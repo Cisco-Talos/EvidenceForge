@@ -998,6 +998,29 @@ def test_action_cohort_publishes_exact_precomputed_receipt_and_result() -> None:
         cohort.dispatcher.publish_prepared_action_cohort_batch(cohort.batch)
 
 
+def test_action_cohort_publishes_exact_admitted_process_create_frontier() -> None:
+    """Prepared timing exposes a process frontier only after its projection publishes."""
+
+    cohort = _dispatcher_environment()
+    identity = cohort.process_plans[0].identity
+    planner = cohort.dispatcher.source_timing_planner
+    lookup = {
+        "hostname": identity.hostname,
+        "pid": identity.pid,
+        "started_at": identity.started_at,
+    }
+
+    assert planner.admitted_process_create_frontier(**lookup) is None
+
+    cohort.dispatcher.publish_prepared_action_cohort_batch(cohort.batch)
+
+    emitted = cohort.emitter.emit.call_args.args[0]
+    assert planner.admitted_process_create_frontier(**lookup) == planner.admission_time(
+        emitted,
+        "ecar",
+    )
+
+
 def test_emitter_failure_is_terminal_but_attempts_later_members() -> None:
     cohort = _dispatcher_environment(member_count=2)
     failure = RuntimeError("injected first sink failure")

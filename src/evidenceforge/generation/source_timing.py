@@ -74,6 +74,20 @@ _SESSION_CLOSURE_TAILS = {
     "windows_event_security": timedelta(seconds=15),
     "syslog": timedelta(seconds=4),
 }
+_SESSION_PROCESS_RELATIONSHIPS = {
+    "ecar": (
+        ("source.ecar_process_create", 950),
+        ("source.ecar_process_terminate", 220),
+    ),
+    "windows_security": (
+        ("source.windows_security_process_create", 24),
+        ("source.windows_security_process_terminate", 420),
+    ),
+    "windows_event_security": (
+        ("source.windows_security_process_create", 24),
+        ("source.windows_security_process_terminate", 420),
+    ),
+}
 _SOURCE_TIMING_LIFECYCLE_RETENTION = timedelta(hours=48)
 _SOURCE_TIMING_TRANSPORT_RETENTION = timedelta(minutes=10)
 _SOURCE_TIMING_TICKET_RETENTION = timedelta(seconds=10)
@@ -1111,6 +1125,9 @@ class SourceTimingPlanner:
         self._sysmon_process_render_create_times = _SourceTimingCache(
             default_deadline=_lifecycle_retention_deadline
         )
+        self._admitted_process_create_frontiers = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
         self._process_dependent_create_times = _SourceTimingCache(
             default_deadline=_lifecycle_retention_deadline
         )
@@ -1622,6 +1639,10 @@ class SourceTimingPlanner:
                 self._runtime_cross_source_sysmon_create_times,
             ),
             ("sysmon_process_render_create", self._sysmon_process_render_create_times),
+            (
+                "admitted_process_create_frontier",
+                self._admitted_process_create_frontiers,
+            ),
             ("process_dependent_create", self._process_dependent_create_times),
             ("kerberos_service", self._kerberos_service_times),
             ("latest_session_start", self._latest_session_start_times),
@@ -2881,6 +2902,35 @@ class SourceTimingPlanner:
                 "windows_security",
                 "windows_event_security",
             }
+            and event.event_type in _PROCESS_START_EVENT_TYPES
+            and event.process is not None
+        ):
+            host = event.src_host or event.dst_host
+            if host is not None:
+                identity = self._subject_process_identity(event)
+                started_at = (
+                    identity.started_at
+                    if identity is not None
+                    else event.process.start_time or self._ensure_plan(event).canonical_timestamp
+                )
+                key = (
+                    host.hostname.casefold(),
+                    event.process.pid,
+                    ensure_utc(started_at),
+                )
+                timestamp = self.admission_time(event, format_name)
+                previous = self._admitted_process_create_frontiers.get(key)
+                if previous is None or timestamp > previous:
+                    self._admitted_process_create_frontiers[key] = timestamp
+
+        if (
+            format_name
+            in {
+                "ecar",
+                "windows_event_sysmon",
+                "windows_security",
+                "windows_event_security",
+            }
             and event.lifecycle is not None
         ):
             family = _endpoint_format_family(format_name)
@@ -3069,6 +3119,25 @@ class SourceTimingPlanner:
                     network.protocol,
                 )
             ] = timestamp
+
+    def admitted_process_create_frontier(
+        self,
+        *,
+        hostname: str,
+        pid: int,
+        started_at: datetime,
+    ) -> datetime | None:
+        """Return the latest committed rendered create time for one process instance."""
+
+        if type(hostname) is not str or not hostname:
+            raise ValueError("admitted process-create lookup requires a hostname")
+        if type(pid) is not int or pid <= 0:
+            raise ValueError("admitted process-create lookup requires a positive PID")
+        if not isinstance(started_at, datetime):
+            raise TypeError("admitted process-create lookup requires a datetime start")
+        return self._admitted_process_create_frontiers.raw_get(
+            (hostname.casefold(), pid, ensure_utc(started_at))
+        )
 
     def _plan_ecar_render_times(
         self,
@@ -4063,12 +4132,18 @@ class SourceTimingPlanner:
             source=source_instance,
             lifecycle_id=self._endpoint_event_lifecycle_id(event),
         )
-        timestamp = anchor + self.timing_runtime.sampler.sample_timedelta(
+        anchored = anchor + self.timing_runtime.sampler.sample_timedelta(
             self._right_skew_distribution(minimum_us, maximum_us),
             relationship_key=relationship,
             scope=scope,
             sample_key="after_anchor",
         )
+        preserves_cross_host_floor = event.event_type == "ssh_session" or bool(
+            event.event_type == "logon"
+            and event.auth is not None
+            and event.auth.session_kind == "rdp"
+        )
+        timestamp = max(preferred, anchored) if preserves_cross_host_floor else anchored
         primary_transport = (
             event.remote_auth.primary_transport if event.remote_auth is not None else None
         )
@@ -5618,12 +5693,57 @@ class SourceTimingPlanner:
 
     @staticmethod
     def session_closure_tail(format_name: str) -> timedelta:
-        """Return the maximum source-visible tail for one session format."""
+        """Return the lifecycle-aware source-visible tail for one session format."""
 
         try:
-            return _SESSION_CLOSURE_TAILS[format_name]
+            configured_tail = _SESSION_CLOSURE_TAILS[format_name]
         except KeyError as exc:
             raise ValueError(f"unsupported session closure format: {format_name!r}") from exc
+        relationships = _SESSION_PROCESS_RELATIONSHIPS.get(format_name)
+        if relationships is None:
+            return configured_tail
+        process_tail = max(
+            timedelta(
+                milliseconds=get_timing_window(
+                    relationship,
+                    default_min_ms=0,
+                    default_max_ms=default_max_ms,
+                    default_position="after",
+                ).max_ms
+            )
+            for relationship, default_max_ms in relationships
+        )
+        if format_name in {"windows_security", "windows_event_security"}:
+            sysmon_create = get_timing_window(
+                "source.sysmon_process_create",
+                default_min_ms=0,
+                default_max_ms=22,
+                default_position="after",
+            )
+            windows_after_sysmon = get_timing_window(
+                "source.windows_security_after_sysmon_process_create_gap",
+                default_min_ms=35,
+                default_max_ms=650,
+                default_position="after",
+            )
+            process_tail = max(
+                process_tail,
+                timedelta(milliseconds=sysmon_create.max_ms)
+                + timedelta(microseconds=sysmon_envelope_timing(1).tail_max_us)
+                + timedelta(milliseconds=windows_after_sysmon.max_ms),
+            )
+        dependent_gap = get_timing_window(
+            "windows.logoff_after_rendered_dependents",
+            default_min_ms=125,
+            default_max_ms=750,
+            default_position="after",
+        )
+        dependent_tail = (
+            process_tail
+            + timedelta(milliseconds=dependent_gap.max_ms)
+            + timedelta(microseconds=4_000)
+        )
+        return max(configured_tail, dependent_tail)
 
     @classmethod
     def max_session_closure_tail(cls, format_names: Iterable[str]) -> timedelta:
@@ -6575,6 +6695,166 @@ class SourceTimingPlanner:
         )
         return projected - ensure_utc(timestamp)
 
+    def endpoint_clock_positive_headroom(
+        self,
+        canonical_time: datetime,
+        os_category: str,
+    ) -> timedelta:
+        """Return the active profile's maximum positive endpoint-clock projection.
+
+        Admission owners use this allocation-free bound before they create state or
+        evidence.  Drift is evaluated relative to the runtime clock registry's
+        reference time, including timestamps that precede that reference.
+        """
+
+        if os_category not in {"windows", "linux"}:
+            return timedelta(0)
+        canonical_time = ensure_utc(canonical_time)
+        timing = endpoint_clock_timing(self.clock_profile_name, os_category)
+        elapsed_seconds = (
+            canonical_time - self.timing_runtime.clocks.reference_time
+        ).total_seconds()
+        maximum_drift_microseconds = max(
+            elapsed_seconds * timing.host_drift_min_ppm,
+            elapsed_seconds * timing.host_drift_max_ppm,
+        )
+        maximum_adjustment_microseconds = (
+            timing.host_offset_max_ms * 1_000 + maximum_drift_microseconds
+        )
+        return timedelta(
+            microseconds=max(0, math.ceil(maximum_adjustment_microseconds)),
+        )
+
+    def endpoint_clock_negative_headroom(
+        self,
+        canonical_time: datetime,
+        os_category: str,
+    ) -> timedelta:
+        """Return the active profile's maximum negative endpoint-clock projection.
+
+        Cross-host ordering owners combine this allocation-free bound with the
+        positive headroom of an earlier source so a later canonical event stays
+        later after both hosts project through independent endpoint clocks.
+        """
+
+        if os_category not in {"windows", "linux"}:
+            return timedelta(0)
+        canonical_time = ensure_utc(canonical_time)
+        timing = endpoint_clock_timing(self.clock_profile_name, os_category)
+        elapsed_seconds = (
+            canonical_time - self.timing_runtime.clocks.reference_time
+        ).total_seconds()
+        minimum_drift_microseconds = min(
+            elapsed_seconds * timing.host_drift_min_ppm,
+            elapsed_seconds * timing.host_drift_max_ppm,
+        )
+        minimum_adjustment_microseconds = (
+            timing.host_offset_min_ms * 1_000 + minimum_drift_microseconds
+        )
+        return timedelta(
+            microseconds=max(0, math.ceil(-minimum_adjustment_microseconds)),
+        )
+
+    def process_create_positive_headroom(
+        self,
+        canonical_time: datetime,
+        os_category: str,
+        *,
+        parent_source_time: datetime | None = None,
+        session_source_time: datetime | None = None,
+        format_names: tuple[str, ...] = (),
+    ) -> timedelta:
+        """Return a conservative finalized process-create source headroom.
+
+        The bound is allocation-free and covers the active endpoint clock,
+        configured eCAR/Sysmon create latency, the Sysmon Event 1 provider
+        envelope, Security 4688's after-Sysmon gap, and bounded parent/session
+        ordering repairs.  An empty ``format_names`` tuple selects every
+        applicable endpoint family for the OS.
+        """
+
+        canonical_time = ensure_utc(canonical_time)
+        if os_category not in {"windows", "linux"}:
+            raise ValueError("process-create source headroom requires windows or linux")
+        if type(format_names) is not tuple or any(type(name) is not str for name in format_names):
+            raise TypeError("process-create source formats must be an exact tuple of strings")
+        families = tuple(
+            dict.fromkeys(
+                _endpoint_format_family(name)
+                for name in (
+                    format_names
+                    or (
+                        ("ecar", "windows_event_security", "windows_event_sysmon")
+                        if os_category == "windows"
+                        else ("ecar",)
+                    )
+                )
+            )
+        )
+        if os_category != "windows" and any(
+            family in {"sysmon", "windows_security"} for family in families
+        ):
+            raise ValueError("Linux process-create admission cannot request Windows formats")
+        parent_floor = ensure_utc(parent_source_time) if parent_source_time is not None else None
+        session_floor = ensure_utc(session_source_time) if session_source_time is not None else None
+        clock_bound = canonical_time + self.endpoint_clock_positive_headroom(
+            canonical_time,
+            os_category,
+        )
+
+        def relationship_tail(key: str, default_max_ms: int) -> timedelta:
+            window = get_timing_window(
+                key,
+                default_min_ms=0,
+                default_max_ms=default_max_ms,
+                default_position="after",
+            )
+            return timedelta(milliseconds=max(0, window.max_ms))
+
+        bounds: list[datetime] = []
+        if "ecar" in families:
+            ecar_bound = clock_bound + relationship_tail(
+                "source.ecar_process_create",
+                950,
+            )
+            if parent_floor is not None:
+                ecar_bound = max(ecar_bound, parent_floor + timedelta(microseconds=2_500))
+            if session_floor is not None:
+                ecar_bound = max(ecar_bound, session_floor + timedelta(microseconds=8_000))
+            bounds.append(ecar_bound)
+
+        if any(family in {"sysmon", "windows_security"} for family in families):
+            sysmon_native_bound = clock_bound + relationship_tail(
+                "source.sysmon_process_create",
+                22,
+            )
+            envelope = sysmon_envelope_timing(1)
+            envelope_tail = timedelta(
+                microseconds=max(envelope.max_us, envelope.tail_max_us),
+            )
+            sysmon_render_bound = sysmon_native_bound + envelope_tail
+            if parent_floor is not None:
+                sysmon_render_bound = max(
+                    sysmon_render_bound,
+                    parent_floor + timedelta(microseconds=2_500),
+                )
+            if session_floor is not None:
+                sysmon_render_bound = max(
+                    sysmon_render_bound,
+                    session_floor + timedelta(microseconds=8_000) + envelope_tail,
+                )
+            if "sysmon" in families:
+                bounds.append(sysmon_render_bound)
+            if "windows_security" in families:
+                windows_gap = relationship_tail(
+                    "source.windows_security_after_sysmon_process_create_gap",
+                    650,
+                )
+                bounds.append(sysmon_render_bound + windows_gap + timedelta(microseconds=1))
+
+        latest_bound = max(bounds, default=canonical_time)
+        return max(timedelta(0), latest_bound - canonical_time)
+
     @staticmethod
     def _endpoint_clock_scope(
         event: TimingOccurrence,
@@ -7493,6 +7773,32 @@ def finalized_endpoint_event_times(
     if native is None or rendered is None:
         return None
     return native, rendered
+
+
+def finalized_process_create_render_times(
+    event: TimingOccurrence,
+    hostname: str,
+) -> tuple[datetime, ...]:
+    """Return every frozen rendered process-create frontier for one host."""
+
+    if type(hostname) is not str or not hostname:
+        raise ValueError("finalized process-create lookup requires a hostname")
+    plan = event.source_timing
+    if plan is None:
+        return ()
+    keys = (
+        ecar_process_render_key("create", hostname),
+        sysmon_process_render_key("create", hostname),
+        endpoint_event_render_key("ecar", hostname, "process_create"),
+        endpoint_event_render_key("windows_event_sysmon", hostname, "process_create"),
+        endpoint_event_render_key("windows_event_security", hostname, "process_create"),
+    )
+    frontiers = {
+        ensure_utc(timestamp)
+        for key in keys
+        if (timestamp := plan.finalized_times.get(key)) is not None
+    }
+    return tuple(sorted(frontiers))
 
 
 def compatibility_endpoint_event_times(

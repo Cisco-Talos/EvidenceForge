@@ -27,6 +27,7 @@ from evidenceforge.utils.rng import _stable_seed
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 _CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES = {"crl", "ocsp"}
+_TLS_X509_CHAIN_GAP_MAXIMUM_US = 45_000
 
 
 def _merge_tls_realism(default: dict, overlay: dict) -> dict:
@@ -278,7 +279,11 @@ def certificate_analyzer_delay_ms(
 
     for depth in range(1, position + 1):
         delay += runtime.sampler.sample_timedelta(
-            TriangularDistribution(minimum=3_000.0, mode=12_000.0, maximum=45_000.0),
+            TriangularDistribution(
+                minimum=3_000.0,
+                mode=12_000.0,
+                maximum=float(_TLS_X509_CHAIN_GAP_MAXIMUM_US),
+            ),
             relationship_key="source.zeek_x509_chain_gap",
             scope=TimingScope(
                 stable_id=f"tls-chain:{zeek_uid}:{fuid}",
@@ -371,6 +376,40 @@ def _tls_window_distribution(
         mode=float(mode_us),
         maximum=float(maximum_us),
     )
+
+
+def certificate_analyzer_delay_bound_ms(*, maximum_position: int) -> int:
+    """Return the overlay-safe analyzer delay bound through a chain position."""
+
+    if maximum_position < 0:
+        raise ValueError("maximum_position must be non-negative")
+    ssl_distribution = _tls_window_distribution(
+        "source.zeek_ssl_analyzer",
+        default_min_ms=3,
+        default_max_ms=650,
+        packet_microtexture=True,
+    )
+    x509_distribution = _tls_window_distribution(
+        "source.zeek_x509_analyzer",
+        default_min_ms=120,
+        default_max_ms=650,
+    )
+    ssl_maximum_us = (
+        ssl_distribution.value
+        if isinstance(ssl_distribution, ConstantDistribution)
+        else ssl_distribution.maximum
+    )
+    x509_maximum_us = (
+        x509_distribution.value
+        if isinstance(x509_distribution, ConstantDistribution)
+        else x509_distribution.maximum
+    )
+    maximum_us = (
+        ssl_maximum_us + x509_maximum_us + maximum_position * _TLS_X509_CHAIN_GAP_MAXIMUM_US
+    )
+    # certificate_analyzer_delay_ms() truncates the sampled timedelta to a
+    # whole-millisecond offset before the connection owner consumes it.
+    return int(maximum_us // 1_000)
 
 
 def certificate_file_size(cert: object) -> int:

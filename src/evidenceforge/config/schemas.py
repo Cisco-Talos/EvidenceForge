@@ -1132,11 +1132,11 @@ class TlsOcspResponseConfig(BaseModel, extra="forbid"):
 
     size_bytes_min: int = Field(gt=0)
     size_bytes_max: int = Field(gt=0)
-    latency_ms_min: float = Field(gt=0)
-    latency_ms_max: float = Field(gt=0)
-    throughput_bytes_per_second_min: float = Field(gt=0)
-    throughput_bytes_per_second_max: float = Field(gt=0)
-    file_duration_floor_ms: float = Field(gt=0)
+    latency_ms_min: float = Field(gt=0, allow_inf_nan=False)
+    latency_ms_max: float = Field(gt=0, allow_inf_nan=False)
+    throughput_bytes_per_second_min: float = Field(gt=0, allow_inf_nan=False)
+    throughput_bytes_per_second_max: float = Field(gt=0, allow_inf_nan=False)
+    file_duration_floor_ms: float = Field(gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def ranges_are_ordered(self) -> Self:

@@ -126,6 +126,7 @@ from evidenceforge.generation.actions.linux_shell_command import (
 from evidenceforge.generation.actions.linux_sudo_session import (
     LinuxSudoSessionActionBundle,
     LinuxSudoSessionRequest,
+    linux_sudo_intrinsic_close_headroom,
 )
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
@@ -137,6 +138,12 @@ from evidenceforge.generation.actions.network_connection import (
 )
 from evidenceforge.generation.actions.network_transaction_planner import (
     NetworkTransactionPlanner,
+    dns_transport_close_headroom_seconds,
+    http_completed_transport_close_bound_seconds,
+    ntp_transport_close_headroom_seconds,
+    tls_completed_extension_headroom_seconds,
+    tls_completed_transport_close_bound_seconds,
+    tls_generated_family_close_bound_seconds,
 )
 from evidenceforge.generation.actions.ocsp_transaction import (
     OcspTransactionActionBundle,
@@ -150,6 +157,9 @@ from evidenceforge.generation.actions.process_execution import (
     ProcessRuntimeImageLoadPlan,
     ProcessTerminationActionBundle,
     ProcessTerminationRequest,
+)
+from evidenceforge.generation.actions.proxy_phase_planner import (
+    proxy_transaction_close_bound_seconds,
 )
 from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
@@ -308,6 +318,7 @@ __all__ = [
     "plan_linux_pipeline_stage_times",
     "LinuxSudoSessionActionBundle",
     "LinuxSudoSessionRequest",
+    "linux_sudo_intrinsic_close_headroom",
     "NetworkConnectionActionBundle",
     "NetworkConnectionIdentityCapture",
     "NetworkConnectionPublicationOutcome",
@@ -315,6 +326,12 @@ __all__ = [
     "PersistentSmbRootHandoff",
     "PersistentSmbRootIntent",
     "NetworkTransactionPlanner",
+    "dns_transport_close_headroom_seconds",
+    "http_completed_transport_close_bound_seconds",
+    "ntp_transport_close_headroom_seconds",
+    "tls_completed_extension_headroom_seconds",
+    "tls_completed_transport_close_bound_seconds",
+    "tls_generated_family_close_bound_seconds",
     "NmapCommandProbeActionBundle",
     "NmapCommandProbeRequest",
     "NtlmValidationActionBundle",
@@ -344,6 +361,7 @@ __all__ = [
     "PortScanRequest",
     "ProxyTransactionActionBundle",
     "ProxyTransactionRequest",
+    "proxy_transaction_close_bound_seconds",
     "RdpSessionActionBundle",
     "RdpSessionRequest",
     "RdpSourceProcessFactory",

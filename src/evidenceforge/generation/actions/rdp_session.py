@@ -64,7 +64,10 @@ from evidenceforge.generation.actions.windows_remote_authentication import (
     WindowsRemoteAuthenticationRequest,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.activity.timing_profiles import (
+    get_timing_window,
+    sysmon_envelope_timing,
+)
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionCompositionCoordinator,
@@ -96,6 +99,159 @@ from evidenceforge.utils.time import ensure_utc
 RDP_TRANSPORT_DURATION_MAX_SECONDS = 3600.0
 RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS = 1500
 _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS = 100
+_RDP_TERMINAL_PROCESS_RELATIONSHIPS = {
+    "ecar": (("source.ecar_process_create", 950), ("source.ecar_process_terminate", 220)),
+    "windows_security": (
+        ("source.windows_security_process_create", 24),
+        ("source.windows_security_process_terminate", 420),
+    ),
+    "sysmon": (
+        ("source.sysmon_process_create", 22),
+        ("source.sysmon_process_terminate", 520),
+    ),
+}
+
+
+class _NetworkSensorHeadroomPlanner(Protocol):
+    """Read-only network-sensor deadline support consumed by action admission."""
+
+    def network_sensor_close_positive_headroom(
+        self,
+        canonical_time: datetime,
+        *,
+        src_ip: str = "",
+        dst_ip: str = "",
+        protocol: str = "",
+        conn_state: str = "",
+        payload_bytes: int | None = None,
+    ) -> timedelta: ...
+
+
+def rdp_action_deadline_transport_headroom_seconds(
+    *,
+    source_deadline: datetime | None = None,
+    source_timing_planner: SourceTimingPlanner | None = None,
+    modeled_source: bool = True,
+) -> float:
+    """Return conservative RDP transport, auth, and close-gap deadline headroom."""
+
+    if type(modeled_source) is not bool:
+        raise TypeError("RDP modeled-source deadline policy must be boolean")
+    if source_deadline is None:
+        if source_timing_planner is not None:
+            raise ValueError("RDP runtime transport headroom requires source_deadline")
+        clock_separation = timedelta(0)
+    else:
+        deadline = ensure_utc(source_deadline)
+        if modeled_source and source_timing_planner is not None:
+            clock_separation = source_timing_planner.endpoint_clock_positive_headroom(
+                deadline, "windows"
+            ) + source_timing_planner.endpoint_clock_negative_headroom(deadline, "windows")
+            if clock_separation < timedelta(0):
+                raise ValueError("RDP endpoint-clock separation must be non-negative")
+        else:
+            clock_separation = timedelta(0)
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=180,
+        default_max_ms=1800,
+        default_position="after",
+        default_class="source_latency",
+    )
+    cross_host_bootstrap_seconds = (
+        clock_separation
+        + timedelta(milliseconds=flow_window.max_ms + 25)
+        + timedelta(milliseconds=350, microseconds=2)
+    ).total_seconds()
+    minimum_transport_seconds = max(60.0, cross_host_bootstrap_seconds)
+    return minimum_transport_seconds + (RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS / 1000)
+
+
+def rdp_action_deadline_source_tail(
+    *,
+    source_deadline: datetime | None = None,
+    source_timing_planner: SourceTimingPlanner | None = None,
+    network_observation_planner: _NetworkSensorHeadroomPlanner | None = None,
+    source_ip: str = "",
+    target_ip: str = "",
+    source_clock_headroom: timedelta = timedelta(0),
+    network_sensor_headroom: timedelta = timedelta(0),
+) -> timedelta:
+    """Return the strict rendered-terminal tail before an RDP action deadline."""
+
+    if type(source_ip) is not str or type(target_ip) is not str:
+        raise TypeError("RDP deadline endpoints must be strings")
+    headrooms = (
+        source_clock_headroom,
+        network_sensor_headroom,
+    )
+    if any(type(headroom) is not timedelta or headroom < timedelta(0) for headroom in headrooms):
+        raise ValueError("RDP rendered-source headrooms must be non-negative timedeltas")
+    if source_deadline is None:
+        if source_timing_planner is not None or network_observation_planner is not None:
+            raise ValueError("RDP runtime deadline planners require source_deadline")
+    else:
+        deadline = ensure_utc(source_deadline)
+        if source_timing_planner is not None:
+            resolved_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
+                deadline,
+                "windows",
+            )
+            if type(
+                resolved_clock_headroom
+            ) is not timedelta or resolved_clock_headroom < timedelta(0):
+                raise ValueError("RDP source-clock planner returned an invalid positive headroom")
+            source_clock_headroom = max(source_clock_headroom, resolved_clock_headroom)
+        if network_observation_planner is not None:
+            resolved_sensor_headroom = (
+                network_observation_planner.network_sensor_close_positive_headroom(
+                    deadline,
+                    src_ip=source_ip,
+                    dst_ip=target_ip,
+                    protocol="tcp",
+                    conn_state="SF",
+                    payload_bytes=1,
+                )
+            )
+            if type(
+                resolved_sensor_headroom
+            ) is not timedelta or resolved_sensor_headroom < timedelta(0):
+                raise ValueError("RDP network-sensor planner returned an invalid positive headroom")
+            network_sensor_headroom = max(network_sensor_headroom, resolved_sensor_headroom)
+    process_tails = {
+        family: max(
+            timedelta(
+                milliseconds=get_timing_window(
+                    relationship,
+                    default_min_ms=0,
+                    default_max_ms=default_max_ms,
+                    default_position="after",
+                ).max_ms
+            )
+            for relationship, default_max_ms in relationships
+        )
+        + timedelta(microseconds=4_000)
+        for family, relationships in _RDP_TERMINAL_PROCESS_RELATIONSHIPS.items()
+    }
+    process_tails["sysmon"] += timedelta(
+        microseconds=max(sysmon_envelope_timing(event_id).tail_max_us for event_id in (1, 5))
+    )
+    dependent_gap = timedelta(
+        milliseconds=get_timing_window(
+            "windows.logoff_after_rendered_dependents",
+            default_min_ms=125,
+            default_max_ms=750,
+            default_position="after",
+        ).max_ms
+    )
+    native_tail = max(
+        SourceTimingPlanner.max_session_closure_tail(("ecar", "windows_event_security")),
+        max(process_tails.values()) + dependent_gap,
+    )
+    return max(
+        native_tail + source_clock_headroom,
+        network_sensor_headroom,
+    ) + timedelta(microseconds=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +276,13 @@ class _RdpTerminalProjectionTimingProof:
             format_name, source_ordinal, timestamp = frontier
             if (
                 type(format_name) is not str
-                or format_name not in {"ecar", "windows_event_security", "windows_security"}
+                or format_name
+                not in {
+                    "ecar",
+                    "windows_event_security",
+                    "windows_event_sysmon",
+                    "windows_security",
+                }
                 or type(source_ordinal) is not int
                 or source_ordinal < 0
                 or not isinstance(timestamp, datetime)
@@ -366,6 +528,7 @@ class _PreparedRdpLifecycleContinuation:
     source_identity: ProcessIdentity | None
     source_session_identity: SessionIdentity | None
     hard_deadline: datetime
+    action_source_deadline: datetime | None
     expected_generation: int
     source_tag: str
     projection_ledger: _RdpTerminalProjectionLedger = field(
@@ -642,6 +805,7 @@ class RdpSessionActionBundle:
     def execute(self) -> str:
         """Expand and dispatch RDP transport and target-logon evidence."""
 
+        hard_deadline_duration_cap = self._hard_deadline_transport_duration_cap()
         rng = _get_rng()
         user = self._executor._coerce_windows_rdp_user_from_existing_session(
             self._request.user,
@@ -649,30 +813,23 @@ class RdpSessionActionBundle:
             self._request.source_ip,
         )
         source_ip, source_system, source_pid = self._resolve_source(rng, user)
+        requested_end_plan = self._request.session_end_plan
         duration = rng.uniform(60.0, RDP_TRANSPORT_DURATION_MAX_SECONDS)
-        end_plan = self._request.session_end_plan
-        if end_plan is not None and end_plan.is_authoritative:
-            close_gap_ms = _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS + (
-                _stable_seed(
-                    "rdp_transport_before_explicit_logoff:"
-                    f"{self._request.stable_id}:{end_plan.canonical_end.isoformat()}"
-                )
-                % (
-                    RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS
-                    - _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS
-                    + 1
+        if hard_deadline_duration_cap is not None:
+            duration = (
+                min(duration, hard_deadline_duration_cap)
+                if requested_end_plan is not None and requested_end_plan.is_authoritative
+                else min(
+                    max(duration, self._hard_deadline_min_transport_seconds()),
+                    hard_deadline_duration_cap,
                 )
             )
-            latest_close = end_plan.canonical_end - timedelta(milliseconds=close_gap_ms)
-            if latest_close <= self._request.time:
-                raise StateError(
-                    "Explicit RDP session end must follow transport open: "
-                    f"{self._request.target_system.hostname} at "
-                    f"{end_plan.canonical_end.isoformat()}"
-                )
-            duration = min(duration, (latest_close - self._request.time).total_seconds())
         effective_end_plan: SessionEndPlan | None = None
-        if self._may_use_exact_initial_publication(
+        if (
+            requested_end_plan is not None
+            and requested_end_plan.is_hard_deadline
+            and not requested_end_plan.is_authoritative
+        ) or self._may_use_exact_initial_publication(
             source_system=source_system,
             source_pid=source_pid,
         ):
@@ -828,7 +985,7 @@ class RdpSessionActionBundle:
             emit_network_evidence=False,
             logon_id=logon_id or None,
             lifecycle_group_id=self._request.stable_id,
-            session_end_plan=self._request.session_end_plan,
+            session_end_plan=effective_end_plan or self._request.session_end_plan,
             remote_authentication_plan=remote_authentication_plan,
         )
         self._rendered_logon_id = rendered_logon_id
@@ -844,6 +1001,86 @@ class RdpSessionActionBundle:
         )
 
         return uid
+
+    def _hard_deadline_transport_duration_cap(self) -> float | None:
+        """Return the transport duration admitted before one immutable session fence."""
+
+        end_plan = self._request.session_end_plan
+        if end_plan is None or not end_plan.is_hard_deadline:
+            return None
+        # Retain the legacy seed namespace so authoritative storyline output is
+        # byte-stable while action-owned deadlines share the same close-gap rule.
+        close_gap_ms = _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS + (
+            _stable_seed(
+                "rdp_transport_before_explicit_logoff:"
+                f"{self._request.stable_id}:{end_plan.canonical_end.isoformat()}"
+            )
+            % (
+                RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS
+                - _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS
+                + 1
+            )
+        )
+        effective_deadline = self._effective_rdp_hard_deadline()
+        latest_close = effective_deadline - timedelta(milliseconds=close_gap_ms)
+        available_seconds = (latest_close - ensure_utc(self._request.time)).total_seconds()
+        if available_seconds <= 0:
+            description = (
+                "Explicit RDP session end"
+                if end_plan.is_authoritative
+                else "RDP action-bundle deadline"
+            )
+            raise StateError(
+                f"{description} must follow transport open: "
+                f"{self._request.target_system.hostname} at "
+                f"{effective_deadline.isoformat()}"
+            )
+        if end_plan.is_authoritative:
+            return available_seconds
+        required_transport_seconds = self._hard_deadline_min_transport_seconds()
+        if available_seconds < required_transport_seconds:
+            raise StateError(
+                "RDP action-bundle deadline leaves less than the minimum transport interval: "
+                f"available={available_seconds:.6f}s, "
+                f"required={required_transport_seconds:.6f}s, "
+                f"deadline={effective_deadline.isoformat()}"
+            )
+        return available_seconds
+
+    def _hard_deadline_min_transport_seconds(self) -> float:
+        """Return the pre-RNG transport support required for cross-host RDP auth."""
+
+        end_plan = self._request.session_end_plan
+        if end_plan is None or not end_plan.is_hard_deadline:
+            return 60.0
+        source_timing_planner = getattr(
+            getattr(self._executor, "dispatcher", None),
+            "source_timing_planner",
+            None,
+        )
+        return rdp_action_deadline_transport_headroom_seconds(
+            source_deadline=ensure_utc(end_plan.canonical_end),
+            source_timing_planner=source_timing_planner,
+            modeled_source=self._modeled_source_possible_before_rng(),
+        ) - (RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS / 1000)
+
+    def _modeled_source_possible_before_rng(self) -> bool:
+        """Return whether source resolution may select a modeled Windows endpoint."""
+
+        request = self._request
+        source_system = request.source_system
+        if source_system is not None:
+            return _get_os_category(source_system.os) == "windows"
+        if request.preserve_explicit_source:
+            return False
+        known = getattr(self._executor, "_ip_to_system", {})
+        exact_source = known.get(request.source_ip)
+        if exact_source is not None and _get_os_category(exact_source.os) == "windows":
+            return True
+        return any(
+            system.ip != request.target_system.ip and _get_os_category(system.os) == "windows"
+            for system in known.values()
+        )
 
     def _has_exact_deferred_projection_owners(self) -> bool:
         """Return whether the built-in transport and optional Windows sinks are present."""
@@ -985,6 +1222,18 @@ class RdpSessionActionBundle:
     def _exact_rdp_deadline(self, transport_close: datetime) -> datetime:
         """Return the half-open logical deadline protecting later logout."""
 
+        deadline = self._effective_rdp_hard_deadline()
+        if deadline <= ensure_utc(transport_close):
+            raise StateError(
+                "Exact RDP transport leaves no half-open disconnect/logout window: "
+                f"close={ensure_utc(transport_close).isoformat()}, "
+                f"deadline={deadline.isoformat()}"
+            )
+        return deadline
+
+    def _effective_rdp_hard_deadline(self) -> datetime:
+        """Return the immutable logical deadline owned by this request."""
+
         registry_end = ensure_utc(
             self._executor._rdp_session_manager.application_registry.window_end
         )
@@ -993,18 +1242,59 @@ class RdpSessionActionBundle:
         )
         window_deadline = registry_end - closure_tail - timedelta(microseconds=1)
         end_plan = self._request.session_end_plan
-        deadline = (
+        if end_plan is not None and end_plan.is_authoritative:
+            return ensure_utc(end_plan.canonical_end)
+        if end_plan is not None and end_plan.is_hard_deadline and not end_plan.is_authoritative:
+            action_source_deadline = min(registry_end, ensure_utc(end_plan.canonical_end))
+            return action_source_deadline - rdp_action_deadline_source_tail(
+                **self._action_deadline_runtime_options(action_source_deadline),
+            )
+        return (
             min(ensure_utc(end_plan.canonical_end), window_deadline)
             if end_plan is not None
             else window_deadline
         )
-        if deadline <= ensure_utc(transport_close):
-            raise StateError(
-                "Exact RDP transport leaves no half-open disconnect/logout window: "
-                f"close={ensure_utc(transport_close).isoformat()}, "
-                f"deadline={deadline.isoformat()}"
+
+    def _action_source_deadline(self) -> datetime | None:
+        """Return the raw half-open rendered-source fence for an action plan."""
+
+        end_plan = self._request.session_end_plan
+        if end_plan is None or not end_plan.is_hard_deadline or end_plan.is_authoritative:
+            return None
+        registry_end = ensure_utc(
+            self._executor._rdp_session_manager.application_registry.window_end
+        )
+        return min(registry_end, ensure_utc(end_plan.canonical_end))
+
+    def _action_deadline_runtime_options(self, deadline: datetime) -> dict[str, Any]:
+        """Return the shared allocation-free planners and exact RDP route facts."""
+
+        dispatcher = getattr(self._executor, "dispatcher", None)
+        source_timing_planner = getattr(dispatcher, "source_timing_planner", None)
+        network_observation_planner = getattr(
+            dispatcher,
+            "network_observation_planner",
+            None,
+        )
+        if dispatcher is not None and not callable(
+            getattr(source_timing_planner, "endpoint_clock_positive_headroom", None)
+        ):
+            raise StateError("RDP deadline admission requires source-clock headroom support")
+        if dispatcher is not None and not callable(
+            getattr(
+                network_observation_planner,
+                "network_sensor_close_positive_headroom",
+                None,
             )
-        return deadline
+        ):
+            raise StateError("RDP deadline admission requires network-sensor headroom support")
+        return {
+            "source_deadline": deadline,
+            "source_timing_planner": source_timing_planner,
+            "network_observation_planner": network_observation_planner,
+            "source_ip": self._request.source_ip,
+            "target_ip": self._request.target_system.ip,
+        }
 
     def _effective_rdp_end_plan(self, transport_close: datetime) -> SessionEndPlan:
         """Return one immutable end plan shared by State and the RDP manager."""
@@ -1108,6 +1398,7 @@ class RdpSessionActionBundle:
         """Prepare the exact initial RDP owner graph without State mutation."""
 
         state = self._executor.state_manager
+        logical_terminal_deadline = self._exact_rdp_deadline(transport_close)
         session_start = ensure_utc(logon_time)
         auth_time = session_start + timedelta(milliseconds=100)
         user_manager_time = auth_time + timedelta(milliseconds=100)
@@ -1219,6 +1510,7 @@ class RdpSessionActionBundle:
                 if elevated
                 else ""
             ),
+            allow_omitted_transport_actor=True,
             source_identity=source_identity,
             source_session_identity=source_session_identity,
         )
@@ -1261,7 +1553,8 @@ class RdpSessionActionBundle:
             source_system=source_system,
             source_identity=source_identity,
             source_session_identity=source_session_identity,
-            hard_deadline=ensure_utc(effective_end_plan.canonical_end),
+            hard_deadline=logical_terminal_deadline,
+            action_source_deadline=self._action_source_deadline(),
             expected_generation=0,
             source_tag=self._request.source,
         )
@@ -1526,6 +1819,7 @@ class RdpSessionActionBundle:
             source_identity=source_plan.identity,
             source_session_identity=source_session_identity,
             hard_deadline=prior.identity.hard_deadline,
+            action_source_deadline=self._action_source_deadline(),
             expected_generation=prior.generation.ordinal + 1,
             source_tag=self._request.source,
         )
@@ -1609,11 +1903,7 @@ class RdpSessionActionBundle:
             occurrence_id = projection_facts.occurrence.occurrence_id
             source_frontiers: list[tuple[str, int, datetime]] = []
             for source in projection_facts.sources:
-                if source.format_name not in {
-                    "ecar",
-                    "windows_event_security",
-                    "windows_security",
-                } or source.status not in {"visible", "delayed"}:
+                if source.status not in {"visible", "delayed"}:
                     continue
                 finalized = tuple(value for _key, value in source.finalized_times)
                 if not finalized and source.projected_timestamp is not None:
@@ -1629,6 +1919,17 @@ class RdpSessionActionBundle:
             )
             if timing_proof.canonical_time != ensure_utc(event.timestamp):
                 raise StateError("Exact RDP terminal projection changed its canonical time")
+            action_source_deadline = continuation.prepared.action_source_deadline
+            if action_source_deadline is not None and (
+                timing_proof.canonical_time >= action_source_deadline
+                or any(
+                    timestamp >= action_source_deadline
+                    for _format_name, _source_ordinal, timestamp in timing_proof.source_frontiers
+                )
+            ):
+                raise StateError(
+                    "Exact RDP terminal projection crossed its action-bundle source deadline"
+                )
             prepared_dispatch = dispatcher.bind_action_cohort_projection(
                 carrier,
                 state_plan=state_plan,
@@ -2080,7 +2381,30 @@ class RdpSessionActionBundle:
             min_gap=timedelta(milliseconds=900),
         )
         resolved = graph.resolved_time("target_logon")
-        if self._request.logon_id:
+        source_timing_planner = getattr(
+            getattr(self._executor, "dispatcher", None),
+            "source_timing_planner",
+            None,
+        )
+        modeled_source = source_ip in getattr(self._executor, "_ip_to_system", {})
+        source_clock_headroom = timedelta(0)
+        target_clock_headroom = timedelta(0)
+        if modeled_source and source_timing_planner is not None:
+            if not callable(
+                getattr(source_timing_planner, "endpoint_clock_positive_headroom", None)
+            ) or not callable(
+                getattr(source_timing_planner, "endpoint_clock_negative_headroom", None)
+            ):
+                raise StateError("RDP source ordering requires endpoint-clock headroom support")
+            source_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
+                ensure_utc(transport_start_time or self._request.time),
+                "windows",
+            )
+            target_clock_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+                resolved + source_clock_headroom,
+                "windows",
+            )
+        if self._request.logon_id or source_clock_headroom or target_clock_headroom:
             flow_window = get_timing_window(
                 "source.ecar_flow",
                 default_min_ms=180,
@@ -2091,8 +2415,11 @@ class RdpSessionActionBundle:
             resolved = max(
                 resolved,
                 ensure_utc(transport_start_time or self._request.time)
-                + timedelta(milliseconds=flow_window.max_ms + 25),
+                + source_clock_headroom
+                + target_clock_headroom
+                + timedelta(milliseconds=flow_window.max_ms + 25, microseconds=1),
             )
+        if self._request.logon_id:
             prior_source_close = self._executor._rdp_reconnect_source_frontier(
                 self._request.logon_id
             )

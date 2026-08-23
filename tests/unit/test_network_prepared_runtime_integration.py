@@ -53,6 +53,7 @@ from evidenceforge.generation.actions.network_connection import (
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
+from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.http import HttpMultipartEntitySpec
@@ -1419,6 +1420,54 @@ def test_committed_suppressed_dns_duplicate_keeps_public_empty_string_contract()
         second_capture.require_receipt(),
     )
     assert emitter.emit.call_count == 1
+
+
+def test_direct_dns_cache_deadline_is_bounded_by_network_runtime_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long authoritative TTL retains cache truth only through this generator run."""
+
+    generator, _state, _emitter = _generator()
+    monkeypatch.setattr(generator_module, "_dns_base_ttl", lambda _query, _internal: 86_400)
+
+    generator.generate_connection(
+        src_ip="10.0.0.10",
+        src_port=53_003,
+        dst_ip="203.0.113.53",
+        time=_START,
+        dst_port=53,
+        proto="udp",
+        service="dns",
+        duration=0.02,
+        orig_bytes=64,
+        resp_bytes=160,
+        conn_state="SF",
+        hostname="long-lived.example.test",
+        preserve_dst_ip=True,
+        preserve_explicit_payload=True,
+        suppress_application_side_effects=True,
+        suppress_source_pid_inference=True,
+        suppress_prereq_dns=True,
+    )
+
+    runtime = generator._network_transaction_runtime
+    key = ("10.0.0.10", "203.0.113.53", "long-lived.example.test", "A")
+    assert (
+        runtime.get_point(
+            NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+            key,
+            at=runtime.window_end - timedelta(microseconds=1),
+        )
+        is not None
+    )
+    assert (
+        runtime.get_point(
+            NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+            key,
+            at=runtime.window_end,
+        )
+        is None
+    )
 
 
 def test_rejected_command_http_root_without_prerequisite_is_owner_neutral(

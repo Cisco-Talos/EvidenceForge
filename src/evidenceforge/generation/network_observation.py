@@ -93,6 +93,9 @@ _PERSISTENT_SMB_MAX_AGGREGATE_ITEMS = 65_536
 _PERSISTENT_SMB_MAX_AGGREGATE_TEXT_BYTES = 8 * 1_024 * 1_024
 _PERSISTENT_SMB_MAX_AGGREGATE_WORK_UNITS = 524_288
 _PERSISTENT_SMB_TCP_HISTORY_MARKERS = frozenset("SsHhAaDdFfRrCcGgTtWwIiQq^")
+_CANONICAL_ZEEK_CONN_STATES = frozenset(
+    {"S0", "S1", "SF", "REJ", "S2", "S3", "RSTO", "RSTR", "RSTOS0", "RSTRH", "SH", "SHR", "OTH"}
+)
 
 _DIRECTIONAL_TRAFFIC_FIELDS = ("payload_bytes", "packets", "ip_bytes")
 _NETWORK_TRAFFIC_FIELDS = ("orig", "resp", "missed_orig_bytes", "missed_resp_bytes")
@@ -2379,6 +2382,122 @@ class NetworkObservationPlanner:
         self.output_end_time = output_end_time
         self._runtime_injected = timing_runtime is not None
         self.timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
+
+    def network_sensor_close_positive_headroom(
+        self,
+        canonical_time: datetime,
+        *,
+        src_ip: str = "",
+        dst_ip: str = "",
+        protocol: str = "",
+        conn_state: str = "",
+        payload_bytes: int | None = None,
+    ) -> timedelta:
+        """Return the maximum positive sensor projection after a canonical close.
+
+        The bound is allocation-free and does not sample or populate clock state. It
+        includes sensor-clock, wander, route, close-processing, and firewall-teardown
+        support. When both endpoint addresses are present it covers the configured
+        observing sensors; callers planning before endpoint selection receive a
+        conservative bound across every configured capture profile. Supplying transport
+        facts selects the exact firewall branch; omitted facts conservatively include the
+        active embryonic-TCP timeout.
+        """
+
+        if any(type(value) is not str for value in (src_ip, dst_ip, protocol, conn_state)):
+            raise TypeError("network sensor headroom route facts must be strings")
+        if protocol not in {"", "tcp", "udp", "icmp"}:
+            raise ValueError("network sensor headroom protocol must be tcp, udp, or icmp")
+        if conn_state and conn_state not in _CANONICAL_ZEEK_CONN_STATES:
+            raise ValueError("network sensor headroom conn_state must be canonical Zeek state")
+        if payload_bytes is not None and (type(payload_bytes) is not int or payload_bytes < 0):
+            raise ValueError("network sensor headroom payload bytes must be non-negative")
+        canonical_time = ensure_utc(canonical_time)
+        runtime = self._runtime_for_event(canonical_time)
+        reference_time = ensure_utc(runtime.clocks.reference_time)
+        elapsed_seconds = (canonical_time - reference_time).total_seconds()
+        candidates: list[timedelta] = []
+        for sensor_identity, profile_name in self._deadline_sensor_profiles(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+        ):
+            timing = network_sensor_observation_timing(profile_name or None)
+            maximum_drift_microseconds = max(
+                elapsed_seconds * timing.clock_drift_min_ppm,
+                elapsed_seconds * timing.clock_drift_max_ppm,
+            )
+            maximum_adjustment_microseconds = (
+                timing.clock_offset_max_us
+                + maximum_drift_microseconds
+                + timing.event_jitter_max_us
+                + timing.route_delay_max_us
+                + 1_800
+                + self._firewall_close_positive_headroom_microseconds(
+                    sensor_identity=sensor_identity,
+                    protocol=protocol,
+                    conn_state=conn_state,
+                    payload_bytes=payload_bytes,
+                )
+            )
+            candidates.append(
+                timedelta(
+                    microseconds=max(0, math.ceil(maximum_adjustment_microseconds)),
+                )
+            )
+        return max(candidates, default=timedelta(0))
+
+    def _deadline_sensor_profiles(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+    ) -> tuple[tuple[str, str], ...]:
+        """Return sensor identities/profiles relevant to a deadline check."""
+
+        visibility = self.visibility_engine
+        if visibility is None:
+            return (("", ""),)
+        if src_ip and dst_ip:
+            sensors = visibility.get_observing_sensors(src_ip, dst_ip)
+        else:
+            sensors = tuple(getattr(visibility, "_sensors", ()))
+        profiles = {
+            (
+                str(getattr(sensor, "hostname", "") or getattr(sensor, "name", "") or ""),
+                str(getattr(sensor, "capture_profile", "") or ""),
+            )
+            for sensor in sensors
+        }
+        return tuple(sorted(profiles)) or (("", ""),)
+
+    @staticmethod
+    def _firewall_close_positive_headroom_microseconds(
+        *,
+        sensor_identity: str,
+        protocol: str,
+        conn_state: str,
+        payload_bytes: int | None,
+    ) -> int:
+        """Return the maximum native firewall timestamp after sensor projection."""
+
+        if protocol and protocol != "tcp":
+            return 8_500
+        if protocol == "tcp":
+            embryonic_states = {"S0", "S1", "SH", "SHR"}
+            known_non_embryonic_state = bool(conn_state) and conn_state not in embryonic_states
+            if (payload_bytes is not None and payload_bytes > 0) or known_non_embryonic_state:
+                return 12_500
+            return (
+                firewall_observation_timing(sensor_identity).tcp_embryonic_timeout_seconds
+                * 1_000_000
+                + 18_500
+            )
+        timing = firewall_observation_timing(sensor_identity)
+        return max(
+            8_500,
+            12_500,
+            timing.tcp_embryonic_timeout_seconds * 1_000_000 + 18_500,
+        )
 
     def plan(
         self,

@@ -218,6 +218,38 @@ def test_source_time_is_deterministic() -> None:
     assert first == second
 
 
+def test_admitted_process_create_frontier_tracks_latest_rendered_endpoint_row() -> None:
+    """The retained process frontier reflects admitted rows, not planning previews."""
+
+    planner = SourceTimingPlanner()
+    host = _host_context()
+    process = _unresolved_process_context(_base_time())
+    event = OccurrenceBuilder(
+        timestamp=_base_time(),
+        event_type="process_create",
+        src_host=host,
+        process=process,
+        auth=AuthContext(username="alice", logon_id=process.logon_id),
+        identity_plan=_sysmon_process_create_identity_plan(host, process),
+    )
+    formats = ("ecar", "windows_event_sysmon", "windows_event_security")
+    for format_name in formats:
+        planner.plan_event(event, format_name)
+
+    lookup = {
+        "hostname": host.hostname.swapcase(),
+        "pid": process.pid,
+        "started_at": process.start_time,
+    }
+    assert planner.admitted_process_create_frontier(**lookup) is None
+
+    admitted_times: list[datetime] = []
+    for format_name in formats:
+        admitted_times.append(planner.admission_time(event, format_name))
+        planner.record_admitted_source_event(event, format_name)
+        assert planner.admitted_process_create_frontier(**lookup) == max(admitted_times)
+
+
 def test_session_closure_follows_same_source_process_termination_with_bounded_tail() -> None:
     """Source timing—not canonical time—orders closure after rendered dependents."""
     planner = SourceTimingPlanner()

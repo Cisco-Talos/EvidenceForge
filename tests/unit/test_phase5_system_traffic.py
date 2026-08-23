@@ -505,6 +505,88 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
         ]
         == timestamp
     )
+    assert (
+        engine.activity_generator.ensure_linux_visible_shell_parent.call_args.kwargs[
+            "existing_only"
+        ]
+        is True
+    )
+
+
+def test_polkit_cli_rejection_does_not_bootstrap_parent_or_schedule_termination(
+    linux_system, state_manager, mock_emitters
+):
+    """A bounded polkit child rejection must leave process state and evidence unchanged."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+
+    before_processes = tuple(
+        (process.pid, process.image, process.start_time)
+        for process in state_manager.get_processes_on_system(linux_system.hostname)
+    )
+    before_emits = {name: emitter.emit.call_count for name, emitter in mock_emitters.items()}
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.packagekit.system-update",
+        process_path="/usr/bin/pkcon",
+        subject_user="deploy",
+        rng=random.Random(31),
+        sys_pids=pids,
+    )
+
+    after_processes = tuple(
+        (process.pid, process.image, process.start_time)
+        for process in state_manager.get_processes_on_system(linux_system.hostname)
+    )
+    assert pid is None
+    assert after_processes == before_processes
+    assert {
+        name: emitter.emit.call_count for name, emitter in mock_emitters.items()
+    } == before_emits
+
+
+def test_polkit_cli_pid_zero_rejection_never_schedules_unowned_termination(
+    linux_system, state_manager
+):
+    """The process reject sentinel must not cross the canonical termination boundary."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.activity_generator = Mock()
+    engine.activity_generator.ensure_linux_visible_shell_parent.return_value = 3131
+    engine.activity_generator.generate_process.return_value = 0
+    engine.activity_generator._user_model_for_username.return_value = User(
+        username="deploy",
+        full_name="Deploy User",
+        email="deploy@example.com",
+    )
+    engine._schedule_foreground_process_termination = Mock()
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.packagekit.system-update",
+        process_path="/usr/bin/pkcon",
+        subject_user="deploy",
+        rng=random.Random(31),
+        sys_pids={"systemd": 1, "dbus": 412},
+    )
+
+    assert pid is None
+    engine._schedule_foreground_process_termination.assert_not_called()
 
 
 def test_polkit_authorization_plan_keeps_subject_and_authentication_coherent(
@@ -603,6 +685,14 @@ def test_polkit_cli_companion_process_uses_visible_user_shell(
     engine.activity_generator = activity_generator
 
     timestamp = datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC)
+    user = activity_generator._user_model_for_username("deploy")
+    assert user is not None
+    shell_pid = activity_generator.ensure_linux_visible_shell_parent(
+        user=user,
+        target_system=linux_system,
+        activity_time=timestamp - timedelta(seconds=5),
+    )
+    assert shell_pid is not None
     pid = engine._materialize_polkit_action_process(
         system=linux_system,
         timestamp=timestamp,
@@ -655,6 +745,12 @@ def test_polkit_cli_companion_process_uses_visible_user_shell(
     assert shell_create_event.auth.username == "deploy"
     assert shell_ecar_create_time < process_ecar_create_time <= timestamp
     assert terminate_event.timestamp > create_event.timestamp
+    assert create_event.identity_plan is not None
+    assert terminate_event.identity_plan is not None
+    process_identity = state_manager.get_process_identity(linux_system.hostname, pid)
+    assert process_identity is not None
+    assert create_event.identity_plan.subject == process_identity
+    assert terminate_event.identity_plan.subject == process_identity
 
 
 def test_polkit_reboot_action_is_explicitly_unsuccessful(

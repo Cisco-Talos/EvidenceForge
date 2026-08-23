@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any, Literal
 
@@ -15,6 +16,7 @@ from evidenceforge.config.schemas import (
     WindowsRemoteAuthTransportConfig,
 )
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.utils.rng import _stable_seed
 
@@ -25,6 +27,8 @@ _CACHED_ANONYMOUS_SMB_BASELINE: WindowsAnonymousSmbBaselineConfig | None = None
 _DEFAULT_MIN_UNLOCK_GAP_SECONDS = 127
 _MIN_UNLOCK_GAP_SECONDS = 60
 _MAX_UNLOCK_GAP_SECONDS = 86_400
+_MACHINE_ACCOUNT_LOGOFF_DELAY_MAX_SECONDS = 30.0
+_MACHINE_ACCOUNT_ENDPOINT_FORMATS = ("ecar", "windows_event_security")
 
 
 def load_windows_auth_realism() -> dict[str, Any]:
@@ -79,6 +83,48 @@ def remote_auth_transport_config() -> WindowsRemoteAuthTransportConfig:
             load_windows_auth_realism().get("remote_auth_transport", {})
         )
     return _CACHED_REMOTE_AUTH_TRANSPORT
+
+
+def remote_auth_transport_max_duration_seconds(
+    *,
+    source: str,
+    outcome: Literal["success", "failure"],
+) -> float:
+    """Return the configured maximum duration for one remote-auth transport."""
+
+    config = remote_auth_transport_config()
+    source_profiles = config.sources.get(source, config.defaults)
+    profile_name = source_profiles.success if outcome == "success" else source_profiles.failure
+    maximum_seconds = config.profiles[profile_name].maximum_seconds
+    # Successful transports are planned around the authentication anchor. If
+    # an overlay's configured maximum is shorter than the sampled lead, the
+    # owner extends the transport to close at least 250 ms after authentication.
+    return max(maximum_seconds, 0.25) if outcome == "success" else maximum_seconds
+
+
+def machine_account_authentication_close_bound_seconds(
+    *,
+    endpoint_clock_headroom_seconds: float = 0.0,
+    network_sensor_headroom_seconds: float = 0.0,
+) -> float:
+    """Return the full machine-auth family bound through visible session closure."""
+
+    headrooms = (endpoint_clock_headroom_seconds, network_sensor_headroom_seconds)
+    if any(not math.isfinite(headroom) or headroom < 0 for headroom in headrooms):
+        raise ValueError("machine-account runtime headrooms must be finite and non-negative")
+    endpoint_close_tail = SourceTimingPlanner.max_session_closure_tail(
+        _MACHINE_ACCOUNT_ENDPOINT_FORMATS
+    ).total_seconds()
+    return max(
+        remote_auth_transport_max_duration_seconds(
+            source="machine_account_logon",
+            outcome="success",
+        )
+        + network_sensor_headroom_seconds,
+        _MACHINE_ACCOUNT_LOGOFF_DELAY_MAX_SECONDS
+        + endpoint_clock_headroom_seconds
+        + endpoint_close_tail,
+    )
 
 
 def sample_remote_auth_transport_duration(

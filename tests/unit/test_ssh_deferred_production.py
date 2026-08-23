@@ -20,16 +20,21 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher, PreparedActionCohortCapability
-from evidenceforge.events.lifecycle import ProcessLifecycleSnapshot
+from evidenceforge.events.lifecycle import ProcessLifecycleSnapshot, SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions.network_connection import NetworkConnectionIdentityCapture
 from evidenceforge.generation.actions.ssh_session import (
     SshSessionActionBundle,
     SshSessionRequest,
     _PreparedSshCloseContinuation,
+    _ssh_action_deadline_source_tail,
+    ssh_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -42,12 +47,13 @@ from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAutho
 from evidenceforge.generation.lifecycle_registry import (
     PreparedLifecycleClosedTransportPublication,
 )
+from evidenceforge.generation.network_observation import NetworkObservationPlanner
 from evidenceforge.generation.network_runtime import NetworkTransactionPreparedCommit
 from evidenceforge.generation.process_runtime_cache import (
     ActivityGeneratorSessionRetentionRelease,
 )
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
-from evidenceforge.generation.source_timing import SourceTimingPreparation
+from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
     SshChannelPreparedCommit,
@@ -69,6 +75,101 @@ _SSH_AUTH_TIMING_RELATIONSHIPS = (
     "ssh.authentication.pam_after_accepted",
     "ssh.authentication.logind_after_pam",
 )
+_TERMINAL_PROCESS_RELATIONSHIPS = frozenset(
+    {
+        "source.ecar_process_create",
+        "source.ecar_process_terminate",
+        "source.windows_security_process_create",
+        "source.windows_security_process_terminate",
+        "source.sysmon_process_create",
+        "source.sysmon_process_terminate",
+    }
+)
+
+
+def _install_terminal_process_latency_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    latency_ms: float = 60_000,
+    dependent_gap_ms: float = 10_000,
+) -> None:
+    """Install one schema-valid process-termination relationship overlay."""
+
+    original = get_timing_window
+
+    def overlay_window(key: str, **kwargs: object) -> TimingWindow:
+        if key in _TERMINAL_PROCESS_RELATIONSHIPS:
+            return TimingWindow(
+                min_ms=latency_ms,
+                max_ms=latency_ms,
+                position="after",
+            )
+        if key == "windows.logoff_after_rendered_dependents":
+            return TimingWindow(
+                min_ms=dependent_gap_ms,
+                max_ms=dependent_gap_ms,
+                position="after",
+            )
+        return original(key, **kwargs)
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.source_timing.get_timing_window",
+        overlay_window,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session.get_timing_window",
+        overlay_window,
+    )
+
+
+def _install_asymmetric_terminal_process_latency_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Make only Sysmon termination slower than every endpoint session source."""
+
+    original = get_timing_window
+
+    def overlay_window(key: str, **kwargs: object) -> TimingWindow:
+        if key == "source.sysmon_process_terminate":
+            return TimingWindow(min_ms=60_000, max_ms=60_000, position="after")
+        if key == "windows.logoff_after_rendered_dependents":
+            return TimingWindow(min_ms=10_000, max_ms=10_000, position="after")
+        return original(key, **kwargs)
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.source_timing.get_timing_window",
+        overlay_window,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session.get_timing_window",
+        overlay_window,
+    )
+
+
+def _fixed_observation_policy(**source_delay_ms: int) -> ObservationPolicy:
+    """Return an isolated complete policy with fixed source-family delays."""
+
+    policy = ObservationPolicy("complete")
+    policy.default = dict(policy.default)
+    policy.sources = dict(policy.sources)
+    for source, delay_ms in source_delay_ms.items():
+        policy.sources[source] = {
+            "delay_ms": {
+                "min_ms": delay_ms,
+                "max_ms": delay_ms,
+            }
+        }
+    return policy
+
+
+def _syslog_render_times(root: Path) -> tuple[datetime, ...]:
+    """Parse RFC 5424 timestamps from one concrete Syslog output tree."""
+
+    return tuple(
+        datetime.fromisoformat(line.split(" ", 2)[1].replace("Z", "+00:00"))
+        for output in root.rglob("syslog.log")
+        for line in output.read_text(encoding="utf-8").splitlines()
+    )
 
 
 @dataclass(slots=True)
@@ -137,6 +238,8 @@ def _fixture(
     extra_emitters: dict[str, object] | None = None,
     member_capacity: int = 65_536,
     output_start_time: datetime | None = None,
+    clock_profile_name: str = "complete",
+    production_timing_runtime: bool = False,
 ) -> _RealSshFixture:
     """Build the real production caller with concrete eCAR and Zeek adapters."""
 
@@ -148,11 +251,23 @@ def _fixture(
     zeek = ZeekEmitter(load_format("zeek_conn"), zeek_path, threaded=threaded)
     emitters: dict[str, object] = {"ecar": ecar, "zeek_conn": zeek}
     emitters.update(extra_emitters or {})
+    source_timing_planner = (
+        SourceTimingPlanner(
+            clock_profile_name=clock_profile_name,
+            timing_runtime=TimingRuntime(
+                reference_time=_START - timedelta(days=1),
+                namespace="ssh-deferred-production",
+            ),
+        )
+        if production_timing_runtime or clock_profile_name != "complete"
+        else None
+    )
     dispatcher = EventDispatcher(
         state,
         emitters,  # type: ignore[arg-type]
         output_start_time=output_start_time,
         action_cohort_member_capacity=member_capacity,
+        source_timing_planner=source_timing_planner,
     )
     generator = ActivityGenerator(
         state,
@@ -845,6 +960,731 @@ def test_exact_close_reserves_maximum_terminal_tail_inside_half_open_window(
     ]
     assert [row["action"] for row in target_rows] == ["LOGIN", "LOGOUT"]
     assert len(zeek_rows) == 1
+
+
+def test_action_bundle_deadline_caps_full_hour_transport_and_terminal_tail(
+    tmp_path: Path,
+) -> None:
+    """An action-owned final-hour SSH session chooses a complete earlier terminal time."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(hours=1)
+    end_plan = SessionEndPlan(deadline, "action_bundle")
+    request = replace(
+        fixture.request(),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=end_plan,
+    )
+
+    bundle = SshSessionActionBundle(request, fixture.generator)
+    expected_close = bundle._hard_deadline_transport_close_limit()
+    _uid, logon_id = bundle.execute_with_identity()
+
+    session = fixture.state.get_session(logon_id)
+    assert session is not None
+    assert session.end_plan == end_plan
+    assert expected_close is not None
+    assert session.network_close_time == expected_close
+    assert ssh_action_deadline_transport_headroom_seconds() == pytest.approx(49.350998)
+    fixture.generator.finalize_ssh_session_lifecycles(deadline)
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    target_rows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_rows] == ["LOGIN", "LOGOUT"]
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    logout_rows = [row for row in target_rows if row["action"] == "LOGOUT"]
+    assert len(logout_rows) == 1
+    assert datetime.fromtimestamp(logout_rows[0]["timestamp_ms"] / 1_000, tz=UTC) < deadline
+    assert len(zeek_rows) == 1
+    assert (
+        datetime.fromtimestamp(
+            zeek_rows[0]["ts"] + zeek_rows[0]["duration"],
+            tz=UTC,
+        )
+        < deadline
+    )
+
+
+def test_process_overlay_finishes_real_ssh_output_before_action_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow endpoint dependents and their logoff gap finalize inside the raw fence."""
+
+    _install_terminal_process_latency_overlay(monkeypatch)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(hours=1)
+    request = replace(
+        fixture.request(),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+
+    assert SourceTimingPlanner.session_closure_tail("ecar") == timedelta(
+        seconds=70,
+        milliseconds=4,
+    )
+    _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+    fixture.generator.finalize_ssh_session_lifecycles(deadline)
+    assert fixture.state.get_session(logon_id) is None
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    ssh_zeek_rows = [row for row in zeek_rows if row.get("id.resp_p") == 22]
+    assert len(ssh_zeek_rows) == 1
+    assert (
+        datetime.fromtimestamp(
+            ssh_zeek_rows[0]["ts"] + ssh_zeek_rows[0]["duration"],
+            tz=UTC,
+        )
+        < deadline
+    )
+
+
+def test_action_deadline_reserves_syslog_observation_delay_in_real_output(
+    tmp_path: Path,
+) -> None:
+    """A delayed exact Syslog logout remains inside the raw action fence."""
+
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    fixture = _fixture(tmp_path / "ssh", extra_emitters={"syslog": syslog})
+    fixture.generator.dispatcher.observation_policy = _fixed_observation_policy(syslog=120_000)
+    deadline = _START + timedelta(hours=1)
+    request = replace(
+        fixture.request(),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    try:
+        _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+        fixture.generator.finalize_ssh_session_lifecycles(deadline)
+        assert fixture.state.get_session(logon_id) is None
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        ecar_rows, _zeek_rows = fixture.close_and_read()
+        syslog.close()
+        syslog_times = _syslog_render_times(syslog_root)
+        assert syslog_times
+        assert max(syslog_times) < deadline
+        assert all(
+            datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline
+            for row in ecar_rows
+        )
+        rendered = "\n".join(
+            output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+        )
+        assert "Removed session" in rendered
+    finally:
+        fixture.ecar.close()
+        fixture.zeek.close()
+        syslog.close()
+
+
+@pytest.mark.parametrize(
+    ("delayed_source", "exact_path"),
+    (("syslog", True), ("ecar", False)),
+    ids=("syslog-terminal-exact", "ecar-auth-compatibility"),
+)
+def test_action_deadline_observation_support_rejects_one_microsecond_short(
+    delayed_source: str,
+    exact_path: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Endpoint delay bounds reject before RNG on exact and compatibility paths."""
+
+    fixture = _fixture(tmp_path)
+    policy = _fixed_observation_policy(**{delayed_source: 120_000})
+    fixture.generator.dispatcher.observation_policy = policy
+    if not exact_path:
+        monkeypatch.setattr(
+            SshSessionActionBundle,
+            "_uses_exact_deferred_publication",
+            lambda _bundle: False,
+        )
+    deadline = _START + timedelta(hours=1)
+    base_request = fixture.request()
+    required_headroom = ssh_action_deadline_transport_headroom_seconds(
+        min_duration_seconds=base_request.min_duration or 0.0,
+        auth_method=base_request.auth_method,
+        public_key_type=base_request.public_key_type,
+        route_class="private",
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=fixture.generator.dispatcher.network_observation_planner,
+        observation_policy=policy,
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    exact_request = replace(
+        base_request,
+        time=deadline - timedelta(seconds=required_headroom),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    assert (
+        SshSessionActionBundle(
+            exact_request,
+            fixture.generator,
+        )._hard_deadline_transport_close_limit()
+        is not None
+    )
+    short_request = replace(
+        exact_request,
+        time=exact_request.time + timedelta(microseconds=1),
+    )
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("SSH observation admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        SshSessionActionBundle(short_request, fixture.generator).execute_with_identity()
+
+    assert (
+        fixture.state.materialization_digest(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    ) == before
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_action_deadline_extreme_cross_host_clocks_reject_before_rng(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid endpoint-clock extrema are part of the modeled-source admission bound."""
+
+    fixture = _fixture(tmp_path)
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_positive_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+        ),
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_negative_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "linux" else timedelta(0)
+        ),
+    )
+    deadline = _START + timedelta(hours=1)
+    policy = fixture.generator.dispatcher.observation_policy
+    base_request = fixture.request()
+    required_headroom = ssh_action_deadline_transport_headroom_seconds(
+        min_duration_seconds=base_request.min_duration or 0.0,
+        auth_method=base_request.auth_method,
+        public_key_type=base_request.public_key_type,
+        route_class="private",
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=fixture.generator.dispatcher.network_observation_planner,
+        observation_policy=policy,
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    assert required_headroom > 600
+    exact_request = replace(
+        base_request,
+        time=deadline - timedelta(seconds=required_headroom),
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    assert (
+        SshSessionActionBundle(
+            exact_request,
+            fixture.generator,
+        )._hard_deadline_transport_close_limit()
+        is not None
+    )
+    short_request = replace(
+        exact_request,
+        time=exact_request.time + timedelta(microseconds=1),
+    )
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("SSH cross-clock admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        SshSessionActionBundle(short_request, fixture.generator).execute_with_identity()
+    assert (
+        fixture.state.materialization_digest(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    ) == before
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+@pytest.mark.parametrize("exact_path", (True, False), ids=("exact", "compatibility"))
+def test_modeled_ssh_source_positive_clock_orders_flow_and_retains_hold(
+    exact_path: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forced late client FLOW precedes LOGIN on both publication paths."""
+
+    def forced_endpoint_clock(
+        _planner: SourceTimingPlanner,
+        canonical_time: datetime,
+        *,
+        hostname: str,
+        os_category: str,
+    ) -> datetime:
+        del os_category
+        return canonical_time + (
+            timedelta(seconds=300)
+            if hostname == "WS-01"
+            else -timedelta(seconds=300)
+            if hostname == "DB-01"
+            else timedelta(0)
+        )
+
+    def forced_positive_headroom(
+        _planner: SourceTimingPlanner,
+        _canonical_time: datetime,
+        os_category: str,
+    ) -> timedelta:
+        return timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "_runtime_endpoint_clock_time",
+        forced_endpoint_clock,
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_positive_headroom",
+        forced_positive_headroom,
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_negative_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "linux" else timedelta(0)
+        ),
+    )
+    if not exact_path:
+        monkeypatch.setattr(
+            SshSessionActionBundle,
+            "_uses_exact_deferred_publication",
+            lambda _bundle: False,
+        )
+
+    fixture = _fixture(
+        tmp_path,
+        clock_profile_name="messy_collection",
+        production_timing_runtime=True,
+    )
+    deadline = _START + timedelta(hours=1)
+    request, source_pid = _modeled_scp_owned_close(fixture)
+    request = replace(
+        request,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+
+    _uid, logon_id = SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+    application = fixture.generator._ssh_channel_manager.find_by_transport(
+        fixture.generator._last_connection_effective_transaction_id
+    )
+    if exact_path:
+        assert application is not None
+        assert application.transport.source_process is not None
+        assert application.transport.source_process.pid == source_pid
+    fixture.generator.finalize_ssh_session_lifecycles(deadline)
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.state.get_process(fixture.source.hostname, source_pid) is None
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    source_flows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.source.hostname
+        and row.get("object") == "FLOW"
+        and row.get("properties", {}).get("dst_port") == "22"
+    ]
+    assert len(source_flows) == 1
+    assert "pid" not in source_flows[0]
+    assert "principal" not in source_flows[0]
+    target_logins = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.target.hostname
+        and row.get("object") == "USER_SESSION"
+        and row.get("action") == "LOGIN"
+    ]
+    assert len(target_logins) == 1
+    assert source_flows[0]["timestamp_ms"] < target_logins[0]["timestamp_ms"]
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    ssh_zeek_rows = [row for row in zeek_rows if row.get("id.resp_p") == 22]
+    assert len(ssh_zeek_rows) == 1
+    assert (
+        datetime.fromtimestamp(
+            ssh_zeek_rows[0]["ts"] + ssh_zeek_rows[0]["duration"],
+            tz=UTC,
+        )
+        < deadline
+    )
+
+
+def test_process_overlay_deadline_rejects_one_microsecond_short_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The overlay-aware composite rejects one microsecond below its exact support."""
+
+    _install_asymmetric_terminal_process_latency_overlay(monkeypatch)
+    assert _ssh_action_deadline_source_tail(
+        source_clock_headroom=timedelta(0),
+        network_sensor_headroom=timedelta(0),
+        ecar_observation_headroom=timedelta(0),
+        syslog_observation_headroom=timedelta(0),
+    ) == timedelta(seconds=70, microseconds=89_001)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(hours=1)
+    required_headroom = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=fixture.generator.dispatcher.network_observation_planner,
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    exact_request = replace(
+        fixture.request(),
+        time=deadline - timedelta(seconds=required_headroom),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    assert (
+        SshSessionActionBundle(
+            exact_request,
+            fixture.generator,
+        )._hard_deadline_transport_close_limit()
+        is not None
+    )
+    request = replace(exact_request, time=exact_request.time + timedelta(microseconds=1))
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator.ssh_close_journal_census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("SSH overlay deadline admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+
+    assert (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator.ssh_close_journal_census(),
+        fixture.generator.timing_runtime.state_digest(),
+        fixture.generator._source_timing_planner.state_digest(),
+    ) == before
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_action_bundle_deadline_rejects_too_late_ssh_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Less than the owner minimum plus terminal tail rejects without partial publication."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(hours=1)
+    required_headroom = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=(fixture.generator.dispatcher.network_observation_planner),
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    request = replace(
+        fixture.request(),
+        time=deadline - timedelta(seconds=required_headroom) + timedelta(microseconds=1),
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator.ssh_close_journal_census(),
+        fixture.generator.timing_runtime.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("SSH deadline admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        unexpected_rng,
+    )
+
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+
+    after = (
+        fixture.state.materialization_digest(),
+        fixture.generator._lifecycle_authority.registry.census(),
+        fixture.generator._ssh_channel_manager.census(),
+        fixture.generator._network_transaction_runtime.census(),
+        fixture.generator.ssh_close_journal_census(),
+        fixture.generator.timing_runtime.state_digest(),
+    )
+    assert after == before
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_action_deadline_preflight_includes_extreme_authentication_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlay auth support rejects one-microsecond-short admission before RNG."""
+
+    fixture = _fixture(tmp_path)
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session.ssh_authentication_timing_support",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            lifecycle_gap_ms=SimpleNamespace(bounds=(0.0, 141_100.0))
+        ),
+    )
+    deadline = _START + timedelta(hours=1)
+    required_headroom = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=(fixture.generator.dispatcher.network_observation_planner),
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    assert required_headroom > 143.1
+    request = replace(
+        fixture.request(),
+        time=deadline - timedelta(seconds=required_headroom) + timedelta(microseconds=1),
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    before = (
+        fixture.state.materialization_digest(),
+        fixture.generator.timing_runtime.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("SSH auth-support admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        SshSessionActionBundle(request, fixture.generator).execute_with_identity()
+
+    assert (
+        fixture.state.materialization_digest(),
+        fixture.generator.timing_runtime.state_digest(),
+    ) == before
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_action_deadline_headroom_includes_overlay_transport_open_jitter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compatibility admission includes the overlayable maximum transport-open sample."""
+
+    maximum_jitter_ms = 2_500
+    maximum_jitter = timedelta(
+        milliseconds=maximum_jitter_ms,
+        microseconds=997,
+    )
+    original_get_timing_window = get_timing_window
+
+    def overlay_window(
+        key: str,
+        **kwargs: object,
+    ) -> TimingWindow:
+        if key == "network.connection_start_jitter":
+            return TimingWindow(min_ms=0, max_ms=maximum_jitter_ms, position="after")
+        return original_get_timing_window(key, **kwargs)
+
+    def maximum_packet_sample(
+        _planner: BaselineTimingPlanner,
+        **_kwargs: object,
+    ) -> timedelta:
+        return maximum_jitter
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session.get_timing_window",
+        overlay_window,
+    )
+    monkeypatch.setattr(
+        BaselineTimingPlanner,
+        "packet_observation_delta",
+        maximum_packet_sample,
+    )
+    fixture = _fixture(tmp_path)
+    deadline = _START + timedelta(hours=1)
+    headroom_seconds = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=fixture.generator.dispatcher.source_timing_planner,
+        network_observation_planner=(fixture.generator.dispatcher.network_observation_planner),
+        source_ip=fixture.source.ip,
+        target_ip=fixture.target.ip,
+    )
+    admission_start = deadline - timedelta(seconds=headroom_seconds)
+    request = replace(
+        fixture.request(),
+        time=admission_start,
+        duration=timedelta(hours=1).total_seconds(),
+        emit_session_close=True,
+        defer_session_close=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+
+    bundle = SshSessionActionBundle(request, fixture.generator)
+    expected_close = bundle._hard_deadline_transport_close_limit()
+    state = bundle._plan_transport()
+
+    assert request.time + timedelta(seconds=headroom_seconds) == deadline
+    assert state.open_time == admission_start + maximum_jitter
+    assert state.duration == 30.0
+    assert state.close_time == expected_close
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+def test_network_sensor_close_headroom_covers_firewall_terminal_branches() -> None:
+    """The shared bound is conservative for complete and partial transport facts."""
+
+    planner = NetworkObservationPlanner(
+        None,
+        timing_runtime=TimingRuntime(
+            reference_time=_START,
+            namespace="network-close-headroom-test",
+        ),
+    )
+    successful = planner.network_sensor_close_positive_headroom(
+        _START,
+        protocol="tcp",
+        conn_state="SF",
+        payload_bytes=1,
+    )
+    datagram = planner.network_sensor_close_positive_headroom(
+        _START,
+        protocol="udp",
+        payload_bytes=0,
+    )
+    embryonic = planner.network_sensor_close_positive_headroom(
+        _START,
+        protocol="tcp",
+        conn_state="S0",
+        payload_bytes=0,
+    )
+
+    assert successful - datagram == timedelta(microseconds=4_000)
+    assert embryonic - successful == timedelta(seconds=30, microseconds=6_000)
+    assert (
+        planner.network_sensor_close_positive_headroom(
+            _START,
+            protocol="tcp",
+            conn_state="S0",
+        )
+        == embryonic
+    )
+    assert (
+        planner.network_sensor_close_positive_headroom(
+            _START,
+            protocol="tcp",
+        )
+        == embryonic
+    )
+    assert planner.network_sensor_close_positive_headroom(_START) == embryonic
+    with pytest.raises(ValueError, match="protocol must be"):
+        planner.network_sensor_close_positive_headroom(_START, protocol="TCP")
+    with pytest.raises(ValueError, match="conn_state must be"):
+        planner.network_sensor_close_positive_headroom(
+            _START,
+            protocol="tcp",
+            conn_state="s0",
+            payload_bytes=0,
+        )
 
 
 def test_exact_close_reauthenticates_frozen_terminal_tail_before_transport_commit(

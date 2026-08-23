@@ -498,6 +498,7 @@ class DeferredSshTimingIntent:
     expected_plan: SshAuthenticationTimingPlan
     transport_open_time: datetime
     ready_at: datetime
+    receiver_bootstrap_headroom: timedelta = timedelta(seconds=2)
 
     def __post_init__(self) -> None:
         """Require bounded inert inputs and an internally consistent ready time."""
@@ -545,9 +546,14 @@ class DeferredSshTimingIntent:
             raise ValueError("Deferred SSH timing preview contains an invalid numeric component")
         open_time = ensure_utc(self.transport_open_time)
         ready_at = ensure_utc(self.ready_at)
+        receiver_bootstrap_headroom = self.receiver_bootstrap_headroom
+        if type(
+            receiver_bootstrap_headroom
+        ) is not timedelta or receiver_bootstrap_headroom < timedelta(seconds=2):
+            raise ValueError("Deferred SSH timing receiver bootstrap must be at least two seconds")
         accepted_at = (
             open_time
-            + timedelta(seconds=2)
+            + receiver_bootstrap_headroom
             + timedelta(milliseconds=max(1.0, self.expected_plan.connection_gap_ms))
             + timedelta(milliseconds=max(250.0, self.expected_plan.accepted_gap_ms))
         )
@@ -559,6 +565,7 @@ class DeferredSshTimingIntent:
         object.__setattr__(self, "public_key_type", self.public_key_type.strip())
         object.__setattr__(self, "transport_open_time", open_time)
         object.__setattr__(self, "ready_at", ready_at)
+        object.__setattr__(self, "receiver_bootstrap_headroom", receiver_bootstrap_headroom)
 
     def replay(
         self,
@@ -599,10 +606,12 @@ class DeferredSshApplicationIntent:
     receiver_state_session_identity: SessionIdentity
     source_identity: ProcessIdentity | None
     source_session_object_id: str
+    source_state_session_identity: SessionIdentity | None
     ready_at: datetime
     auth_method: str
     operation_kind: SshOperationKind
     semantic_operation_id: str
+    allow_omitted_transport_actor: bool = False
 
     def __post_init__(self) -> None:
         """Normalize immutable preparation inputs and reject cross-owner values."""
@@ -619,6 +628,8 @@ class DeferredSshApplicationIntent:
             raise TypeError("Deferred SSH source identity has an unsupported exact type")
         if type(self.operation_kind) is not SshOperationKind:
             raise TypeError("Deferred SSH application intent requires an operation kind")
+        if type(self.allow_omitted_transport_actor) is not bool:
+            raise TypeError("Deferred SSH transport-actor policy changed exact type")
         if not all(
             value.strip()
             for value in (
@@ -635,6 +646,21 @@ class DeferredSshApplicationIntent:
             raise ValueError("Deferred SSH external source cannot carry a State session")
         if self.source_identity is not None and not self.source_session_object_id:
             raise ValueError("Deferred SSH modeled source requires its State session")
+        if (self.source_identity is None) != (self.source_state_session_identity is None):
+            raise ValueError(
+                "Deferred SSH source process and State session must be supplied together"
+            )
+        if self.source_state_session_identity is not None:
+            source_session = self.source_state_session_identity
+            source = self.source_identity
+            assert source is not None
+            if (
+                type(source_session) is not SessionIdentity
+                or source_session.object_id != self.source_session_object_id
+                or source_session.logon_id != source.logon_id
+                or source_session.hostname != source.hostname
+            ):
+                raise ValueError("Deferred SSH source process changed its State session identity")
         object.__setattr__(self, "ready_at", ensure_utc(self.ready_at))
 
     def prepare(
@@ -677,6 +703,11 @@ class DeferredSshApplicationIntent:
         process_identities = [receiver]
         source = self.source_identity
         if source is not None:
+            source_is_transport_actor = transaction.initiating_pid == source.pid
+            if not source_is_transport_actor and not (
+                self.allow_omitted_transport_actor and transaction.initiating_pid <= 0
+            ):
+                raise StateError("Deferred SSH transport changed its exact source process owner")
             if source.started_at > transaction.started_at:
                 raise StateError("Deferred SSH source process starts after TCP open")
             source_hold = SshProcessHold(
@@ -737,7 +768,14 @@ class DeferredSshApplicationIntent:
         process_activity = tuple(
             ProcessActivityPatch(identity, closes_at) for identity in process_identities
         )
-        session_activity = (SessionActivityPatch(self.receiver_state_session_identity, closes_at),)
+        session_activity = (
+            SessionActivityPatch(self.receiver_state_session_identity, closes_at),
+            *(
+                (SessionActivityPatch(self.source_state_session_identity, closes_at),)
+                if self.source_state_session_identity is not None
+                else ()
+            ),
+        )
         process_holds = tuple(
             LifecycleHold(
                 hold_id=stable_uuid(
@@ -1248,7 +1286,8 @@ class DeferredSessionNetworkAuthority:
                 raise ValueError("Deferred SSH timing changed its application auth method")
             receiver_plan = self.state_batch.processes[0]
             if receiver_plan.identity.started_at != (
-                self.ssh_timing_intent.transport_open_time + timedelta(seconds=2)
+                self.ssh_timing_intent.transport_open_time
+                + self.ssh_timing_intent.receiver_bootstrap_headroom
             ):
                 raise ValueError("Deferred SSH timing changed its receiver process boundary")
         elif self.ssh_timing_runtime is not None:

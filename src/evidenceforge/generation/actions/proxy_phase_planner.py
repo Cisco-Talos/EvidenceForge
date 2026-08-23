@@ -5,11 +5,17 @@
 
 from __future__ import annotations
 
+import math
 import random
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.proxy import ProxyTerminalOutcome, ProxyTransactionPlan
+from evidenceforge.generation.actions.network_transaction_planner import (
+    dns_transport_close_headroom_seconds,
+    http_completed_transport_close_bound_seconds,
+    tls_generated_family_close_bound_seconds,
+)
 from evidenceforge.generation.activity.proxy_phase_profiles import (
     MillisecondRange,
     ProxyResolverProfile,
@@ -28,6 +34,146 @@ from evidenceforge.utils.rng import _stable_seed
 if TYPE_CHECKING:
     from evidenceforge.events.contexts import ProxyContext
     from evidenceforge.generation.actions.proxy_transaction import ProxyTransactionRequest
+
+
+_ORIGIN_DURATION_FLOOR_SECONDS = 0.04
+_TLS_ORIGIN_DURATION_FLOOR_SECONDS = 0.85
+_ORIGIN_PHASE_SETUP_FLOOR_SECONDS = 0.001001
+
+
+def proxy_transaction_close_bound_seconds(
+    *,
+    origin_duration_max_seconds: float,
+    origin_close_extension_seconds: float,
+    dst_port: int,
+) -> float:
+    """Return an absolute client-start-to-final-close explicit-proxy bound.
+
+    The result owns phase timing plus both physical transport legs. The origin
+    extension argument is additive only to the logical origin duration; the
+    HTTP and generated-TLS helpers below already return absolute leg durations.
+    """
+
+    timing = proxy_phase_timing()
+    inspected_setup_ms = (
+        timing.inspected_request_after_connect_setup_ms.maximum if dst_port == 443 else 0
+    )
+    resolver_ms = 0
+    lookup_dns_close_ms = 0.0
+    for profile in proxy_resolver_profiles():
+        if profile.origin_after_request_ms is not None:
+            candidate_ms = max(
+                profile.origin_after_request_ms.maximum,
+                timing.policy_decision_after_request_ms.maximum + 1,
+            )
+        else:
+            if (
+                profile.dns_completion_after_request_ms is None
+                or profile.origin_after_dns_ms is None
+            ):
+                continue
+            response_after_request_ms = max(
+                profile.dns_completion_after_request_ms.maximum,
+                timing.policy_decision_after_request_ms.maximum
+                + 2 * timing.dns_query_after_decision_ms.maximum,
+            )
+            candidate_ms = response_after_request_ms + profile.origin_after_dns_ms.maximum
+            query_after_request_ms = (
+                timing.policy_decision_after_request_ms.maximum
+                + timing.dns_query_after_decision_ms.maximum
+            )
+            planned_rtt_maximum_seconds = (
+                response_after_request_ms - query_after_request_ms
+            ) / 1000.0
+            primary_close_ms = query_after_request_ms + 1000 * (
+                dns_transport_close_headroom_seconds(caller_rtt_maximum=planned_rtt_maximum_seconds)
+            )
+            # Forced address lookups can add a companion query after 30 ms and
+            # an MX address query another 45 ms later. Each companion owns a
+            # public-resolver RTT and the canonical DNS transport close tail.
+            companion_close_ms = (
+                timing.policy_decision_after_request_ms.maximum
+                + timing.dns_query_after_decision_ms.maximum
+                + 75
+                + 1000 * dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35)
+            )
+            lookup_dns_close_ms = max(
+                lookup_dns_close_ms,
+                primary_close_ms,
+                companion_close_ms,
+            )
+        resolver_ms = max(resolver_ms, candidate_ms)
+
+    setup_seconds = (timing.request_after_connect_ms.maximum + inspected_setup_ms) / 1000.0
+    terminal_seconds = (
+        timing.policy_decision_after_request_ms.maximum
+        + timing.terminal_response_after_decision_ms.maximum
+        + timing.close_after_flush_ms.maximum
+    ) / 1000.0
+    gateway_seconds = (
+        resolver_ms
+        + timing.gateway_attempt_ms.maximum
+        + timing.client_flush_after_response_ms.maximum
+        + timing.close_after_flush_ms.maximum
+    ) / 1000.0
+    runtime_origin_duration_floor_seconds = (
+        _TLS_ORIGIN_DURATION_FLOOR_SECONDS if dst_port == 443 else _ORIGIN_DURATION_FLOOR_SECONDS
+    )
+    minimum_origin_duration_seconds = _ORIGIN_PHASE_SETUP_FLOOR_SECONDS
+    if dst_port == 443:
+        minimum_origin_duration_seconds += timing.tls_after_origin_connect_ms.maximum / 1000.0
+    effective_origin_duration_seconds = max(
+        origin_duration_max_seconds,
+        runtime_origin_duration_floor_seconds,
+        minimum_origin_duration_seconds,
+    )
+    success_client_seconds = (
+        effective_origin_duration_seconds
+        + (
+            resolver_ms
+            + timing.client_flush_after_response_ms.maximum
+            + timing.close_after_flush_ms.maximum
+        )
+        / 1000.0
+    )
+    origin_transport_close_seconds = (
+        effective_origin_duration_seconds + origin_close_extension_seconds
+    )
+    origin_transport_close_seconds = max(
+        origin_transport_close_seconds,
+        http_completed_transport_close_bound_seconds(
+            caller_duration_maximum=effective_origin_duration_seconds,
+        ),
+    )
+    if dst_port == 443:
+        origin_transport_close_seconds = max(
+            origin_transport_close_seconds,
+            tls_generated_family_close_bound_seconds(
+                caller_duration_maximum=effective_origin_duration_seconds,
+            ),
+        )
+    success_origin_seconds = origin_transport_close_seconds + resolver_ms / 1000.0
+    reused_seconds = (
+        timing.policy_decision_after_request_ms.maximum
+        + timing.origin_service_ms.maximum
+        + timing.client_flush_after_response_ms.maximum
+        + timing.close_after_flush_ms.maximum
+    ) / 1000.0
+    close_seconds = setup_seconds + max(
+        terminal_seconds,
+        gateway_seconds,
+        success_client_seconds,
+        success_origin_seconds,
+        reused_seconds,
+        lookup_dns_close_ms / 1000.0,
+    )
+    # Every client-to-proxy leg carries an HTTP context, including CONNECT and
+    # terminal policy outcomes, so its physical NetworkTransactionPlanner floor
+    # can outlive the phase graph under a timing overlay.
+    physical_close_seconds = http_completed_transport_close_bound_seconds(
+        caller_duration_maximum=close_seconds,
+    )
+    return math.ceil(physical_close_seconds * 1_000_000) / 1_000_000
 
 
 class ProxyPhasePlanner:
@@ -175,6 +321,14 @@ class ProxyPhasePlanner:
                 if proxy.method != "CONNECT":
                     origin_request_at = response_anchor + timedelta(milliseconds=1)
                     response_anchor = origin_request_at
+                # Overlay timing may place TLS/request setup beyond the sampled
+                # origin service duration. Extend the owner transport before
+                # deriving response timing so every canonical phase remains
+                # inside the origin lifecycle.
+                origin_close_at = max(
+                    origin_close_at,
+                    response_anchor + timedelta(microseconds=1),
+                )
                 response_budget = origin_close_at - response_anchor
                 response_fraction = self._timing_runtime.sampler.sample_value(
                     TriangularDistribution(minimum=0.55, mode=0.68, maximum=0.85),
@@ -419,7 +573,7 @@ class ProxyPhasePlanner:
         """Return a source-compatible origin lifetime owned by the phase graph."""
 
         if request.duration is not None:
-            duration_seconds = max(0.04, request.duration)
+            duration_seconds = max(_ORIGIN_DURATION_FLOOR_SECONDS, request.duration)
         else:
             duration_seconds = self._sample_microsecond_gap(
                 fallback,
@@ -436,7 +590,7 @@ class ProxyPhasePlanner:
             http_response_parent_duration_floor(proxy.response_body_bytes),
         )
         if request.dst_port == 443:
-            duration_seconds = max(0.85, duration_seconds)
+            duration_seconds = max(_TLS_ORIGIN_DURATION_FLOOR_SECONDS, duration_seconds)
         return timedelta(seconds=duration_seconds)
 
     @staticmethod

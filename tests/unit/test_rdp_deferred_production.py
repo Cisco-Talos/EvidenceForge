@@ -10,7 +10,7 @@ import random
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,8 +30,14 @@ from evidenceforge.events.observation import ObservationDecision, ObservationPol
 from evidenceforge.events.rdp import RdpSessionState
 from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG
 from evidenceforge.formats import load_format
-from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle
+from evidenceforge.generation.actions.rdp_session import (
+    RdpSessionActionBundle,
+    RdpSessionRequest,
+    rdp_action_deadline_source_tail,
+    rdp_action_deadline_transport_headroom_seconds,
+)
 from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.collection_deployment import (
     CompiledCollectionDeployment,
@@ -56,6 +62,117 @@ from evidenceforge.utils.rng import reset_thread_rng
 
 _START = datetime(2026, 1, 5, 9, tzinfo=UTC)
 _END = _START + timedelta(days=1)
+_TERMINAL_PROCESS_RELATIONSHIPS = frozenset(
+    {
+        "source.ecar_process_create",
+        "source.ecar_process_terminate",
+        "source.windows_security_process_create",
+        "source.windows_security_process_terminate",
+        "source.sysmon_process_create",
+        "source.sysmon_process_terminate",
+    }
+)
+
+
+def _install_terminal_process_latency_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    latency_ms: float = 60_000,
+    dependent_gap_ms: float = 10_000,
+) -> None:
+    """Install one schema-valid process-termination relationship overlay."""
+
+    original = get_timing_window
+
+    def overlay_window(key: str, **kwargs: object) -> TimingWindow:
+        if key in _TERMINAL_PROCESS_RELATIONSHIPS:
+            return TimingWindow(
+                min_ms=latency_ms,
+                max_ms=latency_ms,
+                position="after",
+            )
+        if key == "windows.logoff_after_rendered_dependents":
+            return TimingWindow(
+                min_ms=dependent_gap_ms,
+                max_ms=dependent_gap_ms,
+                position="after",
+            )
+        return original(key, **kwargs)
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.source_timing.get_timing_window",
+        overlay_window,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session.get_timing_window",
+        overlay_window,
+    )
+
+
+def _install_asymmetric_terminal_process_latency_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Make only Sysmon termination slower than every endpoint session source."""
+
+    original = get_timing_window
+
+    def overlay_window(key: str, **kwargs: object) -> TimingWindow:
+        if key == "source.sysmon_process_terminate":
+            return TimingWindow(min_ms=60_000, max_ms=60_000, position="after")
+        if key == "windows.logoff_after_rendered_dependents":
+            return TimingWindow(min_ms=10_000, max_ms=10_000, position="after")
+        return original(key, **kwargs)
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.source_timing.get_timing_window",
+        overlay_window,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session.get_timing_window",
+        overlay_window,
+    )
+
+
+def _install_extreme_cross_host_windows_clocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force the validator-accepted Windows clock extrema on opposite endpoints."""
+
+    def forced_endpoint_clock(
+        _planner: SourceTimingPlanner,
+        canonical_time: datetime,
+        *,
+        hostname: str,
+        os_category: str,
+    ) -> datetime:
+        del os_category
+        return canonical_time + (
+            timedelta(seconds=300)
+            if hostname == "WS-01"
+            else -timedelta(seconds=300)
+            if hostname == "RDS-01"
+            else timedelta(0)
+        )
+
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "_runtime_endpoint_clock_time",
+        forced_endpoint_clock,
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_positive_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+        ),
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_negative_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+        ),
+    )
 
 
 @dataclass(slots=True)
@@ -93,6 +210,7 @@ def _open_rdp_terminal_harness(
     session_end_plan: SessionEndPlan | None = None,
     production_timing_runtime: bool = False,
     open_time: datetime = _START,
+    expect_exact_initial: bool = True,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -240,13 +358,15 @@ def _open_rdp_terminal_harness(
         session.session_user_manager_pid,
         session.explorer_pid,
     )
-    assert all(pid is not None for pid in target_pids)
+    if expect_exact_initial:
+        assert all(pid is not None for pid in target_pids)
     target_identities = tuple(
         state.get_process_identity(target.hostname, pid) for pid in target_pids if pid is not None
     )
-    assert len(target_identities) == 3 and all(
-        identity is not None for identity in target_identities
-    )
+    if expect_exact_initial:
+        assert len(target_identities) == 3 and all(
+            identity is not None for identity in target_identities
+        )
     if include_sysmon and sysmon is None:
         # The existing harness intentionally omits the production deployment and
         # host-boot timing setup needed by Sysmon Event 1. Attach the real sink
@@ -1094,6 +1214,623 @@ def test_exact_rdp_deadline_rejects_insufficient_headroom_before_mutation(
             zeek.close()
 
 
+def test_action_bundle_deadline_caps_full_hour_rdp_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An action-owned final-hour RDP session chooses a complete earlier transport end."""
+
+    class MaximumDurationRng(random.Random):
+        """Choose the maximum transport duration while retaining ordinary byte sampling."""
+
+        def uniform(self, a: float, b: float) -> float:
+            return b
+
+    deadline = _START + timedelta(hours=1)
+    end_plan = SessionEndPlan(deadline, "action_bundle")
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session._get_rng",
+        lambda: MaximumDurationRng(42),
+    )
+
+    harness = _open_rdp_terminal_harness(tmp_path, session_end_plan=end_plan)
+
+    assert rdp_action_deadline_transport_headroom_seconds() == 61.5
+    logical_deadline = deadline - rdp_action_deadline_source_tail(
+        source_deadline=deadline,
+        source_timing_planner=harness.dispatcher.source_timing_planner,
+        network_observation_planner=harness.dispatcher.network_observation_planner,
+        source_ip="10.10.0.25",
+        target_ip="10.20.0.10",
+    )
+    assert logical_deadline - timedelta(milliseconds=1_500) <= harness.disconnect_at
+    assert harness.disconnect_at <= logical_deadline - timedelta(milliseconds=100)
+    state_end_plan = harness.state.get_session_end_plan(harness.logon_id)
+    assert state_end_plan is not None
+    assert state_end_plan.canonical_end == logical_deadline
+    assert state_end_plan.authority == end_plan.authority
+    snapshot = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert snapshot is not None
+    assert snapshot.identity.hard_deadline == logical_deadline
+
+    harness.generator.finalize_rdp_session_lifecycles(deadline)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    journal = harness.generator.rdp_lifecycle_journal_census()
+    manager = harness.generator.rdp_session_manager.census()
+    assert journal.pending_generations == 0
+    assert manager.retained_sessions == 0
+    assert manager.connected_sessions == 0
+    assert manager.disconnected_sessions == 0
+    assert manager.logged_out_sessions == 0
+    assert manager.active_operations == 0
+    assert manager.active_leases == 0
+    _close_rdp_terminal_harness(harness)
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    assert all(
+        datetime.fromisoformat(timestamp.replace("Z", "+00:00")) < deadline
+        for timestamp in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+    )
+    zeek_rows = _read_json_lines(harness.output_root, "zeek.json")
+    assert len(zeek_rows) == 1
+    assert (
+        datetime.fromtimestamp(
+            zeek_rows[0]["ts"] + zeek_rows[0]["duration"],
+            tz=UTC,
+        )
+        < deadline
+    )
+
+
+def test_process_overlay_finishes_real_rdp_output_before_action_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow endpoint dependents and their logoff gap finalize inside the raw fence."""
+
+    _install_terminal_process_latency_overlay(monkeypatch)
+    deadline = _START + timedelta(hours=1)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        include_sysmon=True,
+        modeled_source=False,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    assert SourceTimingPlanner.session_closure_tail("ecar") == timedelta(
+        seconds=70,
+        milliseconds=4,
+    )
+
+    harness.generator.finalize_rdp_session_lifecycles(deadline)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for root in (harness.output_root / "windows", harness.output_root / "sysmon")
+        for output in root.rglob("*.xml")
+    )
+    rendered_times = tuple(
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for value in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+    )
+    assert rendered_times
+    assert max(rendered_times) < deadline
+    zeek_rows = [
+        row
+        for row in _read_json_lines(harness.output_root, "zeek.json")
+        if row.get("id.resp_p") == 3389
+    ]
+    assert len(zeek_rows) == 1
+    assert datetime.fromtimestamp(zeek_rows[0]["ts"] + zeek_rows[0]["duration"], tz=UTC) < deadline
+
+
+def test_modeled_rdp_source_positive_clock_omits_flow_actor_and_finalizes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late mstsc projection remains lifecycle-owned while its FLOW stays PID-free."""
+
+    _install_extreme_cross_host_windows_clocks(monkeypatch)
+
+    deadline = _START + timedelta(hours=1)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name="messy_collection",
+        include_sysmon=True,
+        modeled_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+        production_timing_runtime=True,
+    )
+    harness.generator.finalize_rdp_session_lifecycles(deadline)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    source_flows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.source_hostname and row.get("object") == "FLOW"
+    ]
+    assert len(source_flows) == 1
+    assert "pid" not in source_flows[0]
+    assert "principal" not in source_flows[0]
+    target_logins = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and row.get("object") == "USER_SESSION"
+        and row.get("action") == "LOGIN"
+    ]
+    assert len(target_logins) == 1
+    assert source_flows[0]["timestamp_ms"] < target_logins[0]["timestamp_ms"]
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for root in (harness.output_root / "windows", harness.output_root / "sysmon")
+        for output in root.rglob("*.xml")
+    )
+    rendered_times = tuple(
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for value in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+    )
+    assert rendered_times
+    assert max(rendered_times) < deadline
+    zeek_rows = [
+        row
+        for row in _read_json_lines(harness.output_root, "zeek.json")
+        if row.get("id.resp_p") == 3389
+    ]
+    assert len(zeek_rows) == 1
+    assert datetime.fromtimestamp(zeek_rows[0]["ts"] + zeek_rows[0]["duration"], tz=UTC) < deadline
+
+
+def test_modeled_rdp_compatibility_path_orders_flow_and_logout_before_action_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic fallback retains cross-host ordering and the narrowed logout plan."""
+
+    _install_terminal_process_latency_overlay(monkeypatch)
+    _install_extreme_cross_host_windows_clocks(monkeypatch)
+    monkeypatch.setattr(
+        RdpSessionActionBundle,
+        "_has_exact_deferred_projection_owners",
+        lambda _bundle: False,
+    )
+    deadline = _START + timedelta(hours=1)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name="messy_collection",
+        modeled_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+        production_timing_runtime=True,
+        expect_exact_initial=False,
+    )
+    state_end_plan = harness.state.get_session_end_plan(harness.logon_id)
+    assert state_end_plan is not None
+    assert state_end_plan.authority == "action_bundle"
+    assert state_end_plan.canonical_end < deadline
+    harness.generator.generate_logoff(
+        User(
+            username="analyst",
+            full_name="Security Analyst",
+            email="analyst@example.test",
+        ),
+        System(
+            hostname="RDS-01",
+            ip="10.20.0.10",
+            os="Windows Server 2022",
+            type="server",
+            services=["rdp"],
+        ),
+        state_end_plan.canonical_end,
+        harness.logon_id,
+        logon_type=10,
+    )
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    source_flows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.source_hostname
+        and row.get("object") == "FLOW"
+        and row.get("properties", {}).get("dst_port") == "3389"
+    ]
+    assert len(source_flows) == 1
+    assert "pid" not in source_flows[0]
+    assert "principal" not in source_flows[0]
+    target_sessions = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row.get("action") for row in target_sessions] == ["LOGIN", "LOGOUT"]
+    assert source_flows[0]["timestamp_ms"] < target_sessions[0]["timestamp_ms"]
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for root in (harness.output_root / "windows", harness.output_root / "sysmon")
+        for output in root.rglob("*.xml")
+    )
+    rendered_times = tuple(
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for value in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+    )
+    assert rendered_times
+    assert max(rendered_times) < deadline
+    zeek_rows = [
+        row
+        for row in _read_json_lines(harness.output_root, "zeek.json")
+        if row.get("id.resp_p") == 3389
+    ]
+    assert len(zeek_rows) == 1
+    assert datetime.fromtimestamp(zeek_rows[0]["ts"] + zeek_rows[0]["duration"], tz=UTC) < deadline
+
+
+def test_rdp_reconnect_omits_late_source_actor_and_orders_flow_before_4778(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reconnect keeps a late mstsc lifecycle while publishing its FLOW PID-free."""
+
+    _install_extreme_cross_host_windows_clocks(monkeypatch)
+    deadline = _START + timedelta(hours=4)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name="messy_collection",
+        modeled_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+        production_timing_runtime=True,
+    )
+    harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+    disconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert disconnected is not None
+    assert disconnected.state is RdpSessionState.DISCONNECTED
+    reconnect_at = harness.disconnect_at + timedelta(seconds=1)
+    reconnect_uid, reconnect_logon_id = harness.generator._execute_rdp_session_bundle(
+        user=User(
+            username="analyst",
+            full_name="Security Analyst",
+            email="analyst@example.test",
+        ),
+        target_system=System(
+            hostname="RDS-01",
+            ip="10.20.0.10",
+            os="Windows Server 2022",
+            type="server",
+            services=["rdp"],
+        ),
+        time=reconnect_at,
+        source_ip="10.10.0.25",
+        source_system=System(
+            hostname="WS-01",
+            ip="10.10.0.25",
+            os="Windows 11",
+            type="workstation",
+        ),
+        source_port=50_002,
+        logon_id=harness.logon_id,
+    )
+    assert reconnect_uid
+    assert reconnect_logon_id == harness.logon_id
+    reconnected = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert reconnected is not None
+    assert reconnected.generation.ordinal == disconnected.generation.ordinal + 1
+    updated_session = harness.state.get_session(harness.logon_id)
+    assert updated_session is not None
+    assert updated_session.network_close_time is not None
+    harness.generator.advance_rdp_session_lifecycle_watermark(updated_session.network_close_time)
+    harness.generator.finalize_rdp_session_lifecycles(deadline)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    reconnect_flows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.source_hostname
+        and row.get("object") == "FLOW"
+        and row.get("properties", {}).get("dst_port") == "3389"
+        and row.get("properties", {}).get("src_port") == "50002"
+    ]
+    assert len(reconnect_flows) == 1
+    assert "pid" not in reconnect_flows[0]
+    assert "principal" not in reconnect_flows[0]
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for root in (harness.output_root / "windows", harness.output_root / "sysmon")
+        for output in root.rglob("*.xml")
+    )
+    reconnect_render_time = _windows_security_time(rendered_windows, 4778)
+    assert (
+        datetime.fromtimestamp(reconnect_flows[0]["timestamp_ms"] / 1_000, tz=UTC)
+        < reconnect_render_time
+        < deadline
+    )
+    rendered_times = tuple(
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        for value in re.findall(r'<TimeCreated SystemTime="([^"]+)"', rendered_windows)
+    )
+    assert rendered_times
+    assert max(rendered_times) < deadline
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < deadline for row in ecar_rows
+    )
+    zeek_rows = _read_json_lines(harness.output_root, "zeek.json")
+    assert len(zeek_rows) == 2
+    assert all(
+        datetime.fromtimestamp(row["ts"] + row["duration"], tz=UTC) < deadline for row in zeek_rows
+    )
+
+
+def test_action_bundle_deadline_rejects_too_late_rdp_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow-overlay plan rejects one microsecond below its exact transport support."""
+
+    _install_asymmetric_terminal_process_latency_overlay(monkeypatch)
+    assert rdp_action_deadline_source_tail() == timedelta(seconds=70, microseconds=89_001)
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session._stable_seed",
+        lambda *_parts: 0,
+    )
+
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    registry = SimpleNamespace(window_end=_END)
+    manager = SimpleNamespace(application_registry=registry)
+    executor = SimpleNamespace(_rdp_session_manager=manager)
+    deadline = _START + timedelta(hours=1)
+    probe_request = RdpSessionRequest(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip="198.51.100.25",
+        preserve_explicit_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    probe = RdpSessionActionBundle(executor, probe_request)
+    probe_cap = probe._hard_deadline_transport_duration_cap()
+    assert probe_cap is not None
+    exact_start = _START + timedelta(seconds=probe_cap - 60.0)
+    exact_request = RdpSessionRequest(
+        user=user,
+        target_system=target,
+        time=exact_start,
+        source_ip="198.51.100.25",
+        preserve_explicit_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    assert RdpSessionActionBundle(
+        executor,
+        exact_request,
+    )._hard_deadline_transport_duration_cap() == pytest.approx(60.0)
+    request = RdpSessionRequest(
+        user=user,
+        target_system=target,
+        time=exact_start + timedelta(microseconds=1),
+        source_ip="198.51.100.25",
+        preserve_explicit_source=True,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    before = (
+        vars(executor).copy(),
+        vars(manager).copy(),
+        vars(registry).copy(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("RDP deadline admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        RdpSessionActionBundle(executor, request).execute()
+
+    after = (
+        vars(executor).copy(),
+        vars(manager).copy(),
+        vars(registry).copy(),
+    )
+    assert after == before
+
+
+def test_action_deadline_extreme_rdp_clock_separation_rejects_before_rng(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Modeled-source RDP preflight includes valid cross-host clock extrema."""
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session._stable_seed",
+        lambda *_parts: 0,
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_positive_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+        ),
+    )
+    monkeypatch.setattr(
+        SourceTimingPlanner,
+        "endpoint_clock_negative_headroom",
+        lambda _planner, _canonical_time, os_category: (
+            timedelta(seconds=300) if os_category == "windows" else timedelta(0)
+        ),
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    registry = SimpleNamespace(window_end=_END)
+    manager = SimpleNamespace(application_registry=registry)
+    source_timing_planner = SourceTimingPlanner()
+    network_observation_planner = SimpleNamespace(
+        network_sensor_close_positive_headroom=lambda *_args, **_kwargs: timedelta(0)
+    )
+    dispatcher = SimpleNamespace(
+        source_timing_planner=source_timing_planner,
+        network_observation_planner=network_observation_planner,
+    )
+    executor = SimpleNamespace(
+        _rdp_session_manager=manager,
+        dispatcher=dispatcher,
+        _ip_to_system={source.ip: source, target.ip: target},
+    )
+    deadline = _START + timedelta(hours=1)
+    request = RdpSessionRequest(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip=source.ip,
+        source_system=source,
+        session_end_plan=SessionEndPlan(deadline, "action_bundle"),
+    )
+    probe = RdpSessionActionBundle(executor, request)
+    required_transport = probe._hard_deadline_min_transport_seconds()
+    assert required_transport > 600
+    public_headroom = rdp_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=source_timing_planner,
+        modeled_source=True,
+    )
+    assert public_headroom == pytest.approx(required_transport + 1.5)
+    probe_cap = probe._hard_deadline_transport_duration_cap()
+    assert probe_cap is not None
+    exact_request = replace(
+        request,
+        time=request.time + timedelta(seconds=probe_cap - required_transport),
+    )
+    assert RdpSessionActionBundle(
+        executor,
+        exact_request,
+    )._hard_deadline_transport_duration_cap() == pytest.approx(required_transport)
+    short_request = replace(
+        exact_request,
+        time=exact_request.time + timedelta(microseconds=1),
+    )
+    before = (
+        vars(executor).copy(),
+        vars(manager).copy(),
+        vars(registry).copy(),
+        source_timing_planner.state_digest(),
+    )
+
+    def unexpected_rng() -> random.Random:
+        raise AssertionError("RDP cross-clock admission consumed RNG")
+
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.rdp_session._get_rng",
+        unexpected_rng,
+    )
+    with pytest.raises(StateError, match="action-bundle deadline.*minimum transport interval"):
+        RdpSessionActionBundle(executor, short_request).execute()
+    assert (
+        vars(executor).copy(),
+        vars(manager).copy(),
+        vars(registry).copy(),
+        source_timing_planner.state_digest(),
+    ) == before
+
+
+def test_explicit_rdp_end_plan_remains_exact_at_registry_boundary(tmp_path: Path) -> None:
+    """An authoritative RDP plan keeps its authored State and manager deadline."""
+
+    end_plan = SessionEndPlan(
+        _END,
+        "explicit_storyline",
+        "rdp-window-close",
+    )
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        modeled_source=False,
+        session_end_plan=end_plan,
+    )
+    snapshot = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert snapshot is not None
+    assert snapshot.identity.hard_deadline == end_plan.canonical_end
+    assert harness.state.get_session_end_plan(harness.logon_id) == end_plan
+    assert harness.disconnect_at < end_plan.canonical_end
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+
+def test_short_explicit_rdp_end_keeps_legacy_transport_cap(tmp_path: Path) -> None:
+    """A sub-minute authored plan caps transport without action minimum admission."""
+
+    end_plan = SessionEndPlan(
+        _START + timedelta(seconds=30),
+        "explicit_storyline",
+        "rdp-short-close",
+    )
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        modeled_source=False,
+        session_end_plan=end_plan,
+    )
+    snapshot = harness.generator.rdp_session_manager.get(harness.session_object_id)
+    assert snapshot is not None
+    assert snapshot.identity.hard_deadline == end_plan.canonical_end
+    assert harness.state.get_session_end_plan(harness.logon_id) == end_plan
+    close_gap = end_plan.canonical_end - harness.disconnect_at
+    assert timedelta(milliseconds=100) <= close_gap <= timedelta(milliseconds=1_500)
+
+    harness.generator.finalize_rdp_session_lifecycles(end_plan.canonical_end)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+
 def test_compiled_enterprise_rdp_logout_reserves_source_frontiers_before_output_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1104,7 +1841,7 @@ def test_compiled_enterprise_rdp_logout_reserves_source_frontiers_before_output_
     expected_deadline = _END - closure_tail - timedelta(microseconds=1)
     original_logout = RdpSessionActionBundle.logout_exact_rdp_session
     explicit_storyline_end = SessionEndPlan(
-        _END,
+        _END - timedelta(seconds=20),
         "explicit_storyline",
         "rdp-window-close",
     )
@@ -1118,7 +1855,10 @@ def test_compiled_enterprise_rdp_logout_reserves_source_frontiers_before_output_
         )
         snapshot = harness.generator.rdp_session_manager.get(harness.session_object_id)
         assert snapshot is not None
-        assert snapshot.identity.hard_deadline == expected_deadline
+        expected_session_deadline = (
+            explicit_end.canonical_end if explicit_end is not None else expected_deadline
+        )
+        assert snapshot.identity.hard_deadline == expected_session_deadline
         state_end_plan = harness.state.get_session_end_plan(harness.logon_id)
         assert state_end_plan is not None
         assert state_end_plan.canonical_end == snapshot.identity.hard_deadline
@@ -1945,6 +2685,7 @@ def test_rdp_terminal_owner_failure_retries_without_duplicate_rows(
     harness = _open_rdp_terminal_harness(
         tmp_path,
         clock_profile_name=clock_profile_name,
+        production_timing_runtime=clock_profile_name != "complete",
     )
     injected = False
     selected_calls = 0

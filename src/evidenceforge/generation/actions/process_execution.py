@@ -46,6 +46,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
 from evidenceforge.generation.deployment_registry import LocalArtifactPublishToken
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +158,33 @@ class ProcessExecutionPreparedEffects:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessExecutionReuseIntent:
+    """Authenticated identity for one allocation-free bounded process reuse."""
+
+    hostname: str
+    process_object_id: str
+    pid: int
+    parent_pid: int
+    image: str
+    command_line: str
+    username: str
+    logon_id: str
+    started_at: datetime
+    source_frontier: datetime
+
+    def __post_init__(self) -> None:
+        """Normalize immutable timestamps and reject incomplete reuse identities."""
+
+        if not self.hostname or not self.process_object_id or self.pid <= 0:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "bounded process reuse requires exact host, object, and positive PID identity",
+            )
+        object.__setattr__(self, "started_at", ensure_utc(self.started_at))
+        object.__setattr__(self, "source_frontier", ensure_utc(self.source_frontier))
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessExecutionRequest:
     """Intent for one canonical process execution."""
 
@@ -179,6 +207,11 @@ class ProcessExecutionRequest:
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
     prepared_effects: ProcessExecutionPreparedEffects | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    reuse_intent: ProcessExecutionReuseIntent | None = field(
         default=None,
         compare=False,
         repr=False,

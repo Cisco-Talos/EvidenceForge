@@ -46,6 +46,128 @@ from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 
+_OCSP_REQUEST_DELAY_MIN_MS = 900
+_OCSP_REQUEST_DELAY_MAX_MS = 4_500
+_OCSP_THROUGHPUT_MULTIPLIER_MINIMUM = 0.78
+_OCSP_THROUGHPUT_MULTIPLIER_MAXIMUM = 1.22
+_OCSP_FILE_DURATION_FLOOR_MULTIPLIER_MINIMUM = 0.85
+_OCSP_FILE_DURATION_FLOOR_MULTIPLIER_MAXIMUM = 1.35
+
+
+def _finite_ocsp_response_float(
+    response_config: dict[str, Any],
+    key: str,
+    default: float,
+) -> float:
+    """Return one finite response setting before terminal-family admission."""
+
+    try:
+        value = float(response_config.get(key, default))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"OCSP response {key} must be a finite number") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"OCSP response {key} must be a finite number")
+    return value
+
+
+def ocsp_generated_child_bound_inputs() -> tuple[float, float, float] | None:
+    """Return the finite worst-case timing inputs for an automatic OCSP child.
+
+    The tuple is ``(request_delay, direct_duration, proxy_origin_duration)`` in
+    seconds. It is a pure configuration calculation: it consumes no RNG,
+    timing sampler, port, identity, or state allocation. A zero query
+    probability returns ``None`` because no child can be emitted.
+    """
+
+    config = ocsp_config()
+    try:
+        probability = float(config.get("query_probability", 0.18))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("OCSP query_probability must be a finite number") from exc
+    if not math.isfinite(probability):
+        raise ValueError("OCSP query_probability must be a finite number")
+    if probability <= 0.0:
+        return None
+
+    response_config = config.get("response", {})
+    if not isinstance(response_config, dict):
+        raise ValueError("OCSP response config must be a mapping")
+    try:
+        size_min = max(1, int(response_config.get("size_bytes_min", 900)))
+        size_max = max(size_min, int(response_config.get("size_bytes_max", 2_500)))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("OCSP response sizes must be finite positive integers") from exc
+
+    throughput_min = max(
+        1.0,
+        _finite_ocsp_response_float(
+            response_config,
+            "throughput_bytes_per_second_min",
+            40_000,
+        ),
+    )
+    # The upper endpoint does not lengthen the transaction, but validating it
+    # here prevents a parent from committing before the planner later takes
+    # log(inf) or otherwise fails on an unsupported overlay value.
+    throughput_max = _finite_ocsp_response_float(
+        response_config,
+        "throughput_bytes_per_second_max",
+        400_000,
+    )
+    if throughput_max <= 0.0:
+        raise ValueError("OCSP response throughput must be positive")
+
+    duration_floor = max(
+        0.0001,
+        _finite_ocsp_response_float(
+            response_config,
+            "file_duration_floor_ms",
+            3.0,
+        )
+        / 1_000.0,
+    )
+    latency_min = max(
+        0.001,
+        _finite_ocsp_response_float(response_config, "latency_ms_min", 18.0) / 1_000.0,
+    )
+    latency_max = max(
+        latency_min,
+        _finite_ocsp_response_float(response_config, "latency_ms_max", 240.0) / 1_000.0,
+    )
+    try:
+        file_duration = max(
+            duration_floor * _OCSP_FILE_DURATION_FLOOR_MULTIPLIER_MAXIMUM,
+            size_max / (throughput_min * _OCSP_THROUGHPUT_MULTIPLIER_MINIMUM),
+        )
+        response_duration = latency_max + file_duration
+    except OverflowError as exc:
+        raise ValueError("OCSP response timing exceeds the supported finite range") from exc
+    if not math.isfinite(response_duration):
+        raise ValueError("OCSP response timing exceeds the supported finite range")
+    try:
+        response_duration = math.ceil(response_duration * 1_000_000) / 1_000_000
+    except OverflowError as exc:
+        raise ValueError("OCSP response timing exceeds the supported finite range") from exc
+
+    from evidenceforge.generation.actions.file_transfer import (
+        http_response_parent_duration_floor,
+    )
+
+    try:
+        proxy_origin_duration = max(
+            response_duration,
+            http_response_parent_duration_floor(size_max),
+        )
+    except OverflowError as exc:
+        raise ValueError("OCSP response size exceeds the supported finite range") from exc
+    if not math.isfinite(proxy_origin_duration):
+        raise ValueError("OCSP response size exceeds the supported finite range")
+    return (
+        _OCSP_REQUEST_DELAY_MAX_MS / 1_000.0,
+        response_duration,
+        proxy_origin_duration,
+    )
+
 
 def _uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
     """Return the exact continuous-uniform law using supported timing primitives."""
@@ -183,7 +305,10 @@ class OcspTransactionPlanner:
 
         phase_rng = random.Random(_stable_seed(f"ocsp_phase:{request.stable_id}:{bucket_start}"))
         requested_at = request.tls_event.timestamp + timedelta(
-            milliseconds=phase_rng.randint(900, 4500)
+            milliseconds=phase_rng.randint(
+                _OCSP_REQUEST_DELAY_MIN_MS,
+                _OCSP_REQUEST_DELAY_MAX_MS,
+            )
         )
         response_config = config.get("response", {})
         size_min = max(1, int(response_config.get("size_bytes_min", 900)))
@@ -220,7 +345,10 @@ class OcspTransactionPlanner:
             lifecycle_id=f"{responder}|cache_bucket:{bucket_start}",
         )
         throughput_multiplier = timing_runtime.sampler.sample_value(
-            _uniform_distribution(0.78, 1.22),
+            _uniform_distribution(
+                _OCSP_THROUGHPUT_MULTIPLIER_MINIMUM,
+                _OCSP_THROUGHPUT_MULTIPLIER_MAXIMUM,
+            ),
             relationship_key="ocsp.response.transaction_throughput_multiplier",
             scope=transaction_scope,
             sample_key="throughput_multiplier",
@@ -231,7 +359,10 @@ class OcspTransactionPlanner:
             float(response_config.get("file_duration_floor_ms", 3.0)) / 1000.0,
         )
         duration_floor_multiplier = timing_runtime.sampler.sample_value(
-            _uniform_distribution(0.85, 1.35),
+            _uniform_distribution(
+                _OCSP_FILE_DURATION_FLOOR_MULTIPLIER_MINIMUM,
+                _OCSP_FILE_DURATION_FLOOR_MULTIPLIER_MAXIMUM,
+            ),
             relationship_key="ocsp.response.file_duration_floor_multiplier",
             scope=transaction_scope,
             sample_key="duration_floor_multiplier",

@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -68,6 +69,202 @@ _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
     default=None,
 )
 _NETWORK_IDENTITY_CAPTURE_LOCK_TYPE = type(Lock())
+_DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US = 12_001
+_TLS_COMPLETED_EXTENSION_MAXIMUM_US = 8_000_000
+_TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH = 3
+_TLS_CERTIFICATE_CLOSE_SLACK_SECONDS = 0.005
+_TLS_CERTIFICATE_MINIMUM_BASE_SECONDS = 1.05
+_TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS = 0.075
+_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US = 25_001
+_NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_US = 997
+_NTP_RTT_MAXIMUM_US = 300_001
+_NTP_PROCESSING_MAXIMUM_US = 10_001
+_NTP_CLOSE_SLACK_MAXIMUM_US = 8_001
+
+
+def dns_transport_close_headroom_seconds(*, caller_rtt_maximum: float) -> float:
+    """Return the canonical DNS close bound for a caller-owned RTT maximum."""
+
+    maximum_us = math.ceil(caller_rtt_maximum * 1_000_000) + _DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US
+    return ((maximum_us + 999) // 1_000) / 1_000
+
+
+def tls_completed_extension_headroom_seconds() -> float:
+    """Return the maximum canonical extension for a completed TLS transport."""
+
+    return _TLS_COMPLETED_EXTENSION_MAXIMUM_US / 1_000_000
+
+
+def _tls_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
+    """Return the configured TLS minimum and its maximum sampled floor slack."""
+
+    from evidenceforge.generation.activity.timing_profiles import get_timing_window
+
+    timing_window = get_timing_window(
+        "network.tls_completed_min_duration",
+        default_min_ms=800,
+        default_max_ms=2500,
+        default_position="after",
+        default_class="same_observation",
+    )
+    minimum_seconds = timing_window.min_ms / 1000
+    floor_slack_maximum_seconds = max(
+        0.016,
+        min(0.65, (timing_window.max_ms - timing_window.min_ms) / 1000),
+    )
+    return minimum_seconds, floor_slack_maximum_seconds
+
+
+def _tls_certificate_duration_floor_bound_seconds() -> float:
+    """Return the maximum generated-chain analyzer duration floor."""
+
+    from evidenceforge.generation.activity.tls_realism import (
+        certificate_analyzer_delay_bound_ms,
+    )
+
+    maximum_position = _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH - 1
+    analyzer_floor_seconds = (
+        certificate_analyzer_delay_bound_ms(maximum_position=maximum_position) / 1_000
+        + _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS
+    )
+    chain_floor_seconds = _TLS_CERTIFICATE_MINIMUM_BASE_SECONDS + (
+        _TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS
+        * _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH
+    )
+    return max(analyzer_floor_seconds, chain_floor_seconds)
+
+
+def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
+    """Return the configured HTTP minimum and sampled floor slack maximum."""
+
+    from evidenceforge.generation.activity.timing_profiles import get_timing_window
+
+    timing_window = get_timing_window(
+        "source.zeek_http_request",
+        default_min_ms=1,
+        default_max_ms=35,
+        default_position="after",
+        default_class="same_observation",
+    )
+    minimum_seconds = (timing_window.max_ms + 5) / 1_000
+    return minimum_seconds, _HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US / 1_000_000
+
+
+def http_completed_transport_close_bound_seconds(
+    *,
+    caller_duration_maximum: float,
+) -> float:
+    """Return the absolute start-to-close bound for a completed HTTP transport.
+
+    The result already includes ``caller_duration_maximum``. Callers must use
+    it as the complete physical-leg duration, not add it to their own duration.
+    """
+
+    minimum_seconds, floor_slack_maximum_seconds = _http_completed_duration_floor_bounds_seconds()
+    return max(caller_duration_maximum, minimum_seconds + floor_slack_maximum_seconds)
+
+
+def tls_completed_transport_close_bound_seconds(
+    *,
+    caller_duration_maximum: float,
+) -> float:
+    """Return the generated-TLS absolute start-to-close transport bound.
+
+    A caller duration at or above the configured TLS floor can receive the
+    completed-session extension. A shorter caller duration is replaced by the
+    configured protocol floor plus its sampled slack. Certificate projection
+    can extend the transport again, so the bound also reserves the analyzer
+    maximum for the engine-generated chain cap of three certificates.
+
+    The result already includes ``caller_duration_maximum`` and must not be
+    added to it. The raw ``NetworkConnectionRequest.x509_chain`` escape hatch
+    accepts caller-supplied chains of arbitrary length; those callers must own
+    a chain-specific end plan and cannot use this generated-chain admission
+    contract as a finite bound.
+    """
+
+    minimum_seconds, floor_slack_maximum_seconds = _tls_completed_duration_floor_bounds_seconds()
+    return max(
+        caller_duration_maximum + tls_completed_extension_headroom_seconds(),
+        minimum_seconds + floor_slack_maximum_seconds,
+        _tls_certificate_duration_floor_bound_seconds(),
+    )
+
+
+def _network_transport_open_positive_headroom_seconds() -> float:
+    """Return the maximum generated physical-transport start displacement."""
+
+    from evidenceforge.generation.activity.timing_profiles import get_timing_window
+
+    timing_window = get_timing_window(
+        "network.connection_start_jitter",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    return (timing_window.max_ms * 1_000 + _NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_US) / 1_000_000
+
+
+def tls_generated_family_close_bound_seconds(
+    *,
+    caller_duration_maximum: float,
+) -> float:
+    """Return the parent-TLS plus possible automatic-OCSP family close bound.
+
+    The OCSP branch reserves its maximum request delay, responder latency and
+    transfer time, a direct HTTP physical leg including its independent open
+    jitter, or the complete explicit-proxy HTTP transaction. DNS prerequisites
+    precede either HTTP leg and their companion close maximum remains inside
+    the minimum completed-HTTP interval. The calculation consumes no runtime
+    sampler, connection identity, port, or mutable state.
+    """
+
+    parent_close = tls_completed_transport_close_bound_seconds(
+        caller_duration_maximum=caller_duration_maximum,
+    )
+    from evidenceforge.generation.actions.ocsp_transaction import (
+        ocsp_generated_child_bound_inputs,
+    )
+
+    child_inputs = ocsp_generated_child_bound_inputs()
+    if child_inputs is None:
+        return parent_close
+    request_delay, direct_duration, proxy_origin_duration = child_inputs
+    direct_child_close = (
+        _network_transport_open_positive_headroom_seconds()
+        + http_completed_transport_close_bound_seconds(
+            caller_duration_maximum=direct_duration,
+        )
+    )
+
+    # Import lazily: proxy_phase_planner imports the parent-only TLS helper.
+    # Its port-80 branch does not recurse into this TLS-family calculation.
+    from evidenceforge.generation.actions.proxy_phase_planner import (
+        proxy_transaction_close_bound_seconds,
+    )
+
+    proxy_child_close = proxy_transaction_close_bound_seconds(
+        origin_duration_max_seconds=proxy_origin_duration,
+        origin_close_extension_seconds=0.0,
+        dst_port=80,
+    )
+    family_close = max(
+        parent_close,
+        request_delay + max(direct_child_close, proxy_child_close),
+    )
+    if not math.isfinite(family_close):
+        raise ValueError("generated TLS/OCSP family close bound must be finite")
+    try:
+        return math.ceil(family_close * 1_000_000) / 1_000_000
+    except OverflowError as exc:
+        raise ValueError("generated TLS/OCSP family close bound exceeds supported range") from exc
+
+
+def ntp_transport_close_headroom_seconds() -> float:
+    """Return the maximum canonical NTP RTT, processing, and close tail."""
+
+    maximum_us = _NTP_RTT_MAXIMUM_US + _NTP_PROCESSING_MAXIMUM_US + _NTP_CLOSE_SLACK_MAXIMUM_US
+    return ((maximum_us + 999) // 1_000) / 1_000
 
 
 @dataclass(slots=True)
@@ -932,7 +1129,7 @@ class NetworkTransactionPlanner:
                         median=2_700_000.0,
                         sigma=0.55,
                         minimum=1_500_000.0,
-                        maximum=8_000_000.0,
+                        maximum=float(_TLS_COMPLETED_EXTENSION_MAXIMUM_US),
                     ),
                 ),
             )
@@ -944,6 +1141,23 @@ class NetworkTransactionPlanner:
             sample_key="tls_extension",
         ).total_seconds()
 
+    def _completed_tls_duration_seconds(
+        self,
+        request: NetworkConnectionRequest,
+        duration: float | None,
+    ) -> float:
+        """Return one sampled completed-TLS lifetime through the owning branches."""
+
+        minimum_seconds, floor_slack_maximum_seconds = (
+            _tls_completed_duration_floor_bounds_seconds()
+        )
+        if duration is None or duration < minimum_seconds:
+            return minimum_seconds + self._tls_floor_slack_seconds(
+                request,
+                floor_slack_maximum_seconds,
+            )
+        return duration + self._tls_completed_extension_seconds(request)
+
     def _http_floor_slack_seconds(self, request: NetworkConnectionRequest) -> float:
         """Sample positive source-admission slack above an HTTP duration floor."""
 
@@ -952,12 +1166,26 @@ class NetworkTransactionPlanner:
                 median=3_600.0,
                 sigma=0.88,
                 minimum=0.0,
-                maximum=25_001.0,
+                maximum=float(_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US),
             ),
             relationship_key="network.http.duration_floor_slack",
             scope=self._timing_scope(request),
             sample_key="http_floor",
         ).total_seconds()
+
+    def _completed_http_duration_seconds(
+        self,
+        request: NetworkConnectionRequest,
+        duration: float | None,
+    ) -> float:
+        """Return one completed-HTTP lifetime through the owning floor branch."""
+
+        minimum_seconds, _floor_slack_maximum_seconds = (
+            _http_completed_duration_floor_bounds_seconds()
+        )
+        if duration is None or duration < minimum_seconds:
+            return minimum_seconds + self._http_floor_slack_seconds(request)
+        return duration
 
     def _http_default_duration_seconds(self, request: NetworkConnectionRequest) -> float:
         """Sample a right-skew completed HTTP transport duration."""
@@ -1061,7 +1289,7 @@ class NetworkTransactionPlanner:
             sample_key="dns_close",
             minimum_us=1_037,
             median_us=2_100,
-            maximum_us=12_001,
+            maximum_us=_DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US,
             sigma=0.86,
         )
 
@@ -1208,7 +1436,7 @@ class NetworkTransactionPlanner:
             sample_key="rtt",
             minimum_us=200,
             median_us=median_rtt_us,
-            maximum_us=max(median_rtt_us + 3, 300_001),
+            maximum_us=max(median_rtt_us + 3, _NTP_RTT_MAXIMUM_US),
             sigma=rtt_sigma,
         )
         processing_seconds = self._sample_duration_seconds(
@@ -1217,7 +1445,7 @@ class NetworkTransactionPlanner:
             sample_key="processing",
             minimum_us=50,
             median_us=500,
-            maximum_us=10_001,
+            maximum_us=_NTP_PROCESSING_MAXIMUM_US,
             sigma=0.52,
         )
         close_slack_seconds = self._sample_duration_seconds(
@@ -1226,7 +1454,7 @@ class NetworkTransactionPlanner:
             sample_key="close",
             minimum_us=1_000,
             median_us=2_700,
-            maximum_us=8_001,
+            maximum_us=_NTP_CLOSE_SLACK_MAXIMUM_US,
             sigma=0.64,
         )
         reference_age = self._timing_runtime.sampler.sample_timedelta(
@@ -2842,7 +3070,10 @@ class NetworkTransactionPlanner:
                     NetworkRuntimePointFamily.DIRECT_DNS_TTL,
                     dns_cache_key,
                     (time.timestamp(), time.timestamp() + cache_ttl),
-                    expires_at=ensure_utc(time) + timedelta(seconds=cache_ttl),
+                    expires_at=min(
+                        ensure_utc(time) + timedelta(seconds=cache_ttl),
+                        boundary.network_runtime.window_end,
+                    ),
                 )
 
         # Allocate one physical identity, or reuse the immutable parent identity
@@ -3082,33 +3313,10 @@ class NetworkTransactionPlanner:
             else:
                 orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
                 resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
-            tls_min_window = generator_module.get_timing_window(
-                "network.tls_completed_min_duration",
-                default_min_ms=800,
-                default_max_ms=2500,
-                default_position="after",
-                default_class="same_observation",
-            )
-            tls_min_duration = tls_min_window.min_ms / 1000
-            if duration is None or duration < tls_min_duration:
-                max_extra = max(
-                    0.016, min(0.65, (tls_min_window.max_ms - tls_min_window.min_ms) / 1000)
-                )
-                duration = tls_min_duration + self._tls_floor_slack_seconds(request, max_extra)
-            else:
-                duration += self._tls_completed_extension_seconds(request)
+            duration = self._completed_tls_duration_seconds(request, duration)
 
         if not suppress_application_side_effects and http is not None and conn_state == "SF":
-            http_timing = generator_module.get_timing_window(
-                "source.zeek_http_request",
-                default_min_ms=1,
-                default_max_ms=35,
-                default_position="after",
-                default_class="same_observation",
-            )
-            http_min_duration = (http_timing.max_ms + 5) / 1000
-            if duration is None or duration < http_min_duration:
-                duration = http_min_duration + self._http_floor_slack_seconds(request)
+            duration = self._completed_http_duration_seconds(request, duration)
 
         if not caller_provided_duration:
             duration = self._generator_owned_duration_seconds(request, duration)
@@ -4245,16 +4453,10 @@ class NetworkTransactionPlanner:
             and event.network.protocol == "tcp"
             and event.network.conn_state == "SF"
         ):
-            http_timing = generator_module.get_timing_window(
-                "source.zeek_http_request",
-                default_min_ms=1,
-                default_max_ms=35,
-                default_position="after",
-                default_class="same_observation",
+            event.network.duration = self._completed_http_duration_seconds(
+                request,
+                event.network.duration,
             )
-            http_min_duration = (http_timing.max_ms + 5) / 1000
-            if event.network.duration is None or event.network.duration < http_min_duration:
-                event.network.duration = http_min_duration + self._http_floor_slack_seconds(request)
 
         if event.network.protocol == "tcp" and event.network.conn_state == "SF":
             if event.http is not None:

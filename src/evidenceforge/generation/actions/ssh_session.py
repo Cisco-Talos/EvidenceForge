@@ -75,6 +75,8 @@ from evidenceforge.generation.activity.timing_profiles import (
     SshAuthenticationTimingPlan,
     get_timing_window,
     plan_ssh_authentication_timing,
+    ssh_authentication_timing_support,
+    sysmon_envelope_timing,
 )
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
@@ -125,6 +127,394 @@ logger = logging.getLogger(__name__)
 _SSH_TERMINAL_TAIL_RESERVATION = timedelta(milliseconds=3_500)
 _SSH_RECEIVER_DESCENDANT_PHASE_PREFIX = "receiver-descendant:"
 _SSH_RECEIVER_DESCENDANT_CAPACITY = 4_096
+_SSH_TRANSPORT_OPEN_RELATIONSHIP = "network.connection_start_jitter"
+# BaselineTimingPlanner.packet_observation_delta samples through max_ms + 997 us.
+_SSH_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS = 997
+_SSH_RECEIVER_BOOTSTRAP_HEADROOM = timedelta(seconds=2)
+_SSH_TERMINAL_SOURCE_FORMATS = ("ecar", "syslog")
+_SSH_ACTION_DEADLINE_EPSILON = timedelta(microseconds=1)
+_SSH_TERMINAL_PROCESS_RELATIONSHIPS = {
+    "ecar": (("source.ecar_process_create", 950), ("source.ecar_process_terminate", 220)),
+    "windows_security": (
+        ("source.windows_security_process_create", 24),
+        ("source.windows_security_process_terminate", 420),
+    ),
+    "sysmon": (
+        ("source.sysmon_process_create", 22),
+        ("source.sysmon_process_terminate", 520),
+    ),
+}
+
+
+class _NetworkSensorHeadroomPlanner(Protocol):
+    """Read-only network-sensor deadline support consumed by action admission."""
+
+    def network_sensor_close_positive_headroom(
+        self,
+        canonical_time: datetime,
+        *,
+        src_ip: str = "",
+        dst_ip: str = "",
+        protocol: str = "",
+        conn_state: str = "",
+        payload_bytes: int | None = None,
+    ) -> timedelta: ...
+
+
+class _ObservationDelayPolicy(Protocol):
+    """Read-only observation-delay support consumed by action admission."""
+
+    def delay_bounds(self, source: str) -> tuple[timedelta, timedelta]: ...
+
+    def maximum_delay_difference(
+        self,
+        earlier_source: str,
+        later_source: str,
+    ) -> timedelta: ...
+
+
+def _ssh_ecar_flow_headroom() -> timedelta:
+    """Return the maximum source-native FLOW latency used by auth ordering."""
+
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=40,
+        default_max_ms=300,
+        default_position="after",
+        default_class="source_latency",
+    )
+    return timedelta(milliseconds=flow_window.max_ms + 25)
+
+
+def _ssh_authentication_headroom_seconds(
+    *,
+    auth_method: str | None,
+    public_key_type: str,
+    route_class: str,
+) -> float:
+    """Return a conservative open-to-logind interval for one request shape."""
+
+    candidates = (
+        ((auth_method, public_key_type),)
+        if auth_method is not None
+        else (("password", ""), ("publickey", "RSA"))
+    )
+    lifecycle_seconds = max(
+        ssh_authentication_timing_support(
+            method,
+            public_key_type=key_type,
+            route_class=route_class,
+        ).lifecycle_gap_ms.bounds[1]
+        / 1_000
+        for method, key_type in candidates
+    )
+    return _SSH_RECEIVER_BOOTSTRAP_HEADROOM.total_seconds() + lifecycle_seconds
+
+
+def _ssh_minimum_transport_seconds(
+    *,
+    min_duration_seconds: float,
+    auth_method: str | None,
+    public_key_type: str,
+    route_class: str,
+    source_clock_headroom: timedelta,
+    target_clock_negative_headroom: timedelta,
+    authentication_observation_headroom: timedelta,
+) -> float:
+    """Return transport support through cross-host SSH authentication."""
+
+    authentication_headroom_seconds = _ssh_authentication_headroom_seconds(
+        auth_method=auth_method,
+        public_key_type=public_key_type,
+        route_class=route_class,
+    )
+    cross_host_visibility = (
+        _ssh_ecar_flow_headroom()
+        + source_clock_headroom
+        + target_clock_negative_headroom
+        + authentication_observation_headroom
+    )
+    additional_visibility_seconds = max(
+        0.0,
+        (cross_host_visibility - _SSH_RECEIVER_BOOTSTRAP_HEADROOM).total_seconds(),
+    )
+    return max(
+        30.0,
+        min_duration_seconds,
+        authentication_headroom_seconds + additional_visibility_seconds,
+    )
+
+
+def _ssh_action_deadline_source_tail(
+    *,
+    source_clock_headroom: timedelta,
+    network_sensor_headroom: timedelta,
+    ecar_observation_headroom: timedelta,
+    syslog_observation_headroom: timedelta,
+) -> timedelta:
+    """Return the strict source-native terminal tail reserved by action deadlines."""
+
+    headrooms = (
+        source_clock_headroom,
+        network_sensor_headroom,
+        ecar_observation_headroom,
+        syslog_observation_headroom,
+    )
+    if any(type(headroom) is not timedelta or headroom < timedelta(0) for headroom in headrooms):
+        raise ValueError("SSH rendered-source headrooms must be non-negative timedeltas")
+    process_tails = {
+        family: max(
+            timedelta(
+                milliseconds=get_timing_window(
+                    relationship,
+                    default_min_ms=0,
+                    default_max_ms=default_max_ms,
+                    default_position="after",
+                ).max_ms
+            )
+            for relationship, default_max_ms in relationships
+        )
+        + timedelta(microseconds=4_000)
+        for family, relationships in _SSH_TERMINAL_PROCESS_RELATIONSHIPS.items()
+    }
+    process_tails["sysmon"] += timedelta(
+        microseconds=max(sysmon_envelope_timing(event_id).tail_max_us for event_id in (1, 5))
+    )
+    dependent_gap = timedelta(
+        milliseconds=get_timing_window(
+            "windows.logoff_after_rendered_dependents",
+            default_min_ms=125,
+            default_max_ms=750,
+            default_position="after",
+        ).max_ms
+    )
+    endpoint_native_tail = (
+        max(
+            SourceTimingPlanner.session_closure_tail("ecar"),
+            max(process_tails.values()) + dependent_gap,
+        )
+        + ecar_observation_headroom
+    )
+    syslog_native_tail = (
+        SourceTimingPlanner.session_closure_tail("syslog") + syslog_observation_headroom
+    )
+    return (
+        max(
+            max(endpoint_native_tail, syslog_native_tail) + source_clock_headroom,
+            network_sensor_headroom,
+        )
+        + _SSH_ACTION_DEADLINE_EPSILON
+    )
+
+
+def _ssh_action_deadline_runtime_headrooms(
+    *,
+    source_deadline: datetime | None,
+    source_timing_planner: SourceTimingPlanner | None,
+    network_observation_planner: _NetworkSensorHeadroomPlanner | None,
+    observation_policy: _ObservationDelayPolicy | None,
+    source_ip: str,
+    target_ip: str,
+    source_os_categories: tuple[str, ...],
+    source_clock_headroom: timedelta,
+    network_sensor_headroom: timedelta,
+    ecar_observation_headroom: timedelta,
+    syslog_observation_headroom: timedelta,
+    authentication_observation_headroom: timedelta,
+) -> tuple[timedelta, timedelta, timedelta, timedelta, timedelta]:
+    """Resolve conservative source and sensor bounds without allocating timing state."""
+
+    if type(source_ip) is not str or type(target_ip) is not str:
+        raise TypeError("SSH deadline endpoints must be strings")
+    if (
+        type(source_os_categories) is not tuple
+        or not source_os_categories
+        or any(os_category not in {"linux", "windows"} for os_category in source_os_categories)
+    ):
+        raise ValueError("SSH deadline source OS categories must be a non-empty exact tuple")
+    headrooms = (
+        source_clock_headroom,
+        network_sensor_headroom,
+        ecar_observation_headroom,
+        syslog_observation_headroom,
+        authentication_observation_headroom,
+    )
+    if any(type(headroom) is not timedelta or headroom < timedelta(0) for headroom in headrooms):
+        raise ValueError("SSH rendered-source headrooms must be non-negative timedeltas")
+    if source_deadline is None:
+        if (
+            source_timing_planner is not None
+            or network_observation_planner is not None
+            or observation_policy is not None
+        ):
+            raise ValueError("SSH runtime deadline planners require source_deadline")
+        return (
+            source_clock_headroom,
+            network_sensor_headroom,
+            ecar_observation_headroom,
+            syslog_observation_headroom,
+            authentication_observation_headroom,
+        )
+
+    deadline = ensure_utc(source_deadline)
+    if source_timing_planner is not None:
+        resolved_clock_headrooms = tuple(
+            source_timing_planner.endpoint_clock_positive_headroom(deadline, os_category)
+            for os_category in source_os_categories
+        )
+        if any(
+            type(headroom) is not timedelta or headroom < timedelta(0)
+            for headroom in resolved_clock_headrooms
+        ):
+            raise ValueError("SSH source-clock planner returned an invalid positive headroom")
+        source_clock_headroom = max(
+            source_clock_headroom,
+            *resolved_clock_headrooms,
+        )
+    if network_observation_planner is not None:
+        resolved_sensor_headroom = (
+            network_observation_planner.network_sensor_close_positive_headroom(
+                deadline,
+                src_ip=source_ip,
+                dst_ip=target_ip,
+                protocol="tcp",
+                conn_state="SF",
+                payload_bytes=1,
+            )
+        )
+        if type(resolved_sensor_headroom) is not timedelta or resolved_sensor_headroom < timedelta(
+            0
+        ):
+            raise ValueError("SSH network-sensor planner returned an invalid positive headroom")
+        network_sensor_headroom = max(network_sensor_headroom, resolved_sensor_headroom)
+    if observation_policy is not None:
+        ecar_delay_bounds = observation_policy.delay_bounds("ecar")
+        syslog_delay_bounds = observation_policy.delay_bounds("syslog")
+        if any(
+            type(bounds) is not tuple or len(bounds) != 2
+            for bounds in (ecar_delay_bounds, syslog_delay_bounds)
+        ) or any(
+            type(bound) is not timedelta or bound < timedelta(0)
+            for bounds in (ecar_delay_bounds, syslog_delay_bounds)
+            for bound in bounds
+        ):
+            raise ValueError("SSH observation policy returned invalid endpoint delay bounds")
+        resolved_authentication_observation = observation_policy.maximum_delay_difference(
+            "ecar",
+            "syslog",
+        )
+        if type(
+            resolved_authentication_observation
+        ) is not timedelta or resolved_authentication_observation < timedelta(0):
+            raise ValueError("SSH observation policy returned an invalid auth delay difference")
+        ecar_observation_headroom = max(ecar_observation_headroom, ecar_delay_bounds[1])
+        syslog_observation_headroom = max(
+            syslog_observation_headroom,
+            syslog_delay_bounds[1],
+        )
+        authentication_observation_headroom = max(
+            authentication_observation_headroom,
+            resolved_authentication_observation,
+        )
+    return (
+        source_clock_headroom,
+        network_sensor_headroom,
+        ecar_observation_headroom,
+        syslog_observation_headroom,
+        authentication_observation_headroom,
+    )
+
+
+def ssh_action_deadline_transport_headroom_seconds(
+    *,
+    min_duration_seconds: float = 30.0,
+    auth_method: str | None = None,
+    public_key_type: str = "",
+    route_class: str = "public",
+    source_deadline: datetime | None = None,
+    source_timing_planner: SourceTimingPlanner | None = None,
+    network_observation_planner: _NetworkSensorHeadroomPlanner | None = None,
+    observation_policy: _ObservationDelayPolicy | None = None,
+    source_ip: str = "",
+    target_ip: str = "",
+    source_os_categories: tuple[str, ...] = ("linux", "windows"),
+    source_clock_headroom: timedelta = timedelta(0),
+    network_sensor_headroom: timedelta = timedelta(0),
+    ecar_observation_headroom: timedelta = timedelta(0),
+    syslog_observation_headroom: timedelta = timedelta(0),
+    authentication_observation_headroom: timedelta = timedelta(0),
+) -> float:
+    """Return conservative SSH transport and rendered-terminal deadline headroom.
+
+    ``auth_method=None`` covers both password and RSA public-key authentication.
+    Supplying the request's exact authentication shape can produce a tighter bound.
+    """
+
+    if not math.isfinite(min_duration_seconds) or min_duration_seconds < 0:
+        raise ValueError("SSH deadline minimum duration must be finite and non-negative")
+    if auth_method is not None and (type(auth_method) is not str or not auth_method.strip()):
+        raise ValueError("SSH deadline authentication method must be a non-empty string")
+    if type(public_key_type) is not str or type(route_class) is not str or not route_class:
+        raise ValueError("SSH deadline authentication context is malformed")
+    (
+        source_clock_headroom,
+        network_sensor_headroom,
+        ecar_observation_headroom,
+        syslog_observation_headroom,
+        authentication_observation_headroom,
+    ) = _ssh_action_deadline_runtime_headrooms(
+        source_deadline=source_deadline,
+        source_timing_planner=source_timing_planner,
+        network_observation_planner=network_observation_planner,
+        observation_policy=observation_policy,
+        source_ip=source_ip,
+        target_ip=target_ip,
+        source_os_categories=source_os_categories,
+        source_clock_headroom=source_clock_headroom,
+        network_sensor_headroom=network_sensor_headroom,
+        ecar_observation_headroom=ecar_observation_headroom,
+        syslog_observation_headroom=syslog_observation_headroom,
+        authentication_observation_headroom=authentication_observation_headroom,
+    )
+    target_clock_negative_headroom = timedelta(0)
+    if source_deadline is not None and source_timing_planner is not None:
+        target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+            ensure_utc(source_deadline),
+            "linux",
+        )
+        if type(
+            target_clock_negative_headroom
+        ) is not timedelta or target_clock_negative_headroom < timedelta(0):
+            raise ValueError("SSH target-clock planner returned an invalid negative headroom")
+    transport_open_window = get_timing_window(
+        _SSH_TRANSPORT_OPEN_RELATIONSHIP,
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    maximum_transport_open_delay = timedelta(
+        milliseconds=transport_open_window.max_ms,
+        microseconds=_SSH_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS,
+    )
+    return (
+        _ssh_minimum_transport_seconds(
+            min_duration_seconds=min_duration_seconds,
+            auth_method=auth_method,
+            public_key_type=public_key_type,
+            route_class=route_class,
+            source_clock_headroom=source_clock_headroom,
+            target_clock_negative_headroom=target_clock_negative_headroom,
+            authentication_observation_headroom=authentication_observation_headroom,
+        )
+        + _SSH_TERMINAL_TAIL_RESERVATION.total_seconds()
+        + _ssh_action_deadline_source_tail(
+            source_clock_headroom=source_clock_headroom,
+            network_sensor_headroom=network_sensor_headroom,
+            ecar_observation_headroom=ecar_observation_headroom,
+            syslog_observation_headroom=syslog_observation_headroom,
+        ).total_seconds()
+        + maximum_transport_open_delay.total_seconds()
+    )
 
 
 def _ssh_receiver_descendant_phase_object_id(phase: str) -> str | None:
@@ -585,6 +975,7 @@ class _PreparedSshClosePlan:
     session_close_time: datetime
     logind_remove_time: datetime
     terminal_window_end: datetime
+    action_source_deadline: datetime | None
     session_object_id: str
     logon_id: str
     session_id: int
@@ -648,9 +1039,16 @@ class _PreparedSshClosePlan:
             self.logind_remove_time,
             self.terminal_window_end,
         )
-        if any(type(value) is not datetime for value in terminal_times) or (
-            self.source_terminate_time is not None
-            and type(self.source_terminate_time) is not datetime
+        if (
+            any(type(value) is not datetime for value in terminal_times)
+            or (
+                self.source_terminate_time is not None
+                and type(self.source_terminate_time) is not datetime
+            )
+            or (
+                self.action_source_deadline is not None
+                and type(self.action_source_deadline) is not datetime
+            )
         ):
             raise TypeError("Exact SSH close plan terminal times changed type")
         open_time = ensure_utc(self.open_time)
@@ -661,6 +1059,11 @@ class _PreparedSshClosePlan:
         session_close_time = ensure_utc(self.session_close_time)
         logind_remove_time = ensure_utc(self.logind_remove_time)
         terminal_window_end = ensure_utc(self.terminal_window_end)
+        action_source_deadline = (
+            ensure_utc(self.action_source_deadline)
+            if self.action_source_deadline is not None
+            else None
+        )
         source_terminate_time = (
             ensure_utc(self.source_terminate_time)
             if self.source_terminate_time is not None
@@ -707,6 +1110,9 @@ class _PreparedSshClosePlan:
         object.__setattr__(self, "session_close_time", session_close_time)
         object.__setattr__(self, "logind_remove_time", logind_remove_time)
         object.__setattr__(self, "terminal_window_end", terminal_window_end)
+        object.__setattr__(self, "action_source_deadline", action_source_deadline)
+        if action_source_deadline is not None and terminal_window_end >= action_source_deadline:
+            raise ValueError("Exact SSH action source deadline lacks a strict terminal tail")
         self.require_terminal_tail(terminal_window_end)
 
     def require_terminal_tail(self, window_end: datetime) -> None:
@@ -1562,9 +1968,12 @@ class _PreparedSshCloseContinuation:
                 "application owner"
             )
         self.require_projection_owner_shape()
-        self.plan.require_terminal_tail(
+        registry_window_end = ensure_utc(
             executor._ssh_channel_manager.application_registry.window_end
         )
+        if self.plan.terminal_window_end > registry_window_end:
+            raise StateError("Exact SSH terminal tail crossed its generation-window owner")
+        self.plan.require_terminal_tail(self.plan.terminal_window_end)
 
     def bind(self, transaction: NetworkTransactionPlan) -> _SshCloseContinuation:
         """Bind this exact prepared payload to its captured committed transport."""
@@ -2206,6 +2615,9 @@ class SshSessionActionBundle:
     def execute_with_identity(self) -> tuple[str, str]:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
+        # Hard-deadline admission is read-only and must precede every RNG/state/
+        # source-port/evidence side effect in exact and compatibility paths.
+        self._hard_deadline_transport_close_limit()
         if self._uses_exact_deferred_publication():
             owner_rng = _get_rng()
             rng_state_before = owner_rng.getstate()
@@ -2459,7 +2871,9 @@ class SshSessionActionBundle:
             return request.source_system
         return self.executor._ip_to_system.get(request.source_ip)
 
-    def _deferred_source_process_binding(self) -> tuple[ProcessIdentity, str] | None:
+    def _deferred_source_process_binding(
+        self,
+    ) -> tuple[ProcessIdentity, SessionIdentity] | None:
         """Return an exact existing source-process/session binding when authored."""
 
         request = self.request
@@ -2503,7 +2917,7 @@ class SshSessionActionBundle:
             or ensure_utc(session.start_time) > request_time
         ):
             return None
-        return identity, session_identity.object_id
+        return identity, session_identity
 
     def _exact_deferred_timing_runtime(self) -> TimingRuntime:
         """Require every exact SSH timing owner to share one runtime identity."""
@@ -2567,6 +2981,12 @@ class SshSessionActionBundle:
         """Plan transport-level identity, byte counts, and host contexts."""
 
         request = self.request
+        hard_close_limit = self._hard_deadline_transport_close_limit()
+        action_deadline = bool(
+            request.session_end_plan is not None
+            and request.session_end_plan.is_hard_deadline
+            and not request.session_end_plan.is_authoritative
+        )
         rng = _get_rng()
         src_port = (
             self.executor.preview_ssh_source_port(
@@ -2577,7 +2997,7 @@ class SshSessionActionBundle:
                 self._source_os(),
                 request.time,
             )
-            if deferred_publication
+            if deferred_publication or action_deadline
             else self.executor.reserve_ssh_source_port(
                 request.source_ip,
                 request.target_system.ip,
@@ -2619,6 +3039,32 @@ class SshSessionActionBundle:
             # The predicted packet timestamp is used for receiver process timing,
             # not as a second canonical start for duration arithmetic.
             duration = (planned_close - ensure_utc(request.time)).total_seconds()
+        elif action_deadline:
+            if hard_close_limit is None:
+                raise StateError("SSH action-bundle deadline lost its transport close limit")
+            available_seconds = (hard_close_limit - transport_open_time).total_seconds()
+            action_source_deadline = self._action_source_deadline()
+            if action_source_deadline is None:
+                raise StateError("SSH action-bundle transport lost its source deadline")
+            minimum_seconds = self._action_deadline_min_transport_seconds(action_source_deadline)
+            if available_seconds < minimum_seconds:
+                raise StateError(
+                    "SSH action-bundle deadline leaves less than the minimum transport interval: "
+                    f"available={available_seconds:.6f}s, required={minimum_seconds:.6f}s, "
+                    f"deadline={end_plan.canonical_end.isoformat()}"
+                )
+            duration = min(max(duration, minimum_seconds), available_seconds)
+            if not deferred_publication:
+                reserved_port = self.executor.reserve_ssh_source_port(
+                    request.source_ip,
+                    request.target_system.ip,
+                    src_port,
+                    rng,
+                    self._source_os(),
+                    time=request.time,
+                )
+                if reserved_port != src_port:
+                    raise StateError("SSH source-port preview changed during deadline admission")
         orig_bytes = (
             request.orig_bytes if request.orig_bytes is not None else rng.randint(2000, 50000)
         )
@@ -2643,6 +3089,162 @@ class SshSessionActionBundle:
                 stable_id=request.execution_stable_id(src_port),
                 source=request.source,
             ),
+        )
+
+    def _hard_deadline_transport_close_limit(self) -> datetime | None:
+        """Return the latest transport close admitted by one immutable session fence."""
+
+        request = self.request
+        end_plan = request.session_end_plan
+        if end_plan is None or not end_plan.is_hard_deadline:
+            return None
+        if end_plan.is_authoritative:
+            close_gap_ms = 100 + (
+                _stable_seed(
+                    "ssh_transport_before_explicit_logoff:"
+                    f"{request.stable_id}:{end_plan.canonical_end.isoformat()}"
+                )
+                % 1401
+            )
+            close_limit = ensure_utc(end_plan.canonical_end) - timedelta(milliseconds=close_gap_ms)
+            if close_limit <= ensure_utc(request.time):
+                raise StateError(
+                    "Explicit SSH session end must follow transport open: "
+                    f"{request.target_system.hostname} at {end_plan.canonical_end.isoformat()}"
+                )
+            return close_limit
+
+        action_source_deadline = self._action_source_deadline()
+        if action_source_deadline is None:
+            raise StateError("SSH action-bundle deadline lost its source boundary")
+        route_class = "private" if self._source_system() is not None else "public"
+        runtime_options = self._action_deadline_runtime_options(action_source_deadline)
+        required_headroom = ssh_action_deadline_transport_headroom_seconds(
+            min_duration_seconds=request.min_duration or 0.0,
+            auth_method=request.auth_method,
+            public_key_type=request.public_key_type,
+            route_class=route_class,
+            **runtime_options,
+        )
+        available_headroom = (action_source_deadline - ensure_utc(request.time)).total_seconds()
+        if ensure_utc(request.time) + timedelta(seconds=required_headroom) > action_source_deadline:
+            raise StateError(
+                "SSH action-bundle deadline leaves less than the minimum transport interval: "
+                f"available={available_headroom:.6f}s, required={required_headroom:.6f}s, "
+                f"deadline={action_source_deadline.isoformat()}"
+            )
+        return (
+            action_source_deadline
+            - self._action_rendered_source_tail(action_source_deadline)
+            - _SSH_TERMINAL_TAIL_RESERVATION
+        )
+
+    def _action_deadline_min_transport_seconds(self, deadline: datetime) -> float:
+        """Return the same cross-host auth interval used by public preflight."""
+
+        request = self.request
+        runtime_options = self._action_deadline_runtime_options(deadline)
+        (
+            source_clock_headroom,
+            _network_sensor_headroom,
+            _ecar_observation_headroom,
+            _syslog_observation_headroom,
+            authentication_observation_headroom,
+        ) = _ssh_action_deadline_runtime_headrooms(
+            **runtime_options,
+            source_clock_headroom=timedelta(0),
+            network_sensor_headroom=timedelta(0),
+            ecar_observation_headroom=timedelta(0),
+            syslog_observation_headroom=timedelta(0),
+            authentication_observation_headroom=timedelta(0),
+        )
+        source_timing_planner = runtime_options["source_timing_planner"]
+        target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+            ensure_utc(deadline),
+            "linux",
+        )
+        route_class = "private" if self._source_system() is not None else "public"
+        return _ssh_minimum_transport_seconds(
+            min_duration_seconds=request.min_duration or 0.0,
+            auth_method=request.auth_method,
+            public_key_type=request.public_key_type,
+            route_class=route_class,
+            source_clock_headroom=source_clock_headroom,
+            target_clock_negative_headroom=target_clock_negative_headroom,
+            authentication_observation_headroom=authentication_observation_headroom,
+        )
+
+    def _action_source_deadline(self) -> datetime | None:
+        """Return the raw half-open rendered-source fence for an action plan."""
+
+        end_plan = self.request.session_end_plan
+        if end_plan is None or not end_plan.is_hard_deadline or end_plan.is_authoritative:
+            return None
+        registry_end = ensure_utc(
+            self.executor._ssh_channel_manager.application_registry.window_end
+        )
+        return min(registry_end, ensure_utc(end_plan.canonical_end))
+
+    def _action_deadline_runtime_options(self, deadline: datetime) -> dict[str, Any]:
+        """Return the shared allocation-free planners and exact SSH route facts."""
+
+        dispatcher = getattr(self.executor, "dispatcher", None)
+        source_timing_planner = getattr(dispatcher, "source_timing_planner", None)
+        network_observation_planner = getattr(
+            dispatcher,
+            "network_observation_planner",
+            None,
+        )
+        observation_policy = getattr(dispatcher, "observation_policy", None)
+        if not callable(
+            getattr(source_timing_planner, "endpoint_clock_positive_headroom", None)
+        ) or not callable(getattr(source_timing_planner, "endpoint_clock_negative_headroom", None)):
+            raise StateError("SSH deadline admission requires source-clock headroom support")
+        if not callable(
+            getattr(
+                network_observation_planner,
+                "network_sensor_close_positive_headroom",
+                None,
+            )
+        ):
+            raise StateError("SSH deadline admission requires network-sensor headroom support")
+        if not callable(getattr(observation_policy, "delay_bounds", None)) or not callable(
+            getattr(observation_policy, "maximum_delay_difference", None)
+        ):
+            raise StateError("SSH deadline admission requires observation-delay support")
+        source_os = self._source_os()
+        return {
+            "source_deadline": deadline,
+            "source_timing_planner": source_timing_planner,
+            "network_observation_planner": network_observation_planner,
+            "observation_policy": observation_policy,
+            "source_ip": self.request.source_ip,
+            "target_ip": self.request.target_system.ip,
+            "source_os_categories": (("linux",) if source_os == "linux" else ("linux", "windows")),
+        }
+
+    def _action_rendered_source_tail(self, deadline: datetime) -> timedelta:
+        """Return the owner tail using the same public runtime inputs as preflight."""
+
+        (
+            source_clock_headroom,
+            network_sensor_headroom,
+            ecar_observation_headroom,
+            syslog_observation_headroom,
+            _authentication_observation_headroom,
+        ) = _ssh_action_deadline_runtime_headrooms(
+            **self._action_deadline_runtime_options(deadline),
+            source_clock_headroom=timedelta(0),
+            network_sensor_headroom=timedelta(0),
+            ecar_observation_headroom=timedelta(0),
+            syslog_observation_headroom=timedelta(0),
+            authentication_observation_headroom=timedelta(0),
+        )
+        return _ssh_action_deadline_source_tail(
+            source_clock_headroom=source_clock_headroom,
+            network_sensor_headroom=network_sensor_headroom,
+            ecar_observation_headroom=ecar_observation_headroom,
+            syslog_observation_headroom=syslog_observation_headroom,
         )
 
     def _prepare_deferred_close_plan(
@@ -2753,9 +3355,8 @@ class SshSessionActionBundle:
             receiver_terminate_time=receiver_terminate_time,
             session_close_time=session_close_time,
             logind_remove_time=logind_remove_time,
-            terminal_window_end=(
-                self.executor._ssh_channel_manager.application_registry.window_end
-            ),
+            terminal_window_end=self._owned_terminal_window_end(),
+            action_source_deadline=self._action_source_deadline(),
             session_object_id=session_plan.identity.object_id,
             logon_id=session_plan.identity.logon_id,
             session_id=session_plan.identity.session_id,
@@ -2775,6 +3376,17 @@ class SshSessionActionBundle:
             auth_state=auth_state,
             source_tag=self.request.source,
         )
+
+    def _owned_terminal_window_end(self) -> datetime:
+        """Return the half-open owner for an action-generated SSH terminal tail."""
+
+        window_end = ensure_utc(self.executor._ssh_channel_manager.application_registry.window_end)
+        action_source_deadline = self._action_source_deadline()
+        if action_source_deadline is not None:
+            return action_source_deadline - self._action_rendered_source_tail(
+                action_source_deadline
+            )
+        return window_end
 
     def _prepare_deferred_open(self, state: _SshTransportState) -> _PreparedDeferredSshOpen:
         """Prepare the exact SSH State/application/dependent handoff without mutation."""
@@ -2812,7 +3424,13 @@ class SshSessionActionBundle:
             scope=timing_scope,
         )
         session_start = open_time + timedelta(milliseconds=100)
-        receiver_start = open_time + timedelta(seconds=2)
+        receiver_start = open_time + max(
+            _SSH_RECEIVER_BOOTSTRAP_HEADROOM,
+            self._cross_host_auth_visibility_headroom(
+                transport_open_time=open_time,
+                target_canonical_time=open_time,
+            ),
+        )
         connection_time = receiver_start + timedelta(
             milliseconds=max(1.0, timing.connection_gap_ms)
         )
@@ -2892,7 +3510,10 @@ class SshSessionActionBundle:
         if (request.source_pid > 0 or request.source_process_image) and source_binding is None:
             raise StateError("Exact SSH source process changed before deferred-session preparation")
         source_identity = source_binding[0] if source_binding is not None else None
-        source_session_object_id = source_binding[1] if source_binding is not None else ""
+        source_session_identity = source_binding[1] if source_binding is not None else None
+        source_session_object_id = (
+            source_session_identity.object_id if source_session_identity is not None else ""
+        )
         auth_state = _SshLinuxAuthState(
             sshd_pid=receiver_plan.identity.pid,
             logind_session_id=session_plan.identity.session_id,
@@ -2958,6 +3579,7 @@ class SshSessionActionBundle:
             receiver_state_session_identity=session_plan.identity,
             source_identity=source_identity,
             source_session_object_id=source_session_object_id,
+            source_state_session_identity=source_session_identity,
             ready_at=logind_time,
             auth_method=self._deferred_auth_method(),
             operation_kind=operation_kind,
@@ -2966,6 +3588,7 @@ class SshSessionActionBundle:
                 execution_id,
                 operation_kind.value,
             ),
+            allow_omitted_transport_actor=True,
         )
         dependent_occurrences = (
             DeferredSessionDependentOccurrenceSpec(
@@ -3005,6 +3628,7 @@ class SshSessionActionBundle:
                 expected_plan=timing,
                 transport_open_time=open_time,
                 ready_at=logind_time,
+                receiver_bootstrap_headroom=receiver_start - open_time,
             ),
             ssh_timing_runtime=timing_runtime,
         )
@@ -3406,7 +4030,29 @@ class SshSessionActionBundle:
                     event,
                     source_timing_preparation=timing_preparation,
                 )
-            occurrence_id = dispatcher.action_cohort_projection_occurrence(carrier).occurrence_id
+            projection_facts = dispatcher.action_cohort_projection_facts(carrier)
+            occurrence_id = projection_facts.occurrence.occurrence_id
+            action_source_deadline = continuation.plan.action_source_deadline
+            if action_source_deadline is not None:
+                source_frontiers = tuple(
+                    timestamp
+                    for source in projection_facts.sources
+                    if source.status in {"visible", "delayed"}
+                    for timestamp in (
+                        tuple(value for _key, value in source.finalized_times)
+                        or (
+                            (source.projected_timestamp,)
+                            if source.projected_timestamp is not None
+                            else ()
+                        )
+                    )
+                )
+                if projection_facts.occurrence.timestamp >= action_source_deadline or any(
+                    timestamp >= action_source_deadline for timestamp in source_frontiers
+                ):
+                    raise StateError(
+                        "Exact SSH terminal projection crossed its action-bundle source deadline"
+                    )
             prepared = dispatcher.bind_action_cohort_projection(
                 carrier,
                 state_plan=state_plan,
@@ -3756,6 +4402,22 @@ class SshSessionActionBundle:
             return
         source_system = self._source_system()
         source_process = state.source_process
+        prepared_source_identity = (
+            continuation.plan.source_identity if continuation is not None else None
+        )
+        if source_process is None and prepared_source_identity is not None:
+            # Network source timing may deliberately omit a late SSH client
+            # from the FLOW while the SSH owner still protects and terminates
+            # that exact canonical process through transport close.
+            source_process = ProcessContext(
+                pid=prepared_source_identity.pid,
+                parent_pid=prepared_source_identity.parent_pid,
+                image=prepared_source_identity.image,
+                command_line=prepared_source_identity.command_line,
+                username=prepared_source_identity.principal,
+                logon_id=prepared_source_identity.logon_id,
+                start_time=prepared_source_identity.started_at,
+            )
         if source_system is None or source_process is None or source_process.pid <= 0:
             if continuation is not None:
                 if continuation.plan.source_identity is not None:
@@ -4104,6 +4766,49 @@ class SshSessionActionBundle:
             ecar_after_accept=ecar_after_accept,
         )
 
+    def _cross_host_auth_visibility_headroom(
+        self,
+        *,
+        transport_open_time: datetime,
+        target_canonical_time: datetime,
+    ) -> timedelta:
+        """Bound source FLOW lead over target SSH authentication evidence."""
+
+        canonical_transport_open_time = ensure_utc(transport_open_time)
+        canonical_target_time = ensure_utc(target_canonical_time)
+        source_timing_planner = getattr(
+            getattr(self.executor, "dispatcher", None),
+            "source_timing_planner",
+            None,
+        )
+        source_clock_headroom = timedelta(0)
+        target_clock_headroom = timedelta(0)
+        if source_timing_planner is not None:
+            if not callable(
+                getattr(source_timing_planner, "endpoint_clock_positive_headroom", None)
+            ) or not callable(
+                getattr(source_timing_planner, "endpoint_clock_negative_headroom", None)
+            ):
+                raise StateError("SSH source ordering requires endpoint-clock headroom support")
+            source_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
+                canonical_transport_open_time,
+                self._source_os(),
+            )
+            target_clock_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+                canonical_target_time + source_clock_headroom,
+                "linux",
+            )
+        return (
+            _ssh_ecar_flow_headroom()
+            + source_observation_delay_difference(
+                self.executor,
+                earlier_source="ecar",
+                later_source="syslog",
+            )
+            + source_clock_headroom
+            + target_clock_headroom
+        )
+
     def _resolve_linux_auth_lifecycle(
         self,
         *,
@@ -4125,13 +4830,6 @@ class SshSessionActionBundle:
             raise StateError("SSH lifecycle resolution requires an exact TimingScope")
 
         request = self.request
-        flow_window = get_timing_window(
-            "source.ecar_flow",
-            default_min_ms=40,
-            default_max_ms=300,
-            default_position="after",
-            default_class="source_latency",
-        )
         canonical_transport_open_time = ensure_utc(transport_open_time)
         canonical_event_time = ensure_utc(event.timestamp)
         canonical_offset_ms = max(
@@ -4140,17 +4838,16 @@ class SshSessionActionBundle:
                 (canonical_event_time - canonical_transport_open_time).total_seconds() * 1000
             ),
         )
-        observation_delay_ms = math.ceil(
-            source_observation_delay_difference(
-                self.executor,
-                earlier_source="ecar",
-                later_source="syslog",
+        visibility_headroom_ms = math.ceil(
+            self._cross_host_auth_visibility_headroom(
+                transport_open_time=canonical_transport_open_time,
+                target_canonical_time=canonical_event_time,
             ).total_seconds()
-            * 1000
+            * 1_000
         )
         visibility_floor_ms = max(
             conn_delay_ms,
-            canonical_offset_ms + flow_window.max_ms + observation_delay_ms + 25,
+            canonical_offset_ms + visibility_headroom_ms,
         )
         auth_ready_delay_ms = visibility_floor_ms + accepted_gap_ms
         graph = TemporalConstraintGraph(
@@ -4258,7 +4955,7 @@ class SshSessionActionBundle:
         """Sample one tuple-scoped SSH transport-open time through the engine runtime."""
 
         request = self.request
-        relationship_key = "network.connection_start_jitter"
+        relationship_key = _SSH_TRANSPORT_OPEN_RELATIONSHIP
         window = get_timing_window(
             relationship_key,
             default_min_ms=0,

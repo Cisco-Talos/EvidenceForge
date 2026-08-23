@@ -52,6 +52,20 @@ from evidenceforge.generation.actions import (
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
     dhcp_renewal_interval_seconds,
+    dns_transport_close_headroom_seconds,
+    http_response_parent_duration_floor,
+    linux_sudo_intrinsic_close_headroom,
+    ntp_transport_close_headroom_seconds,
+    proxy_transaction_close_bound_seconds,
+    tls_completed_extension_headroom_seconds,
+    tls_generated_family_close_bound_seconds,
+)
+from evidenceforge.generation.actions.rdp_session import (
+    rdp_action_deadline_source_tail,
+    rdp_action_deadline_transport_headroom_seconds,
+)
+from evidenceforge.generation.actions.ssh_session import (
+    ssh_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.auth_noise import (
     scheduled_stale_credentials_config,
@@ -114,9 +128,12 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.activity.windows_auth_realism import (
     anonymous_smb_baseline_config,
     group_policy_refresh_config,
+    machine_account_authentication_close_bound_seconds,
+    remote_auth_transport_max_duration_seconds,
 )
 from evidenceforge.generation.world_model import (
     HostCapability,
@@ -150,6 +167,11 @@ _BASELINE_SMB_SERVICE_ALIASES = {
     "smbd",
 }
 _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
+_BASELINE_BROWSER_CLOSE_HEADROOM = timedelta(seconds=23)
+_BASELINE_EMAIL_DELIVERY_HEADROOM = timedelta(seconds=32)
+_BASELINE_AUTHORED_ROUTE_REQUEST_GAP_SECONDS = 2.4
+# BaselineTimingPlanner.packet_observation_delta samples through max_ms + 997 us.
+_BASELINE_NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS = 997
 
 
 def _require_seeded_windows_parent(
@@ -227,6 +249,18 @@ class _BaselineRdpIntent:
     user: User
     source_system: System | None
     prepared_bootstrap: _PreparedRdpSessionBootstrap
+    session_end_plan: SessionEndPlan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsScheduledTaskPlan:
+    """One selected Windows task whose cap state has not yet been committed."""
+
+    image: str
+    command_line: str
+    parent_key: str
+    state_key: tuple[str, str]
+    time: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +337,25 @@ def _baseline_inbound_ids_probe_profile(
 
     service = _service_for_port(dst_port) or {443: "ssl", 80: "http", 53: "dns"}.get(dst_port, "")
     return service, None, rng.uniform(0.001, 5.0), rng.randint(40, 2000), rng.randint(0, 1000)
+
+
+def _baseline_inbound_ids_probe_close_contract(
+    *,
+    proto: str,
+    dst_port: int,
+    target_system: System | None,
+    policy_denied: bool,
+    deny_conn_state: str,
+) -> tuple[str, float, str, int]:
+    """Return rendered-close facts for one selected inbound IDS path."""
+
+    if proto != "tcp":
+        return "", 5.0, "", 1
+    if policy_denied or not _nmap_target_exposes_port(dst_port, target_system):
+        conn_state = "REJ" if deny_conn_state == "REJ" else "S0"
+        return "", 0.18 if conn_state == "REJ" else 7.0, conn_state, 0
+    service = _service_for_port(dst_port) or {443: "ssl", 80: "http", 53: "dns"}.get(dst_port, "")
+    return service, 5.0, "", 1
 
 
 def _baseline_inventory_tokens(values: list[str] | tuple[str, ...] | None) -> set[str]:
@@ -2134,7 +2187,9 @@ class BaselineMixin:
         time: datetime,
         sys_pids: dict[str, int],
         rng: random.Random,
-    ) -> tuple[str, int]:
+        *,
+        exclusive_end: datetime | None = None,
+    ) -> tuple[str, int] | None:
         """Return a live caller process for benign service-account delegation."""
         stable_choices = getattr(self, "_service_account_delegation_choices", {})
         choice = stable_choices.get(svc_name.lower())
@@ -2158,6 +2213,7 @@ class BaselineMixin:
                 candidates.append(proc)
         if candidates:
             proc = max(candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.set_current_time(time)
             self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
             return image, proc.pid
 
@@ -2171,6 +2227,12 @@ class BaselineMixin:
         scenario_start = getattr(self, "start_time", None)
         if scenario_start is not None and process_time < scenario_start:
             process_time = time - timedelta(milliseconds=500)
+        termination_time = None
+        if bounded_lifetime is not None and exclusive_end is not None:
+            termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
+            if termination_time > exclusive_end:
+                return None
+        self.state_manager.set_current_time(time)
         pid = self.activity_generator.generate_system_process(
             system=system,
             time=process_time,
@@ -2178,9 +2240,13 @@ class BaselineMixin:
             command_line=command_line,
             parent_pid=parent_pid,
             username="SYSTEM",
+            source_visible_by=(
+                time - timedelta(microseconds=1) if exclusive_end is not None else None
+            ),
         )
         if bounded_lifetime is not None:
-            termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
+            if termination_time is None:
+                termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
             self.activity_generator.generate_system_process_termination(
                 system=system,
                 time=termination_time,
@@ -2206,6 +2272,82 @@ class BaselineMixin:
                 current = 4 + rng.randint(0, 8)
         fd_state[hostname] = current
         return current
+
+    def _emit_linux_ambient_logind_session(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        current_hour: datetime,
+        rng: random.Random,
+        system_type: str,
+        sys_pids: dict[str, int],
+    ) -> None:
+        """Emit one source-local logind lifecycle, right-censored at collection end."""
+
+        sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, time)
+        if system_type == "server":
+            # Headless systems only get a rare, explicit local root console.
+            user = "root"
+        else:
+            # Desktop sessions belong to the modeled workstation owner.
+            user = system.assigned_user or "root"
+        pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
+            user,
+            rng=rng,
+            system_type=system_type,
+        )
+        pam_open_time = time - _linux_baseline_pam_open_lead(rng)
+        pam_pid = _linux_transient_syslog_pid(
+            self.state_manager,
+            system.hostname,
+            pam_open_time,
+            rng,
+        )
+        self.activity_generator.generate_syslog_event(
+            system=system,
+            time=pam_open_time,
+            app_name=pam_app,
+            message=pam_open,
+            pid=pam_pid,
+            facility=10,
+        )
+        self.activity_generator.generate_syslog_event(
+            system=system,
+            time=time,
+            app_name="systemd-logind",
+            message=f"New session {sid} of user {user}.",
+            pid=sys_pids.get("logind", rng.randint(400, 800)),
+            facility=10,
+        )
+        if rng.random() >= 0.65:
+            return
+
+        remove_time = time + timedelta(seconds=rng.randint(120, 5400))
+        if not self._baseline_pass_admits(
+            current_hour,
+            start=time,
+            end=remove_time,
+        ):
+            # This family owns source-local observations, not an ActiveSession.
+            # The opening pair is therefore legitimate right-censored evidence.
+            return
+        self.activity_generator.generate_syslog_event(
+            system=system,
+            time=remove_time - _linux_baseline_pam_close_lead(rng),
+            app_name=pam_app,
+            message=f"pam_unix({pam_service}:session): session closed for user {user}",
+            pid=pam_pid,
+            facility=10,
+        )
+        self.activity_generator.generate_syslog_event(
+            system=system,
+            time=remove_time,
+            app_name="systemd-logind",
+            message=f"Removed session {sid}.",
+            pid=sys_pids.get("logind", rng.randint(400, 800)),
+            facility=10,
+        )
 
     def _render_rsyslog_health_message(
         self,
@@ -2502,10 +2644,10 @@ class BaselineMixin:
         if emitted is None:
             emitted = set()
             self._linux_journald_housekeeping_emitted = emitted
-        hour_end = current_hour + timedelta(hours=1)
+        pass_end = self._baseline_pass_end(current_hour)
         for ts, msg in self._journald_housekeeping_schedule(system, rng):
             key = (system.hostname, ts.isoformat(), msg)
-            if key in emitted or ts < current_hour or ts >= hour_end:
+            if key in emitted or ts < current_hour or ts >= pass_end:
                 continue
             self.activity_generator.generate_syslog_event(
                 system=system,
@@ -2777,7 +2919,16 @@ class BaselineMixin:
         if activity_generator is None:
             return None
 
-        process_time = timestamp - timedelta(milliseconds=120 + rng.randint(0, 760))
+        # Leave Linux CLI companions enough canonical lead for the endpoint
+        # process-create envelope. A rejected child cannot be rolled back after
+        # a shell parent is published.
+        process_lead_ms = (
+            1100
+            if _get_os_category(system.os) == "linux"
+            and self._polkit_action_process_is_user_cli(process_path)
+            else 120
+        )
+        process_time = timestamp - timedelta(milliseconds=process_lead_ms + rng.randint(0, 760))
         scenario_start = getattr(self, "start_time", None)
         if scenario_start is not None:
             scenario_start = (
@@ -2844,8 +2995,10 @@ class BaselineMixin:
                     target_system=system,
                     activity_time=process_time,
                     source_visible_by=timestamp,
+                    existing_only=True,
                 )
-            if visible_parent is not None:
+                if visible_parent is None:
+                    return None
                 parent_pid = visible_parent
             reserve_foreground = getattr(
                 activity_generator,
@@ -2881,6 +3034,8 @@ class BaselineMixin:
                     suppress_command_file_effect=True,
                     source_visible_by=timestamp,
                 )
+                if pid <= 0:
+                    return None
                 self._schedule_foreground_process_termination(
                     user=user,
                     system=system,
@@ -3233,12 +3388,25 @@ class BaselineMixin:
                 continue
 
             self.state_manager.set_current_time(execution_anchor)
-            result = self.world_planner._bootstrap_prepared_rdp_session(
-                user=rdp_user,
-                prepared=request.prepared_bootstrap,
-                rng=rng,
-                allow_existing=True,
-            )
+            if request.session_end_plan is None:
+                result = self.world_planner._bootstrap_prepared_rdp_session(
+                    user=rdp_user,
+                    prepared=request.prepared_bootstrap,
+                    rng=rng,
+                    allow_existing=True,
+                )
+            else:
+                result = self.world_planner.bootstrap_user_session(
+                    user=rdp_user,
+                    target_system=target_system,
+                    time=request.prepared_bootstrap.requested_activity_time,
+                    rng=rng,
+                    session_kind="rdp",
+                    source_system=source_system,
+                    allow_existing=False,
+                    session_end_plan=request.session_end_plan,
+                    _prepared_rdp_bootstrap=request.prepared_bootstrap,
+                )
             session_time = (
                 result.session.start_time if result.session is not None else execution_anchor
             )
@@ -3249,14 +3417,14 @@ class BaselineMixin:
                 session_time=session_time,
             )
 
-    def _select_windows_scheduled_task(
+    def _plan_windows_scheduled_task(
         self,
         *,
         system: System,
         rng: random.Random,
         time: datetime,
-    ) -> tuple[str, str, str] | None:
-        """Pick a scheduled task while honoring per-host caps and cooldowns."""
+    ) -> _WindowsScheduledTaskPlan | None:
+        """Pick a scheduled task without consuming its cap or cooldown."""
         from evidenceforge.generation.activity.system_processes import (
             get_scheduled_task_entries,
             materialize_scheduled_task_entry,
@@ -3270,11 +3438,9 @@ class BaselineMixin:
         counts = getattr(self, "_windows_scheduled_task_counts", None)
         if counts is None:
             counts = {}
-            self._windows_scheduled_task_counts = counts
         last_seen = getattr(self, "_windows_scheduled_task_last_seen", None)
         if last_seen is None:
             last_seen = {}
-            self._windows_scheduled_task_last_seen = last_seen
 
         candidates: list[tuple[dict[str, Any], int, str]] = []
         for entry in entries:
@@ -3306,10 +3472,43 @@ class BaselineMixin:
             k=1,
         )[0]
         entry, _weight, key = candidates[selected_idx]
-        state_key = (system.hostname, key)
-        counts[state_key] = counts.get(state_key, 0) + 1
-        last_seen[state_key] = time
-        return materialize_scheduled_task_entry(entry, rng, system)
+        image, command_line, parent_key = materialize_scheduled_task_entry(entry, rng, system)
+        return _WindowsScheduledTaskPlan(
+            image=image,
+            command_line=command_line,
+            parent_key=parent_key,
+            state_key=(system.hostname, key),
+            time=time,
+        )
+
+    def _commit_windows_scheduled_task(self, plan: _WindowsScheduledTaskPlan) -> None:
+        """Consume the cap and cooldown for one admitted task plan."""
+
+        counts = getattr(self, "_windows_scheduled_task_counts", None)
+        if counts is None:
+            counts = {}
+            self._windows_scheduled_task_counts = counts
+        last_seen = getattr(self, "_windows_scheduled_task_last_seen", None)
+        if last_seen is None:
+            last_seen = {}
+            self._windows_scheduled_task_last_seen = last_seen
+        counts[plan.state_key] = counts.get(plan.state_key, 0) + 1
+        last_seen[plan.state_key] = plan.time
+
+    def _select_windows_scheduled_task(
+        self,
+        *,
+        system: System,
+        rng: random.Random,
+        time: datetime,
+    ) -> tuple[str, str, str] | None:
+        """Pick and commit a scheduled task for legacy nonterminal passes."""
+
+        plan = self._plan_windows_scheduled_task(system=system, rng=rng, time=time)
+        if plan is None:
+            return None
+        self._commit_windows_scheduled_task(plan)
+        return plan.image, plan.command_line, plan.parent_key
 
     def _scaled_interval_range(
         self,
@@ -3544,6 +3743,11 @@ class BaselineMixin:
         # produces visibly reversing process IDs. Execute the planned task
         # anchors chronologically so lifecycle state follows occurrence time.
         for ts, _service, sched in sorted(pending_occurrences, key=lambda item: item[:2]):
+            pass_admission = getattr(self, "_baseline_pass_admits", None)
+            if callable(pass_admission) and not pass_admission(
+                current_hour, start=ts, end=ts + timedelta(seconds=15.0)
+            ):
+                continue
             self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
 
     def _emit_scheduled_event(
@@ -3862,6 +4066,601 @@ class BaselineMixin:
         if flush_emitters:
             self._barrier_flush_all_emitters()
 
+    def _baseline_pass_end(self, current_hour: datetime) -> datetime:
+        """Return the exclusive end of this full warm-up or bounded output pass."""
+
+        hour_end = current_hour + timedelta(hours=1)
+        start_time = getattr(self, "start_time", None)
+        end_time = getattr(self, "end_time", None)
+        if (
+            isinstance(start_time, datetime)
+            and isinstance(end_time, datetime)
+            and current_hour >= start_time
+        ):
+            return min(hour_end, end_time)
+        return hour_end
+
+    def _baseline_pass_is_terminal(self, current_hour: datetime) -> bool:
+        """Return whether this pass is the final output pass for the scenario."""
+
+        start_time = getattr(self, "start_time", None)
+        end_time = getattr(self, "end_time", None)
+        return (
+            isinstance(start_time, datetime)
+            and isinstance(end_time, datetime)
+            and current_hour >= start_time
+            and current_hour + timedelta(hours=1) >= end_time
+        )
+
+    def _baseline_pass_admits(
+        self,
+        current_hour: datetime,
+        *,
+        start: datetime,
+        end: datetime | None = None,
+    ) -> bool:
+        """Return whether a planned baseline occurrence fits this scheduling pass.
+
+        Warm-up and nonterminal output passes retain their existing lifecycle
+        spillover. The terminal output pass must own both the start and any
+        known end, including when the output window ends on an hour boundary.
+        """
+
+        pass_end = self._baseline_pass_end(current_hour)
+        if start < current_hour or start >= pass_end:
+            return False
+        return end is None or not self._baseline_pass_is_terminal(current_hour) or end <= pass_end
+
+    def _baseline_uses_explicit_proxy(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        proto: str,
+        dst_port: int,
+        service: str | None,
+    ) -> bool:
+        """Return whether this optional connection can delegate to an explicit proxy."""
+
+        generator = getattr(self, "activity_generator", None)
+        return bool(
+            generator is not None
+            and getattr(generator, "_proxy_mode", "transparent") == "explicit"
+            and getattr(generator, "_proxy_routes", {}).get(src_ip)
+            and proto == "tcp"
+            and dst_port in {80, 443}
+            and service != ""
+            # Runtime also proxies an external hostname whose resolved address
+            # is private, so a routed caller cannot decide from the IP alone.
+            and bool(dst_ip)
+        )
+
+    def _baseline_network_close_bound_seconds(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        proto: str,
+        dst_port: int,
+        service: str | None,
+        requested_duration_max: float,
+        direct_extension_seconds: float = 0.0,
+        current_hour: datetime | None = None,
+        start: datetime | None = None,
+        conn_state: str = "SF",
+        payload_bytes: int | None = 1,
+        sensor_dst_ip: str | None = None,
+    ) -> float:
+        """Return a canonical or terminal rendered close bound for a connection."""
+
+        normalized_service = service
+        if proto == "tcp" and dst_port in {80, 443} and service != "":
+            normalized_service = "http" if dst_port == 80 else "ssl"
+        direct_bound = requested_duration_max + direct_extension_seconds
+        if normalized_service == "ssl":
+            direct_bound = max(
+                direct_bound,
+                tls_generated_family_close_bound_seconds(
+                    caller_duration_maximum=requested_duration_max
+                ),
+            )
+        close_extension_seconds = max(
+            0.0,
+            direct_extension_seconds
+            if normalized_service == "ssl"
+            else direct_bound - requested_duration_max,
+        )
+        uses_explicit_proxy = self._baseline_uses_explicit_proxy(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            proto=proto,
+            dst_port=dst_port,
+            service=service,
+        )
+        if not uses_explicit_proxy:
+            canonical_close_bound = direct_bound
+        else:
+            canonical_close_bound = proxy_transaction_close_bound_seconds(
+                origin_duration_max_seconds=requested_duration_max,
+                origin_close_extension_seconds=close_extension_seconds,
+                dst_port=dst_port,
+            )
+        if current_hour is None and start is None:
+            return canonical_close_bound
+        if current_hour is None or start is None:
+            raise ValueError("rendered network admission requires both current_hour and start")
+        return self._baseline_rendered_network_close_bound_seconds(
+            current_hour,
+            start=start,
+            # A generated TLS parent can spawn an OCSP HTTP transaction to an
+            # issuer-selected responder, potentially through a separate proxy
+            # route. Reserve the maximum across configured sensors rather than
+            # claiming the parent's physical tuple for the full family.
+            src_ip="" if uses_explicit_proxy or normalized_service == "ssl" else src_ip,
+            dst_ip=(
+                ""
+                if uses_explicit_proxy or normalized_service == "ssl"
+                else dst_ip
+                if sensor_dst_ip is None
+                else sensor_dst_ip
+            ),
+            proto=proto,
+            # The possible child can take a failed proxy-origin branch even
+            # when the TLS parent is a response-bearing SF flow. Preserve
+            # partial transport facts so firewall admission retains its
+            # embryonic-TCP maximum for the whole family.
+            conn_state="" if normalized_service == "ssl" else conn_state,
+            payload_bytes=None if normalized_service == "ssl" else payload_bytes,
+            canonical_close_bound_seconds=canonical_close_bound,
+        )
+
+    def _baseline_rendered_network_close_bound_seconds(
+        self,
+        current_hour: datetime,
+        *,
+        start: datetime,
+        src_ip: str,
+        dst_ip: str,
+        proto: str,
+        conn_state: str,
+        payload_bytes: int | None,
+        canonical_close_bound_seconds: float,
+    ) -> float:
+        """Layer rendered sensor/firewall closure over one canonical close bound."""
+
+        if not math.isfinite(canonical_close_bound_seconds) or canonical_close_bound_seconds < 0:
+            raise ValueError("canonical network close bound must be finite and non-negative")
+        if not self._baseline_pass_is_terminal(current_hour):
+            return canonical_close_bound_seconds
+        transport_open_window = get_timing_window(
+            "network.connection_start_jitter",
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        transport_open_headroom = timedelta(
+            milliseconds=transport_open_window.max_ms,
+            microseconds=_BASELINE_NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS,
+        )
+        canonical_rendered_close_bound_seconds = (
+            canonical_close_bound_seconds + transport_open_headroom.total_seconds()
+        )
+        sensor_headroom = self._baseline_network_sensor_close_positive_headroom(
+            canonical_time=start + timedelta(seconds=canonical_rendered_close_bound_seconds),
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            protocol=proto,
+            conn_state=conn_state,
+            payload_bytes=payload_bytes,
+        )
+        return canonical_rendered_close_bound_seconds + sensor_headroom.total_seconds() + 0.000001
+
+    def _baseline_dhcp_renewal_close_bound_seconds(
+        self,
+        current_hour: datetime,
+        *,
+        start: datetime,
+        system: System,
+        server_addr: str,
+    ) -> float:
+        """Return the complete DHCP renewal network/source close bound."""
+
+        if not self._baseline_pass_is_terminal(current_hour):
+            return 3.0
+
+        canonical_network_close = 0.5
+        sensor_headroom = self._baseline_network_sensor_close_positive_headroom(
+            canonical_time=start + timedelta(seconds=canonical_network_close),
+            src_ip=system.ip,
+            dst_ip=server_addr,
+            protocol="udp",
+            conn_state="SF",
+            payload_bytes=1,
+        )
+        network_close_bound = canonical_network_close + sensor_headroom.total_seconds() + 0.000001
+
+        os_category = _get_os_category(system.os)
+        source_tail_anchor = start + timedelta(seconds=3)
+        endpoint_clock_headroom = (
+            self._baseline_endpoint_clock_positive_headroom(
+                canonical_time=source_tail_anchor,
+                os_categories=(os_category,),
+            )
+            if os_category in {"linux", "windows"}
+            else timedelta(0)
+        )
+        source_close_bound = 3.0 + endpoint_clock_headroom.total_seconds()
+        if os_category == "linux":
+            dispatcher = getattr(self, "dispatcher", None)
+            observation_policy = getattr(dispatcher, "observation_policy", None)
+            delay_bounds = getattr(observation_policy, "delay_bounds", None)
+            if callable(delay_bounds):
+                _minimum_delay, maximum_delay = delay_bounds("syslog")
+                if type(maximum_delay) is not timedelta or maximum_delay < timedelta(0):
+                    raise ValueError("syslog observation delay bound must be non-negative")
+                source_close_bound += maximum_delay.total_seconds()
+        return max(network_close_bound, source_close_bound + 0.000001)
+
+    def _baseline_user_activity_close_bound_seconds(
+        self,
+        *,
+        activity_type: str,
+        system: System,
+        current_hour: datetime,
+        start: datetime,
+    ) -> float | None:
+        """Return a finite selected-family close bound, if an owner exposes one."""
+
+        if activity_type == "logon" or activity_type.startswith("process_"):
+            # Generic logons select their concrete subtype only during
+            # realization. Generic processes can move their actual start to an
+            # existing foreground-shell frontier before sampling a finite
+            # lifetime. Neither path exposes a terminal owner deadline, so a
+            # request-anchor duration would not be a real upper bound.
+            return None
+        if activity_type not in {
+            "connection_web",
+            "connection_saas",
+            "connection_email",
+            "connection_git",
+            "connection_db",
+        }:
+            return None
+
+        planned_destination = "baseline-user-activity"
+        if activity_type in {"connection_web", "connection_saas"}:
+            return max(
+                self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=planned_destination,
+                    proto="tcp",
+                    dst_port=80,
+                    service="http",
+                    requested_duration_max=5.0,
+                    current_hour=current_hour,
+                    start=start,
+                    sensor_dst_ip="",
+                ),
+                self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=planned_destination,
+                    proto="tcp",
+                    dst_port=443,
+                    service="ssl",
+                    requested_duration_max=5.0,
+                    current_hour=current_hour,
+                    start=start,
+                    sensor_dst_ip="",
+                ),
+            )
+        if activity_type == "connection_git":
+            return self._baseline_network_close_bound_seconds(
+                src_ip=system.ip,
+                dst_ip=planned_destination,
+                proto="tcp",
+                dst_port=443,
+                service="ssl",
+                requested_duration_max=5.0,
+                current_hour=current_hour,
+                start=start,
+                sensor_dst_ip="",
+            )
+        return self._baseline_rendered_network_close_bound_seconds(
+            current_hour,
+            start=start,
+            src_ip=system.ip,
+            dst_ip="",
+            proto="tcp",
+            conn_state="SF",
+            payload_bytes=1,
+            canonical_close_bound_seconds=5.0,
+        )
+
+    def _baseline_persona_connection_close_bounds_seconds(
+        self,
+        current_hour: datetime,
+        *,
+        start: datetime,
+        src_ip: str,
+        dst_ip: str,
+        proto: str,
+        dst_port: int,
+        service: str | None,
+        is_browser_connection: bool,
+    ) -> tuple[float, float]:
+        """Return complete rendered bounds for one selected persona connection."""
+
+        planned_conn_state = "SF" if is_browser_connection else ""
+        planned_payload_bytes = 1 if is_browser_connection or service is not None else None
+        direct_extension_seconds = (
+            tls_completed_extension_headroom_seconds() if service == "ssl" else 0.0
+        )
+        direct_close_bound = 90.0 if is_browser_connection else 10.0 + direct_extension_seconds
+        maximum_duration = self._baseline_network_close_bound_seconds(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            proto=proto,
+            dst_port=dst_port,
+            service=service,
+            requested_duration_max=max(
+                0.0,
+                direct_close_bound - direct_extension_seconds,
+            ),
+            direct_extension_seconds=direct_extension_seconds,
+            current_hour=current_hour,
+            start=start,
+            conn_state=planned_conn_state,
+            payload_bytes=planned_payload_bytes,
+        )
+        browser_request_close_headroom = (
+            self._baseline_network_close_bound_seconds(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                proto=proto,
+                dst_port=dst_port,
+                service=service,
+                requested_duration_max=max(
+                    0.0,
+                    _BASELINE_BROWSER_CLOSE_HEADROOM.total_seconds() - direct_extension_seconds,
+                ),
+                direct_extension_seconds=direct_extension_seconds,
+                current_hour=current_hour,
+                start=start,
+                conn_state=planned_conn_state,
+                payload_bytes=planned_payload_bytes,
+            )
+            if is_browser_connection
+            else 0.0
+        )
+        return maximum_duration, browser_request_close_headroom
+
+    def _baseline_ids_connection_close_bound_seconds(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        proto: str,
+        dst_port: int,
+        service: str,
+        requested_duration_max: float,
+        current_hour: datetime | None = None,
+        start: datetime | None = None,
+        conn_state: str = "SF",
+        payload_bytes: int | None = 1,
+    ) -> float:
+        """Return the selected IDS companion connection's complete close bound."""
+
+        if service == "dns" and proto in {"tcp", "udp"} and dst_port == 53:
+            canonical_close_bound = max(
+                requested_duration_max,
+                dns_transport_close_headroom_seconds(caller_rtt_maximum=requested_duration_max),
+            )
+        else:
+            canonical_close_bound = self._baseline_network_close_bound_seconds(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                proto=proto,
+                dst_port=dst_port,
+                service=service,
+                requested_duration_max=requested_duration_max,
+            )
+        if current_hour is None and start is None:
+            return canonical_close_bound
+        if current_hour is None or start is None:
+            raise ValueError("rendered IDS admission requires both current_hour and start")
+        return self._baseline_rendered_network_close_bound_seconds(
+            current_hour,
+            start=start,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            proto=proto,
+            conn_state=conn_state,
+            payload_bytes=payload_bytes,
+            canonical_close_bound_seconds=canonical_close_bound,
+        )
+
+    def _baseline_machine_account_admits(
+        self,
+        current_hour: datetime,
+        *,
+        start: datetime,
+        src_ip: str = "",
+        dst_ip: str = "",
+    ) -> bool:
+        """Return whether the complete machine-auth transport/logoff family fits."""
+
+        endpoint_clock_headroom_seconds = self._baseline_endpoint_clock_positive_headroom(
+            canonical_time=start + timedelta(seconds=30),
+            os_categories=("windows",),
+        ).total_seconds()
+        transport_close_bound_seconds = remote_auth_transport_max_duration_seconds(
+            source="machine_account_logon",
+            outcome="success",
+        )
+        network_sensor_headroom_seconds = self._baseline_network_sensor_close_positive_headroom(
+            canonical_time=start + timedelta(seconds=transport_close_bound_seconds),
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            protocol="tcp",
+            conn_state="SF",
+            payload_bytes=1,
+        ).total_seconds()
+        return self._baseline_pass_admits(
+            current_hour,
+            start=start,
+            end=start
+            + timedelta(
+                seconds=machine_account_authentication_close_bound_seconds(
+                    endpoint_clock_headroom_seconds=endpoint_clock_headroom_seconds,
+                    network_sensor_headroom_seconds=network_sensor_headroom_seconds,
+                ),
+                microseconds=1,
+            ),
+        )
+
+    def _baseline_ssh_terminal_end_plan(
+        self,
+        current_hour: datetime,
+        *,
+        transport_start: datetime,
+    ) -> SessionEndPlan | None:
+        """Plan a bounded optional SSH family or reject it before bootstrap."""
+
+        pass_end = self._baseline_pass_end(current_hour)
+        if not self._baseline_pass_admits(
+            current_hour,
+            start=transport_start,
+            end=transport_start
+            + timedelta(
+                seconds=ssh_action_deadline_transport_headroom_seconds(
+                    source_deadline=pass_end,
+                    source_timing_planner=self._baseline_source_timing_planner(),
+                    network_observation_planner=(self._baseline_network_observation_planner()),
+                    observation_policy=getattr(
+                        getattr(self, "dispatcher", None),
+                        "observation_policy",
+                        None,
+                    ),
+                )
+            ),
+        ):
+            return None
+        return SessionEndPlan(canonical_end=pass_end, authority="action_bundle")
+
+    def _baseline_rdp_terminal_end_plan(
+        self,
+        current_hour: datetime,
+        *,
+        transport_start: datetime,
+    ) -> SessionEndPlan | None:
+        """Plan a bounded optional RDP family or reject it before bootstrap."""
+
+        pass_end = self._baseline_pass_end(current_hour)
+        source_timing_planner = self._baseline_source_timing_planner()
+        logical_deadline = pass_end - rdp_action_deadline_source_tail(
+            source_deadline=pass_end,
+            source_timing_planner=source_timing_planner,
+            network_observation_planner=self._baseline_network_observation_planner(),
+        )
+        if (
+            transport_start
+            + timedelta(
+                seconds=rdp_action_deadline_transport_headroom_seconds(
+                    source_deadline=pass_end,
+                    source_timing_planner=source_timing_planner,
+                    modeled_source=True,
+                )
+            )
+            > logical_deadline
+        ):
+            return None
+        return SessionEndPlan(canonical_end=pass_end, authority="action_bundle")
+
+    def _baseline_endpoint_clock_positive_headroom(
+        self,
+        *,
+        canonical_time: datetime,
+        os_categories: tuple[str, ...],
+    ) -> timedelta:
+        """Return the active source planner's largest positive clock projection."""
+
+        source_timing_planner = self._baseline_source_timing_planner()
+        resolve_headroom = getattr(
+            source_timing_planner,
+            "endpoint_clock_positive_headroom",
+            None,
+        )
+        if not callable(resolve_headroom):
+            return timedelta(0)
+        headrooms = tuple(
+            resolve_headroom(
+                canonical_time,
+                os_category,
+            )
+            for os_category in os_categories
+        )
+        if any(
+            type(headroom) is not timedelta or headroom < timedelta(0) for headroom in headrooms
+        ):
+            raise ValueError("endpoint clock planner returned an invalid positive headroom")
+        return max(headrooms, default=timedelta(0))
+
+    def _baseline_source_timing_planner(self) -> Any | None:
+        """Return the engine/activity source planner without creating one."""
+
+        source_timing_planner = getattr(self, "__dict__", {}).get("source_timing_planner")
+        if source_timing_planner is not None:
+            return source_timing_planner
+        return getattr(
+            getattr(self, "activity_generator", None),
+            "__dict__",
+            {},
+        ).get("_source_timing_planner")
+
+    def _baseline_network_observation_planner(self) -> Any | None:
+        """Return the shared network observation planner without creating one."""
+
+        dispatcher = getattr(self, "__dict__", {}).get("dispatcher")
+        if dispatcher is None:
+            dispatcher = getattr(
+                getattr(self, "activity_generator", None),
+                "__dict__",
+                {},
+            ).get("dispatcher")
+        return getattr(dispatcher, "network_observation_planner", None)
+
+    def _baseline_network_sensor_close_positive_headroom(
+        self,
+        *,
+        canonical_time: datetime,
+        src_ip: str = "",
+        dst_ip: str = "",
+        protocol: str = "",
+        conn_state: str = "",
+        payload_bytes: int | None = None,
+    ) -> timedelta:
+        """Return the active network planner's positive close projection."""
+
+        network_observation_planner = self._baseline_network_observation_planner()
+        resolve_headroom = getattr(
+            network_observation_planner,
+            "network_sensor_close_positive_headroom",
+            None,
+        )
+        if not callable(resolve_headroom):
+            return timedelta(0)
+        headroom = resolve_headroom(
+            canonical_time,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            protocol=protocol,
+            conn_state=conn_state,
+            payload_bytes=payload_bytes,
+        )
+        if type(headroom) is not timedelta or headroom < timedelta(0):
+            raise ValueError("network sensor planner returned an invalid positive headroom")
+        return headroom
+
     def _generate_baseline_email(self, current_hour: datetime, enabled_users: list) -> None:
         """Generate low-volume deterministic background email when explicitly configured."""
         email_config = self.scenario.environment.email
@@ -3937,6 +4736,16 @@ class BaselineMixin:
             planned_messages,
             key=lambda planned: planned[0],
         ):
+            # The delivery bundle can own three SMTP hops plus a source-session
+            # reservation through the first hop. Admit the whole delivery
+            # before its pre-route DNS mutation; optional recipient reads apply
+            # their own scenario-close guard inside the email owner.
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=event_time,
+                end=event_time + _BASELINE_EMAIL_DELIVERY_HEADROOM,
+            ):
+                continue
             self.activity_generator.generate_email_message(
                 spec=spec,
                 actor=actor,
@@ -4031,6 +4840,7 @@ class BaselineMixin:
                 self._emit_affinity_event(
                     affinity=affinity,
                     endpoint=endpoint,
+                    current_hour=current_hour,
                     src_ip=system.ip,
                     source_system=system,
                     user_obj=user,
@@ -4068,6 +4878,7 @@ class BaselineMixin:
             self._emit_affinity_event(
                 affinity=affinity,
                 endpoint=endpoint,
+                current_hour=current_hour,
                 src_ip=src_ip,
                 source_system=None,
                 user_obj=None,
@@ -4082,6 +4893,7 @@ class BaselineMixin:
         *,
         affinity: Any,
         endpoint: Any,
+        current_hour: datetime,
         src_ip: str,
         source_system: Any | None,
         user_obj: Any | None,
@@ -4095,10 +4907,125 @@ class BaselineMixin:
         resolved = self._resolve_affinity_endpoint(endpoint, source_system, target_system)
         if resolved["ip"] is None:
             return
-        self.state_manager.set_current_time(event_time)
         port = int(endpoint.port)
         proto = endpoint.proto
         service = endpoint.service or ("ssl" if port == 443 else "http" if port == 80 else None)
+        sensor_conn_state = "SF" if proto == "tcp" else ""
+        sensor_payload_bytes: int | None = 1
+        if affinity.kind == "web":
+            direct_request_close_headroom = self._baseline_web_affinity_headroom_seconds(
+                affinity.request_profile
+            )
+            direct_extension_seconds = (
+                tls_completed_extension_headroom_seconds()
+                if proto == "tcp" and port == 443 and service != ""
+                else 0.0
+            )
+            request_close_headroom = self._baseline_network_close_bound_seconds(
+                src_ip=src_ip,
+                dst_ip=resolved["ip"],
+                proto=proto,
+                dst_port=port,
+                service=service,
+                requested_duration_max=max(
+                    0.0,
+                    direct_request_close_headroom - direct_extension_seconds,
+                ),
+                direct_extension_seconds=direct_extension_seconds,
+            )
+            maximum_duration = request_close_headroom + _BASELINE_AUTHORED_ROUTE_REQUEST_GAP_SECONDS
+        else:
+            profile = affinity.connection_profile
+            configured_durations = getattr(profile, "durations", None)
+            configured_orig = getattr(profile, "orig_bytes", None)
+            configured_resp = getattr(profile, "resp_bytes", None)
+            configured_conn_states = getattr(profile, "conn_states", {"SF": 1.0})
+            if proto == "tcp" and any(
+                state in {"S0", "S1", "SH", "SHR"} for state in configured_conn_states
+            ):
+                sensor_conn_state = ""
+                sensor_payload_bytes = None
+            maximum_duration = (
+                float(configured_durations[1])
+                if configured_durations and len(configured_durations) == 2
+                else 10.0
+            )
+            if proto == "tcp" and port in {80, 443} and service != "":
+                maximum_body = max(
+                    int(configured_orig[1]) if configured_orig else 8000,
+                    int(configured_resp[1]) if configured_resp else 80000,
+                )
+                normalized_service = "http" if port == 80 else "ssl"
+                direct_extension_seconds = (
+                    tls_completed_extension_headroom_seconds()
+                    if normalized_service == "ssl"
+                    else 0.0
+                )
+                direct_close_bound = max(
+                    13.0,
+                    maximum_duration + (12.0 if normalized_service == "ssl" else 4.0),
+                    http_response_parent_duration_floor(maximum_body) + 12.0,
+                )
+                maximum_duration = self._baseline_network_close_bound_seconds(
+                    src_ip=src_ip,
+                    dst_ip=resolved["ip"],
+                    proto=proto,
+                    dst_port=port,
+                    service=service,
+                    requested_duration_max=max(
+                        0.0,
+                        direct_close_bound - direct_extension_seconds,
+                    ),
+                    direct_extension_seconds=direct_extension_seconds,
+                )
+            elif service == "dns":
+                maximum_duration = max(
+                    maximum_duration,
+                    dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35),
+                )
+            elif service == "ntp":
+                maximum_duration = max(
+                    maximum_duration,
+                    ntp_transport_close_headroom_seconds(),
+                )
+            else:
+                maximum_duration = self._baseline_network_close_bound_seconds(
+                    src_ip=src_ip,
+                    dst_ip=resolved["ip"],
+                    proto=proto,
+                    dst_port=port,
+                    service=service,
+                    requested_duration_max=maximum_duration,
+                )
+        uses_explicit_proxy = self._baseline_uses_explicit_proxy(
+            src_ip=src_ip,
+            dst_ip=resolved["ip"],
+            proto=proto,
+            dst_port=port,
+            service=service,
+        )
+        maximum_duration = self._baseline_rendered_network_close_bound_seconds(
+            current_hour,
+            start=event_time,
+            src_ip="" if uses_explicit_proxy else src_ip,
+            dst_ip="" if uses_explicit_proxy else resolved["ip"],
+            proto=proto,
+            conn_state=sensor_conn_state,
+            payload_bytes=sensor_payload_bytes,
+            canonical_close_bound_seconds=maximum_duration,
+        )
+        rendered_request_close_headroom = (
+            maximum_duration - _BASELINE_AUTHORED_ROUTE_REQUEST_GAP_SECONDS
+            if affinity.kind == "web"
+            else maximum_duration
+        )
+        if not self._baseline_pass_admits(
+            current_hour,
+            start=event_time,
+            end=event_time + timedelta(seconds=maximum_duration),
+        ):
+            return
+        self.state_manager.set_current_time(event_time)
         if affinity.kind == "web":
             os_cat = _get_os_category(source_system.os) if source_system is not None else "windows"
             pid = -1
@@ -4143,6 +5070,12 @@ class BaselineMixin:
                         domain_tags=tuple(resolved["tags"]),
                     ),
                     same_host_only=True,
+                    latest_request_time=(
+                        self._baseline_pass_end(current_hour)
+                        - timedelta(seconds=rendered_request_close_headroom)
+                        if self._baseline_pass_is_terminal(current_hour)
+                        else None
+                    ),
                     source="baseline_traffic_affinity",
                 ),
                 executor=self.activity_generator,
@@ -4158,7 +5091,7 @@ class BaselineMixin:
         resp_bytes = int(
             self._affinity_range_sample(rng, getattr(profile, "resp_bytes", None), 500, 80000)
         )
-        conn_states = getattr(profile, "conn_states", {"SF": 1.0})
+        conn_states = configured_conn_states
         conn_state = rng.choices(
             list(conn_states),
             weights=[float(weight) for weight in conn_states.values()],
@@ -4179,6 +5112,53 @@ class BaselineMixin:
             source_system=source_system,
             hostname=resolved["host"] or "",
             preserve_dst_ip=False,
+        )
+
+    @staticmethod
+    def _baseline_web_affinity_headroom_seconds(request_profile: Any | None) -> float:
+        """Return a conservative close bound for an authored browser affinity."""
+
+        maximum_body = 0
+        for route in getattr(request_profile, "routes", ()) or ():
+            for profile in (getattr(route, "methods", {}) or {}).values():
+                for body_range in (
+                    getattr(profile, "request_body_bytes", None),
+                    getattr(profile, "response_body_bytes", None),
+                ):
+                    if body_range:
+                        maximum_body = max(maximum_body, int(body_range[1]))
+                for multipart in (
+                    getattr(profile, "request_multipart", None),
+                    getattr(profile, "response_multipart", None),
+                ):
+                    if multipart is not None:
+                        maximum_body = max(
+                            maximum_body,
+                            BaselineMixin._baseline_multipart_profile_body_bound(multipart),
+                        )
+        return max(
+            _BASELINE_BROWSER_CLOSE_HEADROOM.total_seconds(),
+            math.ceil(http_response_parent_duration_floor(maximum_body) + 12.0),
+        )
+
+    @staticmethod
+    def _baseline_multipart_profile_body_bound(multipart: Any) -> int:
+        """Return the maximum exact serialized size for a multipart profile."""
+
+        from evidenceforge.generation.activity.http_multipart import (
+            build_http_multipart_context,
+        )
+
+        # Browser requests and generic responses are the normal route-profile
+        # families. Include curl as well so an overlay/user-agent choice cannot
+        # make this admission bound smaller than the canonical serializer.
+        return max(
+            build_http_multipart_context(
+                multipart,
+                stable_key="baseline-affinity-headroom",
+                client_family=family,
+            ).body_len
+            for family in ("browser", "curl", "generic")
         )
 
     def _resolve_affinity_endpoint(
@@ -4492,7 +5472,7 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
-                next_hour = current_hour + timedelta(hours=1)
+                next_hour = self._baseline_pass_end(current_hour)
                 self.state_manager.sweep_closed_connections(next_hour)
                 allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
@@ -4529,7 +5509,7 @@ class BaselineMixin:
 
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
-            next_hour = current_hour + timedelta(hours=1)
+            next_hour = self._baseline_pass_end(current_hour)
             self.state_manager.sweep_closed_connections(next_hour)
             allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
@@ -4576,57 +5556,69 @@ class BaselineMixin:
                 target_system = rng.choice(target_systems)
                 source_system = rng.choice(target_systems)
                 event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                self.state_manager.set_current_time(event_time)
-                self.activity_generator.generate_failed_logon(
-                    user=stale_user,
-                    system=target_system,
-                    time=event_time,
-                    logon_type=3,
-                    source_ip=source_system.ip,
-                )
+                if self._baseline_pass_admits(
+                    current_hour,
+                    start=event_time,
+                    end=event_time + timedelta(seconds=4),
+                ):
+                    self.state_manager.set_current_time(event_time)
+                    self.activity_generator.generate_failed_logon(
+                        user=stale_user,
+                        system=target_system,
+                        time=event_time,
+                        logon_type=3,
+                        source_ip=source_system.ip,
+                    )
 
             # Pattern 2: Kerberos pre-auth failure on DC (~15%/hour)
             if rng.random() < 0.15 and dcs:
                 dc = rng.choice(dcs)
                 source_system = rng.choice(target_systems)
                 event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                self.state_manager.set_current_time(event_time)
-                self.activity_generator.generate_kerberos_preauth_failed(
-                    username=stale.username,
-                    source_ip=source_system.ip,
-                    dc_hostname=dc.hostname,
-                    time=event_time,
-                    status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
-                    emit_connection=True,
-                )
+                if self._baseline_pass_admits(
+                    current_hour,
+                    start=event_time,
+                    end=event_time + timedelta(seconds=0.04),
+                ):
+                    self.state_manager.set_current_time(event_time)
+                    self.activity_generator.generate_kerberos_preauth_failed(
+                        username=stale.username,
+                        source_ip=source_system.ip,
+                        dc_hostname=dc.hostname,
+                        time=event_time,
+                        status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
+                        emit_connection=True,
+                    )
 
             # Pattern 3: Scheduled task failure (~3%/hour)
             if rng.random() < 0.03 and windows_servers:
                 task_host = rng.choice(windows_servers)
                 event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                self.state_manager.set_current_time(event_time)
-                # Failed batch logon for the scheduled task
-                self.activity_generator.generate_failed_logon(
-                    user=stale_user,
-                    system=task_host,
-                    time=event_time,
-                    logon_type=4,  # Batch logon (scheduled task)
-                    source_ip=task_host.ip,
-                )
+                if self._baseline_pass_admits(current_hour, start=event_time):
+                    self.state_manager.set_current_time(event_time)
+                    # Failed batch logon for the scheduled task
+                    self.activity_generator.generate_failed_logon(
+                        user=stale_user,
+                        system=task_host,
+                        time=event_time,
+                        logon_type=4,  # Batch logon (scheduled task)
+                        source_ip=task_host.ip,
+                    )
 
             # Pattern 4: Service startup failure (first hour only, ~2%)
             if is_first_hour and rng.random() < 0.02 and windows_servers:
                 svc_host = rng.choice(windows_servers)
                 event_time = current_hour + timedelta(seconds=rng.randint(0, 300))
-                self.state_manager.set_current_time(event_time)
-                # Failed service logon
-                self.activity_generator.generate_failed_logon(
-                    user=stale_user,
-                    system=svc_host,
-                    time=event_time,
-                    logon_type=5,  # Service logon
-                    source_ip=svc_host.ip,
-                )
+                if self._baseline_pass_admits(current_hour, start=event_time):
+                    self.state_manager.set_current_time(event_time)
+                    # Failed service logon
+                    self.activity_generator.generate_failed_logon(
+                        user=stale_user,
+                        system=svc_host,
+                        time=event_time,
+                        logon_type=5,  # Service logon
+                        source_ip=svc_host.ip,
+                    )
 
     def _generate_baseline_failed_logons(self, current_hour: datetime) -> None:
         """Generate realistic baseline failed logon patterns.
@@ -4637,6 +5629,8 @@ class BaselineMixin:
         3. Management sweep: burst of failures across multiple servers
         """
         rng = _get_rng()
+        terminal_pass = self._baseline_pass_is_terminal(current_hour)
+        pass_end = self._baseline_pass_end(current_hour)
         systems = self.scenario.environment.systems
         servers = [s for s in systems if s.type in ("server", "domain_controller")]
         if not servers:
@@ -4657,16 +5651,22 @@ class BaselineMixin:
                 rng.choice(systems),
             )
             base_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-            self.state_manager.set_current_time(base_time)
+            if not terminal_pass:
+                self.state_manager.set_current_time(base_time)
             # 1-2 failures then success
             n_fails = rng.randint(1, 2)
             for i in range(n_fails):
                 fail_time = base_time + timedelta(seconds=i * rng.randint(2, 8))
+                if terminal_pass and not self._baseline_pass_admits(current_hour, start=fail_time):
+                    continue
+                if terminal_pass:
+                    self.state_manager.set_current_time(fail_time)
                 self.activity_generator.generate_failed_logon(
                     user=user,
                     system=system,
                     time=fail_time,
                     logon_type=2,  # interactive
+                    exclusive_end=pass_end if terminal_pass else None,
                 )
 
         # Pattern 2: Scheduled task with stale creds (deterministic per scenario).
@@ -4718,6 +5718,8 @@ class BaselineMixin:
                 config=_sched_config,
             ):
                 sched_time = current_hour + timedelta(seconds=sched_second)
+                if not self._baseline_pass_admits(current_hour, start=sched_time):
+                    continue
                 self.state_manager.set_current_time(sched_time)
                 self.activity_generator.generate_failed_logon(
                     user=_sched_user,
@@ -4751,6 +5753,12 @@ class BaselineMixin:
             sweep_start = current_hour + timedelta(seconds=rng.randint(0, 1800))
             for i, target in enumerate(targets):
                 sweep_time = sweep_start + timedelta(seconds=i * rng.uniform(1.0, 3.0))
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=sweep_time,
+                    end=sweep_time + timedelta(seconds=4),
+                ):
+                    continue
                 self.state_manager.set_current_time(sweep_time)
                 self.activity_generator.generate_failed_logon(
                     user=_mgmt_user,
@@ -4772,6 +5780,12 @@ class BaselineMixin:
                         rng.choice(systems),
                     )
                     event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=event_time,
+                        end=event_time + timedelta(seconds=0.04),
+                    ):
+                        continue
                     self.state_manager.set_current_time(event_time)
                     self.activity_generator.generate_kerberos_preauth_failed(
                         username=user.username,
@@ -4843,6 +5857,29 @@ class BaselineMixin:
             jitter = rng.gauss(0, 60)  # ~1min jitter
             offset = max(0, min(3599, phase + jitter))
             ts = current_hour + timedelta(seconds=offset)
+            maximum_duration = self._baseline_network_close_bound_seconds(
+                src_ip=src_sys.ip,
+                dst_ip=dst_sys.ip,
+                proto=proto,
+                dst_port=port,
+                service=service,
+                requested_duration_max=30.0,
+                direct_extension_seconds=(
+                    tls_completed_extension_headroom_seconds()
+                    if proto == "tcp" and (port == 443 or service == "ssl")
+                    else 0.0
+                ),
+                current_hour=current_hour,
+                start=ts,
+                conn_state="",
+                payload_bytes=1 if service is not None else None,
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=ts,
+                end=ts + timedelta(seconds=maximum_duration),
+            ):
+                return
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_connection(
                 src_ip=src_sys.ip,
@@ -5004,18 +6041,35 @@ class BaselineMixin:
                 dc = rng.choice(dcs)
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
-                self.activity_generator.generate_connection(
+                close_bound = self._baseline_network_close_bound_seconds(
                     src_ip=ws.ip,
                     dst_ip=dc.ip,
-                    time=ts,
-                    dst_port=1812,
                     proto="udp",
-                    duration=rng.uniform(0.01, 0.1),
-                    orig_bytes=rng.randint(100, 300),
-                    resp_bytes=rng.randint(100, 300),
-                    source_system=ws,
+                    dst_port=1812,
+                    service=None,
+                    requested_duration_max=0.1,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1,
                 )
+                if self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=ws.ip,
+                        dst_ip=dc.ip,
+                        time=ts,
+                        dst_port=1812,
+                        proto="udp",
+                        duration=rng.uniform(0.01, 0.1),
+                        orig_bytes=rng.randint(100, 300),
+                        resp_bytes=rng.randint(100, 300),
+                        source_system=ws,
+                    )
 
         # 19. VPN concentrator → internal (matches remote user activity)
         # Modeled as external-to-internal connections through a server
@@ -5068,18 +6122,35 @@ class BaselineMixin:
                 collector = rng.choice([s for s in linux_sys if s != sender] or linux_sys)
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
-                self.activity_generator.generate_connection(
+                close_bound = self._baseline_network_close_bound_seconds(
                     src_ip=sender.ip,
                     dst_ip=collector.ip,
-                    time=ts,
-                    dst_port=514,
                     proto="tcp",
-                    duration=rng.uniform(1.0, 60.0),
-                    orig_bytes=rng.randint(500, 10000),
-                    resp_bytes=rng.randint(50, 200),
-                    source_system=sender,
+                    dst_port=514,
+                    service=None,
+                    requested_duration_max=60.0,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1,
                 )
+                if self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=sender.ip,
+                        dst_ip=collector.ip,
+                        time=ts,
+                        dst_port=514,
+                        proto="tcp",
+                        duration=rng.uniform(1.0, 60.0),
+                        orig_bytes=rng.randint(500, 10000),
+                        resp_bytes=rng.randint(50, 200),
+                        source_system=sender,
+                    )
 
         # 26. LDAP client → directory server (389/636)
         if linux_sys and dcs:
@@ -5101,7 +6172,15 @@ class BaselineMixin:
             return "ssh"
         return "interactive"
 
-    def _ensure_session_on_system(self, user: User, system, time, rng) -> str:
+    def _ensure_session_on_system(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        rng: random.Random,
+        *,
+        current_hour: datetime | None = None,
+    ) -> str | None:
         """Ensure the user has an active session on the target system.
 
         Returns the logon_id for the session. If no session exists on
@@ -5118,14 +6197,56 @@ class BaselineMixin:
                 existing_interactive.last_activity_time = time
                 return existing_interactive.logon_id
 
-        if hasattr(self, "world_planner"):
-            session = self.world_planner.ensure_user_session(
-                user,
-                system,
-                time,
-                rng,
-                session_kind=self._baseline_generic_session_kind(system),
+        session_kind = self._baseline_generic_session_kind(system)
+        session_end_plan = None
+        if current_hour is not None and session_kind == "ssh":
+            active_session = next(
+                (
+                    session
+                    for session in self.state_manager.get_active_sessions_for_user_at(
+                        user.username,
+                        time,
+                    )
+                    if session.system == system.hostname
+                    and session.session_kind == session_kind
+                    and _session_started_by(session, time)
+                ),
+                None,
             )
+            if active_session is None:
+                if self._baseline_pass_is_terminal(current_hour):
+                    session_end_plan = self._baseline_ssh_terminal_end_plan(
+                        current_hour,
+                        transport_start=time,
+                    )
+                    if session_end_plan is None:
+                        return None
+                elif not self._baseline_pass_admits(
+                    current_hour,
+                    start=time,
+                    end=time + timedelta(hours=1),
+                ):
+                    return None
+
+        if hasattr(self, "world_planner"):
+            if session_end_plan is None:
+                session = self.world_planner.ensure_user_session(
+                    user,
+                    system,
+                    time,
+                    rng,
+                    session_kind=session_kind,
+                )
+            else:
+                session = self.world_planner.ensure_user_session(
+                    user,
+                    system,
+                    time,
+                    rng,
+                    session_kind=session_kind,
+                    session_end_plan=session_end_plan,
+                    allow_existing=False,
+                )
             return session.logon_id
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
@@ -5182,6 +6303,8 @@ class BaselineMixin:
         """
         noise_level = self.scenario.baseline_activity.suspicious_noise
         rng = _get_rng()
+        pass_end = self._baseline_pass_end(current_hour)
+        terminal_pass = self._baseline_pass_is_terminal(current_hour)
 
         num_events = get_suspicious_event_count(noise_level, rng)
         if num_events == 0:
@@ -5210,6 +6333,9 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    event_time = result["time"]
+                    if not self._baseline_pass_admits(current_hour, start=event_time):
+                        continue
                     target_system = result["system"]
                     if (
                         hasattr(self, "world_planner")
@@ -5217,13 +6343,32 @@ class BaselineMixin:
                         and (target_system.type or "workstation").lower()
                         in {"server", "domain_controller"}
                     ):
-                        self.world_planner.ensure_user_session(
-                            result["user"],
-                            target_system,
-                            result["time"],
-                            rng,
-                            session_kind="ssh",
-                        )
+                        session_end_plan = None
+                        if terminal_pass:
+                            session_end_plan = self._baseline_ssh_terminal_end_plan(
+                                current_hour,
+                                transport_start=event_time,
+                            )
+                            if session_end_plan is None:
+                                continue
+                        if session_end_plan is None:
+                            self.world_planner.ensure_user_session(
+                                result["user"],
+                                target_system,
+                                event_time,
+                                rng,
+                                session_kind="ssh",
+                            )
+                        else:
+                            self.world_planner.ensure_user_session(
+                                result["user"],
+                                target_system,
+                                event_time,
+                                rng,
+                                session_kind="ssh",
+                                session_end_plan=session_end_plan,
+                                allow_existing=False,
+                            )
                     else:
                         self.activity_generator.generate_logon(
                             user=result["user"],
@@ -5243,19 +6388,30 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    if not self._baseline_pass_admits(current_hour, start=result["time"]):
+                        continue
                     aligned_time = self._align_rsat_with_future_workstation_session(
                         result["user"],
                         result["system"],
                         result["time"],
-                        current_hour + timedelta(hours=1),
+                        pass_end,
                         rng,
                     )
-                    if aligned_time is None:
+                    if aligned_time is None or not self._baseline_pass_admits(
+                        current_hour,
+                        start=aligned_time,
+                    ):
                         continue
                     result["time"] = aligned_time
                     logon_id = self._ensure_session_on_system(
-                        result["user"], result["system"], result["time"], rng
+                        result["user"],
+                        result["system"],
+                        result["time"],
+                        rng,
+                        current_hour=current_hour,
                     )
+                    if logon_id is None:
+                        continue
                     pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
@@ -5289,24 +6445,36 @@ class BaselineMixin:
                     user = result["user"]
                     system = result["system"]
                     base_time = result["time"]
+                    if not self._baseline_pass_admits(current_hour, start=base_time):
+                        continue
                     for i in range(result["num_failures"]):
                         fail_time = base_time + timedelta(seconds=i * rng.randint(2, 8))
+                        if terminal_pass and not self._baseline_pass_admits(
+                            current_hour,
+                            start=fail_time,
+                        ):
+                            continue
                         self.activity_generator.generate_failed_logon(
                             user=user,
                             system=system,
                             time=fail_time,
                             logon_type=2,  # Interactive (typing password wrong)
+                            exclusive_end=pass_end if terminal_pass else None,
                         )
                     # Successful logon after the failures
                     success_time = base_time + timedelta(
                         seconds=result["num_failures"] * 5 + rng.randint(3, 15)
                     )
-                    self.activity_generator.generate_logon(
-                        user=user,
-                        system=system,
-                        time=success_time,
-                        logon_type=2,
-                    )
+                    if not terminal_pass or self._baseline_pass_admits(
+                        current_hour,
+                        start=success_time,
+                    ):
+                        self.activity_generator.generate_logon(
+                            user=user,
+                            system=system,
+                            time=success_time,
+                            logon_type=2,
+                        )
 
             elif pattern_type == "service_account_anomaly":
                 result = generate_service_account_anomaly(
@@ -5317,7 +6485,14 @@ class BaselineMixin:
                     self.activity_generator.timing_runtime,
                     event_ordinal,
                 )
-                if result:
+                # This compatibility Type-3 occurrence has no transport or
+                # bounded session-end plan. Its State session may legitimately
+                # remain open at the capture cutoff, so only its point start is
+                # constrained by the terminal pass.
+                if result and self._baseline_pass_admits(
+                    current_hour,
+                    start=result["time"],
+                ):
                     self.activity_generator.generate_logon(
                         user=result["user"],
                         system=result["system"],
@@ -5334,7 +6509,14 @@ class BaselineMixin:
                     self.activity_generator.timing_runtime,
                     event_ordinal,
                 )
-                if result:
+                if result and self._baseline_pass_admits(
+                    current_hour,
+                    start=result["time"],
+                    end=result["time"]
+                    + timedelta(
+                        seconds=dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35)
+                    ),
+                ):
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
@@ -5342,6 +6524,27 @@ class BaselineMixin:
                         self.activity_generator, result["system"].ip
                     )
                     dns_server_ip = rng.choice(dns_server_ips)
+                    canonical_close_bound = dns_transport_close_headroom_seconds(
+                        caller_rtt_maximum=0.35
+                    )
+                    rendered_close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=result["system"].ip,
+                        dst_ip=dns_server_ip,
+                        proto="udp",
+                        dst_port=53,
+                        service="dns",
+                        requested_duration_max=canonical_close_bound,
+                        current_hour=current_hour,
+                        start=result["time"],
+                        conn_state="SF",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=result["time"],
+                        end=result["time"] + timedelta(seconds=rendered_close_bound),
+                    ):
+                        continue
                     dns_ctx = DnsContext(
                         query=result["hostname"],
                         trans_id=rng.randint(1, 65535),
@@ -5387,6 +6590,28 @@ class BaselineMixin:
                     event_ordinal,
                 )
                 if result:
+                    requested_duration_max = 120.0 if result.get("large_transfer") else 10.0
+                    maximum_duration = self._baseline_network_close_bound_seconds(
+                        src_ip=result["system"].ip,
+                        dst_ip=result["dst_ip"],
+                        proto="tcp",
+                        dst_port=result["dst_port"],
+                        service=result["service"],
+                        requested_duration_max=requested_duration_max,
+                        direct_extension_seconds=(
+                            tls_completed_extension_headroom_seconds()
+                            if result["service"] == "ssl"
+                            else 0.0
+                        ),
+                        current_hour=current_hour,
+                        start=result["time"],
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=result["time"],
+                        end=result["time"] + timedelta(seconds=maximum_duration),
+                    ):
+                        continue
                     self.state_manager.set_current_time(result["time"])
                     # Large transfers get bigger byte counts
                     if result.get("large_transfer"):
@@ -5419,7 +6644,11 @@ class BaselineMixin:
                     self.activity_generator.timing_runtime,
                     event_ordinal,
                 )
-                if result:
+                if result and self._baseline_pass_admits(
+                    current_hour,
+                    start=result["time"],
+                    end=result["time"] + timedelta(seconds=36),
+                ):
                     ScheduledScanOverlapActionBundle(
                         executor=self,
                         request=ScheduledScanOverlapRequest(
@@ -5455,11 +6684,20 @@ class BaselineMixin:
                         self.activity_generator.timing_runtime,
                         event_ordinal,
                     )
-                if result:
+                if result and self._baseline_pass_admits(
+                    current_hour,
+                    start=result["time"],
+                ):
                     self.state_manager.set_current_time(result["time"])
                     logon_id = self._ensure_session_on_system(
-                        result["user"], result["system"], result["time"], rng
+                        result["user"],
+                        result["system"],
+                        result["time"],
+                        rng,
+                        current_hour=current_hour,
                     )
+                    if logon_id is None:
+                        continue
                     pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
@@ -5487,12 +6725,37 @@ class BaselineMixin:
         for target in request.targets:
             for port in rng.sample(scan_ports, rng.randint(2, 4)):
                 scan_time = request.time + timedelta(seconds=rng.uniform(0, 30))
-                self.state_manager.set_current_time(scan_time)
                 conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
                     port,
                     target,
                     rng,
                 )
+                current_hour = request.time.replace(minute=0, second=0, microsecond=0)
+                if BaselineMixin._baseline_pass_is_terminal(self, current_hour):
+                    payload_bytes = (
+                        0
+                        if conn_state in {"S0", "S1", "SH", "SHR", "REJ"}
+                        else max(0, orig_bytes + resp_bytes)
+                    )
+                    close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=request.scanner.ip,
+                        dst_ip=target.ip,
+                        proto="tcp",
+                        dst_port=port,
+                        service=service,
+                        requested_duration_max=duration,
+                        current_hour=current_hour,
+                        start=scan_time,
+                        conn_state=conn_state,
+                        payload_bytes=payload_bytes,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=scan_time,
+                        end=scan_time + timedelta(seconds=close_bound),
+                    ):
+                        continue
+                self.state_manager.set_current_time(scan_time)
                 self.activity_generator.generate_connection(
                     src_ip=request.scanner.ip,
                     dst_ip=target.ip,
@@ -5696,6 +6959,10 @@ class BaselineMixin:
                         continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
+                    if self._baseline_pass_is_terminal(
+                        current_hour
+                    ) and not self._baseline_pass_admits(current_hour, start=term_time):
+                        continue
                     self._advance_rdp_before_generic_teardown(term_time)
                     live_process = self.state_manager.get_process(system.hostname, proc.pid)
                     if live_process is None:
@@ -6072,6 +7339,26 @@ class BaselineMixin:
                 if offset_sec is None:
                     continue
                 ts = current_hour + timedelta(seconds=offset_sec)
+                if not self._baseline_pass_admits(current_hour, start=ts):
+                    continue
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    proto=proto,
+                    dst_port=dst_port,
+                    service=None,
+                    requested_duration_max=0.0,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state=deny_conn_state,
+                    payload_bytes=0,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    continue
                 self.state_manager.set_current_time(ts)
 
                 src_iface = _resolve_iface(src_ip)
@@ -6115,6 +7402,13 @@ class BaselineMixin:
             Dict mapping (system_hostname, logon_id) → offset_seconds within hour.
         """
         planned: dict[tuple[str, str], float] = {}
+        pass_end = self._baseline_pass_end(current_hour)
+        maximum_offset = max(0.0, (pass_end - current_hour).total_seconds())
+        maximum_planned_offset = (
+            max(0.0, maximum_offset - 0.000001)
+            if self._baseline_pass_is_terminal(current_hour)
+            else 3599.0
+        )
         for user in users:
             sessions = self.state_manager.get_sessions_for_user(user.username)
             if not sessions:
@@ -6148,8 +7442,7 @@ class BaselineMixin:
                         if network_close_time.tzinfo is None
                         else network_close_time.astimezone(UTC)
                     )
-                    hour_end = current_hour + timedelta(hours=1)
-                    if network_close_time < hour_end:
+                    if network_close_time < pass_end:
                         close_seed = _stable_seed(
                             "baseline_ssh_logoff_after_transport:"
                             f"{session.system}:{session.logon_id}:"
@@ -6162,7 +7455,7 @@ class BaselineMixin:
                         ).total_seconds()
                         planned[(session.system, session.logon_id)] = min(
                             max(0.0, close_offset),
-                            3599.0,
+                            maximum_planned_offset,
                         )
                         continue
                 session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
@@ -6175,7 +7468,8 @@ class BaselineMixin:
                 )
                 if rng.random() < logoff_probability:
                     logoff_offset = rng.uniform(0, 3599)
-                    planned[(session.system, session.logon_id)] = logoff_offset
+                    if logoff_offset < maximum_offset:
+                        planned[(session.system, session.logon_id)] = logoff_offset
         return planned
 
     def _publish_planned_session_end_plans(
@@ -6657,6 +7951,7 @@ class BaselineMixin:
         planned_logoffs: dict[tuple[str, str], float] | None = None,
     ) -> None:
         """Generate activity for user at specified time."""
+        terminal_pass = current_hour is not None and self._baseline_pass_is_terminal(current_hour)
         self.activity_generator.finalize_ssh_session_lifecycles(event_time)
         rng = _get_rng()
         if hasattr(self, "world_model"):
@@ -6700,6 +7995,29 @@ class BaselineMixin:
                 else:
                     activities.append(activity_type)
 
+        terminal_activity_plans: list[tuple[str, timedelta]] | None = None
+        if terminal_pass:
+            assert current_hour is not None
+            terminal_activity_plans = []
+            for activity_type in activities:
+                jitter = timedelta(seconds=rng.randint(0, 55))
+                planned_time = event_time + jitter
+                close_bound = self._baseline_user_activity_close_bound_seconds(
+                    activity_type=activity_type,
+                    system=system,
+                    current_hour=current_hour,
+                    start=planned_time,
+                )
+                if close_bound is None:
+                    continue
+                if self._baseline_pass_admits(
+                    current_hour,
+                    start=planned_time,
+                    end=planned_time + timedelta(seconds=close_bound),
+                ):
+                    terminal_activity_plans.append((activity_type, jitter))
+            activities = [activity_type for activity_type, _jitter in terminal_activity_plans]
+
         sessions = self.state_manager.get_sessions_for_user(user.username)
         has_session_on_system = any(
             s.system == system.hostname
@@ -6711,19 +8029,53 @@ class BaselineMixin:
             for s in sessions
         )
         if not has_session_on_system and activities:
-            if hasattr(self, "world_planner"):
-                self.world_planner.ensure_user_session(
-                    user,
-                    system,
-                    event_time,
-                    rng,
-                    session_kind=self._baseline_generic_session_kind(system),
-                )
-            else:
+            session_kind = self._baseline_generic_session_kind(system)
+            session_end_plan = None
+            if terminal_pass:
+                assert current_hour is not None
+                if session_kind == "ssh":
+                    session_end_plan = self._baseline_ssh_terminal_end_plan(
+                        current_hour,
+                        transport_start=event_time,
+                    )
+                    if session_end_plan is None:
+                        activities = []
+                        terminal_activity_plans = []
+                else:
+                    # Local interactive sessions have no action-owned terminal
+                    # logoff path. An end-plan marker alone would leave an
+                    # unpaired session, so terminal activity may only reuse an
+                    # already-active local session.
+                    activities = []
+                    terminal_activity_plans = []
+            if activities and hasattr(self, "world_planner"):
+                if session_end_plan is None:
+                    self.world_planner.ensure_user_session(
+                        user,
+                        system,
+                        event_time,
+                        rng,
+                        session_kind=session_kind,
+                    )
+                else:
+                    self.world_planner.ensure_user_session(
+                        user,
+                        system,
+                        event_time,
+                        rng,
+                        session_kind=session_kind,
+                        session_end_plan=session_end_plan,
+                        allow_existing=False,
+                    )
+            elif activities:
                 self._ensure_session_on_system(user, system, event_time, rng)
 
-        for activity_type in activities:
-            jitter = timedelta(seconds=rng.randint(0, 55))
+        for activity_index, activity_type in enumerate(activities):
+            jitter = (
+                terminal_activity_plans[activity_index][1]
+                if terminal_activity_plans is not None
+                else timedelta(seconds=rng.randint(0, 55))
+            )
             t = event_time + jitter
             active_session = next(
                 (
@@ -6761,6 +8113,24 @@ class BaselineMixin:
             if unlocked_t is None:
                 continue
             t = unlocked_t
+            if terminal_activity_plans is not None:
+                assert current_hour is not None
+                close_bound = self._baseline_user_activity_close_bound_seconds(
+                    activity_type=activity_type,
+                    system=system,
+                    current_hour=current_hour,
+                    start=t,
+                )
+                if close_bound is None:
+                    continue
+            else:
+                close_bound = 60.000001
+            if current_hour is not None and not self._baseline_pass_admits(
+                current_hour,
+                start=t,
+                end=t + timedelta(seconds=close_bound),
+            ):
+                continue
             self.state_manager.set_current_time(t)
             self.activity_generator.execute_baseline_activity(
                 user=user, system=system, time=t, activity_type=activity_type
@@ -6768,7 +8138,11 @@ class BaselineMixin:
 
         # Persona-driven 4648: sysadmin RunAs and helpdesk remote sessions
         os_cat = _get_os_category(system.os) if hasattr(system, "os") else "unknown"
-        if os_cat == "windows" and persona_name:
+        # The explicit-credential owner may materialize a caller process whose
+        # termination lands several seconds after its request anchor. It does
+        # not yet expose a reusable deadline API, so optional persona noise is
+        # omitted only on the terminal pass instead of risking a partial family.
+        if os_cat == "windows" and persona_name and not terminal_pass:
             _pn = persona_name.lower()
             servers = [
                 s
@@ -6804,6 +8178,10 @@ class BaselineMixin:
                 if adjusted_runas_t is None:
                     return
                 runas_t = adjusted_runas_t
+                if current_hour is not None and not self._baseline_pass_admits(
+                    current_hour, start=runas_t
+                ):
+                    return
                 self.state_manager.set_current_time(runas_t)
                 self.activity_generator.generate_explicit_credentials(
                     user=user,
@@ -6857,6 +8235,10 @@ class BaselineMixin:
                     if adjusted_hd_t is None:
                         return
                     hd_t = adjusted_hd_t
+                    if current_hour is not None and not self._baseline_pass_admits(
+                        current_hour, start=hd_t
+                    ):
+                        return
                     self.state_manager.set_current_time(hd_t)
                     self.activity_generator.generate_explicit_credentials(
                         user=user,
@@ -6885,6 +8267,7 @@ class BaselineMixin:
                 time=fail_t,
                 logon_type=7,
                 source_ip=system.ip,
+                exclusive_end=unlock_t,
             )
             self.state_manager.set_current_time(unlock_t)
         self.activity_generator.generate_workstation_unlock(
@@ -6911,9 +8294,9 @@ class BaselineMixin:
         if user.username not in pending:
             return False
 
-        hour_end = current_hour + timedelta(hours=1)
+        pass_end = self._baseline_pass_end(current_hour)
         unlock_t, pending_logon_id = pending[user.username]
-        if unlock_t >= hour_end:
+        if unlock_t >= pass_end:
             return False
 
         pending.pop(user.username, None)
@@ -6963,7 +8346,7 @@ class BaselineMixin:
     ) -> None:
         """Generate workstation lock/unlock events for Windows interactive sessions."""
         rng = _get_rng()
-        hour_end = current_hour + timedelta(hours=1)
+        pass_end = self._baseline_pass_end(current_hour)
 
         # Only Windows workstation users with active interactive sessions
         sessions = self.state_manager.get_sessions_for_user(user.username)
@@ -7015,6 +8398,8 @@ class BaselineMixin:
                 seconds=rng.randint(0, 59),
                 milliseconds=rng.randint(11, 973),
             )
+            if not self._baseline_pass_admits(current_hour, start=lock_t):
+                return
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -7040,7 +8425,7 @@ class BaselineMixin:
                 lock_time=lock_t,
                 unlock_time=unlock_t,
             )
-            if unlock_t < hour_end:
+            if unlock_t < pass_end:
                 self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
             else:
                 self._defer_unlock(user.username, unlock_t, session.logon_id)
@@ -7052,6 +8437,8 @@ class BaselineMixin:
                 seconds=rng.randint(60, 3500),
                 milliseconds=rng.randint(11, 973),
             )
+            if not self._baseline_pass_admits(current_hour, start=lock_t):
+                return
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -7077,7 +8464,7 @@ class BaselineMixin:
                 lock_time=lock_t,
                 unlock_time=unlock_t,
             )
-            if unlock_t < hour_end:
+            if unlock_t < pass_end:
                 self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
             else:
                 self._defer_unlock(user.username, unlock_t, session.logon_id)
@@ -7618,17 +9005,54 @@ class BaselineMixin:
     def _generate_baseline_smb_activity(self, current_hour: datetime) -> None:
         """Execute the hour's planned SMB actions in canonical timestamp order."""
 
-        from evidenceforge.models.scenario import SmbActivityEventSpec, SmbShareLocation
+        from evidenceforge.models.scenario import (
+            SmbActivityEventSpec,
+            SmbBatchSpec,
+            SmbShareLocation,
+        )
 
         for intent in self._plan_baseline_smb_activity(current_hour):
-            self.state_manager.set_current_time(intent.time)
+            duration_ms = None
+            if (
+                intent.actor is not None
+                and intent.share_ref
+                and self._baseline_pass_is_terminal(current_hour)
+            ):
+                duration_ms = max(250, math.ceil(intent.duration * 1000))
+            canonical_duration = max(
+                intent.duration,
+                (duration_ms or 0) / 1000,
+            )
+            close_bound = self._baseline_network_close_bound_seconds(
+                src_ip=intent.source_system.ip,
+                dst_ip=intent.target_ip,
+                proto="tcp",
+                dst_port=445,
+                service="smb",
+                requested_duration_max=canonical_duration,
+                current_hour=current_hour,
+                start=intent.time,
+                conn_state="SF",
+                payload_bytes=1,
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=intent.time,
+                end=intent.time + timedelta(seconds=close_bound),
+            ):
+                continue
             if intent.actor is not None and intent.share_ref:
+                batch = None
+                if duration_ms is not None:
+                    batch = SmbBatchSpec(count=1, duration=f"{duration_ms}ms")
+                self.state_manager.set_current_time(intent.time)
                 self.activity_generator.generate_smb_activity(
                     spec=SmbActivityEventSpec(
                         type="smb_activity",
                         operation=intent.operation,
                         purpose="interactive",
                         target=SmbShareLocation(type="share", share=intent.share_ref),
+                        batch=batch,
                     ),
                     actor=intent.actor,
                     parent_system=intent.source_system,
@@ -7644,6 +9068,7 @@ class BaselineMixin:
                 )
                 continue
 
+            self.state_manager.set_current_time(intent.time)
             self.activity_generator.generate_connection(
                 src_ip=intent.source_system.ip,
                 dst_ip=intent.target_ip,
@@ -7670,7 +9095,11 @@ class BaselineMixin:
     ) -> None:
         """Preserve the established Windows-only baseline SMB RNG path."""
 
-        from evidenceforge.models.scenario import SmbActivityEventSpec, SmbShareLocation
+        from evidenceforge.models.scenario import (
+            SmbActivityEventSpec,
+            SmbBatchSpec,
+            SmbShareLocation,
+        )
 
         smb_targets, _file_servers = self._build_smb_targets(system, dc_ips)
         if not smb_targets:
@@ -7693,7 +9122,6 @@ class BaselineMixin:
             offset = scheduled_second - hour_start_sec + rng.gauss(0, interval * 0.02)
             offset = max(0.0, min(3599.0, offset))
             timestamp = current_hour + timedelta(seconds=offset)
-            self.state_manager.set_current_time(timestamp)
             target_ip = rng.choice(smb_targets)
             target_system = next(
                 (
@@ -7726,6 +9154,14 @@ class BaselineMixin:
                 orig_bytes = rng.randint(200, 2_000)
                 resp_bytes = rng.randint(500, 5_000)
 
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=timestamp,
+                end=timestamp + timedelta(seconds=duration),
+            ):
+                scheduled_second += interval
+                continue
+
             actor = None
             session = None
             if target_system is not None:
@@ -7752,6 +9188,34 @@ class BaselineMixin:
                 if target_system is not None
                 else []
             )
+            duration_ms = None
+            if (
+                actor is not None
+                and server_shares
+                and self._baseline_pass_is_terminal(current_hour)
+            ):
+                duration_ms = max(250, math.ceil(duration * 1000))
+            canonical_duration = max(duration, (duration_ms or 0) / 1000)
+            close_bound = self._baseline_network_close_bound_seconds(
+                src_ip=system.ip,
+                dst_ip=target_ip,
+                proto="tcp",
+                dst_port=445,
+                service="smb",
+                requested_duration_max=canonical_duration,
+                current_hour=current_hour,
+                start=timestamp,
+                conn_state="SF",
+                payload_bytes=1,
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=timestamp,
+                end=timestamp + timedelta(seconds=close_bound),
+            ):
+                scheduled_second += interval
+                continue
+            self.state_manager.set_current_time(timestamp)
             if actor is not None and server_shares:
                 dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
                 share = rng.choice(dc_shares or server_shares)
@@ -7762,12 +9226,16 @@ class BaselineMixin:
                     "write": "update",
                     "metadata": "browse",
                 }[operation_profile]
+                batch = None
+                if duration_ms is not None:
+                    batch = SmbBatchSpec(count=1, duration=f"{duration_ms}ms")
                 self.activity_generator.generate_smb_activity(
                     spec=SmbActivityEventSpec(
                         type="smb_activity",
                         operation=operation,
                         purpose="interactive",
                         target=SmbShareLocation(type="share", share=share.ref),
+                        batch=batch,
                     ),
                     actor=actor,
                     parent_system=system,
@@ -7855,8 +9323,6 @@ class BaselineMixin:
         )
         host_ctx = self.activity_generator._build_host_context(system)
         assigned_user = getattr(system, "assigned_user", None) or ""
-        hour_end = current_hour + timedelta(hours=1)
-
         for _idx in range(count):
             ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
             eligible_processes = [
@@ -7908,7 +9374,7 @@ class BaselineMixin:
 
             if process.start_time and ts <= process.start_time:
                 ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
-            if ts >= hour_end:
+            if not self._baseline_pass_admits(current_hour, start=ts):
                 continue
 
             event_type = f"file_{file_action}"
@@ -7964,6 +9430,7 @@ class BaselineMixin:
         _n_bursts = rng.randint(3, 5)
         _burst_centers = sorted(rng.sample(range(300, 3300, 60), _n_bursts))
         _burst_width = 180  # seconds
+        pass_end = self._baseline_pass_end(current_hour)
 
         def _burst_offset() -> float:
             if rng.random() < 0.70:
@@ -8016,6 +9483,29 @@ class BaselineMixin:
                     continue
                 offset = _burst_offset()
                 ts = current_hour + timedelta(seconds=offset)
+                conn_proto = conn.get("proto", "tcp")
+                conn_service = conn.get("service")
+                maximum_duration = self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto=conn_proto,
+                    dst_port=conn["port"],
+                    service=conn_service,
+                    requested_duration_max=5.0,
+                    direct_extension_seconds=(
+                        tls_completed_extension_headroom_seconds() if conn_service == "ssl" else 0.0
+                    ),
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1 if conn_service is not None else None,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=maximum_duration),
+                ):
+                    continue
                 if not self._package_maintenance_connection_allowed(system, hostname, ts):
                     continue
                 self.state_manager.set_current_time(ts)
@@ -8249,6 +9739,36 @@ class BaselineMixin:
 
                     offset = _burst_offset()
                     ts = current_hour + timedelta(seconds=offset)
+                    conn_proto = conn.get("proto", "tcp")
+                    conn_service = conn.get("service")
+                    planned_conn_state = ""
+                    planned_payload_bytes = 1 if conn_service is not None else None
+                    if fw_denied and denying_sensor is not None:
+                        planned_conn_state = "REJ" if denying_sensor.drop_mode == "reject" else "S0"
+                        planned_payload_bytes = 0
+                    maximum_duration = self._baseline_network_close_bound_seconds(
+                        src_ip=src_ip,
+                        dst_ip=effective_dst_ip,
+                        proto=conn_proto,
+                        dst_port=conn["port"],
+                        service=conn_service,
+                        requested_duration_max=5.0,
+                        direct_extension_seconds=(
+                            tls_completed_extension_headroom_seconds()
+                            if conn_service == "ssl"
+                            else 0.0
+                        ),
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state=planned_conn_state,
+                        payload_bytes=planned_payload_bytes,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=maximum_duration),
+                    ):
+                        continue
                     self.state_manager.set_current_time(ts)
 
                     # Resolve source system object (None for external IPs)
@@ -8474,6 +9994,29 @@ class BaselineMixin:
                     continue
                 offset = max(session_start_sec, raw_offset)
                 ts = current_hour + timedelta(seconds=offset)
+                svc = conn.get("service", "")
+                is_server_source = self._is_server_admin_persona_source(system)
+                conn_proto = conn.get("proto", "tcp")
+                conn_port = conn["port"]
+                is_browser_connection = svc in ("ssl", "http") and hostname and not is_server_source
+                maximum_duration, browser_request_close_headroom = (
+                    self._baseline_persona_connection_close_bounds_seconds(
+                        current_hour,
+                        start=ts,
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        proto=conn_proto,
+                        dst_port=conn_port,
+                        service=svc,
+                        is_browser_connection=bool(is_browser_connection),
+                    )
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=maximum_duration),
+                ):
+                    continue
                 if not _session_active_at(session, ts, current_hour, planned_logoffs):
                     continue
                 paced_ts = self._pace_interactive_startup_activity(
@@ -8488,6 +10031,24 @@ class BaselineMixin:
                 if paced_ts is None:
                     continue
                 ts = paced_ts
+                maximum_duration, browser_request_close_headroom = (
+                    self._baseline_persona_connection_close_bounds_seconds(
+                        current_hour,
+                        start=ts,
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        proto=conn_proto,
+                        dst_port=conn_port,
+                        service=svc,
+                        is_browser_connection=bool(is_browser_connection),
+                    )
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=maximum_duration),
+                ):
+                    continue
                 if not _session_active_at(session, ts, current_hour, planned_logoffs):
                     continue
                 if not self._package_maintenance_connection_allowed(system, hostname, ts):
@@ -8513,7 +10074,6 @@ class BaselineMixin:
 
                 # For HTTP/HTTPS: generate browsing session with subresources,
                 # referrer chains, and cross-domain CDN fan-out.
-                svc = conn.get("service", "")
                 if svc == "smb" and any(
                     share.system.casefold()
                     == str(
@@ -8522,7 +10082,6 @@ class BaselineMixin:
                     for share in self.activity_generator._storage_world.shares
                 ):
                     continue
-                is_server_source = self._is_server_admin_persona_source(system)
                 if svc in ("ssl", "http") and hostname and not is_server_source:
                     self._emit_browsing_session(
                         system=system,
@@ -8535,7 +10094,14 @@ class BaselineMixin:
                         persona_pid=persona_pid,
                         os_cat=os_cat,
                         rng=rng,
-                        latest_request_time=session_deadline,
+                        latest_request_time=(
+                            min(
+                                session_deadline,
+                                pass_end - timedelta(seconds=browser_request_close_headroom),
+                            )
+                            if self._baseline_pass_is_terminal(current_hour)
+                            else session_deadline
+                        ),
                     )
                 else:
                     self.activity_generator.generate_connection(
@@ -8610,6 +10176,8 @@ class BaselineMixin:
             scheduled_pack_event_times,
         )
 
+        pass_end = self._baseline_pass_end(current_hour)
+
         groups = self._claim_hourly_pack_traffic_groups(
             current_hour=current_hour,
             system=system,
@@ -8672,6 +10240,24 @@ class BaselineMixin:
         hourly_cap = max(1, hi * 2)
         scheduled.sort(key=lambda item: (item[0], str(item[1]["id"])))
         for event_time, group, conn in scheduled[:hourly_cap]:
+            service = conn.get("service", "")
+            is_application_connection = bool(conn.get("pack_application"))
+            is_server_source = self._is_server_admin_persona_source(system)
+            conn_proto = conn.get("proto", "tcp")
+            conn_port = conn["port"]
+            maximum_duration = (
+                90.0
+                if is_application_connection and service in ("ssl", "http") and not is_server_source
+                else 18.0
+                if service == "ssl"
+                else 10.0
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=event_time,
+                end=event_time + timedelta(seconds=maximum_duration),
+            ):
+                continue
             active_sessions = [
                 candidate
                 for candidate in self.state_manager.get_sessions_on_system(system.hostname)
@@ -8700,7 +10286,7 @@ class BaselineMixin:
                 os_cat=os_cat,
                 dns_tags=conn.get("dns_tags"),
                 src_host=system.hostname,
-                service=conn.get("service", ""),
+                service=service,
                 source_system_type=getattr(system, "type", None),
                 source_user=user_obj,
             )
@@ -8722,6 +10308,28 @@ class BaselineMixin:
                     dst_ip = guarded_target.ip
                     hostname = self.world_model.fqdn_for_system(guarded_target)
 
+            is_browser_connection = (
+                is_application_connection and service in ("ssl", "http") and not is_server_source
+            )
+            maximum_duration, browser_request_close_headroom = (
+                self._baseline_persona_connection_close_bounds_seconds(
+                    current_hour,
+                    start=event_time,
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto=conn_proto,
+                    dst_port=conn_port,
+                    service=service,
+                    is_browser_connection=is_browser_connection,
+                )
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=event_time,
+                end=event_time + timedelta(seconds=maximum_duration),
+            ):
+                continue
+
             event_time = self._pace_interactive_startup_activity(
                 session=session,
                 system=system,
@@ -8735,6 +10343,24 @@ class BaselineMixin:
                 session, event_time, current_hour, planned_logoffs
             ):
                 continue
+            maximum_duration, browser_request_close_headroom = (
+                self._baseline_persona_connection_close_bounds_seconds(
+                    current_hour,
+                    start=event_time,
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto=conn_proto,
+                    dst_port=conn_port,
+                    service=service,
+                    is_browser_connection=is_browser_connection,
+                )
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=event_time,
+                end=event_time + timedelta(seconds=maximum_duration),
+            ):
+                continue
             if not cadence_allows_event_time(
                 group.get("cadence"),
                 event_time,
@@ -8746,7 +10372,6 @@ class BaselineMixin:
             if not self._package_maintenance_connection_allowed(system, hostname, event_time):
                 continue
 
-            is_application_connection = bool(conn.get("pack_application"))
             process_pid = -1
             if is_application_connection:
                 effective_persona = "_server_admin" if use_server_admin_persona else None
@@ -8768,8 +10393,6 @@ class BaselineMixin:
                     # bound process cannot be made active in this session.
                     continue
             self.state_manager.set_current_time(event_time)
-            service = conn.get("service", "")
-            is_server_source = self._is_server_admin_persona_source(system)
             exact_browser_process = False
             selected_process = None
             if is_application_connection:
@@ -8825,8 +10448,13 @@ class BaselineMixin:
                     persona_pid=process_pid,
                     os_cat=os_cat,
                     rng=allocation_rng,
-                    latest_request_time=_session_activity_deadline(
-                        session, current_hour, planned_logoffs
+                    latest_request_time=(
+                        min(
+                            _session_activity_deadline(session, current_hour, planned_logoffs),
+                            pass_end - timedelta(seconds=browser_request_close_headroom),
+                        )
+                        if self._baseline_pass_is_terminal(current_hour)
+                        else _session_activity_deadline(session, current_hour, planned_logoffs)
                     ),
                     user_agent_override=user_agent_override,
                 )
@@ -8954,6 +10582,8 @@ class BaselineMixin:
 
         rng = _get_rng()
         linux_smb_prepass = self._uses_linux_smb_prepass()
+        pass_end = self._baseline_pass_end(current_hour)
+        terminal_pass = self._baseline_pass_is_terminal(current_hour)
 
         # Compute scenario-local time for business-hour gating
         if hasattr(self, "_scenario_tz") and self._scenario_tz:
@@ -9003,6 +10633,28 @@ class BaselineMixin:
                     rng,
                 ):
                     ts = self._generation_epoch + timedelta(seconds=observed_second)
+                    dst_ip = rng.choice(system_dns_ips)
+                    duration = rng.uniform(0.001, 0.05)
+                    close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        proto="udp",
+                        dst_port=53,
+                        service="dns",
+                        # Context-free DNS accounting can extend the caller's
+                        # canonical response interval through 80.001 ms.
+                        requested_duration_max=0.081,
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state="SF",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=close_bound),
+                    ):
+                        continue
                     self.state_manager.set_current_time(ts)
                     dns_pid = (
                         _svc_pid("svchost_net_svc")
@@ -9013,12 +10665,12 @@ class BaselineMixin:
                     )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(system_dns_ips),
+                        dst_ip=dst_ip,
                         time=ts,
                         dst_port=53,
                         proto="udp",
                         service="dns",
-                        duration=rng.uniform(0.001, 0.05),
+                        duration=duration,
                         orig_bytes=rng.randint(40, 120),
                         resp_bytes=rng.randint(80, 512),
                         source_system=system,
@@ -9065,6 +10717,25 @@ class BaselineMixin:
                         schedule_state,
                     ):
                         ts = self._generation_epoch + timedelta(seconds=observed_second)
+                        duration = rng.uniform(0.01, 0.1)
+                        close_bound = self._baseline_network_close_bound_seconds(
+                            src_ip=system.ip,
+                            dst_ip=ntp_ip,
+                            proto="udp",
+                            dst_port=123,
+                            service="ntp",
+                            requested_duration_max=ntp_transport_close_headroom_seconds(),
+                            current_hour=current_hour,
+                            start=ts,
+                            conn_state="SF",
+                            payload_bytes=1,
+                        )
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + timedelta(seconds=close_bound),
+                        ):
+                            continue
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_connection(
                             src_ip=system.ip,
@@ -9073,7 +10744,7 @@ class BaselineMixin:
                             dst_port=123,
                             proto="udp",
                             service="ntp",
-                            duration=rng.uniform(0.01, 0.1),
+                            duration=duration,
                             orig_bytes=48,
                             resp_bytes=48,
                             source_system=system,
@@ -9130,6 +10801,18 @@ class BaselineMixin:
                     renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
                     # Randomize fractional seconds (OS timer imprecision)
                     renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
+                    renewal_close_bound = self._baseline_dhcp_renewal_close_bound_seconds(
+                        current_hour,
+                        start=renewal_ts,
+                        system=dhcp_state["system"],
+                        server_addr=dhcp_state["server_addr"],
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=renewal_ts,
+                        end=renewal_ts + timedelta(seconds=renewal_close_bound),
+                    ):
+                        continue
                     self.state_manager.set_current_time(renewal_ts)
                     self.activity_generator.generate_dhcp_lease(
                         system=dhcp_state["system"],
@@ -9188,8 +10871,32 @@ class BaselineMixin:
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=0.05),
+                    ):
+                        continue
                     krb_dst_ip = rng.choice(dc_targets)
+                    close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=system.ip,
+                        dst_ip=krb_dst_ip,
+                        proto="tcp",
+                        dst_port=88,
+                        service="kerberos",
+                        requested_duration_max=0.05,
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state="",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=close_bound),
+                    ):
+                        continue
+                    self.state_manager.set_current_time(ts)
                     dc_hostname = dc_hostname_by_ip.get(krb_dst_ip)
                     if dc_hostname is None and dc_hostnames:
                         dc_hostname = rng.choice(dc_hostnames)
@@ -9250,15 +10957,35 @@ class BaselineMixin:
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
+                    dst_ip = rng.choice(dc_targets)
+                    duration = rng.uniform(0.01, 0.5)
+                    close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        proto="tcp",
+                        dst_port=389,
+                        service="ldap",
+                        requested_duration_max=duration,
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state="",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=close_bound),
+                    ):
+                        continue
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dc_targets),
+                        dst_ip=dst_ip,
                         time=ts,
                         dst_port=389,
                         proto="tcp",
                         service="ldap",
-                        duration=rng.uniform(0.01, 0.5),
+                        duration=duration,
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
                         emit_dns=rng.random() > 0.02,
@@ -9290,7 +11017,8 @@ class BaselineMixin:
                 for _si in range(num_svc):
                     svc_offset = rng.uniform(0, 3599)
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
-                    self.state_manager.set_current_time(svc_ts)
+                    if not self._baseline_pass_admits(current_hour, start=svc_ts):
+                        continue
                     svc_image, svc_cmd, svc_parent_key = _pick_svc(
                         rng,
                         sys_type_str,
@@ -9302,6 +11030,27 @@ class BaselineMixin:
                         svc_parent_key,
                         family="system_services",
                     )
+                    svc_lifetime = (
+                        _windows_background_process_lifetime_seconds(
+                            svc_image,
+                            svc_cmd,
+                            rng,
+                        )
+                        if terminal_pass
+                        else None
+                    )
+                    svc_end = (
+                        svc_ts + timedelta(seconds=svc_lifetime)
+                        if svc_lifetime is not None
+                        else None
+                    )
+                    if svc_end is not None and not self._baseline_pass_admits(
+                        current_hour,
+                        start=svc_ts,
+                        end=svc_end,
+                    ):
+                        continue
+                    self.state_manager.set_current_time(svc_ts)
                     svc_pid = self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
@@ -9309,12 +11058,18 @@ class BaselineMixin:
                         command_line=svc_cmd,
                         parent_pid=svc_parent,
                         username="SYSTEM",
+                        source_visible_by=(
+                            svc_end - timedelta(microseconds=1)
+                            if terminal_pass and svc_end is not None
+                            else None
+                        ),
                     )
-                    svc_lifetime = _windows_background_process_lifetime_seconds(
-                        svc_image,
-                        svc_cmd,
-                        rng,
-                    )
+                    if not terminal_pass:
+                        svc_lifetime = _windows_background_process_lifetime_seconds(
+                            svc_image,
+                            svc_cmd,
+                            rng,
+                        )
                     if svc_pid and svc_lifetime is not None:
                         svc_end = svc_ts + timedelta(seconds=svc_lifetime)
                         self.state_manager.set_current_time(svc_end)
@@ -9433,6 +11188,8 @@ class BaselineMixin:
                         _reg_image = _reg_proc.image
                     if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
                         _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
+                    if not self._baseline_pass_admits(current_hour, start=_reg_ts):
+                        continue
                     _target = f"{_key}\\{_vname}"
                     _details = _materialize_registry_value_for_time(
                         _target,
@@ -9496,12 +11253,31 @@ class BaselineMixin:
                     ),
                 ):
                     ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    selected_task = self._select_windows_scheduled_task(
-                        system=system,
-                        rng=rng,
-                        time=ts,
-                    )
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
+                    task_plan = None
+                    if terminal_pass:
+                        task_plan = self._plan_windows_scheduled_task(
+                            system=system,
+                            rng=rng,
+                            time=ts,
+                        )
+                        selected_task = (
+                            (
+                                task_plan.image,
+                                task_plan.command_line,
+                                task_plan.parent_key,
+                            )
+                            if task_plan is not None
+                            else None
+                        )
+                    else:
+                        self.state_manager.set_current_time(ts)
+                        selected_task = self._select_windows_scheduled_task(
+                            system=system,
+                            rng=rng,
+                            time=ts,
+                        )
                     if selected_task is None:
                         continue
                     task_image, task_cmd, task_parent_key = selected_task
@@ -9510,6 +11286,27 @@ class BaselineMixin:
                         task_parent_key,
                         family="scheduled_tasks",
                     )
+                    task_lifetime = (
+                        _windows_background_process_lifetime_seconds(
+                            task_image,
+                            task_cmd,
+                            rng,
+                        )
+                        if terminal_pass
+                        else None
+                    )
+                    task_end = (
+                        ts + timedelta(seconds=task_lifetime) if task_lifetime is not None else None
+                    )
+                    if task_end is not None and not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=task_end,
+                    ):
+                        continue
+                    if task_plan is not None:
+                        self.state_manager.set_current_time(ts)
+                        self._commit_windows_scheduled_task(task_plan)
                     task_pid = self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
@@ -9517,12 +11314,18 @@ class BaselineMixin:
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="SYSTEM",
+                        source_visible_by=(
+                            task_end - timedelta(microseconds=1)
+                            if terminal_pass and task_end is not None
+                            else None
+                        ),
                     )
-                    task_lifetime = _windows_background_process_lifetime_seconds(
-                        task_image,
-                        task_cmd,
-                        rng,
-                    )
+                    if not terminal_pass:
+                        task_lifetime = _windows_background_process_lifetime_seconds(
+                            task_image,
+                            task_cmd,
+                            rng,
+                        )
                     if task_pid and task_lifetime is not None:
                         task_end = ts + timedelta(seconds=task_lifetime)
                         self.state_manager.set_current_time(task_end)
@@ -9556,7 +11359,11 @@ class BaselineMixin:
                         hostname=system.hostname,
                         config=delegation_config,
                     )
-                    if svc_ts is None or not self._service_account_available_at(svc_name, svc_ts):
+                    if (
+                        svc_ts is None
+                        or not self._baseline_pass_admits(current_hour, start=svc_ts)
+                        or not self._service_account_available_at(svc_name, svc_ts)
+                    ):
                         continue
                     occurrence_rng = random.Random(
                         _stable_seed(
@@ -9570,14 +11377,17 @@ class BaselineMixin:
                     if not target_candidates:
                         continue
                     target_sys = occurrence_rng.choice(target_candidates)
-                    self.state_manager.set_current_time(svc_ts)
-                    caller_image, caller_pid = self._ensure_service_account_delegation_process(
+                    caller_process = self._ensure_service_account_delegation_process(
                         system=system,
                         svc_name=svc_name,
                         time=svc_ts,
                         sys_pids=sys_pids,
                         rng=occurrence_rng,
+                        exclusive_end=pass_end if terminal_pass else None,
                     )
+                    if caller_process is None:
+                        continue
+                    caller_image, caller_pid = caller_process
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,
                         system=system,
@@ -9627,13 +11437,30 @@ class BaselineMixin:
                         if occurrence_rng.random() >= emission_probability:
                             continue
                         gpo_ts = self._generation_epoch + timedelta(seconds=scheduled_second)
-                        self.state_manager.set_current_time(gpo_ts)
+                        if not self._baseline_pass_admits(current_hour, start=gpo_ts):
+                            continue
                         gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
                         gpupdate_command = _gpo_refresh_command_line(
                             system.hostname,
                             sequence,
                         )
                         parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                        lifetime = _windows_foreground_lifetime(
+                            gpupdate_image,
+                            gpupdate_command,
+                        )
+                        end_ts = (
+                            gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
+                            if terminal_pass and lifetime is not None
+                            else None
+                        )
+                        if end_ts is not None and not self._baseline_pass_admits(
+                            current_hour,
+                            start=gpo_ts,
+                            end=end_ts,
+                        ):
+                            continue
+                        self.state_manager.set_current_time(gpo_ts)
                         gpupdate_pid = self.activity_generator.generate_system_process(
                             system=system,
                             time=gpo_ts,
@@ -9641,10 +11468,18 @@ class BaselineMixin:
                             command_line=gpupdate_command,
                             parent_pid=parent_pid,
                             username="SYSTEM",
+                            source_visible_by=(
+                                end_ts - timedelta(microseconds=1)
+                                if terminal_pass and end_ts is not None
+                                else None
+                            ),
                         )
-                        lifetime = _windows_foreground_lifetime(gpupdate_image, gpupdate_command)
                         if lifetime is not None:
-                            end_ts = gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
+                            if not terminal_pass:
+                                end_ts = gpo_ts + timedelta(
+                                    seconds=occurrence_rng.uniform(*lifetime)
+                                )
+                            assert end_ts is not None
                             self.state_manager.set_current_time(end_ts)
                             self.activity_generator.generate_system_process_termination(
                                 system=system,
@@ -9680,6 +11515,8 @@ class BaselineMixin:
                             continue
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
+                        if not self._baseline_pass_admits(current_hour, start=ts):
+                            continue
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_create_remote_thread(
                             user=_SYSTEM_USER,
@@ -9710,6 +11547,8 @@ class BaselineMixin:
                         tgt_pid = sys_pids[tgt_key]
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
+                        if not self._baseline_pass_admits(current_hour, start=ts):
+                            continue
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_process_access(
                             user=_SYSTEM_USER,
@@ -9737,6 +11576,8 @@ class BaselineMixin:
                     for _ in range(num_dll):
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
+                        if not self._baseline_pass_admits(current_hour, start=ts):
+                            continue
                         win_procs: list[tuple[int, str]] = []
                         for proc in running:
                             if _eligible_for_hourly_module_load(proc, ts):
@@ -9778,21 +11619,48 @@ class BaselineMixin:
                     for _ in range(num_ssh):
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
+                        if not self._baseline_pass_admits(current_hour, start=ts):
+                            continue
                         ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
                         if ssh_identity is None:
                             continue
                         ssh_user, source_system = ssh_identity
-                        hour_end = current_hour + timedelta(hours=1)
+                        session_end_plan = None
+                        if terminal_pass:
+                            session_end_plan = self._baseline_ssh_terminal_end_plan(
+                                current_hour,
+                                transport_start=ts,
+                            )
+                            if session_end_plan is None:
+                                continue
                         self.state_manager.set_current_time(ts)
-                        self.world_planner.bootstrap_user_session(
-                            user=ssh_user,
-                            target_system=system,
-                            time=ts,
-                            rng=rng,
-                            session_kind="ssh",
-                            source_system=source_system,
-                            allow_existing=True,
-                            required_until=hour_end,
+                        if session_end_plan is None:
+                            bootstrap = self.world_planner.bootstrap_user_session(
+                                user=ssh_user,
+                                target_system=system,
+                                time=ts,
+                                rng=rng,
+                                session_kind="ssh",
+                                source_system=source_system,
+                                allow_existing=True,
+                                required_until=current_hour + timedelta(hours=1),
+                            )
+                        else:
+                            bootstrap = self.world_planner.bootstrap_user_session(
+                                user=ssh_user,
+                                target_system=system,
+                                time=ts,
+                                rng=rng,
+                                session_kind="ssh",
+                                source_system=source_system,
+                                allow_existing=False,
+                                required_until=ts,
+                                session_end_plan=session_end_plan,
+                            )
+                        terminal_transport_close = (
+                            getattr(bootstrap.session, "network_close_time", None)
+                            if terminal_pass
+                            else None
                         )
 
                         persona_lower = (ssh_user.persona or "").lower()
@@ -9870,7 +11738,12 @@ class BaselineMixin:
                                 )[0]
                             cumulative_gap += gap
                             cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
-                            if cmd_time >= hour_end:
+                            if terminal_pass and (
+                                terminal_transport_close is None
+                                or cmd_time >= ensure_utc(terminal_transport_close)
+                            ):
+                                break
+                            if not self._baseline_pass_admits(current_hour, start=cmd_time):
                                 break
                             self.activity_generator.generate_bash_command(
                                 ssh_user, system, cmd_time, cmd
@@ -9900,7 +11773,6 @@ class BaselineMixin:
                         persona=ws_user.persona,
                     )
                     ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    hour_end = current_hour + timedelta(hours=1)
                     cumulative = 0
                     command_entries = pick_bash_session_commands(
                         rng,
@@ -9915,7 +11787,7 @@ class BaselineMixin:
                         gap = rng.randint(30, 300)
                         cumulative += gap
                         cmd_time = ts0 + timedelta(seconds=cumulative)
-                        if cmd_time >= hour_end:
+                        if not self._baseline_pass_admits(current_hour, start=cmd_time):
                             break
                         self.state_manager.set_current_time(cmd_time)
                         self.activity_generator.generate_bash_command(
@@ -9955,6 +11827,8 @@ class BaselineMixin:
             for _ in range(num_rdp):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(current_hour, start=ts):
+                    continue
                 rdp_user = rng.choice(roster)
                 source_system = (
                     self.world_model.pick_remote_source_system(rdp_user, system, rng)
@@ -9983,6 +11857,14 @@ class BaselineMixin:
                     authored_lower_bound=authored_rdp_lower_bound,
                 ):
                     continue
+                session_end_plan = None
+                if terminal_pass:
+                    session_end_plan = self._baseline_rdp_terminal_end_plan(
+                        current_hour,
+                        transport_start=prepared_bootstrap.transport_time,
+                    )
+                    if session_end_plan is None:
+                        continue
                 rdp_requests.append(
                     _BaselineRdpIntent(
                         time=ts,
@@ -9990,6 +11872,7 @@ class BaselineMixin:
                         user=rdp_user,
                         source_system=source_system,
                         prepared_bootstrap=prepared_bootstrap,
+                        session_end_plan=session_end_plan,
                     )
                 )
 
@@ -10012,6 +11895,8 @@ class BaselineMixin:
             for _ in range(num_svc):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(current_hour, start=ts):
+                    continue
                 svc_accounts = ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"]
                 svc_user = rng.choice(svc_accounts)
                 self.activity_generator.generate_service_logon(
@@ -10031,6 +11916,12 @@ class BaselineMixin:
             )
             for offset in offsets:
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=30),
+                ):
+                    continue
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_anonymous_logon(
                     system=system,
@@ -10054,8 +11945,15 @@ class BaselineMixin:
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
                     dc_idx = rng.randint(0, len(dc_ips) - 1)
+                    if not self._baseline_machine_account_admits(
+                        current_hour,
+                        start=ts,
+                        src_ip=system.ip,
+                        dst_ip=dc_ips[dc_idx],
+                    ):
+                        continue
+                    self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_machine_account_logon(
                         hostname=system.hostname,
                         machine_username=f"{system.hostname}$",
@@ -10063,6 +11961,7 @@ class BaselineMixin:
                         source_ip=system.ip,
                         dc_ip=dc_ips[dc_idx],
                         time=ts,
+                        exclusive_end=pass_end if terminal_pass else None,
                     )
 
         # DC-side Kerberos event generation
@@ -10087,6 +11986,30 @@ class BaselineMixin:
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
                         offset = max(0, min(3599, offset))
                         ts = current_hour + timedelta(seconds=offset)
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + timedelta(seconds=0.04),
+                        ):
+                            continue
+                        close_bound = self._baseline_network_close_bound_seconds(
+                            src_ip=client.ip,
+                            dst_ip=dc_ips[_dc_idx],
+                            proto="tcp",
+                            dst_port=88,
+                            service="kerberos",
+                            requested_duration_max=0.04,
+                            current_hour=current_hour,
+                            start=ts,
+                            conn_state="",
+                            payload_bytes=1,
+                        )
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + timedelta(seconds=close_bound),
+                        ):
+                            continue
                         self.state_manager.set_current_time(ts)
 
                         username = f"{client.hostname}$"
@@ -10126,7 +12049,29 @@ class BaselineMixin:
                         for tgs_i in range(num_tgs):
                             elapsed_ms += _machine_account_tgs_gap_ms(rng, first=tgs_i == 0)
                             ts2 = ts + timedelta(milliseconds=elapsed_ms)
-                            if ts2 >= current_hour + timedelta(hours=1):
+                            if not self._baseline_pass_admits(
+                                current_hour,
+                                start=ts2,
+                                end=ts2 + timedelta(seconds=0.05),
+                            ):
+                                continue
+                            close_bound = self._baseline_network_close_bound_seconds(
+                                src_ip=client.ip,
+                                dst_ip=dc_ips[_dc_idx],
+                                proto="tcp",
+                                dst_port=88,
+                                service="kerberos",
+                                requested_duration_max=0.05,
+                                current_hour=current_hour,
+                                start=ts2,
+                                conn_state="",
+                                payload_bytes=1,
+                            )
+                            if not self._baseline_pass_admits(
+                                current_hour,
+                                start=ts2,
+                                end=ts2 + timedelta(seconds=close_bound),
+                            ):
                                 continue
                             target, target_is_dc = _pick_dc_kerberos_target(
                                 rng,
@@ -10157,12 +12102,14 @@ class BaselineMixin:
                             )
                         if rng.random() < 0.10:
                             ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)
-                            self.activity_generator.generate_ntlm_validation(
-                                username=username,
-                                workstation=client.hostname,
-                                dc_hostname=dc_hostname,
-                                time=current_hour + timedelta(seconds=ntlm_offset),
-                            )
+                            ntlm_time = current_hour + timedelta(seconds=ntlm_offset)
+                            if self._baseline_pass_admits(current_hour, start=ntlm_time):
+                                self.activity_generator.generate_ntlm_validation(
+                                    username=username,
+                                    workstation=client.hostname,
+                                    dc_hostname=dc_hostname,
+                                    time=ntlm_time,
+                                )
 
         # TGT Renewal
         if not hasattr(self, "_last_tgt_time"):
@@ -10175,6 +12122,8 @@ class BaselineMixin:
                 if last_tgt and (current_hour - last_tgt) >= renewal_interval:
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
                     self.state_manager.set_current_time(ts)
                     dc_idx = rng.randint(0, len(dc_hostnames) - 1)
                     self.activity_generator.generate_kerberos_tgt_renewal(
@@ -10242,11 +12191,19 @@ class BaselineMixin:
             )
             for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(current_hour, start=ts):
+                    continue
                 kernel_uptime = _kernel_uptime_stamp(boot_uptime, scenario_start, ts)
 
                 source_roll = rng.random()
                 if source_roll < 0.25:
                     if is_dmz and rng.random() < 0.85:
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + timedelta(seconds=6.0),
+                        ):
+                            continue
                         inbound_dst_ip = system.ip
                         if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
                             public_target = (
@@ -10262,6 +12219,24 @@ class BaselineMixin:
                             weights=self._external_scanner_weights,
                             k=1,
                         )[0]
+                        close_bound = self._baseline_network_close_bound_seconds(
+                            src_ip=src_ip,
+                            dst_ip=inbound_dst_ip,
+                            proto="tcp",
+                            dst_port=0,
+                            service=None,
+                            requested_duration_max=6.0,
+                            current_hour=current_hour,
+                            start=ts,
+                            conn_state="S0",
+                            payload_bytes=0,
+                        )
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + timedelta(seconds=close_bound),
+                        ):
+                            continue
                         spt = rng.randint(1024, 65535)
                         dpt = external_scanner_port_for_source(src_ip, rng)
                         packet_len = _ufw_block_syn_packet_len(src_ip)
@@ -10324,60 +12299,14 @@ class BaselineMixin:
                     if ambient_logind_budget <= 0:
                         continue
                     ambient_logind_budget -= 1
-                    # Sequential session IDs per host (systemd-logind increments from boot)
-                    sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
-                    if sys_type == "server":
-                        # Headless systems only get a rare, explicit local root console.
-                        user = "root"
-                    else:
-                        # Desktop sessions belong to the modeled workstation owner.
-                        user = system.assigned_user or "root"
-                    pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
-                        user,
-                        rng=rng,
-                        system_type=sys_type,
-                    )
-                    pam_open_time = ts - _linux_baseline_pam_open_lead(rng)
-                    pam_pid = _linux_transient_syslog_pid(
-                        self.state_manager,
-                        system.hostname,
-                        pam_open_time,
-                        rng,
-                    )
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=pam_open_time,
-                        app_name=pam_app,
-                        message=pam_open,
-                        pid=pam_pid,
-                        facility=10,
-                    )
-                    self.activity_generator.generate_syslog_event(
+                    self._emit_linux_ambient_logind_session(
                         system=system,
                         time=ts,
-                        app_name="systemd-logind",
-                        message=f"New session {sid} of user {user}.",
-                        pid=sys_pids.get("logind", rng.randint(400, 800)),
-                        facility=10,
+                        current_hour=current_hour,
+                        rng=rng,
+                        system_type=sys_type,
+                        sys_pids=sys_pids,
                     )
-                    if rng.random() < 0.65:
-                        remove_time = ts + timedelta(seconds=rng.randint(120, 5400))
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=remove_time - _linux_baseline_pam_close_lead(rng),
-                            app_name=pam_app,
-                            message=f"pam_unix({pam_service}:session): session closed for user {user}",
-                            pid=pam_pid,
-                            facility=10,
-                        )
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=remove_time,
-                            app_name="systemd-logind",
-                            message=f"Removed session {sid}.",
-                            pid=sys_pids.get("logind", rng.randint(400, 800)),
-                            facility=10,
-                        )
                 elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
@@ -10629,6 +12558,12 @@ class BaselineMixin:
                         uid = _linux_uid_for_user(sudo_user)
                         sudo_command = msg.split("COMMAND=", 1)[1].strip()
                         sudo_runtime = _linux_sudo_command_runtime(sudo_command, rng)
+                        if not self._baseline_pass_admits(
+                            current_hour,
+                            start=ts,
+                            end=ts + sudo_runtime + linux_sudo_intrinsic_close_headroom(),
+                        ):
+                            continue
                         self.activity_generator.generate_linux_sudo_session(
                             system=system,
                             time=ts,
@@ -10636,6 +12571,7 @@ class BaselineMixin:
                             sudo_user=sudo_user,
                             uid=uid,
                             runtime=sudo_runtime,
+                            latest_end=pass_end if terminal_pass else None,
                         )
                     else:
                         self.activity_generator.generate_syslog_event(
@@ -10671,6 +12607,25 @@ class BaselineMixin:
                 offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=src_sys.ip,
+                    dst_ip=dst_sys.ip,
+                    proto="icmp",
+                    dst_port=0,
+                    service=None,
+                    # ICMP planning applies a long-tail RTT up to 145 ms.
+                    requested_duration_max=0.146,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    continue
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
                     src_ip=src_sys.ip,
@@ -10825,6 +12780,59 @@ class BaselineMixin:
                         src_ip = ext_ip
                         dst_ip = public_target
                         source_system = None
+                    policy_denied = False
+                    if sig_direction == "in" and fw_sensor is not None and alert_proto == "tcp":
+                        policy_denied = (
+                            self._evaluate_firewall_policy(
+                                src_ip,
+                                local_sys.ip,
+                                alert_dst_port,
+                                fw_sensor,
+                                segment_cidrs,
+                            )
+                            == "deny"
+                        )
+                    if sig_direction == "in":
+                        (
+                            planned_service,
+                            requested_duration_max,
+                            planned_conn_state,
+                            planned_payload_bytes,
+                        ) = _baseline_inbound_ids_probe_close_contract(
+                            proto=alert_proto,
+                            dst_port=alert_dst_port,
+                            target_system=local_sys,
+                            policy_denied=policy_denied,
+                            deny_conn_state=deny_conn_state,
+                        )
+                    else:
+                        planned_service = {22: "ssh", 80: "http", 443: "ssl", 53: "dns"}.get(
+                            alert_dst_port, ""
+                        )
+                        requested_duration_max = 5.0
+                        planned_conn_state = ""
+                        # The sampled outbound response can be empty, so the
+                        # planner must conservatively retain the embryonic-TCP
+                        # firewall branch until the real payload is selected.
+                        planned_payload_bytes = None
+                    close_bound = self._baseline_ids_connection_close_bound_seconds(
+                        src_ip=src_ip,
+                        dst_ip=dst_ip,
+                        proto=alert_proto,
+                        dst_port=alert_dst_port,
+                        service=planned_service,
+                        requested_duration_max=requested_duration_max,
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state=planned_conn_state,
+                        payload_bytes=planned_payload_bytes,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=close_bound),
+                    ):
+                        continue
                     ids_result = IdsAlertActionBundle(
                         IdsAlertRequest(
                             signature=sig,
@@ -10850,18 +12858,6 @@ class BaselineMixin:
                     firewall = None
                     ids_conn_state = None
                     if sig_direction == "in":
-                        policy_denied = False
-                        if fw_sensor is not None and alert_proto == "tcp":
-                            policy_denied = (
-                                self._evaluate_firewall_policy(
-                                    src_ip,
-                                    local_sys.ip,
-                                    alert_dst_port,
-                                    fw_sensor,
-                                    segment_cidrs,
-                                )
-                                == "deny"
-                            )
                         service, ids_conn_state, duration, orig_bytes, resp_bytes = (
                             _baseline_inbound_ids_probe_profile(
                                 rng=rng,
@@ -10939,7 +12935,6 @@ class BaselineMixin:
             response_size_for_mime,
             response_size_for_status,
         )
-        from evidenceforge.generation.activity.timing_profiles import get_timing_window
         from evidenceforge.generation.activity.web_session_profiles import (
             pick_profile_request,
             pick_web_visitor_profile,
@@ -10961,6 +12956,11 @@ class BaselineMixin:
         top_level_budget = rng.randint(web_lo, web_hi)
         if top_level_budget <= 0:
             return
+        # This helper is also exercised as an unbound mixin method in focused
+        # tests, where `self` can expose mocked attributes. Resolve the timing
+        # contract from the concrete mixin implementation.
+        pass_end = BaselineMixin._baseline_pass_end(self, current_hour)
+        terminal_pass = BaselineMixin._baseline_pass_is_terminal(self, current_hour)
 
         internal_client_systems = [s for s in systems if s.ip != sys_obj.ip]
         internal_ips = [s.ip for s in internal_client_systems]
@@ -11119,9 +13119,42 @@ class BaselineMixin:
                 domain_tags=("web",),
             )
             base_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            if not self._baseline_pass_admits(current_hour, start=base_ts):
+                continue
             effective_dst_ip = _effective_dst_ip(is_external_client)
 
             if profile.get("kind") == "session":
+                browser_close_bound = _BASELINE_BROWSER_CLOSE_HEADROOM.total_seconds()
+                if terminal_pass:
+                    browser_tls_extension = (
+                        tls_completed_extension_headroom_seconds() if dst_service == "ssl" else 0.0
+                    )
+                    browser_close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=client_ip,
+                        dst_ip=effective_dst_ip,
+                        proto="tcp",
+                        dst_port=dst_port,
+                        service=dst_service,
+                        requested_duration_max=max(
+                            0.0,
+                            _BASELINE_BROWSER_CLOSE_HEADROOM.total_seconds()
+                            - browser_tls_extension,
+                        ),
+                        direct_extension_seconds=browser_tls_extension,
+                        current_hour=current_hour,
+                        # Sensor-clock drift is monotonic in runtime elapsed time.
+                        # Evaluate the terminal cutoff at the pass frontier so every
+                        # request admitted before it retains this conservative tail.
+                        start=pass_end,
+                        conn_state="SF",
+                        payload_bytes=1,
+                    )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=base_ts,
+                    end=base_ts + timedelta(seconds=browser_close_bound),
+                ):
+                    continue
                 cache_seen = getattr(self, "_web_static_cache_seen", None)
                 if not isinstance(cache_seen, dict):
                     cache_seen = self._web_static_cache_seen = {}
@@ -11145,6 +13178,11 @@ class BaselineMixin:
                         page_load_budget=top_level_budget - top_level_emitted,
                         request_body_floor=200,
                         secondary_duration_min=0.03,
+                        latest_request_time=(
+                            pass_end - timedelta(seconds=browser_close_bound)
+                            if terminal_pass
+                            else None
+                        ),
                         set_current_time=False,
                         source="baseline_web_server_access",
                     ),
@@ -11183,6 +13221,25 @@ class BaselineMixin:
                 req_ts = base_ts + timedelta(milliseconds=elapsed_ms)
                 if request_index < count - 1:
                     elapsed_ms += _tool_gap_ms()
+                if terminal_pass:
+                    request_close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=client_ip,
+                        dst_ip=effective_dst_ip,
+                        proto="tcp",
+                        dst_port=dst_port,
+                        service=dst_service,
+                        requested_duration_max=1.5,
+                        current_hour=current_hour,
+                        start=req_ts,
+                        conn_state="SF",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=req_ts,
+                        end=req_ts + timedelta(seconds=request_close_bound),
+                    ):
+                        continue
                 self.activity_generator.generate_connection(
                     src_ip=client_ip,
                     dst_ip=effective_dst_ip,
@@ -11386,6 +13443,7 @@ class BaselineMixin:
             return
 
         num_sessions = rng.randint(1, 3) if is_business_hours else 1
+        pass_end = self._baseline_pass_end(current_hour)
 
         for _ in range(num_sessions):
             admin = rng.choice(admin_users)
@@ -11402,12 +13460,35 @@ class BaselineMixin:
                 admin,
                 ws,
                 base_time,
-                current_hour + timedelta(hours=1),
+                pass_end,
                 rng,
             )
             if aligned_time is None:
                 continue
             base_time = aligned_time
+            latest_connection_time = base_time + timedelta(seconds=5)
+            network_family_bound = 0.0
+            for port_info in tool["target_ports"]:
+                port_service = port_info.get("service")
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=ws.ip,
+                    dst_ip=dc.ip,
+                    proto="tcp",
+                    dst_port=port_info["port"],
+                    service=port_service,
+                    requested_duration_max=30.0,
+                    current_hour=current_hour,
+                    start=latest_connection_time,
+                    conn_state="",
+                    payload_bytes=1 if port_service is not None else None,
+                )
+                network_family_bound = max(network_family_bound, 5.0 + close_bound)
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=base_time,
+                end=base_time + timedelta(seconds=max(35.0, network_family_bound)),
+            ):
+                continue
             self.state_manager.set_current_time(base_time)
 
             logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)

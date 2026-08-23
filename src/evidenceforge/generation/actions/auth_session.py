@@ -129,6 +129,7 @@ class FailedLogonRequest:
     target_username: str | None = None
     dc_system: System | None = None
     source: str = "activity_generator"
+    exclusive_end: datetime | None = None
 
     @property
     def stable_id(self) -> str:
@@ -177,6 +178,7 @@ class MachineAccountLogonRequest:
     time: datetime
     domain: str = ""
     source: str = "activity_generator"
+    exclusive_end: datetime | None = None
 
     @property
     def stable_id(self) -> str:
