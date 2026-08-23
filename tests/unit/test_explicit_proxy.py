@@ -4068,6 +4068,7 @@ class TestExplicitProxyVisibility:
             root,
             receipt,
             application_receipt=None,
+            prepared_dispatch=None,
             outcome,
         ):
             lifecycle_modes.append(root.runtime_token.lifecycle_mode)
@@ -4077,6 +4078,7 @@ class TestExplicitProxyVisibility:
                 root=root,
                 receipt=receipt,
                 application_receipt=application_receipt,
+                prepared_dispatch=prepared_dispatch,
                 outcome=outcome,
             )
 
