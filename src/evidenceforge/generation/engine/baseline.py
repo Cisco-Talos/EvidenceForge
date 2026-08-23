@@ -6243,7 +6243,7 @@ class BaselineMixin:
                     session.system,
                 )
             )
-            teardown_frontier = max(ensure_utc(logoff_time), *teardown_markers)
+            teardown_frontier = max([ensure_utc(logoff_time), *teardown_markers])
             self._advance_rdp_before_generic_teardown(teardown_frontier)
             live_session = self.state_manager.get_session(session.logon_id)
             if live_session is None:
