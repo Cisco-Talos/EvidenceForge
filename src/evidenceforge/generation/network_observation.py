@@ -3408,10 +3408,34 @@ class NetworkObservationPlanner:
             if "zeek_http" in visible_formats:
                 source_times[network_source_timing_key("zeek_http")] = http_time
 
+        transfers = sorted(event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig)
+        natural_file_uppers = [
+            (
+                observed_close - timedelta(microseconds=ocsp_duration_floor_us)
+                if (
+                    observed_close is not None
+                    and ocsp is not None
+                    and transfer.fuid == ocsp.id
+                    and ocsp_duration_floor_us
+                )
+                else observed_close
+            )
+            for transfer in transfers
+        ]
+        reserved_file_uppers = list(natural_file_uppers)
+        next_file_upper: datetime | None = None
+        for ordinal in range(len(reserved_file_uppers) - 1, -1, -1):
+            file_upper = reserved_file_uppers[ordinal]
+            if next_file_upper is not None:
+                future_row_reserve = next_file_upper - timedelta(microseconds=1)
+                if file_upper is None or future_row_reserve < file_upper:
+                    file_upper = future_row_reserve
+            reserved_file_uppers[ordinal] = file_upper
+            next_file_upper = file_upper
+
         file_times: dict[str, datetime] = {}
         file_durations: dict[str, float] = {}
         previous_file_time: datetime | None = None
-        transfers = sorted(event.protocol.file_transfers, key=lambda transfer: not transfer.is_orig)
         for ordinal, transfer in enumerate(transfers):
             anchor = observed_start
             if http_time is not None and transfer.fuid in (*http.orig_fuids, *http.resp_fuids):
@@ -3435,17 +3459,21 @@ class NetworkObservationPlanner:
                     runtime.audit.record_saturation(
                         "source.zeek_file.observation_not_before_window"
                     )
-            file_upper = observed_close
+            natural_file_upper = natural_file_uppers[ordinal]
+            file_upper = reserved_file_uppers[ordinal]
+            ordering_anchor = (
+                max(anchor, previous_file_time) if previous_file_time is not None else anchor
+            )
             if (
-                observed_close is not None
-                and ocsp is not None
-                and transfer.fuid == ocsp.id
-                and ocsp_duration_floor_us
+                file_upper is not None
+                and natural_file_upper is not None
+                and file_upper <= ordering_anchor < natural_file_upper
             ):
-                file_upper = observed_close - timedelta(microseconds=ocsp_duration_floor_us)
+                runtime.audit.record_saturation("source.zeek_file.future_row_reservation")
+                file_upper = natural_file_upper
             if previous_file_time is not None:
-                anchor = cls._sample_after_within(
-                    max(anchor, previous_file_time),
+                anchor = cls._sample_file_stage_within(
+                    ordering_anchor,
                     file_upper,
                     minimum_us=113,
                     maximum_us=8_500,
@@ -3457,7 +3485,7 @@ class NetworkObservationPlanner:
                 minimum_us = 0
             else:
                 minimum_us = file_window.min_ms * 1_000
-            file_time = cls._sample_after_within(
+            file_time = cls._sample_file_stage_within(
                 anchor,
                 file_upper,
                 minimum_us=minimum_us,
@@ -3571,6 +3599,40 @@ class NetworkObservationPlanner:
                 )
 
         return tuple(sorted(source_times.items())), tuple(sorted(source_durations.items()))
+
+    @classmethod
+    def _sample_file_stage_within(
+        cls,
+        anchor: datetime,
+        upper_bound: datetime | None,
+        *,
+        minimum_us: int,
+        maximum_us: int,
+        relationship_key: str,
+        scope: TimingScope,
+        sample_key: str,
+        runtime: TimingRuntime | SourceTimingPlanningRuntime,
+    ) -> datetime:
+        """Sample one file stage without crossing a half-open owning close."""
+
+        if upper_bound is not None:
+            available_us = round((upper_bound - anchor).total_seconds() * 1_000_000)
+            if available_us == 1:
+                runtime.audit.record_saturation(f"{relationship_key}.admissible_window")
+                return anchor
+            if available_us == 2:
+                runtime.audit.record_saturation(f"{relationship_key}.admissible_window")
+                return anchor + timedelta(microseconds=1)
+        return cls._sample_after_within(
+            anchor,
+            upper_bound,
+            minimum_us=minimum_us,
+            maximum_us=maximum_us,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+            runtime=runtime,
+        )
 
     @classmethod
     def _project_phase_time(

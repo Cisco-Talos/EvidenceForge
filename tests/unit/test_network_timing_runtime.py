@@ -88,6 +88,7 @@ from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import (
     TemporalConstraintGraph,
+    TimingDistributionError,
     TimingRuntime,
     TimingScope,
 )
@@ -1082,6 +1083,283 @@ def test_protocol_rows_remain_inside_one_sensor_lifecycle() -> None:
     assert event.timestamp == canonical_timestamp
     assert event.network.started_at == canonical_start
     assert event.network.closed_at == canonical_close
+
+
+def test_file_stage_cotimes_only_for_exact_one_microsecond_tail() -> None:
+    """An unrepresentable strict gap reuses the prior legal microsecond and is audited."""
+
+    runtime = TimingRuntime(reference_time=T0, namespace="file-stage-one-microsecond-tail")
+    timestamp = NetworkObservationPlanner._sample_file_stage_within(
+        T0,
+        T0 + timedelta(microseconds=1),
+        minimum_us=113,
+        maximum_us=8_500,
+        relationship_key="source.zeek_file.inter_row_gap",
+        scope=TimingScope(stable_id="network:file-stage-one-microsecond-tail"),
+        sample_key="second-file",
+        runtime=runtime,
+    )
+
+    assert timestamp == T0
+    assert timestamp < T0 + timedelta(microseconds=1)
+    summary = runtime.audit.snapshot()
+    assert summary.saturation_counts["source.zeek_file.inter_row_gap.admissible_window"] == 1
+    assert summary.total_samples == 0
+
+
+def test_file_rows_reserve_future_microseconds_before_sampling() -> None:
+    """An earlier file sample cannot consume the final legal slot of a later row."""
+
+    close = T0 + timedelta(microseconds=100)
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="connection",
+        network=replace(
+            network_plan(
+                src_ip="10.0.1.25",
+                src_port=45_001,
+                dst_ip="198.51.100.55",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="CFileRowReservation",
+                conn_id="conn-file-row-reservation",
+                duration=0.0001,
+                source_visible_start_time=T0,
+                source_visible_close_time=close,
+                orig_bytes=300,
+                resp_bytes=500,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            stable_id="network:file-row-reservation",
+        ),
+        file_transfers=[
+            FileTransferContext(
+                fuid="FFileRowReservationOrig",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=300,
+                is_orig=True,
+            ),
+            FileTransferContext(
+                fuid="FFileRowReservationResp",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=500,
+                is_orig=False,
+            ),
+        ],
+    )
+    event._sensor_hostnames_by_format = {"zeek_files": ["core-tap"]}
+
+    def _latest_interior(
+        anchor: datetime,
+        upper_bound: datetime | None,
+        **_kwargs: object,
+    ) -> datetime:
+        assert upper_bound is not None
+        assert upper_bound - anchor >= timedelta(microseconds=3)
+        return upper_bound - timedelta(microseconds=1)
+
+    runtime = TimingRuntime(reference_time=T0, namespace="file-row-reservation")
+    with (
+        patch.object(
+            NetworkObservationPlanner,
+            "_observed_interval",
+            return_value=(T0, close),
+        ),
+        patch.object(
+            NetworkObservationPlanner,
+            "_sample_after_within",
+            side_effect=_latest_interior,
+        ) as sample_after,
+    ):
+        observation = NetworkObservationPlanner(None, timing_runtime=runtime).plan(
+            event,
+            {"zeek_files"},
+        )[0]
+
+    orig_time = observation.source_time(
+        network_source_timing_key("zeek_files", "FFileRowReservationOrig")
+    )
+    resp_time = observation.source_time(
+        network_source_timing_key("zeek_files", "FFileRowReservationResp")
+    )
+    assert orig_time == close - timedelta(microseconds=2)
+    assert resp_time == close - timedelta(microseconds=1)
+    assert T0 <= orig_time < resp_time < close
+    assert sample_after.call_args_list[0].args[1] == close - timedelta(microseconds=1)
+
+
+def test_file_row_reservation_relaxes_against_effective_three_row_anchor() -> None:
+    """A relaxed late row cannot collapse the next reserved row to a zero-width window."""
+
+    close = T0 + timedelta(microseconds=100)
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="connection",
+        network=replace(
+            network_plan(
+                src_ip="10.0.1.25",
+                src_port=45_002,
+                dst_ip="198.51.100.55",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="CThreeFileRowReservation",
+                conn_id="conn-three-file-row-reservation",
+                duration=0.0001,
+                source_visible_start_time=T0,
+                source_visible_close_time=close,
+                orig_bytes=300,
+                resp_bytes=1_000,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            stable_id="network:three-file-row-reservation",
+        ),
+        file_transfers=[
+            FileTransferContext(
+                fuid="FThreeFileRowOrig",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=300,
+                is_orig=True,
+                observation_not_before=close - timedelta(microseconds=2),
+            ),
+            FileTransferContext(
+                fuid="FThreeFileRowResp1",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=500,
+                is_orig=False,
+            ),
+            FileTransferContext(
+                fuid="FThreeFileRowResp2",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=500,
+                is_orig=False,
+            ),
+        ],
+    )
+    timing = NetworkSensorObservationTiming(
+        profile_name="zero-clock",
+        clock_offset_min_us=0,
+        clock_offset_max_us=0,
+        clock_drift_min_ppm=0,
+        clock_drift_max_ppm=0,
+        route_delay_min_us=0,
+        route_delay_max_us=0,
+        event_jitter_min_us=0,
+        event_jitter_max_us=0,
+        capture_loss_probability=0.0,
+        capture_loss_min_fraction=0.0,
+        capture_loss_max_fraction=0.0,
+        capture_loss_max_missed_bytes=0,
+    )
+    runtime = TimingRuntime(reference_time=T0, namespace="three-file-row-reservation")
+
+    source_times, _source_durations = NetworkObservationPlanner._source_native_protocol_timing(
+        event,
+        canonical_start=T0,
+        observed_start=T0,
+        observed_close=close,
+        sensor_identity="core-tap",
+        path_role="source_side",
+        visible_formats={"zeek_files"},
+        timing=timing,
+        runtime=runtime,
+    )
+
+    ordered_times = [
+        dict(source_times)[network_source_timing_key("zeek_files", transfer.fuid)]
+        for transfer in event.protocol.file_transfers
+    ]
+    assert ordered_times == [close - timedelta(microseconds=1)] * 3
+    assert all(timestamp < close for timestamp in ordered_times)
+    assert (
+        runtime.audit.snapshot().saturation_counts["source.zeek_file.future_row_reservation"] == 2
+    )
+
+
+def test_file_row_reservation_never_relaxes_past_ocsp_duration_upper() -> None:
+    """A late predecessor cannot move an OCSP file row past its harder duration bound."""
+
+    close = T0 + timedelta(microseconds=100)
+    ocsp_fuid = "FOcspHardFileUpper"
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="connection",
+        network=replace(
+            network_plan(
+                src_ip="10.0.1.25",
+                src_port=45_003,
+                dst_ip="198.51.100.55",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="COcspHardFileUpper",
+                conn_id="conn-ocsp-hard-file-upper",
+                duration=0.0001,
+                source_visible_start_time=T0,
+                source_visible_close_time=close,
+                orig_bytes=300,
+                resp_bytes=500,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            stable_id="network:ocsp-hard-file-upper",
+        ),
+        file_transfers=[
+            FileTransferContext(
+                fuid="FOcspHardFilePredecessor",
+                source="HTTP",
+                duration=0.0,
+                seen_bytes=300,
+                is_orig=True,
+                observation_not_before=close - timedelta(microseconds=5),
+            ),
+            FileTransferContext(
+                fuid=ocsp_fuid,
+                source="HTTP",
+                duration=0.00001,
+                seen_bytes=500,
+                is_orig=False,
+            ),
+        ],
+        ocsp=OcspContext(id=ocsp_fuid),
+    )
+    timing = NetworkSensorObservationTiming(
+        profile_name="zero-clock-ocsp",
+        clock_offset_min_us=0,
+        clock_offset_max_us=0,
+        clock_drift_min_ppm=0,
+        clock_drift_max_ppm=0,
+        route_delay_min_us=0,
+        route_delay_max_us=0,
+        event_jitter_min_us=0,
+        event_jitter_max_us=0,
+        capture_loss_probability=0.0,
+        capture_loss_min_fraction=0.0,
+        capture_loss_max_fraction=0.0,
+        capture_loss_max_missed_bytes=0,
+    )
+    runtime = TimingRuntime(reference_time=T0, namespace="ocsp-hard-file-upper")
+
+    with pytest.raises(TimingDistributionError, match="source.zeek_file.inter_row_gap"):
+        NetworkObservationPlanner._source_native_protocol_timing(
+            event,
+            canonical_start=T0,
+            observed_start=T0,
+            observed_close=close,
+            sensor_identity="core-tap",
+            path_role="source_side",
+            visible_formats={"zeek_files"},
+            timing=timing,
+            runtime=runtime,
+        )
 
 
 def test_zero_duration_direct_http_and_file_match_c009_bytes(tmp_path: Path) -> None:
