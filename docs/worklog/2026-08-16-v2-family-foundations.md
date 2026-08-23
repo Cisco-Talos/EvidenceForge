@@ -2596,3 +2596,35 @@ system-process source deadlines, failed-logon child deadlines, and terminal base
 selection. Those findings must receive focused regressions and a fresh exact-candidate review
 before integration; the passing diagnostic is retained as pre-repair evidence, not final
 certification.
+
+### Terminal owner deadline closure integrated
+
+Commit ``03d0b174f`` (``fix: enforce terminal owner deadlines``) integrates the repaired candidate
+on ``codex/v2-family-integration``. Commit ``1c60b3f25`` separately records the permanent retirement
+of the 161-case foundation scale matrix. No exhaustive or comparable substitute matrix is part of
+the remaining release plan.
+
+The integrated patch moves half-open generation-window admission to the owners of rendered truth.
+Canonical network and baseline callers reserve source clock, observation, protocol, and
+firewall/sensor teardown support; TLS and explicit-proxy bounds include automatic OCSP response,
+DNS, and physical-leg children; SSH and RDP reserve cross-host clocks, observation delays, process
+termination, dependent-to-logoff gaps, and transport close while preserving explicit-storyline end
+identity and short-session behavior. Direct process generation and bounded wrapper owners reject
+before allocating sessions, parent shells, PIDs, evidence, or cache state. Bounded polkit companion
+processes reuse only an already-visible shell, treat PID zero as rejection, and schedule termination
+only for a State-authenticated canonical process identity.
+
+Independent exact-tree review returned CLEAR with no open P0/P1/P2 across the process, baseline,
+SSH/RDP, and TLS/OCSP/proxy slices. The final reviews replayed 43 terminal process admission/runtime
+cases; 21 decisive SSH/RDP deadline cases plus five adjacent cases; 73 baseline/caller-census,
+transport, watermark, and Windows-runtime cases; 36 OCSP/proxy/schema cases; and 12 bounded polkit
+cases. The OCSP direct-DNS/MX challenge ended its latest artifact 23.642 milliseconds inside the
+exported family bound. Full owning-file follow-ups pass 50/50 RDP tests and 88/88 Phase 5
+system-traffic tests; the original IDS integration reproduction also passes.
+
+Repository-wide Ruff check and format check pass with 671 files already formatted. Project config
+validation reports zero errors, warnings, or informational findings across 93 files. The
+``scenarios/iteration-test/scenario.yaml`` schema and cross-references remain valid with the
+scenario's existing advisory warnings. The official full normal pytest suite, the separately run
+22-node slow suite, two deterministic generation/evaluation runs, and the final blind panel remain
+to be executed from this clean integrated revision.
