@@ -2732,7 +2732,9 @@ class TestPreparedDispatch:
         )
         state_version = state.materialization_version
         state_apply = MagicMock(side_effect=AssertionError("external transport reapplied State"))
-        monkeypatch.setattr(state, "apply", state_apply)
+        # Patch the class seam so the diagnostic digest continues to cover only
+        # StateManager-owned instance authority, not a test-owned MagicMock.
+        monkeypatch.setattr(StateManager, "apply", state_apply)
         state_digest = state.materialization_digest()
 
         with pytest.raises(EventContractError, match="does not authenticate"):
