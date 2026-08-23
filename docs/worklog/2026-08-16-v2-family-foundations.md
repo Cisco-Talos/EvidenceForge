@@ -55,16 +55,16 @@ do not change the package version.
 - Exact lookup stays amortized `O(1)`, temporal lookup stays `O(log n + k)`, and
   retained state plateaus at an explicit horizon rather than scenario duration.
 
-### Scale contract
+### Historical scale contract (retired)
 
 New registries must use compact canonical records, exact composite indexes,
 bounded temporal segments, explicit leases, and expiry queues. Hot paths may
 not scan or sort complete registries, materialize unbounded result lists,
 rebuild reverse indexes, or retain per-occurrence history after reconciliation.
 
-Scale probes cover 10 through 2,000,000 entries, skewed and uniform groups,
+The retired foundation harness covered 10 through 2,000,000 entries, skewed and uniform groups,
 monotonic and out-of-order writes, expiry churn, 24-hour/7-day/30-day runs, and
-worker-count determinism. The principal gates are:
+worker-count determinism. Its former gates were:
 
 - 1M exact lookup p95 no more than 2x the warmed 1K result;
 - 1M temporal lookup p95 no more than 3x after result-count normalization;
@@ -73,6 +73,10 @@ worker-count determinism. The principal gates are:
 - 7-day and 30-day plateau memory within 10%; and
 - byte-identical output and registry digests across worker counts and
   `PYTHONHASHSEED`.
+
+These ranges and thresholds are preserved only to explain historical measurements. They are not
+current or future acceptance gates, and the retired cross-product must not be rerun or recreated as
+a substitute matrix.
 
 ## Compatibility contract
 
@@ -87,11 +91,14 @@ worker-count determinism. The principal gates are:
 - Scenario authoring gains additive exact-host deployment overrides and exact
   source-instance observation overrides.
 
-## Delivery sequence
+## Historical delivery sequence
 
-1. Capture clean baseline tests, generation/evaluation, blind probes, and state
+The initiative originally followed this sequence. The scale-measurement and scale-gate steps record
+completed historical work and create no current or future matrix requirement.
+
+1. Captured clean baseline tests, generation/evaluation, blind probes, and state
    scale measurements.
-2. Land shared compact/indexed/temporal/lease primitives and scale gates.
+2. Landed shared compact/indexed/temporal/lease primitives and historical scale gates.
 3. Land execution/effect and lifecycle contracts in shadow mode, then migrate
    high-risk vertical slices.
 4. Land the shared timing runtime and projection boundary.
@@ -136,12 +143,11 @@ The first implementation slice is the shared indexed-registry substrate. It
 must be independently useful, fully tested, and behavior-preserving before any
 new lifecycle or channel registry depends on it.
 
-The Apple ARM64 foundation probes use a fresh child process per scale point and
-cover sparse/uniform and single-owner-skewed groups, monotonic and
-10%-out-of-order writes, plus replacement/expiry/compaction churn. Lookup gates
-measure each operation independently after three symmetric untimed passes at
-both sizes. First-touch random results and their cross-size ratios remain in the
-JSON as diagnostic-only cache-residency evidence; no fixed delay is added.
+The retired Apple ARM64 foundation probes used a fresh child process per scale point and covered
+sparse/uniform and single-owner-skewed groups, monotonic and 10%-out-of-order writes, plus
+replacement/expiry/compaction churn. Their lookup gates measured each operation independently after
+three symmetric untimed passes at both sizes. First-touch random results and their cross-size ratios
+remain historical diagnostic-only cache-residency evidence; no fixed delay was added.
 
 - Uniform 1K/1M refresh: 0.125/0.167 microseconds warmed exact p95 (1.336x) and
   0.625/0.792 microseconds warmed temporal p95 (1.2672x). The 1M child loaded in
@@ -160,9 +166,9 @@ JSON as diagnostic-only cache-residency evidence; no fixed delay is added.
   them is permanently retired; the official slow release suite and focused
   owner regressions are the current and future acceptance path.
 
-The corrected independently warmed exact and candidate-normalized temporal
-relative gates now pass for both uniform and skewed layouts, along with the
-absolute reference-host latency, 1M memory/load, and bounded-block gates. Raw
+At that historical checkpoint, the corrected independently warmed exact and candidate-normalized
+temporal relative gates passed for both uniform and skewed layouts, along with the absolute
+reference-host latency, 1M memory/load, and bounded-block gates. Raw
 reports are `/tmp/registry-scale-warmed-uniform-v2.json` and
 `/tmp/registry-scale-warmed-skewed-v2.json`; they remain historical diagnostics,
 not final PR evidence. Final evidence comes from the official release gates and
@@ -275,11 +281,12 @@ RSS high after the first primitive-column attempt. Fresh-process results are:
   index bytes (244.86 B/live), 6.960 s load, 6.33 us warmed exact p95, and
   7.96 us warmed secondary p95.
 
-The expanded deployment-registry suite passes 28/28, including capacity/lease
+The expanded deployment-registry suite passed 28/28, including capacity/lease
 atomicity, watermark fences, mutation-version cursors, concurrent disjoint
 owner lanes, exact forced digest collisions, large overflow payloads, and
-handle reuse. The mixed one-million-record release gate is owned by the shared
-foundation workload and is rerun from this stable checkpoint.
+handle reuse. At that checkpoint a mixed one-million-record rerun was still planned through the
+shared foundation workload. That planned gate is now permanently retired and was not carried
+forward.
 
 Post-layout integration remained green: 266/266 deployment, application,
 source-compiler, dispatcher, and eCAR tests; 694/694 activity, Sysmon, and
@@ -491,7 +498,7 @@ coordinator entrypoint.
 
 ## Registry-aware resource forecast
 
-Resource-forecast model v5 now consumes the foundation scale evidence through typed,
+Resource-forecast model v5 retains historical foundation measurements through typed,
 data-replaceable calibration rather than one opaque registry allowance. Workload estimation emits
 five deterministic `RegistryWorkloadInput` rows in a stable order: lifecycle, application
 channels, local artifacts, collection deployment, and deployment/content. Each row carries total
@@ -510,14 +517,15 @@ Static collection and deployment registries plateau at compile time.
 Memory/load/lookup calibration uses the stable isolated 250K points: lifecycle 193,462,272 RSS and
 54,440,724 structural bytes; channels 124,125,184 and 33,698,048; local artifacts 61,980,672 and
 61,215,707; collection deployment 90,685,440 and 30,906,060. The mixed 1M point is 440,172,544 RSS,
-180,260,539 structural bytes, and 22.9891 seconds load. Conservative mutable operation maxima come
-from the prior deterministic smoke probes and remain provenance-tagged
-`foundation_smoke_prior`: lifecycle mutation/expiry 42.52/14.70 us, channels 104.85/65.15 us, and
-artifacts 15.81/6.71 us. Retiring the exhaustive foundation scale matrix means these historical
+180,260,539 structural bytes, and 22.9891 seconds load. Conservative mutable operation maxima came
+from the prior deterministic smoke probes and are retained under the historical profile
+`historical_smoke_calibration`: lifecycle mutation/expiry 42.52/14.70 us, channels 104.85/65.15 us,
+and artifacts 15.81/6.71 us. Retiring the exhaustive foundation scale matrix means these historical
 measurements are not implicitly promoted by the current completion work. Deployment/content
 remains separately provisional under
-`deployment_path_scale_packed_final`: 1M packed bindings loaded in 9.551 seconds at 358.58 RSS and
-168.99 structural bytes/binding with 1.709 us warmed exact p95; it is not represented as part of
+`historical_deployment_path_packed_calibration`: 1M packed bindings loaded in 9.551 seconds at
+358.58 RSS and 168.99 structural bytes/binding with 1.709 us warmed exact p95; it is not represented
+as part of
 the four-registry mixed result.
 
 The registry-only total explicitly excludes interpreter/generator base, emitter queues/format
@@ -774,7 +782,7 @@ separately: 100,000 SMB sidecar records expired/compacted in 1.667 seconds, 100,
 records in 1.512 seconds, and the combined 200,000-record drain normalized to 1.59 seconds per
 100,000 records. Rich closure decoding is reported separately at 0.626 seconds.
 
-The actual one-million-session run retained one million SMB sessions, one million trees, one
+One historical one-million-session run retained one million SMB sessions, one million trees, one
 million handles, one million common channels, one million active operations, and one million used
 operation IDs: six million physical hot records. Load was 152.217 seconds, or 25.37 seconds per
 million retained records. Warmed exact p95 at one million sessions was 1.000 microsecond versus
@@ -783,15 +791,16 @@ affinity p95 was 16.875 microseconds. Incremental RSS was 1,983,741,952 bytes, o
 physical hot record (315.31 MiB normalized per million). SMB sidecar structural index cost was
 122.56 bytes per logical session, or 40.85 bytes per SMB session/tree/handle record. The public
 census reports common channels, active operations, used IDs, SMB sessions, trees, and handles as
-separate counts so the mixed-memory gate is never evaluated against a misleading per-session
+separate counts so the former mixed-memory gate was not evaluated against a misleading per-session
 denominator.
 
 The SMB slice is frozen against shared application-registry hash `85fe0852269a8e44e`, events
 application-model hash `0d6b6f0256373de2`, and index hash `56770354475c08a2`; SMB manager and
-probe hashes are `01e194de1843529b` and `bcd4bbc6804848e3`. A fresh current-hash 10/1,000-entry
+probe hashes are `01e194de1843529b` and `bcd4bbc6804848e3`. A historical current-hash 10/1,000-entry
 smoke loaded in 0.00214/0.14662 seconds, measured warmed exact p95 at 0.708/0.625 microseconds and
 first-touch p95 at 34.041/17.708 microseconds, and inspected at most three exact candidates. The
-shared-registry owner retains the authoritative cache-aware common-registry million-entry artifact.
+shared-registry owner retained the cache-aware common-registry million-entry artifact as historical
+diagnostic context only; it is not release authority and requires no rerun.
 
 Production SMB preflights source-process attribution against the exact LifecycleRegistry process
 interval and immutable close barrier, then acquires the required hold before reuse reservation or
@@ -851,14 +860,15 @@ and packed row once before the commit lane. Canonical route partitioning uses bi
 the packed map's low-bit slot selection, avoiding the skew/clustering discovered by the million-key
 profile.
 
-The authoritative actual one-million-session run retained one million SSH rows, one million common
+The historical actual one-million-session run retained one million SSH rows, one million common
 channel rows, and one million packed used-operation markers (three million physical hot records).
-It loaded in 58.405866 seconds against the 60-second gate; warmed exact p95 was 0.875 microseconds
-against the 10-microsecond gate (24.916 microseconds cold diagnostic); and 32,000 successful queries
-inspected exactly 32,000 candidates. No completed-operation rows were retained. Common, sidecar,
+It loaded in 58.405866 seconds against the former 60-second gate; warmed exact p95 was 0.875
+microseconds against the former 10-microsecond gate (24.916 microseconds cold diagnostic); and
+32,000 successful queries inspected exactly 32,000 candidates. No completed-operation rows were
+retained. Common, sidecar,
 and total structural indexes were respectively 81.405, 70.237, and 77.682 bytes per physical live
-record; incremental RSS was 1,278,509,056 bytes, or 426.17 bytes per physical record. The
-authoritative report is `/tmp/foundation-ssh-1m-prepared.json`, SHA-256
+record; incremental RSS was 1,278,509,056 bytes, or 426.17 bytes per physical record. The historical
+diagnostic report was `/tmp/foundation-ssh-1m-prepared.json`, SHA-256
 `afe6b21bb9d979e61b3e13cb9e6d8bf4c696248285357914f05243776b470d04`.
 
 Focused verification at this checkpoint: 20/20 manager concurrency, containment, fence,
@@ -867,7 +877,7 @@ with one expected slow skip; and 14/14 SSH/SCP storyline tests. The production a
 probe covers shell, exec, SFTP, and SCP and confirms one open common session, zero active child rows,
 and one used initial-operation marker. Scoped Ruff lint/format and whitespace checks are clean.
 
-## Actual-million SSH application-channel gate
+## Historical actual-million SSH application-channel diagnostic (retired)
 
 The shared application-channel admission path now prepares its packed identity, owner key, and
 owner-affinity key once before acquiring route/owner locks. Exact affinity cardinality validation
@@ -877,7 +887,7 @@ digest and identity encoding without retaining authored objects. A focused struc
 requires exactly one owner digest, one affinity digest, and one identity pack for combined channel
 open plus completed first operation.
 
-The fresh actual 1,000,000-session SSH scale run passed on one coherent implementation:
+The historical 1,000,000-session SSH scale run passed on one coherent implementation:
 
 - application-channel SHA-256 `fc779f1d8684ab583ea8fa45ed6e51de7a368cc00cb12d79c99c9b3cd81d7191`;
 - SSH sidecar SHA-256 `50ee350ee20b921edb11b09cf9700fd245be9211c904376cc026b70bfd62ee0a`;
@@ -894,12 +904,12 @@ The fresh actual 1,000,000-session SSH scale run passed on one coherent implemen
   one bounded completed-operation ID marker, so this result is not compared as a raw 1.28 GiB
   value against the separate one-million-mixed-record 512 MiB gate.
 
-The exact JSON is `/tmp/foundation-ssh-1m-prepared.json` (SHA-256
+The historical JSON was `/tmp/foundation-ssh-1m-prepared.json` (SHA-256
 `afe6b21bb9d979e61b3e13cb9e6d8bf4c696248285357914f05243776b470d04`). Focused common-registry and
-SSH tests pass 48/48; the prepared-work regression raises that common-only selection to 29/29.
-This closes the actual-million SSH sidecar gate only. HTTP, proxy, SMB, RDP, the mixed core
-registry workload, duration/determinism matrices, and the final all-registry release report remain
-open until their owners freeze a single shared revision.
+SSH tests passed 48/48; the prepared-work regression raised that common-only selection to 29/29.
+At that checkpoint this result would have closed only the SSH sidecar gate. The remaining protocol,
+mixed-core, duration/determinism, and all-registry matrix requirements are now permanently retired
+and were not carried forward.
 
 ## Generator-local lifecycle authority migration
 
@@ -1162,7 +1172,7 @@ candidates, and physical records. An AST policy inventories every mutable retain
 `ActivityGenerator` field, so a new duration-wide dictionary or set cannot hide outside the
 watermark wrapper.
 
-The fresh actual-million production-shape probe passed both layouts. Uniform traffic inserted
+The historical actual-million production-shape probe passed both layouts. Uniform traffic inserted
 1,000,000 requested entries and retained 1,176,470 physical records including 176,470 reverse
 bindings in 8.7975 seconds; warmed exact p95 was 1.500 microseconds with exactly one candidate per
 query. Incremental RSS was 553,369,600 bytes, or about 448.7 MiB normalized per million physical
@@ -1170,7 +1180,8 @@ records; estimated retained/index bytes were 542,454,927/110,416,456. Single-own
 1,117,648 physical records in 8.5544 seconds with 1.125-microsecond p95 and 341,311,488 bytes RSS.
 Expiring 100,000 due records took 0.6150 seconds and left zero backing records. The 24-hour,
 seven-day, and 30-day profiles retained 1,128/1,264/1,263 physical records, respectively. All eight
-lookup, load, memory, candidate, expiry, backing, and duration-plateau gates passed.
+former lookup, load, memory, candidate, expiry, backing, and duration-plateau gates passed. These
+measurements are diagnostic history, not current or future acceptance criteria.
 
 Production dispatch now calls lifecycle authority before `StateManager.apply`; generic process and
 session create/close rejection therefore leaves both StateManager and emitters untouched. The
@@ -1199,7 +1210,7 @@ close. Scoped Ruff lint is clean. Scoped format checking reports only concurrent
 formatting deltas in timing/effect-owned regions; the owned cache, lifecycle, engine, baseline,
 storyline, probe, and test files are formatted.
 
-## Packed deployment/content registry and actual-million gate
+## Historical packed deployment/content actual-million diagnostic (retired)
 
 The immutable deployment/content compiler now retains canonical values in contiguous variable-byte
 rows with packed open-addressed exact routes rather than one Python object graph, tuple key, and
@@ -1221,17 +1232,18 @@ row, interner, path, relationship, and route backing. The former whole-registry 
 walk—which allocated a million-object `seen` set and materially inflated RSS—has been removed from
 construction. Public exact/page/count/selection APIs and frozen value semantics remain unchanged.
 
-The deterministic public fixture `scripts/deployment_population_scale_probe.py` allocates an exact
-requested physical denominator across all eleven canonical families, rejects populations below
-eleven, supports uniform and single-profile skew, retains no payload bytes, and exposes only the
-production registry/census API to the unified foundation harness. The final fresh skewed
+During the retired checkpoint, `scripts/deployment_population_scale_probe.py` allocated an exact
+requested physical denominator across all eleven canonical families, rejected populations below
+eleven, supported uniform and single-profile skew, retained no payload bytes, and exposed only the
+production registry/census API to the former unified foundation harness. The final historical skewed
 1,000,000-row run retained 727,272 relationship bindings (1,727,272 total backing entries), loaded
 in 53.111638 seconds, retained 429,490,176 bytes of incremental RSS, and peaked at 431,521,792
 bytes. Explicit total/index estimates were 364,685,777/120,827,259 bytes, or 120.827 index bytes
 per canonical physical row. Warm exact binary resolution p95 was 5.583 microseconds; warm weighted
 profile/category selection p95 was 6.206 microseconds with exactly one candidate per query; the
 90,909-entry skew bucket did not require materialization. All <=60-second load, <=512-MiB RSS,
-<=256-byte index, <=10-microsecond lookup, and exact-candidate gates passed. Foundation's independent
+<=256-byte index, <=10-microsecond lookup, and exact-candidate gates passed. The retired harness's
+independent
 100,000-row runner reproduced 4.2804-second load, 63,504,384-byte RSS, 127.31 index bytes per row,
 5.916-microsecond exact lookup, and 5.5-microsecond category selection with stable start/end digest.
 
@@ -1337,12 +1349,12 @@ before external materialization. Runtime owner/profile or architecture admission
 translated at the process-effect boundary to typed `INVALID_ACTOR`; optional suspicious noise may
 skip only that typed outcome, while authored/required work remains fail-closed.
 
-Fresh closeout verification passes 157/157 dispatcher/lifecycle/process/effect/artifact tests;
+Historical closeout verification passed 157/157 dispatcher/lifecycle/process/effect/artifact tests;
 149/149 ledger, ground-truth, manifest, engine, and evaluation tests; the separately executed
-actual million-entry skew test also passes. Another 143/143 file-transfer, account, Linux-shell,
-command-effect, and endpoint-timing tests pass, as do 445/445 activity tests. The actual
-million-entry one-intent probe
-confirms bounded candidates and retained bytes. One/four/eight-worker, `PYTHONHASHSEED`, ordering,
+actual million-entry skew diagnostic also passed. Another 143/143 file-transfer, account,
+Linux-shell, command-effect, and endpoint-timing tests passed, as did 445/445 activity tests. The
+historical million-entry one-intent probe confirmed bounded candidates and retained bytes; it is not
+a current acceptance requirement. One/four/eight-worker, `PYTHONHASHSEED`, ordering,
 digest, near-window all-or-none, drift, source-suppression, full-digest rejection, tamper, and exact
 cardinality regressions are green. `git diff --check` is clean. The static engine-reachable direct
 process/session-start census and its last compatibility migration are owned by the lifecycle
@@ -1403,10 +1415,11 @@ publication residue remains zero after real generation. The combined native depl
 deployment registry, and runtime-content focused suite passes 88/88; config/pack validation passes
 163/163; the deterministic generation matrix passes 8/8.
 
-The current packed deployment shape has a provisional actual million-row green point: 53.11-second
+The historical packed deployment shape had a provisional actual million-row green point: 53.11-second
 load, 429.49-MiB incremental RSS, 120.83 index bytes per physical row, 5.58-microsecond warmed exact
-lookup, and exactly one candidate. The final authoritative same-revision rerun remains intentionally
-held until the aggregate timing/effect/lifecycle/network hash freezes. The full-coverage CLI has
+lookup, and exactly one candidate. A final authoritative same-revision rerun was once held until the
+aggregate timing/effect/lifecycle/network hash froze; that rerun is now permanently retired and is
+not required. The full-coverage CLI has
 advanced through the earlier sssd and optional-sudo admission failures. Its last retained run
 stopped on the now-fixed SQL Server deployment before the network owner landed the separate
 optional cross-host `gvfsd-smb-browse` typed-admission skip; no dispatcher or profile fallback was
@@ -1446,9 +1459,9 @@ retain transport-before-auth rendering, one target session, exact responder/shel
 parity where the canonical model is unchanged, and one-shot receipt/idempotence rejection. Generic
 logon and RDP regions remain outside this ownership boundary.
 
-## SMB immediate-completion scale checkpoint
+## Historical SMB immediate-completion scale checkpoint (retired)
 
-The SMB release probe now exercises the production-shaped immediate-completion admission: one
+The retired SMB release probe exercised the production-shaped immediate-completion admission: one
 immutable TCP/445 transaction, one SMB session/tree sidecar, one shared application channel, and
 one bounded used-operation-ID marker per logical session. The common registry atomically records
 the already-completed first operation without publishing an active operation row. The manager
@@ -1458,7 +1471,7 @@ normalized form; a focused differential regression proves its fields, owner, dig
 hex digest are byte-identical to the strict constructor.
 
 The earlier fresh 100,000-session checkpoint loaded in 8.8068 seconds and therefore remained red
-for the raw logical-session projection. The current single-revision provisional points are:
+for the raw logical-session projection. The historical single-revision provisional points were:
 
 - 20,000 sessions in 1.076861 seconds, projecting 53.843 seconds per million logical sessions;
 - 100,000 sessions with the final 10,000-query warmed working set in 5.594801 seconds, projecting
@@ -1475,21 +1488,22 @@ The improvement comes from preserving already-UTC timestamps, reusing immutable 
 type-specific validated frozen application values, byte-identical compact affinity material,
 avoiding a generated channel-key hex round trip, and allocation-light mutation/open-lock lanes.
 Failure atomicity, disjoint-owner progress, close/expiry, cardinality, lookup, and hash-seed
-semantics remain covered. The focused application-channel plus SMB cohort passes 63/63, and the
-foundation harness passes 13/13. The route/view caches are bounded to a 16,384-entry total warmed
-working set (256 views per fixed owner shard), preventing the release probe's 10,000 exact queries
+semantics remain covered. At that checkpoint, the focused application-channel plus SMB cohort
+passed 63/63 and the now-retired foundation harness passed 13/13. The route/view caches are bounded
+to a 16,384-entry total warmed working set (256 views per fixed owner shard), which prevented the
+former release probe's 10,000 exact queries
 from measuring deterministic cache thrash while keeping cache memory independent of retained
 duration.
 
-One actual one-million-session diagnostic completed in 56.408143 seconds and retained 4,000,000
+One historical one-million-session diagnostic completed in 56.408143 seconds and retained 4,000,000
 physical hot records. Its RSS delta was 1,634,828,288 bytes (408.707 bytes per physical record),
 and sidecar index cost was 123.240 bytes per live session. That child exposed the former cache
-limit as an 18.375-microsecond p95 and triggered the bounded-cache correction above. It is not
-authoritative release evidence because concurrently owned timing files changed during the child:
+limit as an 18.375-microsecond p95 and triggered the bounded-cache correction above. Concurrently
+owned timing files changed during the child:
 implementation digest moved from `96c3d12e9b811e4bcd17f3438a5cc30d8216f4148235b2ca483920ec4ae70eb7`
 to `17748ed0a605287aefc9d03fc2c39f5060abf0203dd24a4dc65b7ff6590ca6d5`. The JSON is preserved at
-`/tmp/foundation-smb-opt7-1m.json`; a same-revision actual-million rerun remains required after the
-aggregate timing/generic freeze.
+`/tmp/foundation-smb-opt7-1m.json` as historical diagnostic context only. It is not current
+calibration or acceptance evidence, and no rerun is required.
 
 ## Source-timing preparation atomicity checkpoint
 
@@ -1677,7 +1691,7 @@ SHA-256 values are `515257cfcd18a66e7171d955ff0fc4e2f3de3764169e7044f1b6fdff6b16
 
 ## Retained-family forecast coverage and release provenance
 
-The adaptive forecast boundary now names the same exact twelve retained-state families as the
+The adaptive forecast boundary names the same exact twelve retained-state families as the former
 foundation release harness: lifecycle, application channels, local artifacts, collection
 deployment, deployment/content, process runtime, timing runtime, HTTP, proxy, SMB, RDP, and SSH.
 Five registry-backed families retain their measured forecast rows. The other seven are represented
@@ -1689,14 +1703,15 @@ gate. Provisional rows remain explicitly labeled; completion evidence comes from
 normal and slow release suites, focused regression/adversarial tests, and real-generation
 evaluation without claiming exhaustive calibration.
 
-The release harness implementation digest now covers the integration owners that can change a
-result without changing a leaf registry: dispatcher, StateManager, lifecycle authority and
-production adapters, activity/baseline/storyline generation, network actions/runtime/observation/
+Before retirement, the release harness implementation digest covered the integration owners that
+could change a result without changing a leaf registry: dispatcher, StateManager, lifecycle
+authority and production adapters, activity/baseline/storyline generation, network actions/runtime/
+observation/
 visibility, runtime content and source-deployment compilation, workload/forecast models, relevant
-configuration, and the scale probes themselves. This closes the earlier possibility that
-`single_implementation_revision` remained true while a production integration owner changed.
-Focused forecast and harness verification passes 36/36; the accompanying storyline fixture repair
-passes 90/90, for 126/126 in the combined current-tree checkpoint. Scoped Ruff, format, and diff
+configuration, and the scale probes themselves. That historical change closed the earlier
+possibility that `single_implementation_revision` remained true while a production integration
+owner changed. Focused forecast and harness verification passed 36/36; the accompanying storyline
+fixture repair passed 90/90, for 126/126 in that combined checkpoint. Scoped Ruff, format, and diff
 checks are clean.
 
 Public documentation now introduces compiled deployment/content and collection foundations in the

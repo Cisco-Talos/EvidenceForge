@@ -1,5 +1,5 @@
 version: 5
-calibration_label: "Measured bounded-registry and cross-platform emitter working-set model"
+calibration_label: "Historical bounded-registry and cross-platform emitter working-set calibration"
 
 memory:
   base_mib: 90
@@ -27,23 +27,22 @@ memory:
   # headroom without making the expected value duration-dependent.
   upper_multiplier: 2.10
 
-# Fresh-process registry costs. Memory/load/lookup use the stable 250K isolated
-# points from scripts/foundation_scale_workload.py. The report classifies all 12
-# mixed retained-state families: these five receive scenario-derived registry
-# projections. Process/timing runtime remain explicitly assigned to the
-# calibrated whole-generator peak and bind to their exact mixed-family release
-# cases; HTTP/proxy/SMB/RDP/SSH bind to exact sidecar cases while remaining in
-# that legacy peak. Those documented exclusions stay provisional until
-# scenario-driver coefficients replace them. Mutable operation costs use
-# conservative maxima from the prior deterministic smoke probes. Deployment
-# content is also provisional because its packed 1M/2M path workload is separate
-# from the mixed calibration.
+# Historical fresh-process registry costs. Memory/load/lookup retain the stable
+# 250K isolated measurements without making their former workload an acceptance
+# requirement. The report classifies all 12 retained-state families: these five
+# receive scenario-derived registry projections. Process/timing runtime and the
+# HTTP/proxy/SMB/RDP/SSH sidecars remain explicitly assigned to the calibrated
+# whole-generator peak with historical provenance. Those documented exclusions
+# stay provisional until scenario-driver coefficients replace them. Mutable
+# operation costs retain conservative historical smoke measurements. Deployment
+# content is also provisional because its historical packed 1M/2M path
+# measurement is separate from the registry calibration.
 registries:
   lifecycle:
     measurement:
       status: provisional
-      profile: foundation_scale_release_250k_lifecycle
-      operation_profile: foundation_smoke_prior
+      profile: historical_250k_lifecycle_calibration
+      operation_profile: historical_smoke_calibration
       measured_entries: 250000
       resident_bytes_per_entry: 773.849088
       structural_bytes_per_entry: 217.762896
@@ -67,8 +66,8 @@ registries:
   application_channels:
     measurement:
       status: provisional
-      profile: foundation_scale_release_250k_application_channels
-      operation_profile: foundation_smoke_prior
+      profile: historical_250k_application_channels_calibration
+      operation_profile: historical_smoke_calibration
       measured_entries: 250000
       resident_bytes_per_entry: 496.500736
       structural_bytes_per_entry: 134.792192
@@ -92,8 +91,8 @@ registries:
   local_artifacts:
     measurement:
       status: provisional
-      profile: foundation_scale_release_250k_local_artifacts
-      operation_profile: foundation_smoke_prior
+      profile: historical_250k_local_artifacts_calibration
+      operation_profile: historical_smoke_calibration
       measured_entries: 250000
       resident_bytes_per_entry: 247.922688
       structural_bytes_per_entry: 244.862828
@@ -118,7 +117,7 @@ registries:
   collection_deployment:
     measurement:
       status: measured
-      profile: foundation_scale_release_250k_collection_deployment
+      profile: historical_250k_collection_deployment_calibration
       unit: source
       measured_entries: 250000
       resident_bytes_per_entry: 362.74176
@@ -143,7 +142,7 @@ registries:
   deployment_content:
     measurement:
       status: provisional
-      profile: deployment_path_scale_packed_final
+      profile: historical_deployment_path_packed_calibration
       unit: path_binding_equivalent
       measured_entries: 1000000
       resident_bytes_per_entry: 358.58

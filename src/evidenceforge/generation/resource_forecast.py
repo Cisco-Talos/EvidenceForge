@@ -32,11 +32,7 @@ ResourceKind = Literal["memory", "disk"]
 RegistryMeasurementStatus = Literal["measured", "provisional", "unavailable"]
 RegistryMeasurementUnit = Literal["live_entry", "source", "path_binding_equivalent"]
 RetainedStateCoverageDisposition = Literal["modeled_registry", "legacy_calibrated_peak"]
-RetainedStateReleaseEvidenceKind = Literal[
-    "scenario_forecast",
-    "mixed_exact_case",
-    "sidecar_exact_case",
-]
+RetainedStateCalibrationEvidenceKind = Literal["scenario_forecast", "historical_calibration"]
 
 _REGISTRY_NAMES: tuple[RegistryName, ...] = (
     "lifecycle",
@@ -54,34 +50,34 @@ _MODELED_RETAINED_STATE_REGISTRIES: dict[RetainedStateFamilyName, RegistryName] 
     "deployment_content": "deployment_content",
 }
 
-_MODELED_RETAINED_STATE_EVIDENCE: dict[RetainedStateFamilyName, str] = {
+_MODELED_RETAINED_STATE_CALIBRATION_EVIDENCE: dict[RetainedStateFamilyName, str] = {
     family: f"resource_forecast:registry:{registry}"
     for family, registry in _MODELED_RETAINED_STATE_REGISTRIES.items()
 }
 
-_EXACT_TESTED_RETAINED_STATE_EXCLUSIONS: dict[
+_HISTORICAL_RETAINED_STATE_CALIBRATION_EVIDENCE: dict[
     RetainedStateFamilyName,
-    tuple[RetainedStateReleaseEvidenceKind, str],
+    tuple[RetainedStateCalibrationEvidenceKind, str],
 ] = {
     "process_runtime": (
-        "mixed_exact_case",
-        "foundation_scale:mixed:process_runtime",
+        "historical_calibration",
+        "resource_forecast:historical:process_runtime",
     ),
     "timing_runtime": (
-        "mixed_exact_case",
-        "foundation_scale:mixed:timing_runtime",
+        "historical_calibration",
+        "resource_forecast:historical:timing_runtime",
     ),
-    "http": ("sidecar_exact_case", "foundation_scale:sidecar:http"),
-    "proxy": ("sidecar_exact_case", "foundation_scale:sidecar:proxy"),
-    "smb": ("sidecar_exact_case", "foundation_scale:sidecar:smb"),
-    "rdp": ("sidecar_exact_case", "foundation_scale:sidecar:rdp"),
-    "ssh": ("sidecar_exact_case", "foundation_scale:sidecar:ssh"),
+    "http": ("historical_calibration", "resource_forecast:historical:http"),
+    "proxy": ("historical_calibration", "resource_forecast:historical:proxy"),
+    "smb": ("historical_calibration", "resource_forecast:historical:smb"),
+    "rdp": ("historical_calibration", "resource_forecast:historical:rdp"),
+    "ssh": ("historical_calibration", "resource_forecast:historical:ssh"),
 }
 
 _LEGACY_PEAK_RETAINED_STATE_RATIONALES: dict[RetainedStateFamilyName, str] = {
     "process_runtime": (
-        "Process-runtime caches remain in the calibrated whole-generator peak until the "
-        "production-shaped duration migration and release measurement close."
+        "Process-runtime caches remain in the calibrated whole-generator peak because no current "
+        "scenario-driver calibration exists."
     ),
     "timing_runtime": (
         "Timing audit, clock, and constraint indexes remain in the calibrated whole-generator "
@@ -209,8 +205,8 @@ class RetainedStateFamilyCoverage(BaseModel):
     disposition: RetainedStateCoverageDisposition
     registry: RegistryName | None = None
     rationale: str = Field(min_length=1)
-    release_evidence_kind: RetainedStateReleaseEvidenceKind
-    release_evidence_id: str = Field(min_length=1)
+    calibration_evidence_kind: RetainedStateCalibrationEvidenceKind
+    calibration_evidence_id: str = Field(min_length=1)
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -224,15 +220,15 @@ class RetainedStateFamilyCoverage(BaseModel):
             raise ValueError("legacy-peak retained-state families cannot name a registry")
         if (
             self.disposition == "modeled_registry"
-            and self.release_evidence_kind != "scenario_forecast"
+            and self.calibration_evidence_kind != "scenario_forecast"
         ):
             raise ValueError("modeled retained-state families require scenario-forecast evidence")
-        if self.disposition == "legacy_calibrated_peak" and self.release_evidence_kind not in {
-            "mixed_exact_case",
-            "sidecar_exact_case",
-        }:
+        if (
+            self.disposition == "legacy_calibrated_peak"
+            and self.calibration_evidence_kind != "historical_calibration"
+        ):
             raise ValueError(
-                "legacy-peak retained-state families require exact release-case evidence"
+                "legacy-peak retained-state families require historical calibration evidence"
             )
         return self
 
@@ -259,7 +255,7 @@ class RegistryForecastReport(BaseModel):
 
     @model_validator(mode="after")
     def require_complete_retained_state_coverage(self) -> Self:
-        """Reject reports that silently omit or double-count a measured mixed family."""
+        """Reject reports that silently omit or double-count a retained-state family."""
 
         families = tuple(item.family for item in self.retained_state_family_coverage)
         if len(set(families)) != len(families) or set(families) != set(RETAINED_STATE_FAMILIES):
@@ -285,17 +281,18 @@ class RegistryForecastReport(BaseModel):
         expected_evidence = {
             **{
                 family: ("scenario_forecast", evidence_id)
-                for family, evidence_id in _MODELED_RETAINED_STATE_EVIDENCE.items()
+                for family, evidence_id in (_MODELED_RETAINED_STATE_CALIBRATION_EVIDENCE.items())
             },
-            **_EXACT_TESTED_RETAINED_STATE_EXCLUSIONS,
+            **_HISTORICAL_RETAINED_STATE_CALIBRATION_EVIDENCE,
         }
         actual_evidence = {
-            item.family: (item.release_evidence_kind, item.release_evidence_id)
+            item.family: (item.calibration_evidence_kind, item.calibration_evidence_id)
             for item in self.retained_state_family_coverage
         }
         if actual_evidence != expected_evidence:
             raise ValueError(
-                "retained-state family coverage must bind canonical forecast or exact-case evidence"
+                "retained-state family coverage must bind canonical forecast or historical "
+                "calibration evidence"
             )
         return self
 
@@ -342,7 +339,7 @@ class _MemoryCalibration(BaseModel):
 
 
 class RegistryMeasuredCost(BaseModel):
-    """One versioned fresh-process registry scale measurement."""
+    """One versioned historical fresh-process registry calibration measurement."""
 
     status: RegistryMeasurementStatus
     profile: str
@@ -816,7 +813,7 @@ def _project_registry(
 
 
 def _retained_state_family_coverage() -> tuple[RetainedStateFamilyCoverage, ...]:
-    """Return the exhaustive mixed-family forecast disposition in canonical order."""
+    """Return the complete retained-state forecast disposition in canonical order."""
 
     coverage: list[RetainedStateFamilyCoverage] = []
     for family in RETAINED_STATE_FAMILIES:
@@ -828,8 +825,8 @@ def _retained_state_family_coverage() -> tuple[RetainedStateFamilyCoverage, ...]
                     disposition="modeled_registry",
                     registry=registry,
                     rationale="Scenario-derived cardinality and a versioned per-entry calibration.",
-                    release_evidence_kind="scenario_forecast",
-                    release_evidence_id=_MODELED_RETAINED_STATE_EVIDENCE[family],
+                    calibration_evidence_kind="scenario_forecast",
+                    calibration_evidence_id=_MODELED_RETAINED_STATE_CALIBRATION_EVIDENCE[family],
                 )
             )
             continue
@@ -841,8 +838,12 @@ def _retained_state_family_coverage() -> tuple[RetainedStateFamilyCoverage, ...]
                 family=family,
                 disposition="legacy_calibrated_peak",
                 rationale=rationale,
-                release_evidence_kind=_EXACT_TESTED_RETAINED_STATE_EXCLUSIONS[family][0],
-                release_evidence_id=_EXACT_TESTED_RETAINED_STATE_EXCLUSIONS[family][1],
+                calibration_evidence_kind=(
+                    _HISTORICAL_RETAINED_STATE_CALIBRATION_EVIDENCE[family][0]
+                ),
+                calibration_evidence_id=(
+                    _HISTORICAL_RETAINED_STATE_CALIBRATION_EVIDENCE[family][1]
+                ),
             )
         )
     return tuple(coverage)

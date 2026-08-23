@@ -236,7 +236,8 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     }
     assert all(item.rationale for item in coverage)
     evidence = {
-        item.family: (item.release_evidence_kind, item.release_evidence_id) for item in coverage
+        item.family: (item.calibration_evidence_kind, item.calibration_evidence_id)
+        for item in coverage
     }
     assert evidence == {
         "lifecycle": ("scenario_forecast", "resource_forecast:registry:lifecycle"),
@@ -256,13 +257,19 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
             "scenario_forecast",
             "resource_forecast:registry:deployment_content",
         ),
-        "process_runtime": ("mixed_exact_case", "foundation_scale:mixed:process_runtime"),
-        "timing_runtime": ("mixed_exact_case", "foundation_scale:mixed:timing_runtime"),
-        "http": ("sidecar_exact_case", "foundation_scale:sidecar:http"),
-        "proxy": ("sidecar_exact_case", "foundation_scale:sidecar:proxy"),
-        "smb": ("sidecar_exact_case", "foundation_scale:sidecar:smb"),
-        "rdp": ("sidecar_exact_case", "foundation_scale:sidecar:rdp"),
-        "ssh": ("sidecar_exact_case", "foundation_scale:sidecar:ssh"),
+        "process_runtime": (
+            "historical_calibration",
+            "resource_forecast:historical:process_runtime",
+        ),
+        "timing_runtime": (
+            "historical_calibration",
+            "resource_forecast:historical:timing_runtime",
+        ),
+        "http": ("historical_calibration", "resource_forecast:historical:http"),
+        "proxy": ("historical_calibration", "resource_forecast:historical:proxy"),
+        "smb": ("historical_calibration", "resource_forecast:historical:smb"),
+        "rdp": ("historical_calibration", "resource_forecast:historical:rdp"),
+        "ssh": ("historical_calibration", "resource_forecast:historical:ssh"),
     }
     assert forecast.pressures == ()
 
@@ -295,7 +302,7 @@ def test_registry_report_uses_maximum_floor_without_double_counting() -> None:
     assert "rendered_payload_and_attachment_buffers" in report.excluded_components
 
 
-def test_registry_report_rejects_reclassifying_an_excluded_mixed_family() -> None:
+def test_registry_report_rejects_reclassifying_an_excluded_retained_state_family() -> None:
     """A sidecar cannot silently masquerade as one of the five modeled registries."""
 
     scenario = _minimal_scenario()
@@ -315,15 +322,15 @@ def test_registry_report_rejects_reclassifying_an_excluded_mixed_family() -> Non
     )
     process_runtime["disposition"] = "modeled_registry"
     process_runtime["registry"] = "lifecycle"
-    process_runtime["release_evidence_kind"] = "scenario_forecast"
-    process_runtime["release_evidence_id"] = "resource_forecast:registry:lifecycle"
+    process_runtime["calibration_evidence_kind"] = "scenario_forecast"
+    process_runtime["calibration_evidence_id"] = "resource_forecast:registry:lifecycle"
 
     with pytest.raises(ValueError, match="canonical registry map"):
         RegistryForecastReport.model_validate(payload)
 
 
-def test_registry_report_rejects_swapped_exact_exclusion_evidence() -> None:
-    """A documented legacy-peak exclusion must retain its exact measured family case."""
+def test_registry_report_rejects_swapped_historical_calibration_evidence() -> None:
+    """A documented legacy-peak exclusion must retain its historical family calibration."""
 
     scenario = _minimal_scenario()
     forecast = build_resource_forecast(
@@ -338,9 +345,9 @@ def test_registry_report_rejects_swapped_exact_exclusion_evidence() -> None:
     ssh = next(
         item for item in payload["retained_state_family_coverage"] if item["family"] == "ssh"
     )
-    ssh["release_evidence_id"] = "foundation_scale:sidecar:http"
+    ssh["calibration_evidence_id"] = "resource_forecast:historical:http"
 
-    with pytest.raises(ValueError, match="canonical forecast or exact-case evidence"):
+    with pytest.raises(ValueError, match="canonical forecast or historical calibration evidence"):
         RegistryForecastReport.model_validate(payload)
 
 

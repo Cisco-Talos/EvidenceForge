@@ -148,7 +148,8 @@ Verification after the v3 fit:
 ## Bounded-registry calibration model v5 (2026-08-16)
 
 Model v5 keeps the established whole-generator memory/disk forecast and adds a typed registry
-report driven by the V2 foundation scale workload. `WorkloadEstimate.registry_inputs` records the
+report retaining historical calibration derived during the V2 foundation work.
+`WorkloadEstimate.registry_inputs` records the
 scenario duration, base/effect occurrences, render-channel observations, effect/channel fanout,
 static deployment bindings, and exact scenario-override contribution for each registry family.
 The resource layer applies data-owned lifecycle/retention horizons and capacities to derive
@@ -160,10 +161,10 @@ mutation, lookup, and expiry costs, plateau horizon and reached time, maximum lo
 heap/segment amplification, and bounded compaction work. The report includes lifecycle,
 application channels, local artifacts, collection deployment, and deployment/content in one stable
 order. Missing measurements fail closed. Mutable operation costs remain explicitly provisional and
-tagged `foundation_smoke_prior`; they are not promoted by the current completion work. The
+tagged `historical_smoke_calibration`; they are not promoted by the current completion work. The
 deployment/content measurement remains explicitly
-`provisional` and provenance-tagged `deployment_path_scale_packed_final` because it comes from the
-separate packed 1M/2M binding workload rather than the four-registry mixed probe.
+`provisional` and provenance-tagged `historical_deployment_path_packed_calibration` because it
+comes from the separate packed 1M/2M binding workload rather than the four-registry mixed probe.
 
 Registry memory does not get added to the legacy calibrated peak. Instead, model v5 constructs an
 explicit registry-plus-emitter/payload floor and takes the maximum of that floor and the prior
@@ -184,21 +185,21 @@ cases, 32 duration cases, 35 protocol-sidecar cases, and one mixed-family case, 
 The sizes, durations, concurrency points, hash seeds, query counts, churn, and one-million-entry
 mixed/sidecar thresholds are unchanged. This closure did not execute the matrix.
 
-Every retained-state family now has typed release evidence. Lifecycle, application channels, local
-artifacts, collection deployment, and deployment/content bind to their scenario forecast registry.
-Process-runtime and timing-runtime remain conservative legacy-peak components but bind to their
-exact family census in the mixed case. HTTP, explicit proxy, SMB, RDP, and SSH remain conservative
-legacy-peak components but bind to their exact one-million-entry sidecar case. Report validation
-rejects a missing, swapped, or silently reclassified evidence binding.
+The retired design gave every retained-state family typed release-case evidence. Lifecycle,
+application channels, local artifacts, collection deployment, and deployment/content bound to their
+scenario forecast registry; process/timing runtime and protocol sidecars bound to exact matrix
+cases. The current report instead exposes historical calibration evidence for those legacy-peak
+families and does not bind them to a current acceptance workload. Report validation rejects a
+missing, swapped, or silently reclassified calibration binding.
 
 Implementation provenance hashed the complete integration-owner manifest used by the mixed and
 sidecar workloads, including configuration, event contracts, action bundles, timing, deployment,
-lifecycle, protocol, and scale-probe owners. The retired authority contract would have required
-`--profile release --enforce --require-complete` with the canonical 161-case configuration, one
-implementation digest, an unchanged Git SHA, a clean start and end, and a complete provenance
-manifest. That contract is no longer a completion or release requirement. Existing focused
+lifecycle, protocol, and scale-probe owners. The retired authority contract would have required the
+canonical 161-case configuration, one implementation digest, an unchanged Git SHA, a clean start
+and end, and a complete provenance manifest. That contract is no longer a completion or release
+requirement. Existing focused
 reference-host gates remain useful diagnostics where their owning code changes.
 
-Focused verification (no full or one-million-entry matrix):
-
-- `uv run pytest --no-cov tests/unit/test_foundation_scale_workload.py tests/unit/test_resource_forecast.py tests/unit/test_workload_limits.py`: 48 passed in an isolated HEAD-plus-candidate checkout.
+Historical focused verification reported 48 passing tests across the former harness, resource
+forecast, and workload-limit suites in an isolated HEAD-plus-candidate checkout. This result is
+provenance only; the deleted harness suite is not an executable instruction or acceptance path.
