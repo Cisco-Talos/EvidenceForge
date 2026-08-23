@@ -5360,7 +5360,7 @@ def test_snort_filter_policy_claims_reject_conflicts_before_durable_commit(
     changed_batch.cancel()
     assert emitter._exact_capacity_reservations == {}
     assert emitter._exact_prepared_policy_limits == {}
-    assert emitter._exact_provisional_sensors == {}
+    assert emitter._exact_provisional_output_states == {}
     monkeypatch.setattr(emitter, "_replace_output", original_replace)
     emitter.close()
 
@@ -5380,7 +5380,7 @@ def test_snort_filter_policy_claims_reject_conflicts_before_durable_commit(
     pending_batch.cancel()
     assert pending._exact_capacity_reservations == {}
     assert pending._exact_prepared_policy_limits == {}
-    assert pending._exact_provisional_sensors == {}
+    assert pending._exact_provisional_output_states == {}
     assert pending.journal_census().retained_rows == 0
     pending.close()
 
@@ -5416,7 +5416,7 @@ def test_snort_dynamic_routes_are_rollback_neutral_and_batch_cumulative(
             }
         )
     )
-    assert emitter._exact_provisional_sensors == {}
+    assert emitter._exact_provisional_output_states == {}
     assert emitter._known_output_sensors == set()
     no_op_batch.cancel()
 
@@ -5434,9 +5434,70 @@ def test_snort_dynamic_routes_are_rollback_neutral_and_batch_cumulative(
     batch.cancel()
     assert emitter._known_output_sensors == set()
     assert emitter._exact_capacity_reservations == {}
-    assert emitter._exact_provisional_sensors == {}
+    assert emitter._exact_provisional_output_states == {}
     assert emitter._exact_prepared_policy_limits == {}
     assert emitter.journal_census().retained_rows == 0
+    emitter.close()
+
+
+def test_snort_exact_batch_reuses_capacity_census_and_policy_claim_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-sensor preparation stays linear and clears participant-local accounting."""
+
+    emitter = SnortEmitter(load_format("snort_alert"), tmp_path / "sensors")
+    original_headroom = emitter._buffer_plan_headroom
+    headroom_calls = 0
+
+    def count_headroom(**kwargs: object) -> tuple[int, int]:
+        nonlocal headroom_calls
+        headroom_calls += 1
+        return original_headroom(**kwargs)
+
+    original_reserve = emitter._reserve_exact_publication_row
+    policy_map_ids: list[int] = []
+
+    def record_policy_map(
+        key: ExactPublicationKey,
+        digest: str,
+        retained_bytes: int,
+    ) -> None:
+        original_reserve(key, digest, retained_bytes)
+        policy_map_ids.append(id(emitter._exact_prepared_policy_limits[key[:2]]))
+
+    monkeypatch.setattr(emitter, "_buffer_plan_headroom", count_headroom)
+    monkeypatch.setattr(emitter, "_reserve_exact_publication_row", record_policy_map)
+    policy = {
+        "detection_filter": None,
+        "event_filter": {
+            "type": "limit",
+            "track": "by_src",
+            "count": 1,
+            "seconds": 60,
+        },
+    }
+    events = [
+        _snort_event(f"linear route {index}", second=index)
+        | {
+            "_ids_policy": policy,
+            "_sensor_hostnames": [f"sensor-{index}"],
+        }
+        for index in range(16)
+    ]
+    batch = ExactPublicationAuthority(capacity=1).issue_batch()
+    batch.prepare(lambda: tuple(emitter.emit_event(event) for event in events))
+
+    assert headroom_calls == 1
+    assert len(policy_map_ids) == len(events)
+    assert len(set(policy_map_ids)) == 1
+    assert len(emitter._exact_prepared_policy_limits[batch._participant_key]) == len(events)
+    assert len(emitter._exact_buffer_plan_headroom) == 1
+
+    batch.cancel()
+    assert emitter._exact_prepared_policy_limits == {}
+    assert emitter._exact_buffer_plan_headroom == {}
+    assert emitter._exact_provisional_output_states == {}
     emitter.close()
 
 
@@ -5532,7 +5593,9 @@ def test_snort_publication_transition_invariant_table(
                 int(connection.execute("SELECT COUNT(*) FROM filter_checkpoints").fetchone()[0]),
             )
             assert durable[1] == census.terminal_headroom_bytes
-        provisional = sum(len(sensors) for sensors in emitter._exact_provisional_sensors.values())
+        provisional = sum(
+            len(states) for states in emitter._exact_provisional_output_states.values()
+        )
         prepared_claims = sum(
             len(claims) for claims in emitter._exact_prepared_policy_limits.values()
         )
@@ -5583,6 +5646,7 @@ def test_snort_publication_transition_invariant_table(
     assert committed[6][0] == committed[6][2] == 1
     assert committed[6][1] == committed[5]
     assert committed[7:] == (0, ("dynamic",), 0, 0, 0)
+    assert emitter._exact_buffer_plan_headroom == {}
     assert exported[1:5] == (0, 1, 1, 1)
     assert exported[5] == exported[6][1] == 0
     assert exported[6][0] == exported[6][2] == exported[6][3] == 1
@@ -5600,11 +5664,11 @@ def test_snort_publication_transition_invariant_table(
     cancel_batch = ExactPublicationAuthority(capacity=1).issue_batch()
     cancel_batch.prepare(lambda: cancelled.emit_event(cancel_event))
     assert cancelled.journal_census().reserved_rows == 8
-    assert cancelled._exact_provisional_sensors
+    assert cancelled._exact_provisional_output_states
     assert cancelled._exact_prepared_policy_limits
     cancel_batch.cancel()
     assert cancelled.journal_census().reserved_rows == 0
-    assert cancelled._exact_provisional_sensors == {}
+    assert cancelled._exact_provisional_output_states == {}
     assert cancelled._exact_prepared_policy_limits == {}
     assert cancelled._known_output_sensors == set()
     assert cancelled._spool_connection is None

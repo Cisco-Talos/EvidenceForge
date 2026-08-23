@@ -11236,6 +11236,10 @@ class EventDispatcher:
             _supports_cisco_asa_exact_projection_publication,
         )
         from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.snort import (
+            SnortEmitter,
+            _supports_snort_exact_projection_publication,
+        )
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
         from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
         from evidenceforge.generation.emitters.windows import (
@@ -11247,6 +11251,7 @@ class EventDispatcher:
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "cisco_asa": CiscoAsaEmitter,
             "ecar": EcarEmitter,
+            "snort_alert": SnortEmitter,
             "syslog": SyslogEmitter,
             "windows_event_security": WindowsEventEmitter,
             "windows_event_sysmon": SysmonEventEmitter,
@@ -11288,6 +11293,16 @@ class EventDispatcher:
                         and network is not None
                         and network.outcome == "success"
                         and (firewall is None or firewall.action == "permit")
+                    )
+                elif supported and emitter_type is SnortEmitter:
+                    occurrence = prepared._projection.occurrence
+                    network = occurrence.network
+                    supported = (
+                        _supports_snort_exact_projection_publication(emitter)
+                        and occurrence.event_type is EventKind.CONNECTION
+                        and network is not None
+                        and not network.application_layer_only
+                        and bool(occurrence.ids_alerts)
                     )
                 if not supported:
                     raise EventContractError(

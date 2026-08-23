@@ -20,7 +20,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Snort/Suricata alert emitter with a durable final-writer journal."""
+"""Snort/Suricata alert emitter with a durable final-writer journal.
+
+Exact publication provides deterministic bytes and same-process retry under
+trusted EvidenceForge code. It is a fault-tolerance contract, not isolation
+from arbitrary code running in the same Python interpreter.
+"""
 
 from __future__ import annotations
 
@@ -764,6 +769,35 @@ def _line_bytes(line: str) -> bytes:
     return (line if line.endswith("\n") else f"{line}\n").encode("utf-8")
 
 
+def _supports_snort_exact_projection_publication(emitter: object) -> bool:
+    """Return whether one canonical open Snort sink can join exact projection."""
+
+    if type(emitter) is not SnortEmitter:
+        return False
+    state = object.__getattribute__(emitter, "__dict__")
+    if type(state) is not dict:
+        return False
+    thread = dict.get(state, "_thread")
+    threaded = dict.get(state, "threaded")
+    format_definition = dict.get(state, "format_def")
+    output_definition = getattr(format_definition, "output", None)
+    template = getattr(output_definition, "template", None)
+    return bool(
+        dict.get(state, "_canonical_template") is True
+        and type(template) is str
+        and _sha256(template.encode("utf-8")) == _CANONICAL_SNORT_TEMPLATE_SHA256
+        and dict.get(state, "_close_state") == "open"
+        and dict.get(state, "_close_thread") is None
+        and dict.get(state, "_export_recovery_pending") is False
+        and dict.get(state, "_worker_publication_error") is None
+        and dict.get(state, "_terminal_cleanup_pending") is False
+        and dict.get(state, "_journal_cleanup_pending") is False
+        and dict.get(state, "_thread_error") is None
+        and type(threaded) is bool
+        and (not threaded or (thread is not None and thread.is_alive()))
+    )
+
+
 class SnortEmitter(SensorMultiplexEmitter):
     """Spool every alert before deterministic filter and final-file publication."""
 
@@ -772,6 +806,7 @@ class SnortEmitter(SensorMultiplexEmitter):
     _sort_before_flush: bool = True
     _external_sorting: bool = False
     _include_sensor_identity: bool = True
+    supports_exact_projection_publication = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         journal_row_capacity = kwargs.pop("journal_row_capacity", _DEFAULT_JOURNAL_ROW_CAPACITY)
@@ -801,8 +836,8 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._preparing_exact_terminal_headroom: int | None = None
         self._preparing_exact_sensor: str | None = None
         self._preparing_exact_policy_limits: dict[str, tuple[int, int]] | None = None
-        self._exact_provisional_sensors: dict[tuple[str, int], set[str]] = {}
         self._exact_prepared_policy_limits: dict[tuple[str, int], dict[str, tuple[int, int]]] = {}
+        self._exact_buffer_plan_headroom: dict[tuple[str, int], tuple[int, int]] = {}
         self._exact_provisional_output_states: dict[
             tuple[str, int], dict[str, _OutputRouteState]
         ] = {}
@@ -1954,15 +1989,14 @@ class SnortEmitter(SensorMultiplexEmitter):
             state = self._state_unlocked()
             pending_rows = state.pending_rows * _PENDING_TERMINAL_ROW_HEADROOM
             self._prepare_output_route_unlocked(sensor, participant_key)
-            provisional_sensors = set(
-                self._exact_provisional_output_states.get(participant_key, {})
-            )
-            buffer_rows, buffer_bytes = self._buffer_plan_headroom(
-                extra_baseline_bytes=self._exact_provisional_output_bytes.get(
-                    participant_key,
-                    0,
-                )
-            )
+            # The exact fence freezes the canonical routes and writer buffers for
+            # preparation; only participant-local route bytes grow between rows.
+            buffer_plan = self._exact_buffer_plan_headroom.get(participant_key)
+            if buffer_plan is None:
+                buffer_plan = self._buffer_plan_headroom()
+                self._exact_buffer_plan_headroom[participant_key] = buffer_plan
+            buffer_rows, buffer_bytes = buffer_plan
+            buffer_bytes += self._exact_provisional_output_bytes.get(participant_key, 0)
             charged_rows = 3 + _PENDING_TERMINAL_ROW_HEADROOM
             projected_rows = (
                 census.retained_rows
@@ -1988,11 +2022,10 @@ class SnortEmitter(SensorMultiplexEmitter):
                 retained_bytes,
                 terminal_headroom,
             )
-            self._exact_provisional_sensors[participant_key] = provisional_sensors
             if policy_limits:
-                prepared_limits = dict(prepared_limits)
-                prepared_limits.update(policy_limits)
-                self._exact_prepared_policy_limits[participant_key] = prepared_limits
+                self._exact_prepared_policy_limits.setdefault(participant_key, {}).update(
+                    policy_limits
+                )
             self._exact_reserved_rows += charged_rows
             self._exact_reserved_bytes += charged_bytes
             self._retained_high_water_rows = max(
@@ -2028,11 +2061,11 @@ class SnortEmitter(SensorMultiplexEmitter):
             _digest, retained_bytes, terminal_headroom = self._exact_capacity_reservations.pop(key)
             self._exact_reserved_rows -= 3 + _PENDING_TERMINAL_ROW_HEADROOM
             self._exact_reserved_bytes -= retained_bytes + terminal_headroom + 512
-        self._exact_provisional_sensors.pop(participant_key, None)
         self._exact_provisional_output_states.pop(participant_key, None)
         self._exact_provisional_output_owners.pop(participant_key, None)
         self._exact_provisional_output_bytes.pop(participant_key, None)
         self._exact_prepared_policy_limits.pop(participant_key, None)
+        self._exact_buffer_plan_headroom.pop(participant_key, None)
 
     def _complete_exact_publication_batch(self, key: tuple[str, int]) -> None:
         with self._spool_lock:

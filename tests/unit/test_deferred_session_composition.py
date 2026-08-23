@@ -26,7 +26,15 @@ from evidenceforge.events.collection_policy import (
     SourceCollectionPolicy,
     SourceInstanceIdentity,
 )
-from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext, SyslogContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    HostContext,
+    IdsAlertPlan,
+    IdsAlertPolicyContext,
+    IdsEventFilterContext,
+    ProcessContext,
+    SyslogContext,
+)
 from evidenceforge.events.dispatcher import (
     EventDispatcher,
     PreparedDispatch,
@@ -80,10 +88,12 @@ from evidenceforge.generation.deferred_session_preseal import (
 from evidenceforge.generation.emitters.base import (
     ExactPublicationAuthority,
     ExactPublicationBatch,
+    ExactPublicationKey,
     LogEmitter,
 )
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
@@ -97,7 +107,6 @@ from evidenceforge.generation.intent_ledger import (
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
     LifecycleConnectionCompositeReceipt,
-    LifecyclePreparedNetworkReceipt,
 )
 from evidenceforge.generation.lifecycle_production_adapters import (
     LifecycleProductionAdapter,
@@ -1274,6 +1283,40 @@ def _compiled_ssh_cisco_deployment() -> CompiledCollectionDeployment:
     return CompiledCollectionDeployment(tuple(sources))
 
 
+def _compiled_ssh_snort_deployment(
+    sensor_hostnames: tuple[str, ...],
+) -> CompiledCollectionDeployment:
+    """Return exact endpoint evidence plus routed Zeek and Snort sensors."""
+
+    source_pairs = [
+        ("ecar", "WS-01"),
+        ("ecar", "DB-01"),
+        *(
+            (format_name, hostname)
+            for hostname in sensor_hostnames
+            for format_name in ("zeek_conn", "snort_alert")
+        ),
+    ]
+    sources = []
+    for format_name, hostname in source_pairs:
+        descriptor = DEFAULT_SOURCE_CATALOG.descriptor(format_name)
+        sources.append(
+            SourceInstanceDeployment(
+                identity=SourceInstanceIdentity(
+                    source_instance=exact_source_instance_id(descriptor.family, hostname),
+                    hostname=hostname,
+                    family=descriptor.family,
+                ),
+                formats=(format_name,),
+                policy=SourceCollectionPolicy(
+                    enabled=True,
+                    capabilities=descriptor.capabilities,
+                ),
+            )
+        )
+    return CompiledCollectionDeployment(tuple(sources))
+
+
 def _compiled_ssh_sysmon_deployment() -> CompiledCollectionDeployment:
     """Return visible eCAR hosts plus one concrete Sysmon source endpoint."""
 
@@ -1375,6 +1418,8 @@ def _foundation_publication_fixture(
     rdp_elevated: bool = False,
     cisco_sensor_hostname: str | None = None,
     cisco_nat: NatSensorObservation | None = None,
+    snort_sensor_hostnames: tuple[str, ...] = (),
+    transport_ids_alerts: tuple[IdsAlertPlan, ...] = (),
     transport_source_pid: int = -1,
     transport_source_image: str = "",
 ) -> _PublicationFixture:
@@ -1509,6 +1554,47 @@ def _foundation_publication_fixture(
         if cisco_sensor_hostname is not None
         else ()
     )
+    snort_observations = tuple(
+        NetworkSensorObservation(
+            sensor_identity=sensor_hostname,
+            path_role="transit",
+            capture_profile="well_synced",
+            tuple_view=NetworkTuple(
+                src_ip=transaction.src_ip,
+                src_port=transaction.src_port,
+                dst_ip=transaction.dst_ip,
+                dst_port=transaction.dst_port,
+                protocol=transaction.protocol,
+            ),
+            connection_uid=transaction.zeek_uid,
+            connection_ids=((transaction.zeek_uid, transaction.zeek_uid),),
+            file_ids=(),
+            local_orig=transaction.local_orig,
+            local_resp=transaction.local_resp,
+            observed_start_time=transaction.started_at,
+            observed_close_time=transaction.closed_at,
+            traffic=transaction.traffic,
+            visible_formats=frozenset({"snort_alert", "zeek_conn"}),
+            history=transaction.history,
+            source_times=(("zeek_conn", transaction.started_at),),
+            source_durations=(
+                (("zeek_conn", transaction.duration),) if transaction.duration is not None else ()
+            ),
+        )
+        for sensor_hostname in snort_sensor_hostnames
+    )
+    network_observations = (*cisco_observations, *snort_observations)
+    sensor_hostnames_by_format: dict[str, list[str]] = {}
+    if cisco_sensor_hostname is not None:
+        sensor_hostnames_by_format["cisco_asa"] = [cisco_sensor_hostname]
+    zeek_sensors = (
+        *((cisco_sensor_hostname,) if cisco_sensor_hostname is not None else ()),
+        *snort_sensor_hostnames,
+    )
+    if zeek_sensors:
+        sensor_hostnames_by_format["zeek_conn"] = list(zeek_sensors)
+    if snort_sensor_hostnames:
+        sensor_hostnames_by_format["snort_alert"] = list(snort_sensor_hostnames)
     with planner.prepared_planning() as timing:
         transport = dispatcher.prepare_builder(
             OccurrenceBuilder(
@@ -1518,16 +1604,10 @@ def _foundation_publication_fixture(
                 dst_host=dst_host,
                 process=source_process,
                 network=transaction,
-                network_observations=cisco_observations,
-                network_observations_planned=bool(cisco_observations),
-                _sensor_hostnames_by_format=(
-                    {
-                        "cisco_asa": [cisco_sensor_hostname],
-                        "zeek_conn": [cisco_sensor_hostname],
-                    }
-                    if cisco_sensor_hostname is not None
-                    else {}
-                ),
+                network_observations=network_observations,
+                network_observations_planned=bool(network_observations),
+                ids_alerts=transport_ids_alerts,
+                _sensor_hostnames_by_format=sensor_hostnames_by_format,
                 identity_plan=(
                     EventIdentityPlan(actor=source_process_identity)
                     if source_process_identity is not None
@@ -2116,6 +2196,284 @@ def test_exact_deferred_ssh_cross_interface_asa_emits_one_stable_lifecycle(
     teardown_ids = re.findall(r"Teardown .* connection (\d+) for", rendered)
     assert len(built_ids) == len(teardown_ids) == 1
     assert built_ids == teardown_ids
+
+
+@pytest.mark.parametrize("threaded", (False, True))
+def test_exact_deferred_ssh_snort_publishes_one_candidate_per_sensor(
+    threaded: bool,
+    tmp_path: Path,
+) -> None:
+    """Correlated IDS candidates join the SSH transport's exact publication."""
+
+    sensor_hostnames = ("ids-edge", "ids-core")
+    snort_root = tmp_path / "snort"
+    format_definition = load_format("snort_alert")
+    if threaded:
+        format_definition = format_definition.model_copy(deep=True)
+    snort = SnortEmitter(
+        format_definition,
+        snort_root,
+        threaded=threaded,
+        sensor_hostnames=list(sensor_hostnames),
+    )
+    snort.emit_event(
+        {
+            "timestamp": _START - timedelta(seconds=1),
+            "gid": 1,
+            "sid": 9_000_001,
+            "rev": 1,
+            "message": "prior ordinary IDS candidate",
+            "classification": "misc-activity",
+            "priority": 3,
+            "protocol": "TCP",
+            "src_ip": "10.0.0.30",
+            "src_port": 51_000,
+            "dst_ip": "10.0.0.40",
+            "dst_port": 443,
+            "_ids_candidate": True,
+            "_ids_policy": None,
+            "_cluster_id": "ordinary-before-deferred",
+            "_occurrence_id": "ordinary-before-deferred-1",
+            "_source_observation_status": "visible",
+            "_ids_origin": "built_in",
+            "_sensor_hostnames": list(sensor_hostnames),
+        }
+    )
+    alert = IdsAlertPlan(
+        sid=2_002_911,
+        rev=7,
+        message="ET SCAN Potential SSH Scan",
+        classification="attempted-recon",
+        priority=2,
+        origin="authored_attachment",
+        policy=IdsAlertPolicyContext(
+            event_filter=IdsEventFilterContext(
+                type="limit",
+                track="by_src",
+                count=1,
+                seconds=60,
+            )
+        ),
+    )
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"snort_alert": snort},
+        collection_deployment=_compiled_ssh_snort_deployment(sensor_hostnames),
+        snort_sensor_hostnames=sensor_hostnames,
+        transport_ids_alerts=(alert,),
+    )
+
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    snort_proofs = tuple(
+        proof for proof in committed.publication.target_proofs if proof.format_name == "snort_alert"
+    )
+    assert len(snort_proofs) == len(sensor_hostnames)
+    assert all(proof.member_ordinal == 0 and proof.row_count == 1 for proof in snort_proofs)
+    admitted = snort.journal_census()
+    assert admitted.pending_rows == 2 * len(sensor_hostnames)
+    assert admitted.active_receipts == admitted.admission_receipts == 0
+    assert admitted.reserved_rows == admitted.reserved_bytes == 0
+
+    publication.ecar.close()
+    publication.zeek.close()
+    snort.close()
+    for sensor_hostname in sensor_hostnames:
+        rendered = (snort_root / sensor_hostname / "snort_alert.log").read_text(encoding="utf-8")
+        assert rendered.count("[1:2002911:7]") == 1
+        assert rendered.count("ET SCAN Potential SSH Scan") == 1
+        assert rendered.count("prior ordinary IDS candidate") == 1
+    terminal = snort.journal_census()
+    assert terminal.retained_rows == terminal.reserved_rows == terminal.active_receipts == 0
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "commit-fail-before",
+        "commit-lost-return",
+        "release-fail-before",
+        "release-lost-return",
+    ),
+)
+def test_exact_deferred_ssh_snort_recovers_candidate_publication(
+    failure_mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Snort candidate commit and release retries converge without duplicate alerts."""
+
+    sensor_hostnames = ("ids-core",)
+    snort_root = tmp_path / "snort-recovery"
+    snort = SnortEmitter(
+        load_format("snort_alert"),
+        snort_root,
+        threaded=False,
+        sensor_hostnames=list(sensor_hostnames),
+    )
+    original_commit = snort._commit_exact_row
+    original_release = snort._release_exact_candidate
+    commit_attempts = 0
+    release_attempts = 0
+
+    def fault_candidate_commit(key: ExactPublicationKey, digest: str, frozen: object) -> None:
+        nonlocal commit_attempts
+        envelope = SnortEmitter._parse_exact_envelope(frozen)
+        if failure_mode.startswith("commit-") and commit_attempts == 0:
+            commit_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_commit(key, digest, frozen)
+            raise OSError(f"injected Snort {failure_mode}")
+        original_commit(key, digest, frozen)
+        assert envelope["sid"] == 2_002_911
+
+    def fault_candidate_release(key: ExactPublicationKey) -> None:
+        nonlocal release_attempts
+        if failure_mode.startswith("release-") and release_attempts == 0:
+            release_attempts += 1
+            if failure_mode.endswith("lost-return"):
+                original_release(key)
+            raise OSError(f"injected Snort {failure_mode}")
+        original_release(key)
+
+    monkeypatch.setattr(snort, "_commit_exact_row", fault_candidate_commit)
+    monkeypatch.setattr(snort, "_release_exact_candidate", fault_candidate_release)
+    alert = IdsAlertPlan(
+        sid=2_002_911,
+        rev=7,
+        message="ET SCAN Potential SSH Scan",
+        classification="attempted-recon",
+        origin="authored_attachment",
+    )
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"snort_alert": snort},
+        collection_deployment=_compiled_ssh_snort_deployment(sensor_hostnames),
+        snort_sensor_hostnames=sensor_hostnames,
+        transport_ids_alerts=(alert,),
+    )
+
+    with pytest.raises(OSError, match=f"Snort {failure_mode}"):
+        publication.authority.materialize_prepared_deferred_session_publication(
+            publication.composition,
+            publication.fixture.coordinator,
+            publication.fixture.owner_rng,
+            dispatcher=publication.dispatcher,
+            publication_batch=publication.batch,
+        )
+
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    assert publication.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+    resumed = publication.dispatcher.drain_exact_projection_recoveries()
+    assert len(resumed) == 1
+    assert all(
+        outcome.status == "succeeded" for result in resumed for outcome in result.projections
+    )
+    assert commit_attempts == int(failure_mode.startswith("commit-"))
+    assert release_attempts == int(failure_mode.startswith("release-"))
+    recovery = publication.dispatcher.exact_projection_recovery_census()
+    assert recovery.unresolved_recoveries == recovery.reserved_recoveries == 0
+    assert recovery.authority.active_batches == 0
+    census = snort.journal_census()
+    assert census.pending_rows == 1
+    assert census.reserved_rows == census.reserved_bytes == 0
+    assert census.active_receipts == census.admission_receipts == 0
+
+    publication.ecar.close()
+    publication.zeek.close()
+    snort.close()
+    rendered = (snort_root / sensor_hostnames[0] / "snort_alert.log").read_text(encoding="utf-8")
+    assert rendered.count("[1:2002911:7]") == 1
+    terminal = snort.journal_census()
+    assert terminal.retained_rows == terminal.active_receipts == terminal.admission_receipts == 0
+
+
+class _OpenSnortSubclass(SnortEmitter):
+    """Inherited exact machinery is not an approved projection target."""
+
+
+@pytest.mark.parametrize(
+    "target_kind",
+    ("subclass", "custom-format", "closed", "replaced"),
+)
+def test_exact_deferred_ssh_rejects_unavailable_snort_before_state(
+    target_kind: str,
+    tmp_path: Path,
+) -> None:
+    """Deferred publication rejects an unsupported, closed, or replaced sink."""
+
+    sensor_hostnames = ("ids-core",)
+    emitter_type = _OpenSnortSubclass if target_kind == "subclass" else SnortEmitter
+    format_definition = load_format("snort_alert")
+    if target_kind == "custom-format":
+        format_definition = format_definition.model_copy(deep=True)
+        format_definition.output.template = f"{format_definition.output.template}\ncustom"
+    snort = emitter_type(
+        format_definition,
+        tmp_path / target_kind,
+        threaded=False,
+        sensor_hostnames=list(sensor_hostnames),
+    )
+    alert = IdsAlertPlan(
+        sid=2_002_911,
+        message="ET SCAN Potential SSH Scan",
+        classification="attempted-recon",
+        origin="authored_attachment",
+    )
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"snort_alert": snort},
+        collection_deployment=_compiled_ssh_snort_deployment(sensor_hostnames),
+        snort_sensor_hostnames=sensor_hostnames,
+        transport_ids_alerts=(alert,),
+        prepare_publication=False,
+    )
+    replacement: SnortEmitter | None = None
+    if target_kind == "closed":
+        snort.close()
+    elif target_kind == "replaced":
+        replacement = SnortEmitter(
+            load_format("snort_alert"),
+            tmp_path / "replacement",
+            threaded=False,
+            sensor_hostnames=list(sensor_hostnames),
+        )
+        publication.dispatcher.emitters["snort_alert"] = replacement
+    state_version = publication.fixture.state.materialization_version
+    state_digest = publication.fixture.state.materialization_digest()
+    timing_digest = publication.fixture.timing_planner.state_digest()
+
+    with pytest.raises(EventContractError, match="lacks exact projection publication"):
+        publication.dispatcher.prepare_deferred_session_publication_batch(
+            publication.composition,
+            publication.fixture.coordinator,
+        )
+
+    assert publication.fixture.state.materialization_version == state_version
+    assert publication.fixture.state.materialization_digest() == state_digest
+    assert publication.fixture.timing_planner.state_digest() == timing_digest
+    census = snort.journal_census()
+    assert census.pending_rows == census.reserved_rows == census.active_receipts == 0
+    _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
+    _cancel_unmaterialized_publication(publication)
+    publication.ecar.close()
+    publication.zeek.close()
+    snort.close()
+    if replacement is not None:
+        replacement.close()
 
 
 def test_exact_deferred_ssh_same_interface_planned_nat_remains_visible(
@@ -3725,21 +4083,16 @@ def test_authored_ssh_planner_authentication_precedes_lifecycle_materialization(
     assert len(zeek_rows) == 1
 
 
-@pytest.mark.parametrize(
-    "receipt_type",
-    (LifecycleConnectionCompositeReceipt, LifecyclePreparedNetworkReceipt),
-    ids=("connection", "prepared-network"),
-)
 @pytest.mark.parametrize("failure_mode", ("fail-before", "lost-return"))
-def test_exact_deferred_bridge_recovers_lifecycle_receipt_issuance(
-    receipt_type: type[LifecycleConnectionCompositeReceipt] | type[LifecyclePreparedNetworkReceipt],
+def test_exact_deferred_bridge_recovers_connection_receipt_issuance(
     failure_mode: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both outer lifecycle proofs survive constructor failure and lost return."""
+    """The outer connection proof survives constructor failure and lost return."""
 
     publication = _foundation_publication_fixture(DeferredSessionKind.RDP, tmp_path)
+    receipt_type = LifecycleConnectionCompositeReceipt
     original = receipt_type._issue
     attempts = 0
 
