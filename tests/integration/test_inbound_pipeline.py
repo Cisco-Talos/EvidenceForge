@@ -39,6 +39,10 @@ def _build_inbound_scenario(
     log_formats: list[dict] | None = None,
 ) -> Scenario:
     """Build a scenario for inbound traffic integration tests."""
+    effective_log_formats = log_formats or [
+        {"format": "cisco_asa"},
+        {"format": "zeek_conn"},
+    ]
     fw_sensor = NetworkSensor(
         type="firewall",
         name="fw01",
@@ -57,6 +61,29 @@ def _build_inbound_scenario(
     sensors = [fw_sensor]
     if extra_sensors:
         sensors.extend(extra_sensors)
+    zeek_conn_selected = any(
+        str(log_entry.get("format", "")).casefold() == "zeek_conn"
+        for log_entry in effective_log_formats
+    )
+    zeek_conn_deployed = any(
+        sensor.type == "network"
+        and any(
+            str(format_name).casefold() in {"zeek", "zeek_conn"}
+            for format_name in sensor.log_formats
+        )
+        for sensor in sensors
+    )
+    if zeek_conn_selected and not zeek_conn_deployed:
+        sensors.append(
+            NetworkSensor(
+                type="network",
+                name="zeek01",
+                hostname="zeek01",
+                monitoring_segments=[segment.name for segment in segments],
+                direction="bidirectional",
+                log_formats=["zeek_conn"],
+            )
+        )
 
     network = NetworkConfig(segments=segments, sensors=sensors)
 
@@ -84,7 +111,7 @@ def _build_inbound_scenario(
             variation="low",
         ),
         output=OutputSpec(
-            logs=log_formats or [{"format": "cisco_asa"}, {"format": "zeek_conn"}],
+            logs=effective_log_formats,
             destination="./output",
         ),
     )
