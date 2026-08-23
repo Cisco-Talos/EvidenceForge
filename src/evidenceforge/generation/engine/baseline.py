@@ -6959,6 +6959,40 @@ class BaselineMixin:
                         continue
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
+                    resolved_term_time = (
+                        self.activity_generator.resolve_process_lifecycle_close_candidate(
+                            system.hostname,
+                            proc.pid,
+                            term_time,
+                        )
+                    )
+                    pass_end = self._baseline_pass_end(current_hour)
+                    if resolved_term_time is None or resolved_term_time >= pass_end:
+                        continue
+                    term_time = resolved_term_time
+                    if is_short_lived and term_time > current_hour + timedelta(hours=1):
+                        continue
+                    owning_session = self.state_manager.get_session(proc.logon_id)
+                    session_deadlines = [
+                        ensure_utc(deadline)
+                        for deadline in (
+                            (
+                                owning_session.end_plan.canonical_end
+                                if owning_session is not None
+                                and owning_session.end_plan is not None
+                                and owning_session.end_plan.is_authoritative
+                                else None
+                            ),
+                            (
+                                owning_session.network_close_time
+                                if owning_session is not None
+                                else None
+                            ),
+                        )
+                        if deadline is not None
+                    ]
+                    if session_deadlines and term_time >= min(session_deadlines):
+                        continue
                     if self._baseline_pass_is_terminal(
                         current_hour
                     ) and not self._baseline_pass_admits(current_hour, start=term_time):

@@ -14,7 +14,11 @@ import pytest
 
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 
 
@@ -1015,6 +1019,111 @@ class TestWindowsProcessTreeRealism:
         assert parent_proc is not None, f"Parent PID {parent_pid} not found in StateManager"
         assert parent_proc.image != "", "Parent should have an image path"
         assert parent_proc.command_line != "", "Parent should have a command line"
+
+    def test_preexisting_auto_parent_is_registered_without_creation_row(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """A warm-up parent remains rowless but is live in both canonical owners."""
+        compatibility_ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        session_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        child_time = session_time + timedelta(minutes=5)
+        logon_id = compatibility_ag.generate_logon(user, win_system, session_time)
+
+        registry = LifecycleRegistry(shard_count=8)
+        shadow = LifecycleShadow(state_manager, registry)
+        authority = GeneratorLifecycleAuthority(state_manager, shadow, shard_count=8)
+        authority.bootstrap_active_state()
+        ag = ActivityGenerator(
+            state_manager,
+            mock_emitters,
+            lifecycle_shadow=shadow,
+            lifecycle_authority=authority,
+        )
+        ag._system_pids = {win_system.hostname: pids}
+        ag._scenario_start_time = child_time
+        for emitter in mock_emitters.values():
+            emitter.reset_mock()
+
+        parent_pid = ag._ensure_parent_chain(
+            win_system,
+            user,
+            child_time,
+            logon_id,
+            "ssh.exe",
+            "windows",
+        )
+
+        state_identity = state_manager.get_process_identity(win_system.hostname, parent_pid)
+        assert state_identity is not None
+        registry_process = ag._lifecycle_authority.registry.get_process(state_identity.object_id)
+        assert registry_process is not None
+        assert registry_process.closed_at is None
+        assert registry_process.identity.object_id == state_identity.object_id
+        assert registry_process.identity.pid == state_identity.pid
+        assert registry_process.identity.started_at == state_identity.started_at
+        assert not any(
+            call[0][0].event_type == "process_create"
+            and call[0][0].process is not None
+            and call[0][0].process.pid == parent_pid
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+        )
+
+    def test_auto_parent_rejects_unregistered_grandparent_before_state_mutation(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Strict parent creation fails closed before publishing State or evidence."""
+        compatibility_ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        session_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        child_time = session_time + timedelta(minutes=5)
+        logon_id = compatibility_ag.generate_logon(user, win_system, session_time)
+
+        registry = LifecycleRegistry(shard_count=8)
+        shadow = LifecycleShadow(state_manager, registry)
+        authority = GeneratorLifecycleAuthority(state_manager, shadow, shard_count=8)
+        strict_ag = ActivityGenerator(
+            state_manager,
+            mock_emitters,
+            lifecycle_shadow=shadow,
+            lifecycle_authority=authority,
+        )
+        strict_ag._system_pids = {win_system.hostname: pids}
+        for emitter in mock_emitters.values():
+            emitter.reset_mock()
+
+        def process_snapshot() -> tuple[tuple[object, ...], ...]:
+            return tuple(
+                sorted(
+                    (
+                        process.system,
+                        process.pid,
+                        process.ecar_object_id,
+                        process.start_time,
+                        process.last_activity_time,
+                    )
+                    for process in state_manager.list_running_processes()
+                )
+            )
+
+        before_processes = process_snapshot()
+        before_time = state_manager.get_current_time()
+        before_version = state_manager.materialization_version
+
+        with pytest.raises(StateError, match="parent is not registered and live"):
+            strict_ag._ensure_parent_chain(
+                win_system,
+                user,
+                child_time,
+                logon_id,
+                "ssh.exe",
+                "windows",
+            )
+
+        assert process_snapshot() == before_processes
+        assert state_manager.get_current_time() == before_time
+        assert state_manager.materialization_version == before_version
+        assert registry.stats().process_entries == 0
+        assert all(emitter.emit.call_count == 0 for emitter in mock_emitters.values())
 
     def test_parent_command_line_populated(self, state_manager, mock_emitters, win_system, user):
         """ProcessContext.parent_command_line should be populated, not '-'."""

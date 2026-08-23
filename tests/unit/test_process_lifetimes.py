@@ -25,7 +25,11 @@ from evidenceforge.generation.engine.baseline import (
     _windows_background_process_lifetime_seconds,
     _windows_stale_process_target_lifetime,
 )
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
 
@@ -50,16 +54,12 @@ def _linux_interactive_shell(
     start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
     state = StateManager()
     state.set_current_time(start - timedelta(minutes=5))
-    events = []
-    dispatcher = EventDispatcher(state_manager=state, emitters={})
-    original_dispatch = dispatcher.dispatch
-
-    def capture(event):
-        events.append(event)
-        original_dispatch(event)
-
-    dispatcher.dispatch = capture
-    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    events: list[object] = []
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    emitter.emit.side_effect = lambda event: events.append(event)
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
     system = System(
         hostname="LNX-01",
@@ -99,6 +99,220 @@ def _linux_interactive_shell(
     assert session is not None
     session.session_shell_pid = shell_pid
     return generator, state, system, user, logon_id, shell_pid, events
+
+
+def _windows_process_family() -> tuple[
+    ActivityGenerator,
+    StateManager,
+    System,
+    User,
+    str,
+    int,
+    int,
+    Mock,
+]:
+    """Build one exact interactive parent/child family with observable dispatch."""
+
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="WIN-01",
+        ip="10.10.1.30",
+        os="Windows 11",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    session_plan = state.plan_session_materialization(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=start,
+        session_kind="interactive",
+        lifecycle_group_id="test:process-family",
+        session_id=2,
+    )
+    session, _session_receipt = generator._lifecycle_authority.materialize_session(session_plan)
+    parent_plan = state.plan_process_materialization(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Tools\Parent.exe",
+        command_line="Parent.exe",
+        username=user.username,
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=session.logon_id,
+        lifecycle_group_id=session.lifecycle_group_id,
+        start_time=start + timedelta(seconds=1),
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+    )
+    parent, _parent_receipt = generator._lifecycle_authority.materialize_process(parent_plan)
+    child_plan = state.plan_process_materialization(
+        system=system.hostname,
+        parent_pid=parent.pid,
+        image=r"C:\Tools\Child.exe",
+        command_line="Child.exe --once",
+        username=user.username,
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=session.logon_id,
+        lifecycle_group_id="test:process-child",
+        start_time=start + timedelta(seconds=2),
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+    )
+    child, _child_receipt = generator._lifecycle_authority.materialize_process(child_plan)
+    session.process_tree_root = parent.pid
+    return (
+        generator,
+        state,
+        system,
+        user,
+        session.logon_id,
+        parent.pid,
+        child.pid,
+        emitter,
+    )
+
+
+def _materialize_detached_process(
+    generator: ActivityGenerator,
+    state: StateManager,
+    system: System,
+    user: User,
+    *,
+    start_time: datetime,
+    image: str,
+    command_line: str,
+    parent_pid: int = 0,
+) -> RunningProcess:
+    """Materialize one exact non-session process for finalizer tests."""
+
+    state.set_current_time(start_time)
+    plan = state.plan_process_materialization(
+        system=system.hostname,
+        parent_pid=parent_pid,
+        image=image,
+        command_line=command_line,
+        username=user.username,
+        integrity_level="Medium",
+        os_category="windows" if "windows" in system.os.casefold() else "linux",
+        start_time=start_time,
+        lifecycle_group_id=f"test:detached:{image}:{start_time.isoformat()}",
+    )
+    process, _receipt = generator._lifecycle_authority.materialize_process(plan)
+    return process
+
+
+def test_compatibility_close_resolver_registers_late_direct_state_child() -> None:
+    """Fixture compatibility cannot hide a late direct-State child from admission."""
+
+    start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    generator = ActivityGenerator(state, {})
+    system = System(
+        hostname="LNX-COMPAT-01",
+        ip="10.10.2.31",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    parent_pid = state.create_process(
+        system.hostname,
+        0,
+        "/usr/bin/bash",
+        "bash -lc worker",
+        "analyst",
+        "Medium",
+    )
+    parent = state.get_process(system.hostname, parent_pid)
+    assert parent is not None
+    generator._lifecycle_authority.ensure_process(system.hostname, parent.pid)
+    state.set_current_time(start + timedelta(seconds=1))
+    child_pid = state.create_process(
+        system.hostname,
+        parent.pid,
+        "/usr/bin/worker",
+        "worker --once",
+        "analyst",
+        "Medium",
+    )
+    child = state.get_process(system.hostname, child_pid)
+    assert child is not None
+    assert generator._lifecycle_authority.registry.get_process(child.ecar_object_id) is None
+    state_before = state.list_running_processes()
+    current_time_before = state.state.current_time
+
+    resolved = generator.resolve_process_lifecycle_close_candidate(
+        system.hostname,
+        parent.pid,
+        start + timedelta(seconds=5),
+    )
+
+    assert resolved is None
+    assert state.list_running_processes() == state_before
+    assert state.state.current_time == current_time_before
+    child_lifecycle = generator._lifecycle_authority.registry.get_process(child.ecar_object_id)
+    assert child_lifecycle is not None
+    assert child_lifecycle.closed_at is None
+    assert child_lifecycle.identity.object_id == child.ecar_object_id
+    assert child_lifecycle.identity.hostname == child.system
+    assert child_lifecycle.identity.pid == child.pid
+    assert child_lifecycle.identity.started_at == child.start_time
+    assert child_lifecycle.identity.image == child.image
+
+
+def test_strict_close_resolver_rejects_state_only_process_without_mutation() -> None:
+    """Production lifecycle admission never backfills a State-only process."""
+
+    start = datetime(2024, 3, 18, 12, 30, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    registry = LifecycleRegistry()
+    shadow = LifecycleShadow(state, registry)
+    authority = GeneratorLifecycleAuthority(state, shadow)
+    dispatcher = EventDispatcher(state_manager=state, emitters={}, lifecycle_shadow=shadow)
+    generator = ActivityGenerator(
+        state,
+        {},
+        dispatcher=dispatcher,
+        lifecycle_shadow=shadow,
+        lifecycle_authority=authority,
+    )
+    pid = state.create_process(
+        "LNX-STRICT-01",
+        0,
+        "/usr/bin/bash",
+        "bash -lc worker",
+        "analyst",
+        "Medium",
+    )
+    process = state.get_process("LNX-STRICT-01", pid)
+    assert process is not None
+    state_before = state.list_running_processes()
+    current_time_before = state.state.current_time
+    registry_before = registry.stats()
+
+    with pytest.raises(StateError, match="no matching live lifecycle identity"):
+        generator.resolve_process_lifecycle_close_candidate(
+            "LNX-STRICT-01",
+            pid,
+            start + timedelta(seconds=5),
+        )
+
+    assert state.list_running_processes() == state_before
+    assert state.state.current_time == current_time_before
+    assert registry.stats() == registry_before
+    assert registry.get_process(process.ecar_object_id) is None
 
 
 def test_sqlcmd_select_query_has_bounded_foreground_lifetime() -> None:
@@ -228,16 +442,10 @@ def test_cmd_c_wrapper_terminates_after_final_foreground_child() -> None:
     """A noninteractive cmd wrapper closes just after its invoked child exits."""
     start = datetime(2024, 3, 18, 17, 1, 30, tzinfo=UTC)
     state = StateManager()
-    events = []
-    dispatcher = EventDispatcher(state_manager=state, emitters={})
-    original_dispatch = dispatcher.dispatch
-
-    def capture(event):
-        events.append(event)
-        original_dispatch(event)
-
-    dispatcher.dispatch = capture
-    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
     user = User(username="SYSTEM", full_name="SYSTEM", email="system@example.local")
     system = System(
         hostname="FILE-SRV-01",
@@ -283,8 +491,10 @@ def test_cmd_c_wrapper_terminates_after_final_foreground_child() -> None:
     )
 
     terminations = {
-        event.process.pid: event.timestamp
-        for event in events
+        call.args[0].process.pid: call.args[0].timestamp
+        for call in emitter.emit.call_args_list
+        if call.args
+        for event in (call.args[0],)
         if event.event_type == "process_terminate" and event.process is not None
     }
     assert child_pid in terminations
@@ -803,16 +1013,12 @@ def test_process_owned_ssh_transport_holds_client_process_until_close() -> None:
     start = datetime(2024, 3, 18, 15, 59, 55, tzinfo=UTC)
     state = StateManager()
     state.set_current_time(start - timedelta(minutes=5))
-    events = []
-    dispatcher = EventDispatcher(state_manager=state, emitters={})
-    original_dispatch = dispatcher.dispatch
-
-    def capture(event):
-        events.append(event)
-        original_dispatch(event)
-
-    dispatcher.dispatch = capture
-    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    events: list[object] = []
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    emitter.emit.side_effect = lambda event: events.append(event)
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
     user = User(
         username="aisha.johnson",
         full_name="Aisha Johnson",
@@ -940,6 +1146,219 @@ def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None
         pid,
         start,
     )
+
+
+def test_bounded_foreground_parent_defers_to_children_first_session_teardown() -> None:
+    """An advisory parent close must not precede a live exact child lifecycle."""
+
+    (
+        generator,
+        state,
+        system,
+        user,
+        logon_id,
+        parent_pid,
+        child_pid,
+        emitter,
+    ) = _windows_process_family()
+    parent = state.get_process(system.hostname, parent_pid)
+    child = state.get_process(system.hostname, child_pid)
+    assert parent is not None
+    assert child is not None
+    parent_lifecycle_before = generator._lifecycle_authority.registry.get_process(
+        parent.ecar_object_id
+    )
+    calls_before = len(emitter.emit.call_args_list)
+
+    candidate = generator._generate_bounded_foreground_process_termination(
+        user=user,
+        system=system,
+        start_time=parent.start_time,
+        pid=parent.pid,
+        process_name=parent.image,
+        logon_id=logon_id,
+        lifetime=(10.0, 10.0),
+        rng=random.Random(1),
+    )
+
+    assert candidate == parent.start_time + timedelta(seconds=10)
+    assert state.get_process(system.hostname, parent.pid) is parent
+    assert len(emitter.emit.call_args_list) == calls_before
+    assert (
+        generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+        == parent_lifecycle_before
+    )
+
+    generator.generate_logoff(
+        user,
+        system,
+        child.start_time + timedelta(minutes=10),
+        logon_id,
+        from_storyline=True,
+    )
+
+    parent_lifecycle = generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+    child_lifecycle = generator._lifecycle_authority.registry.get_process(child.ecar_object_id)
+    assert parent_lifecycle is not None
+    assert child_lifecycle is not None
+    assert child_lifecycle.closed_at is not None
+    assert parent_lifecycle.closed_at is not None
+    assert child_lifecycle.closed_at < parent_lifecycle.closed_at
+    assert generator.dispatcher.lifecycle_shadow.violation_summary["total"] == 0
+
+
+def test_detached_finalizer_retries_live_parent_and_resolves_retained_child_frontier() -> None:
+    """A detached parent remains queued until its exact child graph drains."""
+
+    start = datetime(2024, 3, 18, 18, 0, tzinfo=UTC)
+    state = StateManager()
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    system = System(
+        hostname="APP-INT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    user = User(
+        username="marcus.chen",
+        full_name="Marcus Chen",
+        email="marcus.chen@example.local",
+    )
+    parent = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start,
+        image="/usr/bin/bash",
+        command_line="bash -lc worker",
+    )
+    child = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start + timedelta(seconds=1),
+        image="/usr/bin/worker",
+        command_line="worker --once",
+        parent_pid=parent.pid,
+    )
+    candidate = start + timedelta(seconds=5)
+    first_cutoff = start + timedelta(seconds=10)
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=parent.pid,
+        process_name=parent.image,
+        logon_id="",
+        termination_time=candidate,
+    )
+    parent_lifecycle_before = generator._lifecycle_authority.registry.get_process(
+        parent.ecar_object_id
+    )
+
+    generator.finalize_foreground_process_lifetimes(first_cutoff)
+
+    assert state.get_process(system.hostname, parent.pid) is parent
+    assert (
+        generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+        == parent_lifecycle_before
+    )
+    assert generator.foreground_process_termination_time(
+        system.hostname, parent.pid
+    ) == first_cutoff + timedelta(microseconds=1)
+    assert not emitter.emit.call_args_list
+
+    child_close = start + timedelta(seconds=20)
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=child_close,
+        pid=child.pid,
+        process_name=child.image,
+        logon_id="",
+    )
+    generator.finalize_foreground_process_lifetimes(start + timedelta(seconds=30))
+
+    parent_lifecycle = generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+    assert parent_lifecycle is not None
+    assert parent_lifecycle.closed_at == child_close + timedelta(microseconds=1)
+    assert state.get_process(system.hostname, parent.pid) is None
+    assert generator.dispatcher.lifecycle_shadow.violation_summary["total"] == 0
+
+
+def test_detached_due_finalizers_close_children_first_in_one_pass() -> None:
+    """A due parent and child drain in depth order during one finalizer pass."""
+
+    start = datetime(2024, 3, 18, 18, 30, tzinfo=UTC)
+    state = StateManager()
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    system = System(
+        hostname="APP-INT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    user = User(
+        username="marcus.chen",
+        full_name="Marcus Chen",
+        email="marcus.chen@example.local",
+    )
+    parent = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start,
+        image="/usr/bin/bash",
+        command_line="bash -lc worker",
+    )
+    child = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start + timedelta(seconds=1),
+        image="/usr/bin/worker",
+        command_line="worker --once",
+        parent_pid=parent.pid,
+    )
+    parent_candidate = start + timedelta(seconds=5)
+    child_candidate = start + timedelta(seconds=10)
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=parent.pid,
+        process_name=parent.image,
+        logon_id="",
+        termination_time=parent_candidate,
+    )
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=child.pid,
+        process_name=child.image,
+        logon_id="",
+        termination_time=child_candidate,
+    )
+
+    generator.finalize_foreground_process_lifetimes(start + timedelta(seconds=20))
+
+    parent_lifecycle = generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+    child_lifecycle = generator._lifecycle_authority.registry.get_process(child.ecar_object_id)
+    assert parent_lifecycle is not None
+    assert child_lifecycle is not None
+    assert child_lifecycle.closed_at == child_candidate
+    assert parent_lifecycle.closed_at == child_candidate + timedelta(microseconds=1)
+    assert state.get_process(system.hostname, child.pid) is None
+    assert state.get_process(system.hostname, parent.pid) is None
+    assert generator.dispatcher.lifecycle_shadow.violation_summary["total"] == 0
 
 
 def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window() -> None:

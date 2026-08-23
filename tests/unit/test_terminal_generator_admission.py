@@ -2020,6 +2020,45 @@ def test_bounded_windows_ssh_owner_preflights_full_desktop_process_chain() -> No
     )
 
 
+def test_connection_owner_omits_windows_ssh_actor_before_future_process_mutation() -> None:
+    """A flow cannot bootstrap an SSH actor whose source create follows the flow."""
+
+    generator, state, emitters = _generator(profile="messy_collection")
+    system = _windows_system()
+    user = _user()
+    _register_windows_service_parents(generator, state, system)
+    session_start = _START - timedelta(minutes=10)
+    state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=session_start,
+        session_kind="interactive",
+    )
+    generator._users_by_username = {user.username: user}
+    processes_before = _process_state_snapshot(state, system.hostname)
+    history_before = dict(generator._user_process_history)
+    frontier_before = state.get_current_time()
+
+    owner = generator._ensure_high_confidence_connection_owner(
+        source_system=system,
+        time=_START,
+        service="ssh",
+        dst_port=22,
+        proto="tcp",
+        hostname="lnx-target.example.test",
+        http=None,
+        ssh_attempted_username=user.username,
+    )
+
+    assert owner == (-1, None)
+    assert state.get_current_time() == frontier_before
+    assert _process_state_snapshot(state, system.hostname) == processes_before
+    assert generator._user_process_history == history_before
+    assert not any(emitter.emit.called for emitter in emitters.values())
+
+
 def test_bounded_foreground_owner_rejects_late_shell_without_sibling_mutation() -> None:
     """A late Linux shell cannot trigger a bounded sibling-shell fallback."""
 

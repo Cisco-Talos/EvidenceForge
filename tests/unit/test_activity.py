@@ -6759,14 +6759,18 @@ class TestActivityGenerator:
         activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
         activity_gen._all_system_ips = [workstation.ip, app_server.ip]
         activity_gen._users_by_username = {test_user.username: test_user}
-        state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
-            username=test_user.username,
-            system=workstation.hostname,
-            logon_type=2,
-            source_ip="-",
-            session_kind="interactive",
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            workstation.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
         )
+        activity_gen._system_pids = {workstation.hostname: {"smss": smss_pid}}
+        activity_gen.generate_logon(test_user, workstation, logon_time, logon_type=2)
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_connection(
@@ -6828,14 +6832,18 @@ class TestActivityGenerator:
             proxy_server.ip: proxy_server,
         }
         activity_gen._users_by_username = {test_user.username: test_user}
-        state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
-            username=test_user.username,
-            system=workstation.hostname,
-            logon_type=2,
-            source_ip="-",
-            session_kind="interactive",
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            workstation.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
         )
+        activity_gen._system_pids = {workstation.hostname: {"smss": smss_pid}}
+        activity_gen.generate_logon(test_user, workstation, logon_time, logon_type=2)
         state_manager.set_current_time(timestamp)
 
         app_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
@@ -14079,6 +14087,11 @@ class TestActivityGenerator:
             "process_source_terminate_time",
             source_terminate_time,
         )
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,
@@ -14141,6 +14154,11 @@ class TestActivityGenerator:
             lambda **kwargs: generated.append(kwargs),
         )
         monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,
@@ -14186,6 +14204,11 @@ class TestActivityGenerator:
             lambda **kwargs: generated.append(kwargs),
         )
         monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,

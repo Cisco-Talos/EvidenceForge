@@ -6223,6 +6223,85 @@ class ActivityGenerator:
         )
         return finalizer[4] if finalizer is not None else None
 
+    def resolve_process_lifecycle_close_candidate(
+        self,
+        hostname: str,
+        pid: int,
+        close_at: datetime,
+    ) -> datetime | None:
+        """Resolve one advisory process close against its exact child frontier."""
+
+        running = self.state_manager.get_process(hostname, pid)
+        if running is None:
+            raise StateError(
+                f"Process close admission lost its live State identity: {hostname} pid={pid}"
+            )
+        lifecycle_process = self._lifecycle_authority.registry.get_process(running.ecar_object_id)
+        if lifecycle_process is None and self._lifecycle_compatibility_fixture_mode:
+            self._lifecycle_authority.ensure_process(hostname, pid)
+            lifecycle_process = self._lifecycle_authority.registry.get_process(
+                running.ecar_object_id
+            )
+        if (
+            lifecycle_process is None
+            or lifecycle_process.closed_at is not None
+            or lifecycle_process.close_barrier is not None
+            or lifecycle_process.closure_ticket is not None
+            or lifecycle_process.identity.hostname != running.system
+            or lifecycle_process.identity.pid != running.pid
+            or lifecycle_process.identity.started_at != running.start_time
+            or lifecycle_process.identity.image != running.image
+        ):
+            raise StateError(
+                "Process close admission has no matching live lifecycle identity: "
+                f"{hostname} pid={pid} object={running.ecar_object_id}"
+            )
+        if self._lifecycle_compatibility_fixture_mode:
+            direct_children = tuple(
+                child
+                for child in self.state_manager.get_processes_on_system(hostname)
+                if child.parent_pid == pid
+            )
+            for child in direct_children:
+                self._lifecycle_authority.ensure_process(hostname, child.pid)
+                child_lifecycle = self._lifecycle_authority.registry.get_process(
+                    child.ecar_object_id
+                )
+                if (
+                    child_lifecycle is None
+                    or child_lifecycle.closed_at is not None
+                    or child_lifecycle.identity.object_id != child.ecar_object_id
+                    or child_lifecycle.identity.hostname != child.system
+                    or child_lifecycle.identity.pid != child.pid
+                    or child_lifecycle.identity.started_at != child.start_time
+                    or child_lifecycle.identity.image != child.image
+                    or child_lifecycle.identity.parent_object_id != running.ecar_object_id
+                ):
+                    raise StateError(
+                        "Compatibility process close admission has no matching live child "
+                        f"lifecycle identity: {hostname} pid={child.pid} "
+                        f"object={child.ecar_object_id}"
+                    )
+        try:
+            latest_closed_child = self._lifecycle_authority.process_child_close_deadline(
+                hostname,
+                pid,
+            )
+        except StateError as error:
+            if self._lifecycle_authority.live_child_process_page_for_object(running.ecar_object_id):
+                return None
+            raise StateError(
+                "Process close admission child frontier changed during resolution: "
+                f"{hostname} pid={pid} object={running.ecar_object_id}"
+            ) from error
+        candidate = ensure_utc(close_at)
+        if latest_closed_child is not None:
+            candidate = max(
+                candidate,
+                ensure_utc(latest_closed_child) + timedelta(microseconds=1),
+            )
+        return candidate
+
     def finalize_foreground_process_lifetimes(self, end_time: datetime) -> None:
         """Close any tracked one-shot foreground shell processes still running.
 
@@ -6233,16 +6312,40 @@ class ActivityGenerator:
         """
         known_users = getattr(self, "_users_by_username", {})
         window_end = ensure_utc(end_time)
+        due_finalizers = self._foreground_process_finalizers.expire_before(
+            window_end.timestamp(),
+            inclusive=True,
+        )
+
+        def process_depth(
+            finalizer: tuple[
+                tuple[str, int, datetime | None],
+                tuple[System, str, str, str, datetime],
+            ],
+        ) -> int:
+            key, _value = finalizer
+            running = self.state_manager.get_process(key[0], key[1])
+            depth = 0
+            seen: set[tuple[str, int]] = set()
+            while running is not None and (running.system, running.pid) not in seen:
+                seen.add((running.system, running.pid))
+                if running.parent_pid <= 0:
+                    break
+                parent = self.state_manager.get_process(running.system, running.parent_pid)
+                if parent is None:
+                    break
+                depth += 1
+                running = parent
+            return depth
+
+        due_finalizers.sort(key=process_depth, reverse=True)
         for key, (
             system,
             username,
             process_name,
             logon_id,
             termination_time,
-        ) in self._foreground_process_finalizers.expire_before(
-            window_end.timestamp(),
-            inclusive=True,
-        ):
+        ) in due_finalizers:
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
                 continue
@@ -6255,10 +6358,53 @@ class ActivityGenerator:
                 full_name=username,
                 email=f"{username}@example.local",
             )
+            resolved_termination_time = self.resolve_process_lifecycle_close_candidate(
+                system.hostname,
+                key[1],
+                termination_time,
+            )
+            if resolved_termination_time is None:
+                if self.state_manager.get_session(running.logon_id or logon_id) is None:
+                    self._remember_foreground_process_finalizer(
+                        system=system,
+                        user=process_user,
+                        pid=key[1],
+                        process_name=running.image or process_name,
+                        logon_id=running.logon_id or logon_id,
+                        termination_time=window_end + timedelta(microseconds=1),
+                    )
+                continue
+            session = self.state_manager.get_session(running.logon_id or logon_id)
+            session_deadlines = [
+                ensure_utc(deadline)
+                for deadline in (
+                    (
+                        session.end_plan.canonical_end
+                        if session is not None
+                        and session.end_plan is not None
+                        and session.end_plan.is_authoritative
+                        else None
+                    ),
+                    session.network_close_time if session is not None else None,
+                )
+                if deadline is not None
+            ]
+            if session_deadlines and resolved_termination_time >= min(session_deadlines):
+                continue
+            if resolved_termination_time > window_end:
+                self._remember_foreground_process_finalizer(
+                    system=system,
+                    user=process_user,
+                    pid=key[1],
+                    process_name=running.image or process_name,
+                    logon_id=running.logon_id or logon_id,
+                    termination_time=resolved_termination_time,
+                )
+                continue
             self.generate_process_termination(
                 user=process_user,
                 system=system,
-                time=termination_time,
+                time=resolved_termination_time,
                 pid=key[1],
                 process_name=running.image or process_name,
                 logon_id=running.logon_id or logon_id,
@@ -7141,19 +7287,42 @@ class ActivityGenerator:
                     ensure_utc(start_time) + timedelta(milliseconds=100),
                 )
             termination_time = min(termination_time, latest_termination)
-        self._remember_foreground_process_finalizer(
-            system=system,
-            user=user,
-            pid=pid,
-            process_name=process_name,
-            logon_id=logon_id,
-            termination_time=termination_time,
+        resolved_termination_time = self.resolve_process_lifecycle_close_candidate(
+            system.hostname,
+            pid,
+            termination_time,
         )
-        if self._is_within_scenario_window(termination_time):
+        lifecycle_deadline = min(lifecycle_deadlines) if lifecycle_deadlines else None
+        resolved_precedes_deadline = (
+            resolved_termination_time is None
+            or lifecycle_deadline is None
+            or resolved_termination_time < lifecycle_deadline
+        )
+        if resolved_precedes_deadline:
+            tracked_termination_time = resolved_termination_time or termination_time
+            self._remember_foreground_process_finalizer(
+                system=system,
+                user=user,
+                pid=pid,
+                process_name=process_name,
+                logon_id=logon_id,
+                termination_time=tracked_termination_time,
+            )
+        else:
+            # The owning session teardown already has the only valid close
+            # window. Do not publish a post-deadline advisory release or leave
+            # stale finalizer ownership behind it.
+            tracked_termination_time = lifecycle_deadline
+            assert tracked_termination_time is not None
+        if (
+            resolved_termination_time is not None
+            and resolved_precedes_deadline
+            and self._is_within_scenario_window(resolved_termination_time)
+        ):
             self.generate_process_termination(
                 user=user,
                 system=system,
-                time=termination_time,
+                time=resolved_termination_time,
                 pid=pid,
                 process_name=process_name,
                 logon_id=logon_id,
@@ -7161,8 +7330,8 @@ class ActivityGenerator:
             )
             source_termination_time = self.process_source_terminate_time(system.hostname, pid)
             if source_termination_time is not None:
-                return max(termination_time, source_termination_time)
-        return termination_time
+                return max(resolved_termination_time, source_termination_time)
+        return tracked_termination_time
 
     def _is_within_scenario_window(self, event_time: datetime) -> bool:
         """Return whether source-visible generated telemetry belongs inside the scenario."""
@@ -8909,6 +9078,7 @@ class ActivityGenerator:
             os_category=os_category,
             hostname=hostname,
             ssh_attempted_username=ssh_attempted_username,
+            source_visible_by=time,
         )
 
     @staticmethod
@@ -23143,6 +23313,15 @@ class ActivityGenerator:
             for process in self.state_manager.get_processes_on_system(system.hostname)
         ):
             return
+        child_lifecycle = self._lifecycle_authority.registry.get_process(child.ecar_object_id)
+        if child_lifecycle is None or child_lifecycle.closed_at != ensure_utc(
+            child_termination_time
+        ):
+            # Compatibility dispatch may record a non-strict lifecycle close
+            # failure after ending the child in State.  Do not cascade that
+            # split-brain state into the shell parent; the owning session will
+            # close it after the exact child graph drains.
+            return
         seed = _stable_seed(
             "one_shot_shell_after_final_child:"
             f"{system.hostname}:{parent.pid}:{child.pid}:{child_termination_time.isoformat()}"
@@ -23151,6 +23330,38 @@ class ActivityGenerator:
             milliseconds=80 + (seed % 920),
             microseconds=137 + (seed % 719),
         )
+        resolved_parent_termination_time = self.resolve_process_lifecycle_close_candidate(
+            system.hostname,
+            parent.pid,
+            parent_termination_time,
+        )
+        if resolved_parent_termination_time is None:
+            return
+        parent_session = self.state_manager.get_session(parent.logon_id)
+        parent_deadlines = [
+            ensure_utc(deadline)
+            for deadline in (
+                (
+                    session_end_plan.canonical_end
+                    if session_end_plan is not None and session_end_plan.is_authoritative
+                    else None
+                ),
+                (
+                    parent_session.end_plan.canonical_end
+                    if parent_session is not None
+                    and parent_session.end_plan is not None
+                    and parent_session.end_plan.is_authoritative
+                    else None
+                ),
+                parent_session.network_close_time if parent_session is not None else None,
+            )
+            if deadline is not None
+        ]
+        if (
+            parent_deadlines and resolved_parent_termination_time >= min(parent_deadlines)
+        ) or not self._is_within_scenario_window(resolved_parent_termination_time):
+            return
+        parent_termination_time = resolved_parent_termination_time
         parent_user = (
             user
             if parent.username == user.username
@@ -32461,7 +32672,10 @@ class ActivityGenerator:
                                     rng=rng,
                                 )
                             )
-                            if singleton_key is not None:
+                            if (
+                                singleton_key is not None
+                                and self.state_manager.get_process(system.hostname, pid) is None
+                            ):
                                 self.update_singleton_application_end(
                                     singleton_key, process_time, termination_time
                                 )
@@ -41304,18 +41518,6 @@ class ActivityGenerator:
                 os_cat=os_cat,
             )
 
-        # Create the parent process
-        self.state_manager.set_current_time(parent_time)
-        parent_pid = self.state_manager.create_process(
-            system=system.hostname,
-            parent_pid=grandparent_pid,
-            image=image,
-            command_line=cmd_line,
-            username=user.username,
-            integrity_level="System" if user.username == "SYSTEM" else "Medium",
-            logon_id=logon_id,
-        )
-
         # Determine if this is a pre-existing process (no creation event)
         # Long-lived parents early in the scenario were "already running"
         lifetime = config.get("lifetime", "long")
@@ -41330,15 +41532,31 @@ class ActivityGenerator:
         if not is_pre_existing and scenario_start and parent_time < scenario_start:
             is_pre_existing = True
 
-        if not is_pre_existing:
-            # Emit a process creation event
-            from evidenceforge.events.base import OccurrenceBuilder
+        # Parent-chain members are canonical lifecycle owners, not State-only
+        # compatibility objects. Freeze the exact identity before publication so
+        # every positive PID returned to a strict child is already registered and
+        # live under that same identity.
+        process_plan = self.state_manager.plan_process_materialization(
+            system=system.hostname,
+            parent_pid=grandparent_pid,
+            image=image,
+            command_line=cmd_line,
+            username=user.username,
+            integrity_level="System" if user.username == "SYSTEM" else "Medium",
+            os_category=os_cat,
+            logon_id=logon_id,
+            start_time=parent_time,
+        )
+        process_identity = process_plan.identity
+        parent_pid = process_identity.pid
 
-            self.state_manager.get_process_object_id(system.hostname, parent_pid)
-            self.state_manager.get_process_object_id(
-                system.hostname,
-                grandparent_pid,
-            )
+        if is_pre_existing:
+            self._lifecycle_authority.materialize_process(process_plan)
+        else:
+            # Emit the same single parent process-creation row, but bind it to the
+            # external materialization plan and authenticate publication with the
+            # lifecycle receipt.
+            from evidenceforge.events.base import OccurrenceBuilder
 
             event = OccurrenceBuilder(
                 timestamp=parent_time,
@@ -41368,10 +41586,36 @@ class ActivityGenerator:
                     ),
                     token_elevation="%%1938",
                     mandatory_label="S-1-16-8192",
-                    start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
+                    start_time=process_identity.started_at,
+                ),
+                identity_plan=EventIdentityPlan(
+                    subject=process_identity,
+                    actor=process_plan.parent_identity,
+                ),
+                lifecycle=ActionLifecycleContext(
+                    group_id=process_identity.lifecycle_group_id,
+                    canonical_start=process_identity.started_at,
+                    phase="start",
+                    parent_group_id=process_identity.parent_lifecycle_group_id or None,
                 ),
             )
-            self.dispatcher.dispatch_builder(event)
+            with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+                prepared_dispatch = self.dispatcher.prepare_builder(
+                    event,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                    lifecycle_ticket=process_plan,
+                    source_timing_preparation=timing_preparation,
+                )
+            self.dispatcher.validate_prepared(prepared_dispatch)
+            with timing_preparation.claimed_commit():
+                _parent, materialization_receipt = self._lifecycle_authority.materialize_process(
+                    process_plan,
+                    finalize_external_no_fail=timing_preparation.commit_no_fail,
+                )
+            self.dispatcher.publish_prepared(
+                prepared_dispatch,
+                materialization_receipt=materialization_receipt,
+            )
 
         # Record in user process history
         self._record_user_process(system, user, parent_pid, image)

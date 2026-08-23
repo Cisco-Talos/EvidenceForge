@@ -2661,6 +2661,121 @@ class TestSystemProcessProtection:
         activity_generator.generate_process_termination.assert_called_once()
         assert activity_generator.generate_process_termination.call_args.kwargs["time"] == deadline
 
+    def test_stale_cleanup_defers_parent_past_retained_child_frontier(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Detached stale cleanup resolves strictly after a retained child close."""
+
+        engine, _pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)
+        activity_generator = engine.activity_generator
+        actor = User(username="alice", full_name="Alice", email="alice@example.test")
+        engine.scenario.environment.users = [actor]
+        start_time = datetime(2024, 3, 15, 8, 10, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        parent_plan = state_manager.plan_process_materialization(
+            system=win_system.hostname,
+            parent_pid=0,
+            image=r"C:\Tools\Parent.exe",
+            command_line="Parent.exe",
+            username=actor.username,
+            integrity_level="Medium",
+            os_category="windows",
+            lifecycle_group_id="test:detached-stale-parent",
+            start_time=start_time,
+        )
+        parent, _parent_receipt = activity_generator._lifecycle_authority.materialize_process(
+            parent_plan
+        )
+        child_plan = state_manager.plan_process_materialization(
+            system=win_system.hostname,
+            parent_pid=parent.pid,
+            image=r"C:\Tools\Child.exe",
+            command_line="Child.exe --once",
+            username=actor.username,
+            integrity_level="Medium",
+            os_category="windows",
+            lifecycle_group_id="test:detached-stale-child",
+            start_time=start_time + timedelta(seconds=1),
+        )
+        child, _child_receipt = activity_generator._lifecycle_authority.materialize_process(
+            child_plan
+        )
+        child_close = start_time + timedelta(hours=2, minutes=20)
+        activity_generator.generate_process_termination(
+            user=actor,
+            system=win_system,
+            time=child_close,
+            pid=child.pid,
+            process_name=child.image,
+            logon_id="",
+        )
+        parent_lifecycle = activity_generator._lifecycle_authority.registry.get_process(
+            parent.ecar_object_id
+        )
+        child_lifecycle = activity_generator._lifecycle_authority.registry.get_process(
+            child.ecar_object_id
+        )
+        assert parent_lifecycle is not None
+        assert child_lifecycle is not None
+        assert child_lifecycle.closed_at == child_close
+        assert parent_lifecycle.close_barrier is None
+        candidate = start_time + timedelta(minutes=5)
+        activity_generator._remember_foreground_process_finalizer(
+            system=win_system,
+            user=actor,
+            pid=parent.pid,
+            process_name=parent.image,
+            logon_id="",
+            termination_time=candidate,
+        )
+        first_census = child_close - timedelta(hours=1)
+        state_manager.set_current_time(first_census)
+        calls_before = {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        }
+
+        engine._terminate_stale_processes(first_census)
+
+        assert state_manager.get_process(win_system.hostname, parent.pid) is parent
+        assert state_manager.state.current_time == first_census
+        assert (
+            activity_generator._lifecycle_authority.registry.get_process(parent.ecar_object_id)
+            == parent_lifecycle
+        )
+        assert {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        } == calls_before
+
+        resolved_close = child_close + timedelta(microseconds=1)
+        assert (
+            activity_generator.resolve_process_lifecycle_close_candidate(
+                win_system.hostname,
+                parent.pid,
+                child_close,
+            )
+            == resolved_close
+        )
+        engine._terminate_stale_processes(first_census + timedelta(hours=1))
+
+        closed_parent = activity_generator._lifecycle_authority.registry.get_process(
+            parent.ecar_object_id
+        )
+        assert closed_parent is not None
+        assert closed_parent.closed_at == resolved_close
+        assert state_manager.get_process(win_system.hostname, parent.pid) is None
+        emitted_parent_closes = [
+            call.args[0]
+            for name, emitter in mock_emitters.items()
+            for call in emitter.emit.call_args_list[calls_before[name] :]
+            if call.args
+            and call.args[0].event_type == "process_terminate"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == parent.pid
+        ]
+        assert emitted_parent_closes
+        assert {event.timestamp for event in emitted_parent_closes} == {resolved_close}
+        assert activity_generator.dispatcher.lifecycle_shadow.violation_summary["total"] == 0
+
     def test_stale_cleanup_leaves_active_session_process_tree_root_for_exact_close(
         self, state_manager, mock_emitters, linux_system
     ):
