@@ -160,7 +160,7 @@ mutation, lookup, and expiry costs, plateau horizon and reached time, maximum lo
 heap/segment amplification, and bounded compaction work. The report includes lifecycle,
 application channels, local artifacts, collection deployment, and deployment/content in one stable
 order. Missing measurements fail closed. Mutable operation costs remain explicitly provisional and
-tagged `foundation_smoke_prior` until the active release matrix replaces them data-only. The
+tagged `foundation_smoke_prior`; they are not promoted by the current completion work. The
 deployment/content measurement remains explicitly
 `provisional` and provenance-tagged `deployment_path_scale_packed_final` because it comes from the
 separate packed 1M/2M binding workload rather than the four-registry mixed probe.
@@ -173,7 +173,13 @@ the exact legacy calculation and return `registry_report=None`.
 
 ## Release evidence closure (2026-08-17)
 
-The release-scale harness now preserves the canonical matrix as an exact static contract: 93 scale
+**Retired on 2026-08-22:** the 161-case foundation scale matrix described below is historical
+design context only. It is permanently outside the current and future acceptance plan and must not
+be executed or replaced by a comparable substitute matrix. EvidenceForge now uses the official
+normal and slow release suites, focused owner/regression tests, and bounded real-generation and
+evaluation runs for release confidence.
+
+The release-scale harness preserved the canonical matrix as an exact static contract: 93 scale
 cases, 32 duration cases, 35 protocol-sidecar cases, and one mixed-family case, for 161 cases total.
 The sizes, durations, concurrency points, hash seeds, query counts, churn, and one-million-entry
 mixed/sidecar thresholds are unchanged. This closure did not execute the matrix.
@@ -185,16 +191,13 @@ exact family census in the mixed case. HTTP, explicit proxy, SMB, RDP, and SSH r
 legacy-peak components but bind to their exact one-million-entry sidecar case. Report validation
 rejects a missing, swapped, or silently reclassified evidence binding.
 
-Implementation provenance now hashes the complete integration-owner manifest used by the mixed and
+Implementation provenance hashed the complete integration-owner manifest used by the mixed and
 sidecar workloads, including configuration, event contracts, action bundles, timing, deployment,
-lifecycle, protocol, and scale-probe owners. An authoritative result exists only for
-`--profile release --enforce --require-complete` with the canonical 161-case configuration. The
-harness rejects an unavailable Git revision or dirty worktree before starting child cases, then
-captures the ending Git revision and worktree state immediately after the children and before it
-writes the JSON report. Final authority requires one implementation digest, an unchanged Git SHA,
-a clean start and end, the complete provenance manifest, and all 161 cases. Non-authoritative
-focused development leaves the Git/release-only gates open rather than rejecting a dirty tree;
-existing reference-host absolute gates remain unchanged.
+lifecycle, protocol, and scale-probe owners. The retired authority contract would have required
+`--profile release --enforce --require-complete` with the canonical 161-case configuration, one
+implementation digest, an unchanged Git SHA, a clean start and end, and a complete provenance
+manifest. That contract is no longer a completion or release requirement. Existing focused
+reference-host gates remain useful diagnostics where their owning code changes.
 
 Focused verification (no full or one-million-entry matrix):
 

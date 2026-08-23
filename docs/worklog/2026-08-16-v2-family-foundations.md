@@ -155,15 +155,18 @@ JSON as diagnostic-only cache-residency evidence; no fixed delay is added.
   bytes incremental peak RSS. The prior skewed churn point completed 500K
   replacements in 1.734 seconds, temporal compaction in 0.672 seconds, and
   100K current expirations in 0.090 seconds; post-watermark heap and temporal
-  amplification were 1.0. These two points are rerun in the final single-revision
-  release matrix rather than silently treated as current-revision evidence.
+  amplification were 1.0. These historical points are not current-revision
+  evidence. The exhaustive foundation scale matrix that once would have rerun
+  them is permanently retired; the official slow release suite and focused
+  owner regressions are the current and future acceptance path.
 
 The corrected independently warmed exact and candidate-normalized temporal
 relative gates now pass for both uniform and skewed layouts, along with the
 absolute reference-host latency, 1M memory/load, and bounded-block gates. Raw
 reports are `/tmp/registry-scale-warmed-uniform-v2.json` and
-`/tmp/registry-scale-warmed-skewed-v2.json`; final PR evidence will be copied
-from the one coherent release-matrix revision rather than these temporary files.
+`/tmp/registry-scale-warmed-skewed-v2.json`; they remain historical diagnostics,
+not final PR evidence. Final evidence comes from the official release gates and
+the bounded real-generation/evaluation runs described below.
 
 ## Foundation implementation and independent review
 
@@ -508,9 +511,11 @@ Memory/load/lookup calibration uses the stable isolated 250K points: lifecycle 1
 54,440,724 structural bytes; channels 124,125,184 and 33,698,048; local artifacts 61,980,672 and
 61,215,707; collection deployment 90,685,440 and 30,906,060. The mixed 1M point is 440,172,544 RSS,
 180,260,539 structural bytes, and 22.9891 seconds load. Conservative mutable operation maxima come
-from the prior deterministic smoke probes and are provenance-tagged `foundation_smoke_prior` until
-the active release matrix closes: lifecycle mutation/expiry 42.52/14.70 us, channels 104.85/65.15
-us, and artifacts 15.81/6.71 us. Deployment/content remains separately provisional under
+from the prior deterministic smoke probes and remain provenance-tagged
+`foundation_smoke_prior`: lifecycle mutation/expiry 42.52/14.70 us, channels 104.85/65.15 us, and
+artifacts 15.81/6.71 us. Retiring the exhaustive foundation scale matrix means these historical
+measurements are not implicitly promoted by the current completion work. Deployment/content
+remains separately provisional under
 `deployment_path_scale_packed_final`: 1M packed bindings loaded in 9.551 seconds at 358.58 RSS and
 168.99 structural bytes/binding with 1.709 us warmed exact p95; it is not represented as part of
 the four-registry mixed result.
@@ -1678,9 +1683,11 @@ deployment, deployment/content, process runtime, timing runtime, HTTP, proxy, SM
 Five registry-backed families retain their measured forecast rows. The other seven are represented
 by explicit `legacy_calibrated_peak` provisional dispositions with a concrete rationale; they are
 not silently omitted or mislabeled as final measurements. Model validation rejects omissions,
-duplicates, changed registry mappings, and unrecognized dispositions. The final frozen 161-case
-release matrix must replace those provisional rows or preserve an explicit reviewed exclusion;
-development checkpoints do not claim that calibration is final.
+duplicates, changed registry mappings, and unrecognized dispositions. The previously proposed
+exhaustive foundation scale matrix is permanently retired and is not a current or future acceptance
+gate. Provisional rows remain explicitly labeled; completion evidence comes from the official
+normal and slow release suites, focused regression/adversarial tests, and real-generation
+evaluation without claiming exhaustive calibration.
 
 The release harness implementation digest now covers the integration owners that can change a
 result without changing a leaf registry: dispatcher, StateManager, lifecycle authority and
@@ -1817,8 +1824,9 @@ closure cells. Required gates cover aligned graph substitution, nested object mu
 stale capabilities, ID reuse, exact receipt repair, resolver/class/helper real-commit-then-raise,
 hostile setters, first/middle/last provisional faults, finalize rejection while rollback is pending,
 cleanup exhaustion and retry, capped/prunable authority retention, plateau behavior, and every outer
-owner boundary. The authoritative 161-case/one-million-entry matrix remains deferred until these
-owner closures and the dispatcher share one frozen implementation revision.
+owner boundary. The previously proposed exhaustive foundation scale matrix is permanently out of
+scope. These owner closures are certified through focused fault/regression coverage and the
+official slow release suite.
 
 Independent review subsequently tightened the construction boundary. Capturing a callback when a
 claim starts is still too late: a replaceable owner method, ``deepcopy`` helper, lock context, or
@@ -1842,8 +1850,8 @@ yet proved by the committed milestones. ``codex/v2-family-foundations`` is 53 co
 behind ``origin/dev`` at ``c2fcddac``, all three version declarations remain unchanged at
 ``2.0.0rc1``, and the Git index is empty. The remaining integration is still a large dirty tree, the
 branch has no upstream, and no draft PR exists. Prior checkpoint prose and deleted ``/tmp`` JSON
-files are not accepted as final evidence: the authoritative scale harness deliberately requires a
-clean, single-revision worktree.
+files are not accepted as final evidence; applicable final results must be produced from the frozen
+integration candidate.
 
 The audit found two concrete implementation gaps in addition to the composite-cohort work.
 ``ActivityGenerator._ssh_source_ports`` remains the one field explicitly classified as definite
@@ -1856,13 +1864,10 @@ compatibility-only exclusion; an inventory test alone is not completion. Conditi
 universes must likewise be bounded or explicitly reviewed in the final retained-state census.
 
 Final evidence must come from one clean final commit. Required gates include the complete normal
-pytest suite, repository Ruff lint and format checks, config/scenario validation, the slow 31-day SMB
-retention integration, and the unchanged authoritative 161-case release command:
-``scripts/foundation_scale_workload.py --profile release --reference-host --enforce
---require-complete``. Its JSON must report no errors, failed gates, or open gates; a clean identical
-start/end SHA; ``single_implementation_revision`` true; and
-``release_result_revision_bound`` true. The report and SHA-256 must be preserved durably rather than
-left only in ``/tmp``. A fresh two-run iteration-test generation must then prove byte-identical data
+pytest suite, repository Ruff lint and format checks, config/scenario validation, the official slow
+release suite (including the 31-day SMB retention integration), and the focused owner/adversarial
+regressions. No exhaustive foundation scale matrix is part of this effort now or in the future. A
+fresh two-run iteration-test generation must then prove byte-identical data
 trees across the requested worker/hash-seed variants, pass quantitative evaluation without material
 regression from the 97.2016 baseline, and feed an isolated four-person blind panel. The final blind
 package must include canonical ``scores.json``, four reports, ``REPORT.md``, any triggered
@@ -2288,9 +2293,9 @@ A fresh clean clone of ``2678ad09b`` also completed the enforced 14-case foundat
 ``errors=[]``, ``failed_gates=[]``, a clean and stable repository revision, and all requested smoke
 size/duration/isolation coverage. The revision-bound report is
 ``/private/tmp/foundation-smoke-2678ad09b.json`` with SHA-256
-``107a4e1bd0962ddd7405dcbf946763f338b7bf256fac8dda390fe5e743af2c99``. Release-only million-row,
-seven-/30-day, multiworker, multi-hash-seed, and 161-case gates correctly remain open until the
-production owner graph is integrated and frozen.
+``107a4e1bd0962ddd7405dcbf946763f338b7bf256fac8dda390fe5e743af2c99``. This smoke run did not claim
+exhaustive million-row, seven-/30-day, multiworker, or multi-hash-seed certification. Those
+historical harness diagnostics are not current or future acceptance criteria.
 
 ### SourceTiming public composite boundary landed
 
@@ -2572,3 +2577,22 @@ The next dependency-ordered V2 milestone is the already-open SMB persistent-chan
 and production caller migration. Do not patch the removed legacy StateManager SMB methods back in;
 route SMB authentication/tree/handle ownership through the prepared application-channel manager
 and the now-proven auth/session projection boundary.
+
+### Final verification scope and terminal-runtime review
+
+On 2026-08-22 the exhaustive foundation scale matrix was explicitly and permanently removed from
+the completion plan. It is not deferred, optional, or a future release gate, and it must not be
+reintroduced through a comparable substitute matrix. Final verification instead uses the official
+normal and slow release pytest suites, focused owner/regression and adversarial tests, config and
+scenario validation, and two deterministic real generation/evaluation runs. These gates provide
+integration confidence without claiming exhaustive cross-product scale certification.
+
+The frozen terminal-runtime candidate completed its 68-case adversarial diagnostic with 68 passing
+in 1,289.74 seconds. Its combined tracked/untracked digest remained
+``7087003f893c7c1caf96f786722017dbaf065f3481fef8f4805dc311408cee0f`` and ``git diff --check``
+remained clean. Independent review then found bounded owning-layer defects in TLS overlay duration
+headroom, proxy runtime floors, machine-account logoff admission, sudo fail-before-mutation,
+system-process source deadlines, failed-logon child deadlines, and terminal baseline family
+selection. Those findings must receive focused regressions and a fresh exact-candidate review
+before integration; the passing diagnostic is retained as pre-repair evidence, not final
+certification.
