@@ -11,6 +11,12 @@ Use this reference to select an existing pack. Pack discovery and lifecycle oper
 Packs are optional. A Scenario 1.0 document or monolithic Scenario 2.0 document needs no
 `composition`, pack scan, missing-pack warning, or migration.
 
+## Contents
+
+- [Exact selection](#exact-selection)
+- [What still belongs in the scenario](#what-still-belongs-in-the-scenario)
+- [Inspect before authoring against exports](#inspect-before-authoring-against-exports)
+
 ## Exact selection
 
 Select direct industry packs:
@@ -60,6 +66,12 @@ An organization pack may contribute partial concrete environment and baseline fr
 effective compiled result must still satisfy all required scenario fields; scenario-local fields
 are appropriate for exercise-specific additions and overrides.
 
+`pack show` calls the six reusable catalogs `exports`. Those lists do not include an organization
+pack's `environment` or `baseline_activity` model fragments. Empty catalog exports therefore do
+not mean that an organization pack lacks users, systems, domain, topology, storage, or baseline
+content. Never infer that those fields belong in the scenario until effective composition proves
+they are absent.
+
 Project `.eforge/config` remains a separate project-wide configuration layer. It is not a pack and
 must not be copied into scenario YAML. Effective precedence is packaged defaults, direct industry
 packs, organization pack, project config, then scenario-local fields.
@@ -79,9 +91,17 @@ Inspect identities, compatibility, dependencies, digest, exports, merges, and fi
 not guess qualified IDs. Use non-writing explanation mode during iteration; write an authoritative
 resolved document only when the user requests the artifact.
 
+An empty working directory is a valid project root. It does not need a `.eforge` directory to use
+installed `package` packs; the project pack and config layers are simply absent. Treat a package
+pack's reported filesystem `location` as diagnostic metadata and do not traverse it during
+scenario authoring.
+
 Ordinary explanation JSON stays compact. Only when the task needs pack-contributed concrete model
 fields, add `--include-effective-scenario` and inspect its stable `effective_scenario` object. This
 is required before writing an effective `ENVIRONMENT.md`; it does not write a temporary artifact.
+For a self-contained organization, begin with a thin wrapper containing the exact composition
+reference plus scenario identity, time, and output, then resolve before adding any local
+environment fields.
 
 The resolved document is generated and non-editable. It is the correct source for the effective
 environment and briefing, but authored changes must go back to the declaring scenario/include,

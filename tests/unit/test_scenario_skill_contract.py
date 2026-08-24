@@ -209,6 +209,13 @@ def test_scenario_skill_preserves_ownership_and_safety_boundaries() -> None:
     assert "`effective_scenario` object" in prose
     assert "temporary resolved artifact" in prose
 
+    pack_consumption = _read(REFERENCE_ROOT / "scenario-pack-consumption.md").lower()
+    assert "do not include an organization" in pack_consumption
+    assert "empty catalog exports" in pack_consumption
+    assert "does not need a `.eforge` directory" in pack_consumption
+    assert "do not traverse it" in pack_consumption
+    assert "never infer" in pack_consumption
+
 
 def test_scenario_briefing_uses_effective_environment_without_attack_details() -> None:
     """The analyst briefing follows composition and stays answer-free."""

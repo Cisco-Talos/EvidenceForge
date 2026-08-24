@@ -20,6 +20,9 @@ specialized industry- or organization-pack skill.
 1. Resolve one concrete absolute project root from the user's project or scenario location.
 2. Pass `--project-root <absolute-project-root>` to every pack, resolve, validate, and generate
    command that accepts it. Do not let changing working directories change repository selection.
+   An existing `.eforge` directory is not required: an empty working directory is a valid project
+   root, package packs remain available, and its project pack repository is simply empty until a
+   project pack is created.
 3. Use `eforge` directly. If it is unavailable in an EvidenceForge source checkout, retry with
    `uv run eforge`.
 4. Read `/eforge:references:pack-reference` before creating, copying, versioning, repairing, or
@@ -61,11 +64,15 @@ For comparison:
 
 1. Show both exact references as JSON.
 2. Compare identity, compatibility range, dependencies, exports, digest, and source.
-3. Read semantic YAML only after the CLI has resolved the intended pack.
+3. Read semantic YAML only when authoring or diagnosing a resolved `project` or `path` pack. During
+   scenario consumption, do not traverse a `source: package` location to discover content; inspect
+   the effective model with non-writing `eforge resolve` using `--explain-composition --json` and
+   `--include-effective-scenario`.
 4. Explain behavior differences from catalog content and composition provenance, not directory
    order.
 
-Package packs are read-only. Never edit a location reported with `source: package`.
+Package packs are read-only. Never edit a location reported with `source: package`. Treat that
+location as diagnostic metadata, not as the scenario-consumption interface.
 
 ## Create or fork safely
 

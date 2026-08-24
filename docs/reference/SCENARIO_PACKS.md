@@ -101,6 +101,10 @@ do not have a scenario, the order is explicit `--project-root`, the nearest `.ef
 the working directory, then the working directory. Chat-driven workflows resolve one absolute
 project root and pass it explicitly to every applicable command.
 
+The selected project root does not need to contain `.eforge`. An empty directory is a valid root:
+installed package packs remain available, and the project pack/config layers are simply absent
+until created.
+
 ## Fixed pack contract
 
 Every pack contains `pack.yaml` and all six catalog files, including unused catalogs:
@@ -268,6 +272,14 @@ eforge pack copy package:industry:healthcare@1.0.0 \
 eforge resolve scenario.yaml --output resolved.yaml \
   --project-root /absolute/project --explain-composition --json
 ```
+
+`pack show` reports six catalog `exports` plus `model_contributions`. Organization environment and
+baseline fragments are not catalog exports, so empty catalog lists do not mean that an
+organization lacks users, systems, topology, storage, or baseline content. To inspect actual
+composed model values without writing an artifact, use a thin scenario wrapper and add
+`--include-effective-scenario` to `resolve --explain-composition --json`. Treat a packaged pack's
+filesystem `location` as diagnostic metadata rather than traversing the installed package during
+scenario authoring.
 
 `pack init` and `pack copy` publish atomically and refuse unsafe identities, traversal, symlinked
 ancestry, or an existing destination. A renamed copy rewrites typed semantic self-references but

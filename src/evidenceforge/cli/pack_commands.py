@@ -44,6 +44,10 @@ def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
             dependency.model_dump(mode="json") for dependency in pack.manifest.industry_dependencies
         ],
         "exports": {catalog: sorted(entries) for catalog, entries in pack.catalogs.items()},
+        "model_contributions": {
+            "environment_fields": sorted(pack.environment),
+            "baseline_activity_fields": sorted(pack.baseline_activity),
+        },
     }
 
 
@@ -132,6 +136,11 @@ def show_pack(
     console.print(f"Digest: {payload['digest']}")
     for catalog, names in payload["exports"].items():
         console.print(f"  {catalog}: {', '.join(names) if names else '(empty)'}")
+    model = payload["model_contributions"]
+    if model["environment_fields"] or model["baseline_activity_fields"]:
+        console.print("Organization model:")
+        console.print("  environment fields: " + ", ".join(model["environment_fields"]))
+        console.print("  baseline activity fields: " + ", ".join(model["baseline_activity_fields"]))
 
 
 @pack_app.command("validate")

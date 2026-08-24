@@ -12,6 +12,7 @@ import yaml
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import app
+from evidenceforge.composition.compiler import resolve_management_project_root
 from evidenceforge.composition.packs import CATALOG_FILES
 
 runner = CliRunner()
@@ -42,10 +43,64 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
     shown_payload = json.loads(shown.stdout)
     assert shown.exit_code == 0
     assert shown_payload["exports"]["persona_catalog"] == ["healthcare:clinical_coordinator"]
+    assert shown_payload["model_contributions"] == {
+        "baseline_activity_fields": [],
+        "environment_fields": [],
+    }
     validation_payload = json.loads(validated.stdout)
     assert validated.exit_code == 0
     assert validation_payload["valid"] is True
     assert validation_payload["dependencies"][0]["name"] == "healthcare"
+
+
+def test_organization_show_distinguishes_model_fields_from_catalog_exports() -> None:
+    """Empty organization catalogs cannot be mistaken for an empty concrete model."""
+
+    shown = runner.invoke(
+        app,
+        ["pack", "show", "package:organization:northstar-health@1.0.0", "--json"],
+    )
+
+    assert shown.exit_code == 0, shown.stdout
+    payload = json.loads(shown.stdout)
+    assert payload["exports"]["storage_catalog"] == []
+    assert payload["model_contributions"]["environment_fields"] == [
+        "description",
+        "domain",
+        "email",
+        "groups",
+        "network",
+        "storage",
+        "systems",
+        "timezone",
+        "users",
+    ]
+    assert payload["model_contributions"]["baseline_activity_fields"] == [
+        "description",
+        "intensity",
+        "suspicious_noise",
+        "variation",
+    ]
+
+
+def test_package_packs_work_from_empty_directory_without_eforge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The working directory is a valid root even when no project repository exists."""
+
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / ".eforge").exists()
+    assert resolve_management_project_root() == tmp_path.resolve()
+
+    listed = runner.invoke(app, ["pack", "list", "--json"])
+
+    assert listed.exit_code == 0, listed.stdout
+    payload = json.loads(listed.stdout)
+    assert any(
+        pack["source"] == "package" and pack["name"] == "northstar-health"
+        for pack in payload["packs"]
+    )
+    assert not (tmp_path / ".eforge").exists()
 
 
 def test_northstar_linux_pack_has_exact_dependency_and_indexed_digest() -> None:

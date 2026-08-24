@@ -79,6 +79,10 @@ For pack-management commands without a scenario, selection is:
 Skills must resolve one concrete absolute project root and pass it explicitly. A project-root
 choice must not change because a later command runs from another directory.
 
+The project root does not need to contain `.eforge`. An empty working directory is a valid root:
+installed `package` packs remain available, while the project pack and config repositories are
+simply absent until created.
+
 Inspect repositories with:
 
 ```bash
@@ -849,7 +853,7 @@ eforge pack list --project-root <root> --json
 Success:
 
 ```json
-{"packs": [{"source": "package", "type": "industry", "name": "healthcare", "version": "1.0.0", "digest": "...", "location": "...", "exports": {}}]}
+{"packs": [{"source": "package", "type": "industry", "name": "healthcare", "version": "1.0.0", "digest": "...", "location": "...", "exports": {}, "model_contributions": {"environment_fields": [], "baseline_activity_fields": []}}]}
 ```
 
 Failure, exit 1:
@@ -865,7 +869,11 @@ eforge pack show <ref-or-path> --project-root <root> --json
 ```
 
 Success is the raw pack metadata payload with `source`, `type`, `name`, `version`, `description`,
-`requires_evidenceforge`, `digest`, `location`, `industry_dependencies`, and sorted `exports`.
+`requires_evidenceforge`, `digest`, `location`, `industry_dependencies`, sorted catalog `exports`,
+and `model_contributions`. The latter lists top-level organization `environment` and
+`baseline_activity` fields without exposing raw model values. Empty catalog exports never imply
+that an organization model is empty; inspect the composed values through non-writing `resolve`
+using `--explain-composition --json --include-effective-scenario`.
 
 Failure, exit 1:
 
