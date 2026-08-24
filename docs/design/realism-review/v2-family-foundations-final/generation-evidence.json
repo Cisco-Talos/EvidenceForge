@@ -1,0 +1,30 @@
+{
+  "schema_version": "evidenceforge-generation-comparison/v1",
+  "scenario": "iteration-test",
+  "generation_seed": 42,
+  "resolved_scenario_sha256": "3a4323b5f3480531e206f3cbaf83fd8e4c4f748b5302beae0daeab292ee0b64d",
+  "compiled_sha256": "953695bed5295e5cd43a40dca2734ecc695299c3df015c7997c74aebf336b33e",
+  "normalized_generation_manifest_sha256": "cd504a671e90c83280f7210cf0aa45a27efce7d654983a82aef556beeac27bc2",
+  "data_manifest_sha256": "d8f00f1bff868a147332a59ab22c8a2cd94fb990e1f3521b5d9805b8bab08b09",
+  "file_count": 117,
+  "size_kib": 46464,
+  "runs": [
+    {
+      "label": "A12",
+      "path_at_verification": "/private/tmp/eforge-v2-final-a12.HrzaXo",
+      "python_hash_seed": 0,
+      "created_at": "2026-08-24T09:05:00.879948Z"
+    },
+    {
+      "label": "B1",
+      "path_at_verification": "/private/tmp/eforge-v2-final-b1.Lxe3fn",
+      "python_hash_seed": 99991,
+      "created_at": "2026-08-24T09:12:08.321013Z"
+    }
+  ],
+  "comparison": {
+    "data_and_artifacts_byte_identical": true,
+    "only_changed_file": "GENERATION_MANIFEST.json",
+    "only_changed_field": "created_at"
+  }
+}

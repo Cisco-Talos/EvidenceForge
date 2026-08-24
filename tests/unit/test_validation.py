@@ -3152,6 +3152,58 @@ class TestStorylineCausalOrder:
         warnings = [i for i in issues if "no prior account_created" in i.message.lower()]
         assert len(warnings) >= 1
 
+    def test_account_created_for_existing_service_account_is_error(self):
+        """Creating a predeclared service account should fail before generation."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.1",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
+                ],
+                service_accounts=["svc_mhsync"],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-existing-account",
+                    time="2024-01-15T10:00:00Z",
+                    actor="SYSTEM",
+                    system="DC-01",
+                    activity="create account",
+                    events=[
+                        {
+                            "type": "account_created",
+                            "target_username": "SVC_MHSYNC",
+                        }
+                    ],
+                ),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        errors = [
+            issue
+            for issue in issues
+            if "already exists in the effective identity directory" in issue.message
+        ]
+        assert len(errors) == 1
+        assert errors[0].severity == "error"
+        assert errors[0].field_path == "storyline.0.events.0.target_username"
+
     def test_account_created_then_deleted_no_warning(self):
         """Account creation then deletion should not warn."""
         scenario = Scenario(

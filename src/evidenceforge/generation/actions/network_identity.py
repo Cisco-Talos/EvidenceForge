@@ -56,6 +56,10 @@ _NETWORK_CONNECTION_IDENTITY_EXCLUDED_FIELDS = frozenset(
     {
         "deferred_session_authority",
         "identity_capture",
+        "persistent_smb_application_intent",
+        "persistent_smb_file_mutation_journal",
+        "persistent_smb_terminal_authority",
+        "persistent_smb_terminal_continuation",
         "prepared_application_token",
         "explicit_proxy_open_preparation",
         "explicit_proxy_request_preparation",

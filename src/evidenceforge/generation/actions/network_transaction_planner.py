@@ -38,6 +38,13 @@ from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
     NetworkRuntimePointFamily,
 )
+from evidenceforge.generation.persistent_smb_continuation import (
+    NetworkConnectionPublicationOutcome,
+    PersistentSmbPreparedRoot,
+    PersistentSmbRootHandoff,
+    PersistentSmbTerminalContinuation,
+    PersistentSmbTerminalContinuationAuthority,
+)
 from evidenceforge.generation.state_manager import (
     ConnectionExistingSessionLifecycleDisposition,
     ConnectionMaterializationMode,
@@ -191,7 +198,7 @@ def tls_completed_transport_close_bound_seconds(
     )
 
 
-def _network_transport_open_positive_headroom_seconds() -> float:
+def network_transport_open_positive_headroom_seconds() -> float:
     """Return the maximum generated physical-transport start displacement."""
 
     from evidenceforge.generation.activity.timing_profiles import get_timing_window
@@ -231,7 +238,7 @@ def tls_generated_family_close_bound_seconds(
         return parent_close
     request_delay, direct_duration, proxy_origin_duration = child_inputs
     direct_child_close = (
-        _network_transport_open_positive_headroom_seconds()
+        network_transport_open_positive_headroom_seconds()
         + http_completed_transport_close_bound_seconds(
             caller_duration_maximum=direct_duration,
         )
@@ -319,7 +326,7 @@ class _PreparedNetworkBoundary:
         root: Any,
         receipt: Any,
         application_receipt: Any,
-        prepared_dispatch: Any = None,
+        persistent_smb_root_handoff: Any = None,
         outcome: Any,
     ) -> Any:
         """Populate the prevalidated occurrence-local capture after authority success."""
@@ -333,7 +340,7 @@ class _PreparedNetworkBoundary:
             root=root,
             receipt=receipt,
             application_receipt=application_receipt,
-            prepared_dispatch=prepared_dispatch,
+            persistent_smb_root_handoff=persistent_smb_root_handoff,
             outcome=outcome,
         )
         if publication_result is not None:
@@ -343,7 +350,7 @@ class _PreparedNetworkBoundary:
             root=root,
             receipt=receipt,
             application_receipt=application_receipt,
-            prepared_dispatch=prepared_dispatch,
+            persistent_smb_root_handoff=persistent_smb_root_handoff,
             outcome=outcome,
         ):
             raise StateError("Network identity capture did not publish its exact committed owner")
@@ -359,6 +366,7 @@ class _PreparedNetworkBoundary:
         root: Any,
         receipt: Any,
         application_receipt: Any,
+        persistent_smb_root_handoff: Any,
         outcome: Any,
     ) -> tuple[Any, ...] | None:
         """Reauthenticate one exact durable handoff across its final callback."""
@@ -384,6 +392,7 @@ class _PreparedNetworkBoundary:
                     object.__getattribute__(capture, "_prepared_root"),
                     object.__getattribute__(capture, "_source_timing_preparation"),
                     object.__getattribute__(capture, "_prepared_dispatch"),
+                    object.__getattribute__(capture, "_persistent_smb_root_handoff"),
                     object.__getattribute__(capture, "_receipt"),
                     object.__getattribute__(capture, "_application_receipt"),
                     object.__getattribute__(capture, "_outcome"),
@@ -392,16 +401,18 @@ class _PreparedNetworkBoundary:
 
         def matches_expected(observed: tuple[Any, ...]) -> bool:
             return (
-                len(observed) == 9
+                len(observed) == 10
                 and observed[0] is root.transaction
                 and type(observed[1]) is str
                 and observed[1] == root.runtime_token.lifecycle_mode
                 and observed[2] is root
-                and observed[5] is receipt
-                and observed[6] is application_receipt
-                and type(observed[7]) is NetworkConnectionPublicationOutcome
-                and observed[7] is outcome
-                and observed[8] is None
+                and observed[4] is None
+                and observed[5] is persistent_smb_root_handoff
+                and observed[6] is receipt
+                and observed[7] is application_receipt
+                and type(observed[8]) is NetworkConnectionPublicationOutcome
+                and observed[8] is outcome
+                and observed[9] is None
             )
 
         before = snapshot()
@@ -430,6 +441,7 @@ class _PreparedNetworkBoundary:
         root: Any,
         receipt: Any,
         application_receipt: Any,
+        persistent_smb_root_handoff: Any,
         outcome: Any,
     ) -> None:
         """Restore and reauthenticate the exact public handoff after acknowledgement."""
@@ -446,16 +458,18 @@ class _PreparedNetworkBoundary:
         if (
             type(capture) is not NetworkConnectionIdentityCapture
             or type(facts) is not tuple
-            or len(facts) != 9
+            or len(facts) != 10
             or facts[0] is not root.transaction
             or type(facts[1]) is not str
             or facts[1] != root.runtime_token.lifecycle_mode
             or facts[2] is not root
-            or facts[5] is not receipt
-            or facts[6] is not application_receipt
-            or type(facts[7]) is not NetworkConnectionPublicationOutcome
-            or facts[7] is not outcome
-            or facts[8] is not None
+            or facts[4] is not None
+            or facts[5] is not persistent_smb_root_handoff
+            or facts[6] is not receipt
+            or facts[7] is not application_receipt
+            or type(facts[8]) is not NetworkConnectionPublicationOutcome
+            or facts[8] is not outcome
+            or facts[9] is not None
         ):
             raise StateError("Prepared network durable identity capture facts changed after ack")
 
@@ -468,10 +482,11 @@ class _PreparedNetworkBoundary:
             object.__setattr__(capture, "_prepared_root", facts[2])
             object.__setattr__(capture, "_source_timing_preparation", facts[3])
             object.__setattr__(capture, "_prepared_dispatch", facts[4])
-            object.__setattr__(capture, "_receipt", facts[5])
-            object.__setattr__(capture, "_application_receipt", facts[6])
-            object.__setattr__(capture, "_outcome", facts[7])
-            object.__setattr__(capture, "_claim", facts[8])
+            object.__setattr__(capture, "_persistent_smb_root_handoff", facts[5])
+            object.__setattr__(capture, "_receipt", facts[6])
+            object.__setattr__(capture, "_application_receipt", facts[7])
+            object.__setattr__(capture, "_outcome", facts[8])
+            object.__setattr__(capture, "_claim", facts[9])
 
         restore()
         try:
@@ -481,6 +496,7 @@ class _PreparedNetworkBoundary:
                 root=root,
                 receipt=receipt,
                 application_receipt=application_receipt,
+                persistent_smb_root_handoff=persistent_smb_root_handoff,
                 outcome=outcome,
             )
         except BaseException:
@@ -1878,6 +1894,197 @@ class NetworkTransactionPlanner:
                 merged[object_id] = patch
         return tuple(merged.values())
 
+    def _build_persistent_smb_root_handoff(
+        self,
+        preparation: PersistentSmbPreparedRoot,
+        materialization: Any,
+    ) -> PersistentSmbRootHandoff:
+        """Authenticate and retain every exact child returned with one SMB root."""
+
+        from evidenceforge.generation.lifecycle_authority import (
+            LifecyclePreparedNetworkResult,
+        )
+        from evidenceforge.generation.smb_channels import SmbChannelAdmissionResult
+
+        executor = self._executor
+        if type(materialization) is not LifecyclePreparedNetworkResult:
+            raise StateError("Persistent SMB root returned an invalid materialization")
+        if not executor._lifecycle_authority.authenticates_prepared_network_receipt(
+            preparation.root,
+            materialization.receipt,
+        ):
+            raise StateError("Persistent SMB root returned an unauthenticated receipt")
+        state = materialization.connection.state
+        pin_install = state.smb_connection_pin_install
+        file_mutation = state.smb_file_mutation
+        application = materialization.connection.application
+        if (
+            pin_install is None
+            or file_mutation is None
+            or type(application) is not SmbChannelAdmissionResult
+            or not executor.state_manager.authenticates_smb_connection_pin_install_receipt(
+                pin_install
+            )
+            or not executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
+                file_mutation.receipt
+            )
+            or not executor._smb_channel_manager.authenticates_admission_receipt(
+                application.receipt
+            )
+        ):
+            raise StateError("Persistent SMB root lost an exact terminal child result")
+        lifecycle_binding = executor._lifecycle_authority.detach_prepared_network_receipt(
+            materialization.receipt
+        )
+        return PersistentSmbRootHandoff(
+            materialization=materialization,
+            lifecycle_binding=lifecycle_binding,
+            file_journal=preparation.file_journal,
+            prepared_dispatch=preparation.prepared_dispatch,
+            observations=preparation.observations,
+            pin_install_receipt=pin_install,
+            file_mutation=file_mutation,
+            application_token=preparation.application_token,
+            application_result=application,
+        )
+
+    def _resume_or_publish_persistent_smb_root(
+        self,
+        *,
+        boundary: _PreparedNetworkBoundary,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        continuation: PersistentSmbTerminalContinuation,
+    ) -> str:
+        """Materialize or adopt one exact retained SMB root and publish its full handoff."""
+
+        executor = self._executor
+        facts = authority.root_facts(continuation)
+        preparation = facts.prepared_root
+        if type(preparation) is not PersistentSmbPreparedRoot:
+            raise StateError("Persistent SMB continuation has no exact prepared root")
+        phase_before = facts.phase
+        boundary.root = preparation.root
+        boundary.timing_preparation = preparation.source_timing_preparation
+        boundary.lifecycle_adapter = executor._lifecycle_authority.registry
+        boundary.lifecycle_token = preparation.lifecycle_token
+        boundary.application_manager = executor._smb_channel_manager
+        boundary.application_token = preparation.application_token
+        boundary.prerequisite_receipts = preparation.prerequisite_receipts
+        boundary.transfer()
+
+        if phase_before == "root_prepared":
+            materialization = (
+                executor._lifecycle_authority.materialize_prepared_network_transaction(
+                    preparation.root,
+                    preparation.owner_rng,
+                    source_timing_preparation=preparation.source_timing_preparation,
+                    lifecycle_token=preparation.lifecycle_token,
+                    application_token=preparation.application_token,
+                    prerequisite_receipts=preparation.prerequisite_receipts,
+                )
+            )
+            boundary.terminal_materialization = materialization
+            handoff = self._build_persistent_smb_root_handoff(preparation, materialization)
+            authority.bind_committed_root(
+                continuation,
+                materialization=materialization,
+                handoff=handoff,
+                outcome=preparation.outcome,
+            )
+        elif phase_before in {"root_committed", "source_prepared", "source_published"}:
+            materialization = facts.materialization
+            handoff = facts.handoff
+            if (
+                materialization is None
+                or type(handoff) is not PersistentSmbRootHandoff
+                or handoff.materialization is not materialization
+                or facts.outcome is not preparation.outcome
+            ):
+                raise StateError("Persistent SMB committed continuation changed exact owners")
+            boundary.terminal_materialization = materialization
+        else:
+            raise StateError(
+                f"Persistent SMB root cannot resume from continuation phase {phase_before!r}"
+            )
+
+        application_receipt = handoff.application_result.receipt
+        receipt_retained = executor._lifecycle_authority.authenticates_prepared_network_receipt(
+            preparation.root,
+            materialization.receipt,
+        )
+        if not receipt_retained and phase_before == "root_prepared":
+            raise StateError("Fresh persistent SMB root lost its lifecycle receipt authority")
+        durable_capture = boundary.publish_committed_capture_no_fail(
+            root=preparation.root,
+            receipt=materialization.receipt,
+            application_receipt=application_receipt,
+            persistent_smb_root_handoff=handoff,
+            outcome=preparation.outcome,
+        )
+        if receipt_retained:
+            durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
+                durable_capture,
+                authority=executor._lifecycle_authority,
+                root=preparation.root,
+                receipt=materialization.receipt,
+                application_receipt=application_receipt,
+                persistent_smb_root_handoff=handoff,
+                outcome=preparation.outcome,
+            )
+        else:
+            durable_capture_facts = None
+        if receipt_retained and durable_capture is not None:
+            from evidenceforge.generation.lifecycle_authority import (
+                GeneratorLifecycleAuthority,
+            )
+
+            GeneratorLifecycleAuthority._bind_prepared_network_durable_capture_for_ack(
+                executor._lifecycle_authority,
+                preparation.root,
+                materialization,
+                durable_capture,
+                durable_capture_facts,
+                expected_persistent_smb_root_handoff=handoff,
+            )
+        if receipt_retained:
+            acknowledged = (
+                executor._lifecycle_authority.acknowledge_prepared_network_transaction_if_retained(
+                    preparation.root,
+                    materialization,
+                    durable_capture=durable_capture,
+                    durable_capture_facts=durable_capture_facts,
+                )
+            )
+            if not acknowledged:
+                raise StateError("Persistent SMB retained lifecycle receipt was not acknowledged")
+            boundary.restore_committed_capture_after_ack(
+                durable_capture,
+                durable_capture_facts,
+                authority=executor._lifecycle_authority,
+                root=preparation.root,
+                receipt=materialization.receipt,
+                application_receipt=application_receipt,
+                persistent_smb_root_handoff=handoff,
+                outcome=preparation.outcome,
+            )
+
+        transaction = preparation.root.transaction
+        executor._last_connection_effective_dst_ip = transaction.dst_ip
+        executor._last_connection_effective_tuple = (
+            transaction.src_ip,
+            transaction.src_port,
+            transaction.dst_ip,
+            transaction.dst_port,
+            transaction.protocol,
+        )
+        executor._last_connection_effective_time = transaction.started_at
+        executor._last_connection_effective_transaction_id = transaction.stable_id
+        return (
+            ""
+            if preparation.outcome is NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
+            else transaction.zeek_uid
+        )
+
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one request while retaining exact cancellation ownership."""
 
@@ -1929,6 +2136,35 @@ class NetworkTransactionPlanner:
             if request.persistent_smb_root_intent is None
             else PersistentSmbRootIntent.from_identity_snapshot(request.persistent_smb_root_intent)
         )
+        persistent_smb_application_intent = request.persistent_smb_application_intent
+        persistent_smb_file_journal = request.persistent_smb_file_mutation_journal
+        persistent_smb_terminal_authority = request.persistent_smb_terminal_authority
+        persistent_smb_terminal_continuation = request.persistent_smb_terminal_continuation
+        if persistent_smb_intent is not None:
+            if (
+                type(persistent_smb_terminal_authority)
+                is not PersistentSmbTerminalContinuationAuthority
+                or type(persistent_smb_terminal_continuation)
+                is not PersistentSmbTerminalContinuation
+                or not persistent_smb_terminal_authority.authenticates_claimed(
+                    persistent_smb_terminal_continuation
+                )
+            ):
+                raise StateError("Persistent SMB root lost its exact continuation claim")
+            persistent_phase = persistent_smb_terminal_authority.root_facts(
+                persistent_smb_terminal_continuation
+            ).phase
+            if persistent_phase in {
+                "root_prepared",
+                "root_committed",
+                "source_prepared",
+                "source_published",
+            }:
+                return self._resume_or_publish_persistent_smb_root(
+                    boundary=boundary,
+                    authority=persistent_smb_terminal_authority,
+                    continuation=persistent_smb_terminal_continuation,
+                )
         prepared_application_token = request.prepared_application_token
         explicit_proxy_request_preparation = request.explicit_proxy_request_preparation
         if prepared_application_token is not None:
@@ -2007,6 +2243,7 @@ class NetworkTransactionPlanner:
         parent_action_group_id = request.parent_action_group_id
         preserve_start_time = request.preserve_start_time
         caller_supplied_pid = pid > 0
+        caller_owned_pid = pid if caller_supplied_pid else None
 
         from evidenceforge.events.contexts import NetworkTransactionDraft
 
@@ -2707,12 +2944,13 @@ class NetworkTransactionPlanner:
             and http is not None
             and not suppress_source_pid_inference
         ):
-            # Direct client-to-proxy listener traffic owns a real client process
-            # prerequisite (for example curl/wget/browser), independent of whether
-            # the later transport root is admitted. Resolve or start that process
-            # before NetworkRuntime.begin(), then carry only its stable identity
-            # into the prepared root. The existing helper remains the sole owner of
-            # source-native UA/process compatibility and prerequisite publication.
+            # Direct HTTP and client-to-proxy listener traffic own a real client
+            # process prerequisite (for example curl/wget/browser), independent of
+            # whether the later transport root is admitted. Resolve or start that
+            # process before NetworkRuntime.begin(), then carry only its stable
+            # identity into the prepared root. The existing helpers remain the sole
+            # owners of source-native UA/process compatibility and prerequisite
+            # publication.
             attribution = _NetworkOccurrenceDraft(
                 timestamp=time,
                 http=http,
@@ -2735,6 +2973,11 @@ class NetworkTransactionPlanner:
                     image=process_image,
                 )
             executor._repair_explicit_proxy_listener_process_attribution(
+                attribution,
+                source_system=resolved_source_system,
+                time=time,
+            )
+            executor._repair_browser_http_process_attribution(
                 attribution,
                 source_system=resolved_source_system,
                 time=time,
@@ -3188,6 +3431,18 @@ class NetworkTransactionPlanner:
                     )
                 if resp_bytes:
                     resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+            elif conn_state in ("S1", "SH", "SHR"):
+                # Handshake-only observations still own a finite physical
+                # interval even when the caller omits a duration.  Without a
+                # close time the lifecycle authority cannot publish the root.
+                orig_bytes = 0
+                resp_bytes = 0
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration or 0.5,
+                    sample_key="explicit_handshake",
+                )
         elif proto == "udp":
             # DNS connections with responses must not be S0 (no-response)
             if service == "kerberos" and resp_bytes and resp_bytes > 0:
@@ -4715,6 +4970,43 @@ class NetworkTransactionPlanner:
         transaction = event.network.transaction
         if transaction is None:
             raise ValueError("Network transaction disappeared after finalization")
+        persistent_smb_batch = None
+        persistent_smb_client_identity = None
+        if persistent_smb_intent is not None:
+            persistent_smb_batch = persistent_smb_intent.prepare(
+                executor.state_manager,
+                transaction,
+            )
+            persistent_smb_client_identity = persistent_smb_intent.client_process_identity(
+                executor.state_manager,
+                persistent_smb_batch,
+            )
+            client_process = persistent_smb_intent.client_process
+            if (
+                persistent_smb_client_identity is not None
+                and client_process.transport_attribution == "process"
+            ):
+                pid = persistent_smb_client_identity.pid
+                process_ctx = generator_module.ProcessContext(
+                    pid=persistent_smb_client_identity.pid,
+                    parent_pid=persistent_smb_client_identity.parent_pid,
+                    image=persistent_smb_client_identity.image,
+                    command_line=persistent_smb_client_identity.command_line,
+                    username=persistent_smb_client_identity.principal,
+                    logon_id=persistent_smb_client_identity.logon_id,
+                    start_time=persistent_smb_client_identity.started_at,
+                    parent_start_time=executor._lookup_parent_start_time(
+                        persistent_smb_client_identity.hostname,
+                        persistent_smb_client_identity.parent_pid,
+                    ),
+                )
+                event.process = process_ctx
+                event.network.initiating_pid = pid
+            else:
+                pid = -1
+                process_ctx = None
+                event.process = None
+                event.network.initiating_pid = -1
         attached_files = tuple(
             candidate
             for candidate in (event.file_transfer, *event.file_transfers)
@@ -4977,14 +5269,31 @@ class NetworkTransactionPlanner:
             file_transfers=event.protocol.file_transfers,
         )
         deferred_batch = deferred_authority.state_batch if deferred_authority is not None else None
-        persistent_smb_batch = None
         if persistent_smb_intent is not None:
             if materialization_mode is not ConnectionMaterializationMode.PHYSICAL:
                 raise StateError("Persistent SMB root requires physical network materialization")
-            persistent_smb_batch = persistent_smb_intent.prepare(
-                executor.state_manager,
+            if persistent_smb_batch is None:
+                raise StateError("Persistent SMB root lost its prepared State batch")
+            session_plan = persistent_smb_batch.session
+            if (
+                persistent_smb_application_intent is None
+                or persistent_smb_file_journal is None
+                or session_plan is None
+                or persistent_smb_application_intent.manager is not executor._smb_channel_manager
+                or not executor.state_manager.authenticates_smb_file_mutation_journal(
+                    persistent_smb_file_journal
+                )
+            ):
+                raise StateError("Persistent SMB root lost an exact prepared child owner")
+            application_token = persistent_smb_application_intent.prepare(
+                session_plan.identity,
                 event.network,
             )
+            boundary.track_application(
+                executor._smb_channel_manager,
+                application_token,
+            )
+            network_preparation.terminalize_smb_file_mutation(persistent_smb_file_journal)
             network_preparation.reserve_smb_connection_pin()
         deferred_existing_session_patch = (
             deferred_authority.existing_state_patch if deferred_authority is not None else None
@@ -5256,7 +5565,45 @@ class NetworkTransactionPlanner:
                 deferred_publication_batch,
             )
         boundary.validate_deferred_session_publication_batch()
+        if persistent_smb_intent is not None:
+            if (
+                persistent_smb_terminal_authority is None
+                or persistent_smb_terminal_continuation is None
+                or prepared_dispatch is None
+                or lifecycle_token is None
+                or boundary.application_token is None
+            ):
+                raise StateError("Persistent SMB root lost a prepared continuation owner")
+            persistent_smb_terminal_authority.bind_prepared_root(
+                persistent_smb_terminal_continuation,
+                PersistentSmbPreparedRoot(
+                    root=root,
+                    owner_rng=owner_rng,
+                    source_timing_preparation=boundary.timing_preparation,
+                    lifecycle_token=lifecycle_token,
+                    application_token=boundary.application_token,
+                    file_journal=persistent_smb_file_journal,
+                    prerequisite_receipts=boundary.prerequisite_receipts,
+                    prepared_dispatch=prepared_dispatch,
+                    observations=persistent_smb_observations,
+                    outcome=(
+                        NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
+                        if committed_suppressed
+                        else NetworkConnectionPublicationOutcome.PUBLISHED
+                    ),
+                ),
+            )
         boundary.transfer()
+        if (
+            persistent_smb_intent is not None
+            and persistent_smb_terminal_authority is not None
+            and persistent_smb_terminal_continuation is not None
+        ):
+            return self._resume_or_publish_persistent_smb_root(
+                boundary=boundary,
+                authority=persistent_smb_terminal_authority,
+                continuation=persistent_smb_terminal_continuation,
+            )
         try:
             deferred_published = (
                 executor._lifecycle_authority.materialize_prepared_deferred_session_publication(
@@ -5283,10 +5630,6 @@ class NetworkTransactionPlanner:
             )
             boundary.terminal_materialization = materialized
 
-            from evidenceforge.generation.actions.network_connection import (
-                NetworkConnectionPublicationOutcome,
-            )
-
             outcome = (
                 NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
                 if committed_suppressed
@@ -5300,23 +5643,52 @@ class NetworkTransactionPlanner:
             )
             persistent_smb_handoff = None
             if persistent_smb_intent is not None:
-                from evidenceforge.generation.actions.network_connection import (
-                    PersistentSmbRootHandoff,
-                )
+                from evidenceforge.generation.smb_channels import SmbChannelAdmissionResult
 
                 pin_install = materialized.connection.state.smb_connection_pin_install
+                file_mutation = materialized.connection.state.smb_file_mutation
+                smb_application = materialized.connection.application
                 if (
                     prepared_dispatch is None
                     or pin_install is None
+                    or file_mutation is None
+                    or type(smb_application) is not SmbChannelAdmissionResult
                     or not executor.state_manager.authenticates_smb_connection_pin_install_receipt(
                         pin_install
                     )
+                    or not executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
+                        file_mutation.receipt
+                    )
+                    or not executor._smb_channel_manager.authenticates_admission_receipt(
+                        smb_application.receipt
+                    )
                 ):
-                    raise StateError("Persistent SMB root lost its exact State pin installation")
+                    raise StateError("Persistent SMB root lost an exact terminal child result")
                 persistent_smb_handoff = PersistentSmbRootHandoff(
+                    materialization=materialized,
+                    lifecycle_binding=(
+                        executor._lifecycle_authority.detach_prepared_network_receipt(
+                            materialized.receipt
+                        )
+                    ),
+                    file_journal=persistent_smb_file_journal,
                     prepared_dispatch=prepared_dispatch,
                     observations=persistent_smb_observations,
                     pin_install_receipt=pin_install,
+                    file_mutation=file_mutation,
+                    application_token=application_token,
+                    application_result=smb_application,
+                )
+                if (
+                    persistent_smb_terminal_authority is None
+                    or persistent_smb_terminal_continuation is None
+                ):
+                    raise StateError("Persistent SMB root lost its continuation owner")
+                persistent_smb_terminal_authority.bind_committed_root(
+                    persistent_smb_terminal_continuation,
+                    materialization=materialized,
+                    handoff=persistent_smb_handoff,
+                    outcome=outcome,
                 )
             try:
                 authenticated_materialization = (
@@ -5330,7 +5702,7 @@ class NetworkTransactionPlanner:
                     root=root,
                     receipt=materialized.receipt,
                     application_receipt=application_receipt,
-                    prepared_dispatch=persistent_smb_handoff,
+                    persistent_smb_root_handoff=persistent_smb_handoff,
                     outcome=outcome,
                 )
                 raise
@@ -5339,7 +5711,7 @@ class NetworkTransactionPlanner:
                     root=root,
                     receipt=materialized.receipt,
                     application_receipt=application_receipt,
-                    prepared_dispatch=persistent_smb_handoff,
+                    persistent_smb_root_handoff=persistent_smb_handoff,
                     outcome=outcome,
                 )
                 raise AssertionError("Prepared network authority returned an invalid receipt")
@@ -5347,7 +5719,7 @@ class NetworkTransactionPlanner:
                 root=root,
                 receipt=materialized.receipt,
                 application_receipt=application_receipt,
-                prepared_dispatch=persistent_smb_handoff,
+                persistent_smb_root_handoff=persistent_smb_handoff,
                 outcome=outcome,
             )
             durable_capture_facts = boundary.authenticate_committed_capture_for_ack(
@@ -5356,6 +5728,7 @@ class NetworkTransactionPlanner:
                 root=root,
                 receipt=materialized.receipt,
                 application_receipt=application_receipt,
+                persistent_smb_root_handoff=persistent_smb_handoff,
                 outcome=outcome,
             )
             if durable_capture is not None:
@@ -5369,6 +5742,7 @@ class NetworkTransactionPlanner:
                     materialized,
                     durable_capture,
                     durable_capture_facts,
+                    expected_persistent_smb_root_handoff=persistent_smb_handoff,
                 )
             try:
                 executor._lifecycle_authority.acknowledge_prepared_network_transaction(
@@ -5385,6 +5759,7 @@ class NetworkTransactionPlanner:
                     root=root,
                     receipt=materialized.receipt,
                     application_receipt=application_receipt,
+                    persistent_smb_root_handoff=persistent_smb_handoff,
                     outcome=outcome,
                 )
                 raise
@@ -5395,6 +5770,7 @@ class NetworkTransactionPlanner:
                 root=root,
                 receipt=materialized.receipt,
                 application_receipt=application_receipt,
+                persistent_smb_root_handoff=persistent_smb_handoff,
                 outcome=outcome,
             )
         except BaseException as primary:
@@ -5533,7 +5909,12 @@ class NetworkTransactionPlanner:
                 parent_action_group_id=parent_action_group_id,
             )
 
-        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
+        if (
+            pid != caller_owned_pid
+            and pid > 0
+            and resolved_source_system is not None
+            and process_ctx is not None
+        ):
             running = executor.state_manager.get_process(resolved_source_system.hostname, pid)
             if executor._process_termination_recorded(
                 resolved_source_system.hostname,

@@ -353,6 +353,15 @@ def test_samba_session_and_file_follow_admitted_ecar_flow() -> None:
         network=transport,
     )
     planner.plan_event(flow_event, "ecar")
+    assert flow_event.source_timing is not None
+    source_flow_time = base + timedelta(milliseconds=500)
+    target_flow_time = base + timedelta(milliseconds=100)
+    flow_event.source_timing.finalized_times[ecar_flow_render_key("outbound", client.hostname)] = (
+        source_flow_time
+    )
+    flow_event.source_timing.finalized_times[ecar_flow_render_key("inbound", server.hostname)] = (
+        target_flow_time
+    )
     planner.record_admitted_source_event(flow_event, "ecar")
 
     auth = AuthContext(
@@ -415,15 +424,13 @@ def test_samba_session_and_file_follow_admitted_ecar_flow() -> None:
     )
     planner.plan_event(logoff_event, "ecar")
 
-    flow_time = flow_event.source_timing.finalized_times[
-        ecar_flow_render_key("inbound", server.hostname)
-    ]
+    flow_frontier = max(source_flow_time, target_flow_time)
     login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
     logout_time = logoff_event.source_timing.finalized_times[ecar_session_render_key("logout")]
     file_time = planned_file.source_timing.finalized_times[
         endpoint_event_render_key("ecar", server.hostname)
     ]
-    assert flow_time < login_time < file_time < logout_time
+    assert flow_frontier < login_time < file_time < logout_time
     assert planned_file.timestamp == base + timedelta(milliseconds=200)
 
 
@@ -2083,6 +2090,51 @@ def test_remote_auth_ecar_projection_order_retains_same_target_window() -> None:
     assert observed[0] == observed[1]
 
 
+def test_smb_ecar_projection_order_retains_latest_endpoint_flow_frontier() -> None:
+    """SMB auth must follow the later endpoint FLOW regardless of admission order."""
+
+    observed: list[datetime] = []
+    source_flow_time = _base_time() + timedelta(milliseconds=700)
+    target_flow_time = _base_time() + timedelta(milliseconds=200)
+    for projection_order in (
+        ("source_endpoint", "destination_endpoint"),
+        ("destination_endpoint", "source_endpoint"),
+    ):
+        planner = SourceTimingPlanner()
+        flow_event, login_event = _remote_auth_timing_events()
+        assert login_event.auth is not None
+        login_event = replace(
+            login_event,
+            auth=replace(login_event.auth, session_kind="smb"),
+        )
+        for projection_role in projection_order:
+            projection = replace(flow_event, source_timing=None)
+            planner.plan_event(projection, "ecar", projection_role=projection_role)
+            assert projection.source_timing is not None
+            if projection_role == "source_endpoint":
+                assert projection.src_host is not None
+                projection.source_timing.finalized_times[
+                    ecar_flow_render_key("outbound", projection.src_host.hostname)
+                ] = source_flow_time
+            else:
+                assert projection.dst_host is not None
+                projection.source_timing.finalized_times[
+                    ecar_flow_render_key("inbound", projection.dst_host.hostname)
+                ] = target_flow_time
+            planner.record_admitted_source_event(projection, "ecar")
+        planner.plan_event(login_event, "ecar")
+        assert login_event.source_timing is not None
+        login_time = login_event.source_timing.finalized_times[ecar_session_render_key("login")]
+        observed.append(login_time)
+        assert (
+            timedelta(milliseconds=8)
+            <= login_time - source_flow_time
+            <= timedelta(milliseconds=140)
+        )
+
+    assert observed[0] == observed[1]
+
+
 def test_remote_auth_ecar_source_only_projection_does_not_create_target_anchor() -> None:
     """A source-only connection without a modeled target cannot anchor target auth."""
 
@@ -2225,6 +2277,52 @@ def test_remote_auth_windows_login_uses_target_local_transport_close() -> None:
     )
     login_time = login_event.source_timing.finalized_times["windows.remote_authentication"]
     assert canonical_close < wfp_time < login_time < projected_close
+
+
+def test_windows_wfp_late_candidate_uses_transport_interior_without_close_atom() -> None:
+    """Cross-host 5156 ordering must retain each host's transport interior."""
+
+    planner = _source_timing_planner("enterprise_standard")
+    flow_event, login_event = _remote_auth_timing_events()
+    assert flow_event.network is not None
+    candidate = datetime(2024, 1, 16, 11, 30, 0, 428372, tzinfo=UTC)
+    canonical_close = candidate + timedelta(microseconds=28_048)
+    canonical_start = canonical_close - timedelta(milliseconds=180)
+    wfp_event = _remote_auth_wfp_event(flow_event, login_event)
+    wfp_event.timestamp = candidate
+    wfp_event.network = network_plan(
+        src_ip=flow_event.network.src_ip,
+        src_port=flow_event.network.src_port,
+        dst_ip=flow_event.network.dst_ip,
+        dst_port=flow_event.network.dst_port,
+        protocol="tcp",
+        service="smb",
+        duration=0.18,
+        source_visible_start_time=canonical_start,
+        source_visible_close_time=canonical_close,
+        conn_state="SF",
+    )
+    source_wfp = replace(
+        wfp_event,
+        src_host=flow_event.src_host,
+        source_timing=None,
+    )
+    planner.plan_event(source_wfp, "windows_event_security")
+    source_wfp_time = source_wfp.source_timing.finalized_times["windows.wfp_connection"]
+    planner.record_admitted_source_event(source_wfp, "windows_event_security")
+
+    planner.plan_event(wfp_event, "windows_event_security")
+
+    host = wfp_event.src_host
+    assert host is not None
+    projected_close = canonical_close + planner.endpoint_clock_adjustment_for_host(
+        hostname=host.hostname,
+        os_category=host.os_category,
+        timestamp=canonical_close,
+    )
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    assert source_wfp_time > projected_close
+    assert candidate < wfp_time < projected_close
 
 
 def test_windows_wfp_source_clock_adjustment_is_applied_once() -> None:

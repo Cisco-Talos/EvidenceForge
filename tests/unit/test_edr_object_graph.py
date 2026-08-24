@@ -259,7 +259,11 @@ class TestObjectIdLifecycle:
             "cmd.exe",
         )
         create_obj_id = state_manager.get_process_object_id(win_system.hostname, pid)
-        state_manager.end_process(win_system.hostname, pid)
+        state_manager.end_process(
+            win_system.hostname,
+            pid,
+            end_time=timestamp + timedelta(seconds=5),
+        )
 
         activity_gen.generate_process_termination(
             test_user,

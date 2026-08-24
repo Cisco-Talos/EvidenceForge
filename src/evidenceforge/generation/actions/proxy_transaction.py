@@ -613,6 +613,9 @@ class ProxyTransactionActionBundle:
                     pass
 
         client_pid, client_process_image = self._resolve_client_process(proxy_context, proxy_sys)
+        caller_owned_client_pid = (
+            client_pid if request.pid > 0 and client_pid == request.pid else -1
+        )
         suppress_client_pid_inference = request.suppress_source_pid_inference or (
             request.pid > 0 and client_pid <= 0
         )
@@ -786,7 +789,9 @@ class ProxyTransactionActionBundle:
             resp_bytes=client_resp_bytes,
             src_port=src_port,
             emit_dns=False,
-            pid=client_pid,
+            # Preserve explicit caller lifecycle ownership, but let the network
+            # root retain teardown ownership for a proxy-bundle prerequisite.
+            pid=caller_owned_client_pid,
             source_system=request.source_system,
             conn_state=request.conn_state or "SF",
             ids_alerts=list(request.ids_alerts),

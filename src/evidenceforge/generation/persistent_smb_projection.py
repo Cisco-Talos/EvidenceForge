@@ -49,6 +49,7 @@ _MAX_SIGNED_63 = (1 << 63) - 1
 class PersistentSmbProjectionPhase(StrEnum):
     """Stable lifecycle ordering class retained with one detached member."""
 
+    CLIENT_PROCESS = "client_process"
     TRANSPORT = "transport"
     TYPE3_LOGON = "type3_logon"
     TREE_OR_FILE = "tree_or_file"
@@ -2034,6 +2035,56 @@ class PersistentSmbProjectionGroupAuthority:
                 and located[1].timing_owner_ref() is timing_planner
                 and trusted is not None
                 and self._member_facts_match(final_snapshot[0], trusted)
+            )
+
+    def authenticates_cancellable_member_token(
+        self,
+        token: object,
+        *,
+        timing_planner: SourceTimingPlanner,
+    ) -> bool:
+        """Return whether one exact inactive or certified member still needs cancellation."""
+
+        if type(timing_planner) is not SourceTimingPlanner:
+            return False
+        snapshot_result = self._snapshot_member_token(token)
+        if snapshot_result is None:
+            return False
+        snapshot, binding = snapshot_result
+        assert type(token) is PersistentSmbProjectionMemberToken
+        with self._lock:
+            located = self._member_for_token_locked(token)
+            if located is None:
+                return False
+            group, member = located
+            trusted = member.facts
+            if (
+                trusted is None
+                or member.state not in {"inactive", "certified"}
+                or member.timing_binding is not binding
+                or member.timing_owner_ref is None
+                or member.timing_owner_ref() is not timing_planner
+                or group.facts.group_id != trusted.group_id
+                or not self._member_facts_match(snapshot, trusted)
+            ):
+                return False
+            context_digest = trusted.timing_context_digest
+        if not timing_planner.authenticates_detached_preparation_binding(
+            binding,
+            context_digest=context_digest,
+        ):
+            return False
+        with self._lock:
+            located = self._member_for_token_locked(token)
+            trusted = located[1].facts if located is not None else None
+            return bool(
+                located is not None
+                and located[1].state in {"inactive", "certified"}
+                and located[1].timing_binding is binding
+                and located[1].timing_owner_ref is not None
+                and located[1].timing_owner_ref() is timing_planner
+                and trusted is not None
+                and self._member_facts_match(snapshot, trusted)
             )
 
     def certify_member(

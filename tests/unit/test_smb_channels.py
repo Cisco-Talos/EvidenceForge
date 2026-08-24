@@ -20,10 +20,15 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
-from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.application_channels import (
+    ApplicationChannelAdmissionToken,
+    ApplicationChannelRegistry,
+)
 from evidenceforge.generation.smb_channels import (
     SmbApplicationChannelManager,
     SmbChannelAffinity,
+    SmbCompletedHandlePlan,
+    SmbCompletedOperationPlan,
     SmbOperationLease,
 )
 from evidenceforge.models.exceptions import StateError
@@ -232,6 +237,392 @@ def test_same_share_reuses_transport_session_tree_and_frozen_identity() -> None:
     assert second.transport_plan == first.transport_plan
     assert second.ground_truth_transport_uid == "OBSERVED1"
     assert second.ordinal == 1
+
+
+def test_exact_channel_reuse_never_crosses_an_overlapping_same_affinity_session() -> None:
+    """An authenticated anchor cannot attach its next file to a sibling channel."""
+
+    manager = _manager()
+    affinity = _affinity()
+    first = _open(manager, affinity, suffix="1")
+    sibling = _open(manager, affinity, suffix="2")
+    assert manager.finalize_operation(first)
+    assert manager.finalize_operation(sibling)
+
+    result = manager.reserve_channel_reuse(
+        first,
+        affinity,
+        share_ref="file01.documents",
+        semantic_operation_id="first-channel-second-file",
+        requested_at=_START + timedelta(seconds=2),
+        required_until=_START + timedelta(seconds=3),
+        initiator_bytes=110,
+        responder_bytes=220,
+    )
+
+    lease = result.lease
+    assert lease is not None
+    assert not result.closures
+    assert lease.channel_id == first.channel_id
+    assert lease.channel_id != sibling.channel_id
+    assert lease.transport_plan == first.transport_plan
+    assert lease.transport_plan.stable_id == first.transport_plan.stable_id
+    assert manager.finalize_operation(lease)
+    first_snapshot = manager.application_registry.get(first.channel_id)
+    sibling_snapshot = manager.application_registry.get(sibling.channel_id)
+    assert first_snapshot is not None and first_snapshot.completed_operations == 2
+    assert sibling_snapshot is not None and sibling_snapshot.completed_operations == 1
+
+    assert manager.close_session(
+        first.channel_id,
+        closed_at=_START + timedelta(seconds=4),
+        reason="test complete",
+    )
+    assert manager.close_session(
+        sibling.channel_id,
+        closed_at=_START + timedelta(seconds=4),
+        reason="test complete",
+    )
+    assert manager.census().open_sessions == 0
+
+
+def test_terminal_two_operation_batch_is_atomic_exact_and_sidecar_neutral() -> None:
+    """One root commits all ordered members closed with exact bytes and no live SMB state."""
+
+    manager = _manager()
+    plan = _plan()
+    first_start = _START + timedelta(milliseconds=100)
+    first_end = first_start + timedelta(milliseconds=400)
+    second_start = first_end + timedelta(microseconds=1)
+    second_end = second_start + timedelta(milliseconds=500)
+    operations = (
+        SmbCompletedOperationPlan(
+            semantic_operation_id="first",
+            started_at=first_start,
+            ended_at=first_end,
+            initiator_bytes=40,
+            responder_bytes=80,
+            handles=(
+                SmbCompletedHandlePlan(
+                    file_id="content-1",
+                    content_version=1,
+                    access="read",
+                    opened_at=first_start,
+                    closed_at=first_end,
+                ),
+            ),
+        ),
+        SmbCompletedOperationPlan(
+            semantic_operation_id="second",
+            started_at=second_start,
+            ended_at=second_end,
+            initiator_bytes=60,
+            responder_bytes=120,
+            handles=(
+                SmbCompletedHandlePlan(
+                    file_id="content-2",
+                    content_version=1,
+                    access="read",
+                    opened_at=second_start,
+                    closed_at=second_end,
+                ),
+            ),
+        ),
+    )
+    token = manager.prepare_fresh_session_with_completed_operations_and_close(
+        _affinity(),
+        transport_plan=plan,
+        sensor_observations=(),
+        ground_truth_transport_uid="OBSERVED1",
+        logon_id="0xA1",
+        auth_session_ref="auth-1",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="kerberos",
+        account_scope="EXAMPLE",
+        effective_uid=None,
+        effective_gid=None,
+        client_access="windows_native",
+        server_hostname="FILE01",
+        client_ip="10.0.0.10",
+        lifecycle_group_id=plan.stable_id,
+        share_ref="FILE01.Documents",
+        tree_connected_at=_START + timedelta(milliseconds=50),
+        operations=operations,
+        idle_timeout=timedelta(minutes=15),
+        closed_at=second_end + timedelta(milliseconds=10),
+    )
+
+    with manager.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert manager.authenticates_admission_receipt(result.receipt)
+    assert result.receipt.operation_ids == tuple(
+        operation.operation_id for operation in result.result.operations
+    )
+    assert (
+        manager.application_registry.recover_committed_admission(token.application_token)
+        is result.application
+    )
+    assert manager.application_registry.acknowledge_committed_admission(
+        token.application_token,
+        result.application,
+    )
+    assert result.result.operations[1].started_at > result.result.operations[0].ended_at
+    snapshot = result.application.snapshot
+    assert snapshot.reserved_operations == snapshot.completed_operations == 2
+    assert snapshot.reserved_initiator_bytes == 100
+    assert snapshot.reserved_responder_bytes == 200
+    assert snapshot.active_operations == 0
+    assert snapshot.closed_at == result.result.closure.closed_at
+    census = manager.census()
+    assert census.open_sessions == census.open_trees == census.open_handles == 0
+    assert census.prepared_admissions == census.claimed_admissions == 0
+    assert census.application.open_channels == 0
+    assert census.application.used_operation_ids == 2
+
+
+def test_terminal_batch_accepts_64_and_rejects_65_without_residue() -> None:
+    """The exact runtime cardinality boundary accepts 64 and neutrally rejects 65."""
+
+    manager = _manager()
+    plan = _plan()
+    operations = tuple(
+        SmbCompletedOperationPlan(
+            semantic_operation_id=f"member-{index}",
+            started_at=_START + timedelta(milliseconds=100 + index * 2),
+            ended_at=_START + timedelta(milliseconds=101 + index * 2),
+            initiator_bytes=1 if index < 63 else 37,
+            responder_bytes=2 if index < 63 else 74,
+        )
+        for index in range(64)
+    )
+    token = manager.prepare_fresh_session_with_completed_operations_and_close(
+        _affinity(),
+        transport_plan=plan,
+        sensor_observations=(),
+        ground_truth_transport_uid="OBSERVED1",
+        logon_id="0xA1",
+        auth_session_ref="auth-1",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="kerberos",
+        account_scope="EXAMPLE",
+        effective_uid=None,
+        effective_gid=None,
+        client_access="windows_native",
+        server_hostname="FILE01",
+        client_ip="10.0.0.10",
+        lifecycle_group_id=plan.stable_id,
+        share_ref="FILE01.Documents",
+        tree_connected_at=_START + timedelta(milliseconds=50),
+        operations=operations,
+        idle_timeout=timedelta(minutes=15),
+        closed_at=_START + timedelta(milliseconds=250),
+    )
+    with manager.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+    assert len(result.result.operations) == 64
+    assert result.application.snapshot.reserved_operations == 64
+    assert result.application.snapshot.completed_operations == 64
+    assert result.application.snapshot.reserved_initiator_bytes == 100
+    assert result.application.snapshot.reserved_responder_bytes == 200
+    assert (
+        manager.application_registry.recover_committed_admission(token.application_token)
+        is result.application
+    )
+    assert manager.application_registry.acknowledge_committed_admission(
+        token.application_token,
+        result.application,
+    )
+
+    rejecting_manager = _manager()
+    before = rejecting_manager.census()
+    member = SmbCompletedOperationPlan(
+        semantic_operation_id="member",
+        started_at=_START + timedelta(seconds=1),
+        ended_at=_START + timedelta(seconds=2),
+        initiator_bytes=0,
+        responder_bytes=0,
+    )
+    with pytest.raises(ValueError, match="1..64"):
+        rejecting_manager.prepare_fresh_session_with_completed_operations_and_close(
+            _affinity(),
+            transport_plan=_plan(),
+            sensor_observations=(),
+            ground_truth_transport_uid="OBSERVED1",
+            logon_id="0xA1",
+            auth_session_ref="auth-1",
+            principal="EXAMPLE\\analyst",
+            auth_protocol="kerberos",
+            account_scope="EXAMPLE",
+            effective_uid=None,
+            effective_gid=None,
+            client_access="windows_native",
+            server_hostname="FILE01",
+            client_ip="10.0.0.10",
+            lifecycle_group_id="smb-transport-1",
+            share_ref="FILE01.Documents",
+            tree_connected_at=_START + timedelta(milliseconds=50),
+            operations=(member,) * 65,
+            idle_timeout=timedelta(minutes=15),
+            closed_at=_START + timedelta(seconds=3),
+        )
+    assert rejecting_manager.census() == before
+    accepted = manager.census()
+    assert accepted.open_sessions == accepted.open_trees == accepted.open_handles == 0
+    assert accepted.prepared_admissions == accepted.claimed_admissions == 0
+    assert accepted.application.open_channels == 0
+    assert accepted.application.recoverable_admission_receipts == 0
+
+
+def test_terminal_batch_cancel_releases_manager_and_common_reservations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost common release return is retryable through the retained SMB owner."""
+
+    manager = _manager()
+    plan = _plan()
+    started_at = _START + timedelta(milliseconds=100)
+    ended_at = started_at + timedelta(milliseconds=500)
+    token = manager.prepare_fresh_session_with_completed_operations_and_close(
+        _affinity(),
+        transport_plan=plan,
+        sensor_observations=(),
+        ground_truth_transport_uid="OBSERVED1",
+        logon_id="0xA1",
+        auth_session_ref="auth-1",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="kerberos",
+        account_scope="EXAMPLE",
+        effective_uid=None,
+        effective_gid=None,
+        client_access="windows_native",
+        server_hostname="FILE01",
+        client_ip="10.0.0.10",
+        lifecycle_group_id=plan.stable_id,
+        share_ref="FILE01.Documents",
+        tree_connected_at=_START + timedelta(milliseconds=50),
+        operations=(
+            SmbCompletedOperationPlan(
+                semantic_operation_id="cancelled",
+                started_at=started_at,
+                ended_at=ended_at,
+                initiator_bytes=100,
+                responder_bytes=200,
+            ),
+        ),
+        idle_timeout=timedelta(minutes=15),
+        closed_at=ended_at + timedelta(milliseconds=10),
+    )
+
+    faulted = False
+
+    common_cancel = manager.application_registry.cancel_prepared_admission
+
+    def lose_common_release_return(application_token: ApplicationChannelAdmissionToken) -> bool:
+        nonlocal faulted
+        released = common_cancel(application_token)
+        if not faulted:
+            faulted = True
+            raise RuntimeError("injected common release tail")
+        return released
+
+    monkeypatch.setattr(
+        manager.application_registry,
+        "cancel_prepared_admission",
+        lose_common_release_return,
+    )
+    with pytest.raises(RuntimeError, match="injected common release tail"):
+        manager.cancel_prepared_admission(token)
+    held = manager.census()
+    assert faulted
+    assert held.prepared_admissions == 1
+    assert held.application.prepared_admissions == 0
+    assert held.application.releasing_admissions == 0
+
+    monkeypatch.setattr(
+        manager.application_registry,
+        "cancel_prepared_admission",
+        common_cancel,
+    )
+    assert manager.cancel_prepared_admission(token)
+    census = manager.census()
+    assert census.prepared_admissions == census.claimed_admissions == 0
+    assert census.open_sessions == census.open_trees == census.open_handles == 0
+    assert census.application.open_channels == 0
+    assert census.application.prepared_admissions == 0
+    assert census.application.claimed_admissions == 0
+    assert census.application.reserved_channel_ids == 0
+    assert census.application.reserved_transport_ids == 0
+    assert census.application.reserved_operation_ids == 0
+
+
+def test_terminal_batch_commit_adopts_one_common_lost_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A primitive common commit lost return converges to one terminal SMB result."""
+
+    manager = _manager()
+    plan = _plan()
+    started_at = _START + timedelta(milliseconds=100)
+    ended_at = started_at + timedelta(milliseconds=500)
+    token = manager.prepare_fresh_session_with_completed_operations_and_close(
+        _affinity(),
+        transport_plan=plan,
+        sensor_observations=(),
+        ground_truth_transport_uid="OBSERVED1",
+        logon_id="0xA1",
+        auth_session_ref="auth-1",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="kerberos",
+        account_scope="EXAMPLE",
+        effective_uid=None,
+        effective_gid=None,
+        client_access="windows_native",
+        server_hostname="FILE01",
+        client_ip="10.0.0.10",
+        lifecycle_group_id=plan.stable_id,
+        share_ref="FILE01.Documents",
+        tree_connected_at=_START + timedelta(milliseconds=50),
+        operations=(
+            SmbCompletedOperationPlan(
+                semantic_operation_id="lost-return",
+                started_at=started_at,
+                ended_at=ended_at,
+                initiator_bytes=100,
+                responder_bytes=200,
+            ),
+        ),
+        idle_timeout=timedelta(minutes=15),
+        closed_at=ended_at + timedelta(milliseconds=10),
+    )
+    faulted = False
+
+    def lose_first_open_row_return(stage: str) -> None:
+        nonlocal faulted
+        if stage == "open-row" and not faulted:
+            faulted = True
+            raise OSError("injected terminal batch lost return")
+
+    monkeypatch.setattr(manager._registry, "_prepared_commit_fault", lose_first_open_row_return)
+    with manager.prepared_admission(token) as prepared:
+        result = prepared.commit_no_fail()
+
+    assert faulted
+    assert manager.authenticates_admission_receipt(result.receipt)
+    assert result.result.operations[0].operation_id == result.receipt.operation_ids[0]
+    assert (
+        manager.application_registry.recover_committed_admission(token.application_token)
+        is result.application
+    )
+    assert manager.application_registry.acknowledge_committed_admission(
+        token.application_token,
+        result.application,
+    )
+    census = manager.census()
+    assert census.prepared_admissions == census.claimed_admissions == 0
+    assert census.open_sessions == census.open_trees == census.open_handles == 0
+    assert census.application.open_channels == 0
+    assert census.application.used_operation_ids == 1
 
 
 def test_immediate_first_operation_matches_active_then_finalize_and_close() -> None:

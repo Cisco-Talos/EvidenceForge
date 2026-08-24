@@ -281,6 +281,12 @@ PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES: tuple[SourceTimingIndexFamilySpec, ...]
         "lifecycle+48h",
     ),
     SourceTimingIndexFamilySpec(
+        "admitted_process_create_frontier",
+        "hostname/pid/started_at",
+        "latest datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
         "process_dependent_create",
         "family/source_instance/process_object_id",
         "datetime",
@@ -537,6 +543,17 @@ class SourceTimingDetachedPreparationBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceTimingActionCapacityReservation:
+    """Exact action-bound capacity reserved before an external root may commit."""
+
+    reservation_id: str
+    action_id: str
+    action_binding_digest: str
+    detached_binding_budget: int
+    _integrity: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class SourceTimingDetachedBindingCensus:
     """Constant-time detached timing-binding authority counts and bytes."""
 
@@ -568,6 +585,7 @@ class _SourceTimingDetachedBindingRecord:
     generation_marker: object
     lane_epoch: int
     binding_token: SourceTimingPreparationToken
+    action_capacity_identity: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -608,6 +626,10 @@ class SourceTimingPreparationAuthorityCensus:
     high_water_preparations: int
     high_water_receipts: int
     capacity: int
+    retained_action_reservations: int
+    reserved_detached_binding_slots: int
+    reserved_preparation_claim_slots: int
+    reserved_preparation_receipt_slots: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,6 +682,26 @@ class _SourceTimingReceiptAuthority:
     receipt_ref: ReferenceType[SourceTimingPreparationReceipt]
     facts: _SourceTimingReceiptFacts
     generation_marker: object
+    action_capacity_identity: int | None = None
+    committed: bool = False
+
+
+@dataclass(slots=True)
+class _SourceTimingActionCapacityRecord:
+    """Planner-private exact quota retained for one pre-root action."""
+
+    carrier: SourceTimingActionCapacityReservation
+    reservation_id: str
+    action_id: str
+    action_binding_digest: str
+    detached_binding_budget: int
+    integrity: str
+    remaining_detached_slots: int
+    materialized_detached_bindings: int = 0
+    preparation: SourceTimingPreparation | None = None
+    claim_materialized: bool = False
+    receipt_materialized: bool = False
+    committing: bool = False
     committed: bool = False
 
 
@@ -737,6 +779,8 @@ class _SourceTimingClaimRecord:
     cache_plans: tuple[_SourceTimingCacheCommitPlan, ...]
     runtime_plan: _SourceTimingRuntimeCommitPlan | None
     retained_plan_operations: int
+    action_capacity_identity: int | None = None
+    commit_capacity: _SourceTimingActionCapacityRecord | None = None
     state: str = "claimed"
     certified_receipt: SourceTimingPreparationReceipt | None = None
 
@@ -1194,6 +1238,11 @@ class SourceTimingPlanner:
         self._detached_bindings: dict[int, _SourceTimingDetachedBindingRecord] = {}
         self._detached_binding_by_context: dict[tuple[int, int, str], int] = {}
         self._detached_binding_high_water = 0
+        self._action_capacity_records: dict[int, _SourceTimingActionCapacityRecord] = {}
+        self._action_capacity_by_action: dict[str, int] = {}
+        self._reserved_detached_binding_slots = 0
+        self._reserved_preparation_claim_slots = 0
+        self._reserved_preparation_receipt_slots = 0
         for _name, cache in self._bounded_indexes():
             cache._owner = self
 
@@ -1234,6 +1283,374 @@ class SourceTimingPlanner:
         self._detached_bindings = {}
         self._detached_binding_by_context = {}
         self._detached_binding_high_water = 0
+        self._action_capacity_records = {}
+        self._action_capacity_by_action = {}
+        self._reserved_detached_binding_slots = 0
+        self._reserved_preparation_claim_slots = 0
+        self._reserved_preparation_receipt_slots = 0
+
+    @staticmethod
+    def _action_capacity_action_id(action_id: object) -> str:
+        """Validate one bounded exact action key without normalization."""
+
+        if type(action_id) is not str or not action_id or len(action_id.encode("utf-8")) > 512:
+            raise StateError("Source timing action capacity requires a bounded exact action ID")
+        return action_id
+
+    @staticmethod
+    def _action_capacity_payload_field(value: str | int) -> bytes:
+        encoded = str(value).encode("utf-8")
+        return len(encoded).to_bytes(8, "big") + encoded
+
+    def _action_capacity_integrity(
+        self,
+        *,
+        reservation_id: str,
+        action_id: str,
+        action_binding_digest: str,
+        detached_binding_budget: int,
+    ) -> str:
+        payload = b"".join(
+            self._action_capacity_payload_field(value)
+            for value in (
+                "source-timing-action-capacity-v1",
+                reservation_id,
+                action_id,
+                action_binding_digest,
+                detached_binding_budget,
+            )
+        )
+        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+
+    def _active_action_capacity_locked(
+        self,
+        reservation: SourceTimingActionCapacityReservation,
+    ) -> _SourceTimingActionCapacityRecord:
+        """Resolve one exact active pre-root capacity capability under authority lock."""
+
+        if type(reservation) is not SourceTimingActionCapacityReservation:
+            raise StateError("Source timing action capacity is copied, foreign, or stale")
+        record = self._action_capacity_records.get(id(reservation))
+        if (
+            record is None
+            or record.carrier is not reservation
+            or self._action_capacity_by_action.get(record.action_id) != id(reservation)
+        ):
+            raise StateError("Source timing action capacity is copied, foreign, or stale")
+        try:
+            reservation_id = _exact_sha256_hex(
+                object.__getattribute__(reservation, "reservation_id"),
+                "source timing action capacity reservation ID",
+            )
+            action_id = self._action_capacity_action_id(
+                object.__getattribute__(reservation, "action_id")
+            )
+            action_binding_digest = _exact_sha256_hex(
+                object.__getattribute__(reservation, "action_binding_digest"),
+                "source timing action capacity binding digest",
+            )
+            detached_binding_budget = object.__getattribute__(
+                reservation,
+                "detached_binding_budget",
+            )
+            integrity = object.__getattribute__(reservation, "_integrity")
+        except (AttributeError, StateError, TypeError, ValueError) as error:
+            raise StateError("Source timing action capacity integrity failed") from error
+        if (
+            type(detached_binding_budget) is not int
+            or type(integrity) is not str
+            or reservation_id != record.reservation_id
+            or action_id != record.action_id
+            or action_binding_digest != record.action_binding_digest
+            or detached_binding_budget != record.detached_binding_budget
+            or not hmac.compare_digest(integrity, record.integrity)
+        ):
+            raise StateError("Source timing action capacity integrity failed")
+        expected = self._action_capacity_integrity(
+            reservation_id=reservation_id,
+            action_id=action_id,
+            action_binding_digest=action_binding_digest,
+            detached_binding_budget=detached_binding_budget,
+        )
+        if not hmac.compare_digest(integrity, expected):
+            raise StateError("Source timing action capacity integrity failed")
+        return record
+
+    def reserve_action_capacity(
+        self,
+        *,
+        action_id: str,
+        action_binding_digest: str,
+        detached_binding_budget: int,
+    ) -> SourceTimingActionCapacityReservation:
+        """Reserve detached, claim, and receipt slots before an external root."""
+
+        canonical_action = self._action_capacity_action_id(action_id)
+        canonical_binding = _exact_sha256_hex(
+            action_binding_digest,
+            "source timing action capacity binding digest",
+        )
+        if (
+            type(detached_binding_budget) is not int
+            or not 1 <= detached_binding_budget <= self._detached_binding_capacity
+        ):
+            raise StateError("Source timing action capacity has an invalid detached-binding budget")
+        with self._preparation_authority_lock:
+            existing_identity = self._action_capacity_by_action.get(canonical_action)
+            if existing_identity is not None:
+                existing = self._action_capacity_records.get(existing_identity)
+                if (
+                    existing is not None
+                    and existing.action_binding_digest == canonical_binding
+                    and existing.detached_binding_budget == detached_binding_budget
+                ):
+                    self._active_action_capacity_locked(existing.carrier)
+                    return existing.carrier
+                raise StateError("Source timing action capacity changed on retry")
+            if (
+                len(self._detached_bindings)
+                + self._reserved_detached_binding_slots
+                + detached_binding_budget
+                > self._detached_binding_capacity
+            ):
+                raise StateError("Source timing detached-binding capacity is exhausted")
+            if (
+                len(self._preparation_claim_records) + self._reserved_preparation_claim_slots + 1
+                > self._preparation_authority_capacity
+            ):
+                raise StateError("Source timing preparation authority capacity is exhausted")
+            if (
+                len(self._committed_preparation_receipts)
+                + self._reserved_preparation_receipt_slots
+                + 1
+                > self._preparation_authority_capacity
+            ):
+                raise StateError("Source timing preparation receipt capacity is exhausted")
+            reservation_id = secrets.token_hex(32)
+            integrity = self._action_capacity_integrity(
+                reservation_id=reservation_id,
+                action_id=canonical_action,
+                action_binding_digest=canonical_binding,
+                detached_binding_budget=detached_binding_budget,
+            )
+            carrier = SourceTimingActionCapacityReservation(
+                reservation_id=reservation_id,
+                action_id=canonical_action,
+                action_binding_digest=canonical_binding,
+                detached_binding_budget=detached_binding_budget,
+                _integrity=integrity,
+            )
+            record = _SourceTimingActionCapacityRecord(
+                carrier=carrier,
+                reservation_id=reservation_id,
+                action_id=canonical_action,
+                action_binding_digest=canonical_binding,
+                detached_binding_budget=detached_binding_budget,
+                integrity=integrity,
+                remaining_detached_slots=detached_binding_budget,
+            )
+            self._action_capacity_records[id(carrier)] = record
+            self._action_capacity_by_action[canonical_action] = id(carrier)
+            self._reserved_detached_binding_slots += detached_binding_budget
+            self._reserved_preparation_claim_slots += 1
+            self._reserved_preparation_receipt_slots += 1
+            return carrier
+
+    def recover_action_capacity(
+        self,
+        *,
+        action_id: str,
+        action_binding_digest: str,
+        detached_binding_budget: int,
+    ) -> SourceTimingActionCapacityReservation | None:
+        """Recover the canonical retained capability for one exact action."""
+
+        canonical_action = self._action_capacity_action_id(action_id)
+        canonical_binding = _exact_sha256_hex(
+            action_binding_digest,
+            "source timing action capacity binding digest",
+        )
+        if type(detached_binding_budget) is not int or detached_binding_budget < 1:
+            raise StateError("Source timing action capacity has an invalid detached-binding budget")
+        with self._preparation_authority_lock:
+            identity = self._action_capacity_by_action.get(canonical_action)
+            if identity is None:
+                return None
+            record = self._action_capacity_records.get(identity)
+            if record is None:
+                raise StateError("Source timing action capacity index is inconsistent")
+            if (
+                record.action_binding_digest != canonical_binding
+                or record.detached_binding_budget != detached_binding_budget
+            ):
+                raise StateError("Source timing action capacity changed on retry")
+            self._active_action_capacity_locked(record.carrier)
+            return record.carrier
+
+    def authenticates_action_capacity(
+        self,
+        reservation: object,
+        *,
+        action_id: str,
+        action_binding_digest: str,
+        detached_binding_budget: int,
+    ) -> bool:
+        """Return whether one exact action quota remains retained and intact."""
+
+        try:
+            canonical_action = self._action_capacity_action_id(action_id)
+            canonical_binding = _exact_sha256_hex(
+                action_binding_digest,
+                "source timing action capacity binding digest",
+            )
+            if type(detached_binding_budget) is not int:
+                return False
+            with self._preparation_authority_lock:
+                record = self._active_action_capacity_locked(reservation)  # type: ignore[arg-type]
+                return bool(
+                    record.action_id == canonical_action
+                    and record.action_binding_digest == canonical_binding
+                    and record.detached_binding_budget == detached_binding_budget
+                )
+        except (AttributeError, StateError, TypeError, ValueError):
+            return False
+
+    def authenticates_neutral_action_capacity(
+        self,
+        reservation: object,
+        *,
+        action_id: str,
+        action_binding_digest: str,
+        detached_binding_budget: int,
+    ) -> bool:
+        """Return whether an exact live action quota has no materialized subordinate owner."""
+
+        try:
+            canonical_action = self._action_capacity_action_id(action_id)
+            canonical_binding = _exact_sha256_hex(
+                action_binding_digest,
+                "source timing action capacity binding digest",
+            )
+            if type(detached_binding_budget) is not int:
+                return False
+            with self._preparation_authority_lock:
+                record = self._active_action_capacity_locked(reservation)  # type: ignore[arg-type]
+                return bool(
+                    record.action_id == canonical_action
+                    and record.action_binding_digest == canonical_binding
+                    and record.detached_binding_budget == detached_binding_budget
+                    and record.preparation is None
+                    and record.materialized_detached_bindings == 0
+                    and record.remaining_detached_slots == record.detached_binding_budget
+                    and not record.claim_materialized
+                    and not record.receipt_materialized
+                    and not record.committing
+                    and not record.committed
+                )
+        except (AttributeError, StateError, TypeError, ValueError):
+            return False
+
+    def cancel_action_capacity(
+        self,
+        reservation: SourceTimingActionCapacityReservation,
+    ) -> None:
+        """Release one exact neutral pre-root action reservation."""
+
+        with self._preparation_authority_lock:
+            record = self._active_action_capacity_locked(reservation)
+            if (
+                record.preparation is not None
+                or record.materialized_detached_bindings != 0
+                or record.remaining_detached_slots != record.detached_binding_budget
+                or record.claim_materialized
+                or record.receipt_materialized
+                or record.committing
+                or record.committed
+            ):
+                raise StateError("Source timing action capacity is not neutral for cancellation")
+            self._reserved_detached_binding_slots -= record.remaining_detached_slots
+            self._reserved_preparation_claim_slots -= 1
+            self._reserved_preparation_receipt_slots -= 1
+            self._action_capacity_records.pop(id(reservation))
+            self._action_capacity_by_action.pop(record.action_id, None)
+
+    def release_committed_action_capacity(
+        self,
+        reservation: SourceTimingActionCapacityReservation,
+    ) -> None:
+        """Release a committed quota after every detached member is acknowledged."""
+
+        with self._preparation_authority_lock:
+            record = self._active_action_capacity_locked(reservation)
+            if (
+                not record.committed
+                or record.committing
+                or record.materialized_detached_bindings != 0
+                or record.remaining_detached_slots != record.detached_binding_budget
+                or not record.claim_materialized
+                or not record.receipt_materialized
+            ):
+                raise StateError("Source timing committed action capacity is not releasable")
+            self._reserved_detached_binding_slots -= record.remaining_detached_slots
+            self._action_capacity_records.pop(id(reservation))
+            self._action_capacity_by_action.pop(record.action_id, None)
+
+    def _bind_action_capacity_preparation(
+        self,
+        reservation: SourceTimingActionCapacityReservation,
+        preparation: SourceTimingPreparation,
+    ) -> None:
+        """Bind one exact open preparation to its pre-root quota."""
+
+        with self._preparation_admission_lock:
+            with self._preparation_authority_lock:
+                record = self._active_action_capacity_locked(reservation)
+                if (
+                    record.preparation is not None
+                    or record.materialized_detached_bindings != 0
+                    or record.claim_materialized
+                    or record.receipt_materialized
+                    or record.committing
+                    or record.committed
+                    or self._preparation_lane is not preparation
+                ):
+                    raise StateError("Source timing action capacity is not neutral for binding")
+                record.preparation = preparation
+
+    def _release_action_capacity_preparation(
+        self,
+        preparation: SourceTimingPreparation,
+    ) -> None:
+        """Return one cancelled empty preparation to its retained reservation."""
+
+        reservation = object.__getattribute__(preparation, "_action_capacity")
+        if reservation is None:
+            return
+        with self._preparation_authority_lock:
+            record = self._active_action_capacity_locked(reservation)
+            if record.preparation is not preparation:
+                raise StateError("Source timing action capacity changed preparation owner")
+            if (
+                record.materialized_detached_bindings != 0
+                or record.claim_materialized
+                or record.receipt_materialized
+                or record.committing
+                or record.committed
+            ):
+                raise StateError("Source timing action capacity retained materialized owners")
+            record.preparation = None
+
+    def _action_capacity_for_preparation_locked(
+        self,
+        preparation: SourceTimingPreparation,
+    ) -> _SourceTimingActionCapacityRecord | None:
+        reservation = object.__getattribute__(preparation, "_action_capacity")
+        if reservation is None:
+            return None
+        record = self._active_action_capacity_locked(reservation)
+        if record.preparation is not preparation:
+            raise StateError("Source timing action capacity changed preparation owner")
+        return record
 
     def _require_public_mutation_lane(self) -> None:
         """Reject canonical planner mutation while one preparation owns the lane."""
@@ -1416,11 +1833,32 @@ class SourceTimingPlanner:
         preparation_id = id(preparation)
         semantic_bytes = _source_timing_claim_semantic_bytes(record)
         with self._preparation_authority_lock:
-            if len(self._preparation_claim_records) >= self._preparation_authority_capacity:
-                raise StateError("Source timing preparation authority capacity is exhausted")
+            action_capacity = self._action_capacity_for_preparation_locked(preparation)
+            if action_capacity is None:
+                if (
+                    len(self._preparation_claim_records) + self._reserved_preparation_claim_slots
+                    >= self._preparation_authority_capacity
+                ):
+                    raise StateError("Source timing preparation authority capacity is exhausted")
+            elif (
+                action_capacity.remaining_detached_slots != 0
+                or action_capacity.materialized_detached_bindings
+                != action_capacity.detached_binding_budget
+                or action_capacity.claim_materialized
+                or not action_capacity.receipt_materialized
+                or action_capacity.committing
+                or action_capacity.committed
+            ):
+                raise StateError("Source timing action claim capacity is not ready")
             if preparation_id in self._preparation_claim_records:
                 raise StateError("Source timing preparation already owns an active claim record")
+            record.action_capacity_identity = (
+                None if action_capacity is None else id(action_capacity.carrier)
+            )
             self._preparation_claim_records[preparation_id] = record
+            if action_capacity is not None:
+                action_capacity.claim_materialized = True
+                self._reserved_preparation_claim_slots -= 1
             self._preparation_claim_semantic_bytes += semantic_bytes
             self._active_preparation_claims += 1
             self._retained_preparation_plan_operations += record.retained_plan_operations
@@ -1471,6 +1909,20 @@ class SourceTimingPlanner:
         runtime_preparation = record.admitted_runtime_preparation
         if runtime_preparation is None:
             return False
+        if record.action_capacity_identity is not None:
+            with self._preparation_authority_lock:
+                capacity = self._action_capacity_records.get(record.action_capacity_identity)
+                if (
+                    capacity is None
+                    or capacity.preparation is not record.preparation_ref()
+                    or capacity.remaining_detached_slots != 0
+                    or capacity.materialized_detached_bindings != capacity.detached_binding_budget
+                    or not capacity.claim_materialized
+                    or not capacity.receipt_materialized
+                    or capacity.committing
+                    or capacity.committed
+                ):
+                    return False
         runtime_base = runtime_preparation._base
         return bool(
             runtime_base.audit._mutation_version == runtime_preparation.audit.base_version
@@ -1497,6 +1949,12 @@ class SourceTimingPlanner:
         """Remove one exact active or terminal record from constant-time counts."""
 
         if record.state in {"claimed", "certified"}:
+            if record.action_capacity_identity is not None:
+                capacity = self._action_capacity_records.get(record.action_capacity_identity)
+                if capacity is None or not capacity.claim_materialized or capacity.committed:
+                    raise StateError("Source timing action claim capacity is inconsistent")
+                capacity.claim_materialized = False
+                self._reserved_preparation_claim_slots += 1
             self._active_preparation_claims -= 1
         elif record.state == "committed":
             self._terminal_preparations -= 1
@@ -1505,19 +1963,53 @@ class SourceTimingPlanner:
         if not self._preparation_claim_records:
             self._preparation_claim_records.clear()
 
+    def _begin_preparation_record_commit(
+        self,
+        record: _SourceTimingClaimRecord,
+    ) -> None:
+        """Validate and fence one commit before its first canonical write."""
+
+        with self._preparation_authority_lock:
+            capacity: _SourceTimingActionCapacityRecord | None = None
+            if record.action_capacity_identity is not None:
+                capacity = self._action_capacity_records.get(record.action_capacity_identity)
+                if (
+                    capacity is None
+                    or capacity.preparation is not record.preparation_ref()
+                    or capacity.remaining_detached_slots != 0
+                    or capacity.materialized_detached_bindings != capacity.detached_binding_budget
+                    or not capacity.claim_materialized
+                    or not capacity.receipt_materialized
+                    or capacity.committing
+                    or capacity.committed
+                ):
+                    raise StateError("Source timing action capacity cannot begin commit")
+                capacity.committing = True
+            if record.state not in {"claimed", "certified"} or record.commit_capacity is not None:
+                if capacity is not None:
+                    capacity.committing = False
+                raise StateError("Source timing preparation cannot begin commit")
+            record.commit_capacity = capacity
+            record.state = "committing"
+
     def _terminalize_preparation_record_no_fail(
         self,
         record: _SourceTimingClaimRecord,
     ) -> None:
-        """Publish one already-certified terminal record with scalar-only writes."""
+        """Publish one pre-fenced terminal record using scalar-only writes."""
 
         with self._preparation_authority_lock:
+            capacity = record.commit_capacity
+            if capacity is not None:
+                capacity.committed = True
+                capacity.committing = False
             self._active_preparation_claims -= 1
             self._terminal_preparations += 1
             self._retained_preparation_plan_operations -= record.retained_plan_operations
             record.receipt_authority.committed = True
             record.state = "committed"
             record.retained_plan_operations = 0
+            record.commit_capacity = None
 
     def _preparation_carrier_collected(
         self,
@@ -1541,6 +2033,12 @@ class SourceTimingPlanner:
 
         if self._committed_preparation_receipts.get(receipt_identity) is not authority:
             return False
+        if authority.action_capacity_identity is not None and not authority.committed:
+            capacity = self._action_capacity_records.get(authority.action_capacity_identity)
+            if capacity is None or not capacity.receipt_materialized or capacity.committed:
+                raise StateError("Source timing action receipt capacity is inconsistent")
+            capacity.receipt_materialized = False
+            self._reserved_preparation_receipt_slots += 1
         self._committed_preparation_receipts.pop(receipt_identity, None)
         self._preparation_receipt_semantic_bytes -= _source_timing_receipt_semantic_bytes(
             receipt_identity,
@@ -1555,6 +2053,7 @@ class SourceTimingPlanner:
         receipt: SourceTimingPreparationReceipt,
         *,
         generation_marker: object,
+        preparation: SourceTimingPreparation,
     ) -> _SourceTimingReceiptAuthority:
         """Preallocate exact receipt authority before any canonical mutation."""
 
@@ -1582,11 +2081,32 @@ class SourceTimingPlanner:
         authority = _SourceTimingReceiptAuthority(receipt_ref, facts, generation_marker)
         semantic_bytes = _source_timing_receipt_semantic_bytes(receipt_id, authority)
         with self._preparation_authority_lock:
-            if len(self._committed_preparation_receipts) >= self._preparation_authority_capacity:
-                raise StateError("Source timing preparation receipt capacity is exhausted")
+            action_capacity = self._action_capacity_for_preparation_locked(preparation)
+            if action_capacity is None:
+                if (
+                    len(self._committed_preparation_receipts)
+                    + self._reserved_preparation_receipt_slots
+                    >= self._preparation_authority_capacity
+                ):
+                    raise StateError("Source timing preparation receipt capacity is exhausted")
+            elif (
+                action_capacity.remaining_detached_slots != 0
+                or action_capacity.materialized_detached_bindings
+                != action_capacity.detached_binding_budget
+                or action_capacity.claim_materialized
+                or action_capacity.receipt_materialized
+                or action_capacity.committing
+                or action_capacity.committed
+            ):
+                raise StateError("Source timing action receipt capacity is not ready")
             if receipt_id in self._committed_preparation_receipts:
                 raise StateError("Source timing receipt identity is already retained")
+            if action_capacity is not None:
+                authority.action_capacity_identity = id(action_capacity.carrier)
             self._committed_preparation_receipts[receipt_id] = authority
+            if action_capacity is not None:
+                action_capacity.receipt_materialized = True
+                self._reserved_preparation_receipt_slots -= 1
             self._preparation_receipt_semantic_bytes += semantic_bytes
             self._preparation_receipt_high_water = max(
                 self._preparation_receipt_high_water,
@@ -1626,6 +2146,10 @@ class SourceTimingPlanner:
                 high_water_preparations=self._preparation_authority_high_water,
                 high_water_receipts=self._preparation_receipt_high_water,
                 capacity=self._preparation_authority_capacity,
+                retained_action_reservations=len(self._action_capacity_records),
+                reserved_detached_binding_slots=self._reserved_detached_binding_slots,
+                reserved_preparation_claim_slots=self._reserved_preparation_claim_slots,
+                reserved_preparation_receipt_slots=self._reserved_preparation_receipt_slots,
             )
 
     def _bounded_indexes(self) -> tuple[tuple[str, _SourceTimingCache], ...]:
@@ -1732,6 +2256,8 @@ class SourceTimingPlanner:
             return (host, object_id), (timestamp, rendered), lifecycle_deadline
         if family == "sysmon_process_render_create":
             return (host, object_id), timestamp, lifecycle_deadline
+        if family == "admitted_process_create_frontier":
+            return (host, 10_000 + ordinal, timestamp), timestamp, lifecycle_deadline
         if family == "kerberos_service":
             return (
                 ("windows_event_security", f"machine-{ordinal}$", src_ip, host),
@@ -1864,12 +2390,28 @@ class SourceTimingPlanner:
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
     @contextmanager
-    def prepared_planning(self) -> Iterator[SourceTimingPreparation]:
+    def prepared_planning(
+        self,
+        *,
+        action_capacity: SourceTimingActionCapacityReservation | None = None,
+    ) -> Iterator[SourceTimingPreparation]:
         """Stage a related source-timing family without canonical mutation."""
 
         active = _ACTIVE_SOURCE_TIMING_PREPARATION.get()
         if type(active) is SourceTimingPreparation and active._owner is self:
             raise StateError("Nested source timing preparations are not supported")
+        if action_capacity is not None:
+            with self._preparation_authority_lock:
+                capacity_record = self._active_action_capacity_locked(action_capacity)
+                if (
+                    capacity_record.preparation is not None
+                    or capacity_record.materialized_detached_bindings != 0
+                    or capacity_record.claim_materialized
+                    or capacity_record.receipt_materialized
+                    or capacity_record.committing
+                    or capacity_record.committed
+                ):
+                    raise StateError("Source timing action capacity is already bound")
         with self._preparation_lock:
             marker = object()
             self._install_preparation_lane(marker)
@@ -1880,8 +2422,11 @@ class SourceTimingPlanner:
                     self,
                     preparation_id=preparation_id,
                     lane_marker=marker,
+                    action_capacity=action_capacity,
                 )
                 self._bind_preparation_lane(preparation, marker)
+                if action_capacity is not None:
+                    self._bind_action_capacity_preparation(action_capacity, preparation)
             except BaseException:
                 with self._preparation_admission_lock:
                     self._preparation_lane = None
@@ -2154,6 +2699,20 @@ class SourceTimingPlanner:
             or self._detached_bindings.get(binding_identity) is not record
         ):
             return False
+        capacity: _SourceTimingActionCapacityRecord | None = None
+        if record.action_capacity_identity is not None:
+            capacity = self._action_capacity_records.get(record.action_capacity_identity)
+            if (
+                capacity is None
+                or id(capacity.carrier) != record.action_capacity_identity
+                or capacity.materialized_detached_bindings < 1
+                or capacity.remaining_detached_slots >= capacity.detached_binding_budget
+            ):
+                raise StateError("Source timing action capacity lost a detached binding")
+            if capacity.claim_materialized and not capacity.committed:
+                raise StateError(
+                    "Source timing detached binding is fenced by an active action commit"
+                )
         self._detached_bindings.pop(binding_identity, None)
         semantic_key = (record.lane_epoch, record.preparation_id, record.context_digest)
         if self._detached_binding_by_context.get(semantic_key) == binding_identity:
@@ -2161,6 +2720,10 @@ class SourceTimingPlanner:
         self._detached_binding_semantic_bytes -= _source_timing_detached_binding_semantic_bytes(
             binding_identity, record
         )
+        if capacity is not None:
+            capacity.materialized_detached_bindings -= 1
+            capacity.remaining_detached_slots += 1
+            self._reserved_detached_binding_slots += 1
         if not self._detached_bindings:
             self._detached_bindings.clear()
             if not self._detached_binding_by_context:
@@ -2225,6 +2788,7 @@ class SourceTimingPlanner:
         base_digest = token_facts.base_state_digest
         overlay_digest = generation.overlay_digest
         semantic_key = self._detached_semantic_key(generation, context)
+        action_capacity_identity: int | None = None
 
         # Lock order for detached admission is always admission -> authority.
         # All random/allocation work for a new binding happens after this first
@@ -2243,8 +2807,19 @@ class SourceTimingPlanner:
                 )
                 if recovered is not None:
                     return recovered
-                if len(self._detached_bindings) >= self._detached_binding_capacity:
-                    raise StateError("Source timing detached-binding capacity is exhausted")
+                action_capacity = self._action_capacity_for_preparation_locked(preparation)
+                if action_capacity is None:
+                    if (
+                        len(self._detached_bindings) + self._reserved_detached_binding_slots
+                        >= self._detached_binding_capacity
+                    ):
+                        raise StateError("Source timing detached-binding capacity is exhausted")
+                else:
+                    if action_capacity.remaining_detached_slots < 1:
+                        raise StateError(
+                            "Source timing action detached-binding reservation is exhausted"
+                        )
+                    action_capacity_identity = id(action_capacity.carrier)
 
         binding_id = secrets.token_hex(32)
         integrity = self._detached_preparation_binding_integrity(
@@ -2291,6 +2866,7 @@ class SourceTimingPlanner:
             generation_marker=generation.generation_marker,
             lane_epoch=generation.lane_epoch,
             binding_token=token_facts.token,
+            action_capacity_identity=action_capacity_identity,
         )
         semantic_bytes = _source_timing_detached_binding_semantic_bytes(
             binding_identity,
@@ -2312,11 +2888,28 @@ class SourceTimingPlanner:
                 )
                 if recovered is not None:
                     return recovered
-                if len(self._detached_bindings) >= self._detached_binding_capacity:
-                    raise StateError("Source timing detached-binding capacity is exhausted")
+                action_capacity = self._action_capacity_for_preparation_locked(preparation)
+                if action_capacity_identity is None:
+                    if action_capacity is not None:
+                        raise StateError("Source timing action capacity changed during detachment")
+                    if (
+                        len(self._detached_bindings) + self._reserved_detached_binding_slots
+                        >= self._detached_binding_capacity
+                    ):
+                        raise StateError("Source timing detached-binding capacity is exhausted")
+                elif (
+                    action_capacity is None
+                    or id(action_capacity.carrier) != action_capacity_identity
+                    or action_capacity.remaining_detached_slots < 1
+                ):
+                    raise StateError("Source timing action capacity changed during detachment")
                 self._detached_bindings[binding_identity] = record
                 self._detached_binding_by_context[semantic_key] = binding_identity
                 self._detached_binding_semantic_bytes += semantic_bytes
+                if action_capacity is not None:
+                    action_capacity.remaining_detached_slots -= 1
+                    action_capacity.materialized_detached_bindings += 1
+                    self._reserved_detached_binding_slots -= 1
                 self._detached_binding_high_water = max(
                     self._detached_binding_high_water,
                     len(self._detached_bindings),
@@ -2944,7 +3537,7 @@ class SourceTimingPlanner:
                 event.lifecycle.parent_group_id
                 if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
                 else event.lifecycle.group_id
-                if event.lifecycle.phase == "dependent"
+                if event.lifecycle.phase == "dependent" and event.event_type != "wfp_connection"
                 else None
             )
             if session_group:
@@ -3035,18 +3628,19 @@ class SourceTimingPlanner:
             and network.dst_port == 445
             and event.dst_host is not None
         ):
-            timestamp = self._target_ecar_endpoint_flow_time(event)
+            timestamp = self._ecar_endpoint_flow_frontier(event)
             if timestamp is not None:
-                self._admitted_ecar_smb_transports[
-                    self._smb_transport_key(
-                        event.dst_host.hostname,
-                        network.src_ip,
-                        network.src_port,
-                        network.dst_ip,
-                        network.dst_port,
-                        network.protocol,
-                    )
-                ] = timestamp
+                key = self._smb_transport_key(
+                    event.dst_host.hostname,
+                    network.src_ip,
+                    network.src_port,
+                    network.dst_ip,
+                    network.dst_port,
+                    network.protocol,
+                )
+                previous = self._admitted_ecar_smb_transports.get(key)
+                if previous is None or timestamp > previous:
+                    self._admitted_ecar_smb_transports[key] = timestamp
         if (
             format_name == "ecar"
             and event.event_type == "connection"
@@ -4087,6 +4681,13 @@ class SourceTimingPlanner:
     ) -> datetime:
         """Place endpoint authentication strictly after its admitted transport view."""
 
+        if family == "windows_security" and event.event_type == "wfp_connection":
+            return self._windows_wfp_time_inside_transport(
+                event,
+                source_instance=source_instance,
+                hostname=hostname,
+                preferred=preferred,
+            )
         if event.event_type not in {
             "logon",
             "machine_logon",
@@ -4107,9 +4708,11 @@ class SourceTimingPlanner:
             if anchor is None and event.event_type == "ssh_session":
                 anchor = self._ssh_transport_anchor(event)
                 relationship = "ecar.ssh_session_after_transport"
-            if anchor is None and event.auth is not None and event.auth.session_kind == "smb":
-                anchor = self._smb_transport_anchor(event)
-                relationship = "ecar.smb_session_after_transport"
+            if event.auth is not None and event.auth.session_kind == "smb":
+                smb_anchor = self._smb_transport_anchor(event)
+                if smb_anchor is not None:
+                    anchor = smb_anchor if anchor is None else max(anchor, smb_anchor)
+                    relationship = "ecar.smb_session_after_transport"
         elif family == "windows_security":
             anchor = self._remote_auth_transport_anchor(
                 event,
@@ -4187,6 +4790,88 @@ class SourceTimingPlanner:
             sample_key=f"before_close:{available_us}",
         )
 
+    def _windows_wfp_time_inside_transport(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Keep one WFP observation strictly inside its source-local transport."""
+
+        network = event.network
+        host = next(
+            (
+                candidate
+                for candidate in (event.src_host, event.dst_host)
+                if candidate is not None and candidate.hostname.casefold() == hostname.casefold()
+            ),
+            None,
+        )
+        if network is None or network.closed_at is None or host is None:
+            return preferred
+        source_floor = self._runtime_endpoint_clock_time(
+            self._ensure_plan(event).canonical_timestamp,
+            hostname=hostname,
+            os_category=host.os_category,
+        )
+        source_close = self._runtime_endpoint_clock_time(
+            network.closed_at,
+            hostname=hostname,
+            os_category=host.os_category,
+        )
+        if source_floor >= source_close:
+            raise StateError(
+                "WFP source window begins at or after its transport close: "
+                f"host={hostname} floor={source_floor.isoformat()} "
+                f"close={source_close.isoformat()}"
+            )
+        if source_floor <= preferred < source_close - _SOURCE_EPSILON:
+            return preferred
+
+        available_us = int(
+            (source_close - _SOURCE_EPSILON - source_floor).total_seconds() * 1_000_000
+        )
+        if available_us <= 1:
+            raise StateError(
+                "WFP source window cannot fit inside its transport: "
+                f"host={hostname} floor={source_floor.isoformat()} "
+                f"close={source_close.isoformat()}"
+            )
+        window = get_timing_window(
+            "source.windows_wfp_connection",
+            default_min_ms=3,
+            default_max_ms=35,
+            default_position="after",
+            default_class="source_latency",
+        )
+        maximum_us = min(window.max_ms * 1_000, available_us)
+        preferred_minimum_us = window.min_ms * 1_000
+        minimum_us = preferred_minimum_us if maximum_us > preferred_minimum_us + 1 else 0
+        delay = self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(minimum_us, maximum_us + 1),
+            relationship_key="source.windows_wfp_connection.admissible",
+            scope=TimingScope(
+                stable_id=self._endpoint_event_object_id(event, hostname, "base"),
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=self._endpoint_event_lifecycle_id(event),
+            ),
+            sample_key=f"inside_transport:{available_us}",
+        )
+        timestamp = source_floor + delay
+        if timestamp >= source_close:
+            raise StateError(
+                "WFP admissible source timing reached its transport close: "
+                f"host={hostname} timestamp={timestamp.isoformat()} "
+                f"close={source_close.isoformat()}"
+            )
+        self.timing_runtime.audit.record_saturation(
+            "source.windows_wfp_connection.admissible_window"
+        )
+        return timestamp
+
     def _machine_ticket_anchor(self, event: TimingOccurrence) -> datetime | None:
         """Return the latest admitted matching service ticket near a machine logon."""
 
@@ -4257,6 +4942,8 @@ class SourceTimingPlanner:
 
         lifecycle = event.lifecycle
         if lifecycle is None:
+            return preferred
+        if event.event_type == "wfp_connection":
             return preferred
         if event.event_type in {"logon", "machine_logon", "ssh_session"}:
             return preferred
@@ -5162,7 +5849,7 @@ class SourceTimingPlanner:
         )
 
     def _smb_transport_anchor(self, event: TimingOccurrence) -> datetime | None:
-        """Return the admitted exact-tuple SMB FLOW time for a Samba session."""
+        """Return the admitted exact-tuple SMB endpoint FLOW frontier."""
 
         auth = event.auth
         host = event.dst_host or event.src_host
@@ -5234,6 +5921,23 @@ class SourceTimingPlanner:
             event,
             ecar_flow_render_key("inbound", event.dst_host.hostname),
         )
+
+    @classmethod
+    def _ecar_endpoint_flow_frontier(cls, event: TimingOccurrence) -> datetime | None:
+        """Return the latest admitted eCAR FLOW observation across both endpoints."""
+
+        candidates: list[datetime] = []
+        if event.src_host is not None:
+            timestamp = cls._finalized_time(
+                event,
+                ecar_flow_render_key("outbound", event.src_host.hostname),
+            )
+            if timestamp is not None:
+                candidates.append(timestamp)
+        target_timestamp = cls._target_ecar_endpoint_flow_time(event)
+        if target_timestamp is not None:
+            candidates.append(target_timestamp)
+        return max(candidates, default=None)
 
     def _target_ecar_endpoint_flow_close(
         self,
@@ -6995,6 +7699,7 @@ class SourceTimingPreparation:
 
     __slots__ = (
         "__weakref__",
+        "_action_capacity",
         "_binding_token",
         "_cache_overlays",
         "_claim_thread_id",
@@ -7022,8 +7727,10 @@ class SourceTimingPreparation:
         *,
         preparation_id: int,
         lane_marker: object,
+        action_capacity: SourceTimingActionCapacityReservation | None = None,
     ) -> None:
         self._owner = owner
+        self._action_capacity = action_capacity
         self._planning_thread_id = get_ident()
         self._lane_marker = lane_marker
         self._lane_active = True
@@ -7308,6 +8015,7 @@ class SourceTimingPreparation:
         receipt_authority = owner._retain_expected_preparation_receipt(
             expected_receipt,
             generation_marker=generation.generation_marker,
+            preparation=self,
         )
         preparation_id = id(self)
         owner_ref = ref(owner)
@@ -7384,6 +8092,8 @@ class SourceTimingPreparation:
         ):
             raise StateError("Claimed source timing preparation cannot cancel directly")
         if self._state == "cancelled":
+            if type(owner) is SourceTimingPlanner:
+                owner._release_action_capacity_preparation(self)
             return
         if self._state == "committed":
             raise StateError("Committed source timing preparation cannot cancel")
@@ -7405,6 +8115,7 @@ class SourceTimingPreparation:
         self._state = "cancelled"
         self._context_closed = True
         self._release_owner_lane()
+        owner._release_action_capacity_preparation(self)
 
     @contextmanager
     def claimed_commit(self) -> Iterator[SourceTimingPreparation]:
@@ -7593,6 +8304,7 @@ class SourceTimingPreparation:
         runtime_plan = cast(_SourceTimingRuntimeCommitPlan, record.runtime_plan)
         expected_receipt = record.expected_receipt
         owner = record.owner
+        owner._begin_preparation_record_commit(record)
         for cache_plan in record.cache_plans:
             cache_plan.target._apply_operations_locked(
                 cache_plan.operations,

@@ -543,7 +543,7 @@ def test_smb_copy_fans_out_required_client_file_effect(
     assert len(server_reads) == 1
     assert client_creates[0].get("pid", -1) > 4
     assert client_creates[0].get("actorID")
-    assert client_creates[0]["timestamp_ms"] != server_reads[0]["timestamp_ms"]
+    assert abs(client_creates[0]["timestamp_ms"] - server_reads[0]["timestamp_ms"]) < 2_000
     assert server_reads[0].get("actorID") != client_creates[0].get("actorID")
     assert "target_process_uuid" not in client_creates[0].get("properties", {})
     assert client_creates[0]["objectID"] != server_reads[0]["objectID"]

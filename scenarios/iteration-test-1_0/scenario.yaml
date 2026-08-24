@@ -1339,26 +1339,26 @@ storyline:
     events:
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net user svc_mhsync MhsSvc!2024 /add /domain"
+        command_line: "net user svc_dirsync MhsSvc!2024 /add /domain"
         supplementary: none
         technique: "T1136.002 - Create Account: Domain Account"
         description: "Create backdoor domain account"
       - type: account_created
-        target_username: svc_mhsync
+        target_username: svc_dirsync
         technique: "T1136.002 - Create Account: Domain Account"
-        description: "Domain account svc_mhsync created"
+        description: "Domain account svc_dirsync created"
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net group \"Domain Admins\" svc_mhsync /add /domain"
+        command_line: "net group \"Domain Admins\" svc_dirsync /add /domain"
         supplementary: none
         technique: "T1098 - Account Manipulation"
         description: "Add backdoor account to privileged group"
       - type: group_member_added
         group_name: "Domain Admins"
-        member_name: svc_mhsync
+        member_name: svc_dirsync
         scope: global
         technique: "T1098 - Account Manipulation"
-        description: "svc_mhsync added to Domain Admins"
+        description: "svc_dirsync added to Domain Admins"
 
   - id: evt-017
     time: "+4h20m"
@@ -1780,12 +1780,12 @@ storyline:
     events:
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net user svc_mhsync /delete /domain"
+        command_line: "net user svc_dirsync /delete /domain"
         supplementary: none
         technique: "T1531 - Account Access Removal"
         description: "Delete backdoor domain account"
       - type: account_deleted
-        target_username: svc_mhsync
+        target_username: svc_dirsync
         technique: "T1531 - Account Access Removal"
         description: "Backdoor domain account deleted"
 

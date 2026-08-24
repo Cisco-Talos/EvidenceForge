@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -231,6 +231,7 @@ def test_tls_runtime_backing_plateaus_under_real_hourly_baseline_watermarks() ->
             _emit_sensor_startup=Mock(),
             _report_progress=Mock(),
         )
+        engine._baseline_pass_end = MethodType(BaselineMixin._baseline_pass_end, engine)
 
         def generate_hour(
             current: datetime,

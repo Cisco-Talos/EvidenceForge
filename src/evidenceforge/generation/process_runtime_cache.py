@@ -1192,6 +1192,7 @@ _PROCESS_CACHE_FIELDS = (
     "_preferred_browser_by_session",
     "_last_browser_launch_by_session",
     "_process_source_create_times",
+    "_process_source_create_bounds",
     "_process_source_terminate_times",
     "_process_source_create_latest",
     "_process_source_terminate_latest",

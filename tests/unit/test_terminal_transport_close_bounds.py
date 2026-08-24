@@ -22,6 +22,7 @@ from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions import (
     dns_transport_close_headroom_seconds,
     http_completed_transport_close_bound_seconds,
+    network_transport_open_positive_headroom_seconds,
     proxy_transaction_close_bound_seconds,
     tls_completed_extension_headroom_seconds,
     tls_generated_family_close_bound_seconds,
@@ -421,6 +422,7 @@ def test_network_owner_exports_exact_dns_and_tls_close_headroom() -> None:
 
     assert dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35) == 0.363
     assert dns_transport_close_headroom_seconds(caller_rtt_maximum=0.3509994) == 0.364
+    assert network_transport_open_positive_headroom_seconds() == 0.850997
     assert tls_completed_extension_headroom_seconds() == 8.0
 
 

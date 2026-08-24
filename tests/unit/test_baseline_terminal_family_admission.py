@@ -1121,6 +1121,27 @@ def test_terminal_remote_session_plans_keep_only_candidates_that_fit(
         is None
     )
 
+    remote_admin_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds(
+        min_duration_seconds=baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+    )
+    safe_remote_admin_ssh = pass_end - timedelta(seconds=remote_admin_headroom)
+    assert (
+        baseline._baseline_ssh_terminal_end_plan(
+            _WINDOW_START,
+            transport_start=safe_remote_admin_ssh,
+            post_activity_support_seconds=(baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
+        )
+        is not None
+    )
+    assert (
+        baseline._baseline_ssh_terminal_end_plan(
+            _WINDOW_START,
+            transport_start=safe_remote_admin_ssh + timedelta(microseconds=1),
+            post_activity_support_seconds=(baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
+        )
+        is None
+    )
+
     logical_deadline = pass_end - baseline_module.rdp_action_deadline_source_tail()
     rdp_headroom = baseline_module.rdp_action_deadline_transport_headroom_seconds()
     safe_rdp = logical_deadline - timedelta(seconds=rdp_headroom)
@@ -1138,6 +1159,62 @@ def test_terminal_remote_session_plans_keep_only_candidates_that_fit(
         )
         is None
     )
+
+
+def test_terminal_system_traffic_skips_ssh_without_required_until_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Late optional remote-admin SSH is skipped before session bootstrap."""
+
+    pass_end = _WINDOW_START + timedelta(minutes=10)
+    baseline, _activity, state_manager, _target = _minimal_linux_system_traffic(pass_end)
+    source = System(
+        hostname="WS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    user = User(username="admin", full_name="Admin User", email="admin@example.test")
+    old_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds()
+    required_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds(
+        min_duration_seconds=baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+    )
+    remaining_seconds = (old_headroom + required_headroom) / 2.0
+    event_time = pass_end - timedelta(seconds=remaining_seconds)
+
+    class _LateSshRng(random.Random):
+        def uniform(self, start: float, end: float) -> float:
+            if start == 0 and end == 3599:
+                return (event_time - _WINDOW_START).total_seconds()
+            return super().uniform(start, end)
+
+    baseline.scenario.environment.users = [user]
+    baseline._scaled_randint = lambda *_args, **_kwargs: 0
+    baseline._get_baseline_ssh_users = lambda _system: [user]
+    baseline._linux_remote_admin_hour_probability = lambda _system: 1.0
+    baseline._linux_remote_admin_session_count = lambda *_args: 1
+    baseline._pick_baseline_ssh_identity = lambda *_args, **_kwargs: (user, source)
+    baseline.world_planner = Mock()
+    baseline.world_planner.bootstrap_user_session.return_value = SimpleNamespace(
+        session=SimpleNamespace(network_close_time=pass_end - timedelta(seconds=1))
+    )
+    set_current_time = Mock(wraps=state_manager.set_current_time)
+    state_manager.set_current_time = set_current_time
+    monkeypatch.setattr(baseline_module, "_get_rng", lambda: _LateSshRng(7))
+
+    assert (
+        baseline._baseline_ssh_terminal_end_plan(
+            _WINDOW_START,
+            transport_start=event_time,
+        )
+        is not None
+    )
+
+    baseline._generate_system_traffic(_WINDOW_START)
+
+    baseline.world_planner.bootstrap_user_session.assert_not_called()
+    set_current_time.assert_not_called()
+    assert state_manager.get_sessions_for_user(user.username) == []
 
 
 def test_terminal_remote_session_plans_include_runtime_clock_headroom() -> None:

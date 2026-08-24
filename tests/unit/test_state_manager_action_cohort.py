@@ -1159,21 +1159,9 @@ def test_action_cohort_smb_connection_finalization_commits_recovers_and_releases
 
 
 def test_action_cohort_smb_finalizer_preserves_timing_and_requires_install_ack() -> None:
-    """Close planning is pre-canonical and preserves lifecycle-bound interval truth."""
+    """Close planning is reversible, while materialization requires install acknowledgement."""
 
     manager, _owner, pin, session_identity, initial = _pinned_smb_root(acknowledge_install=False)
-    builder = manager.begin_action_cohort_materialization()
-    with pytest.raises(StateError, match="install receipt must be acknowledged"):
-        builder.finalize_smb_connection(
-            pin,
-            _cumulative_smb_transaction(initial),
-            session_identity,
-            end_time=initial.closed_at,
-        )
-    receipt = manager.recover_smb_connection_pin_install(pin)
-    assert receipt is not None
-    assert manager.acknowledge_smb_connection_pin_install(receipt)
-
     changed_interval = replace(
         _cumulative_smb_transaction(initial),
         closed_at=initial.closed_at + timedelta(seconds=1),
@@ -1183,13 +1171,43 @@ def test_action_cohort_smb_finalizer_preserves_timing_and_requires_install_ack()
             ("transport_close", initial.closed_at + timedelta(seconds=1)),
         ),
     )
+    changed_builder = manager.begin_action_cohort_materialization()
     with pytest.raises(StateError, match="preserve the pinned transport interval"):
-        builder.finalize_smb_connection(
+        changed_builder.finalize_smb_connection(
             pin,
             changed_interval,
             session_identity,
             end_time=changed_interval.closed_at,
         )
+
+    builder = manager.begin_action_cohort_materialization()
+    builder.finalize_smb_connection(
+        pin,
+        _cumulative_smb_transaction(initial),
+        session_identity,
+        end_time=initial.closed_at,
+    )
+    plan = builder.seal()
+    before_digest = manager.materialization_digest()
+    before_summary = manager.get_state_summary()
+    before_connection = dict(manager.state.open_connections[initial.conn_id].__dict__)
+    with pytest.raises(StateError, match="install receipt must be acknowledged"):
+        manager.materialize_action_cohort(plan)
+    assert manager.materialization_digest() == before_digest
+    assert manager.get_state_summary() == before_summary
+    assert manager.state.open_connections[initial.conn_id].__dict__ == before_connection
+    assert manager.get_session(session_identity.logon_id) is not None
+    assert manager.recover_smb_connection_finalization(pin) is None
+
+    receipt = manager.recover_smb_connection_pin_install(pin)
+    assert receipt is not None
+    assert manager.acknowledge_smb_connection_pin_install(receipt)
+    result = manager.materialize_action_cohort(plan)
+    terminal = result.smb_connection_finalization
+    assert terminal is not None
+    assert manager.acknowledge_smb_connection_finalization(terminal)
+    assert manager.sweep_closed_connections(initial.closed_at) == 1
+    _assert_no_smb_connection_pin_authority(manager)
 
 
 def _terminal_smb_connection() -> tuple[

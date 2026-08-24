@@ -114,6 +114,8 @@ def test_public_surface_exposes_explicit_member_activation_lifecycle() -> None:
 
     assert public_names == {
         "acknowledge_persistent_smb_projection_member",
+        "authenticates_cancellable_persistent_smb_projection_member",
+        "authenticates_empty_persistent_smb_projection_group",
         "cancel_empty_persistent_smb_projection_group",
         "cancel_persistent_smb_projection_member",
         "certify_persistent_smb_projection_member",
@@ -122,6 +124,7 @@ def test_public_surface_exposes_explicit_member_activation_lifecycle() -> None:
         "prepare_persistent_smb_projection_member",
         "recover_committed_persistent_smb_projection_member",
         "recover_inactive_persistent_smb_projection_member",
+        "recover_persistent_smb_projection_group",
         "reserve_persistent_smb_projection_group",
     }
     assert not any("activate" in name.casefold() for name in public_names)

@@ -55,6 +55,38 @@ def _generator(runtime: TimingRuntime) -> ActivityGenerator:
     return ActivityGenerator(StateManager(), emitters, timing_runtime=runtime)
 
 
+def _lightweight_process_bound_generator(
+    runtime: TimingRuntime,
+    system: System,
+    *,
+    source_timing_planner: SourceTimingPlanner | None = None,
+) -> ActivityGenerator:
+    """Build the smallest generator with one canonical process-bound owner."""
+
+    state_manager = StateManager()
+    state_manager.set_current_time(_START)
+    state_manager.register_process(
+        system=system.hostname,
+        pid=4242,
+        parent_pid=0,
+        image="/usr/bin/nmap",
+        command_line="nmap -sn 10.0.0.30",
+        username=_user().username,
+        integrity_level="Medium",
+        os_category="linux",
+        start_time=_START,
+    )
+    generator = object.__new__(ActivityGenerator)
+    generator.timing_runtime = runtime
+    generator.state_manager = state_manager
+    generator._source_timing_planner = source_timing_planner or SourceTimingPlanner(
+        "enterprise_standard",
+        timing_runtime=runtime,
+    )
+    generator._process_source_create_bounds = {}
+    return generator
+
+
 def _called_name(call: ast.Call) -> str:
     if isinstance(call.func, ast.Name):
         return call.func.id
@@ -321,10 +353,11 @@ def test_linux_visibility_delta_is_source_timing_cancel_neutral() -> None:
 
     runtime = TimingRuntime(reference_time=_START, namespace="linux-visibility-cancel")
     owner = SourceTimingPlanner("enterprise_standard", timing_runtime=runtime)
-    generator = object.__new__(ActivityGenerator)
-    generator.timing_runtime = runtime
-    generator._process_source_create_times = {(_linux().hostname, 4242): _START}
-    generator._process_source_create_latest = {}
+    generator = _lightweight_process_bound_generator(
+        runtime,
+        _linux(),
+        source_timing_planner=owner,
+    )
     before = runtime.audit.snapshot()
 
     with owner.prepared_planning() as preparation:
@@ -345,11 +378,8 @@ def test_nmap_anchor_publishes_once_only_after_probe_success(reject: bool) -> No
     """The scanner adapter retains or discards its one frozen anchor with the action."""
 
     runtime = TimingRuntime(reference_time=_START, namespace=f"nmap-{reject}")
-    generator = object.__new__(ActivityGenerator)
-    generator.timing_runtime = runtime
+    generator = _lightweight_process_bound_generator(runtime, _linux())
     generator._ip_to_system = {}
-    generator._process_source_create_times = {(_linux().hostname, 4242): _START}
-    generator._process_source_create_latest = {}
     generator._emit_nmap_discovery_probes = Mock(
         side_effect=RuntimeError("probe publication rejected") if reject else None
     )
@@ -379,7 +409,11 @@ def test_ssh_readiness_faults_before_transport_planning(
     """Compatibility SSH freezes readiness before reserving its transport tuple."""
 
     runtime = TimingRuntime(reference_time=_START, namespace=f"ssh-{failure_mode}")
-    executor = SimpleNamespace(timing_runtime=runtime, dispatcher=SimpleNamespace(emitters={}))
+    executor = SimpleNamespace(
+        timing_runtime=runtime,
+        dispatcher=SimpleNamespace(emitters={}),
+        _ip_to_system={},
+    )
     bundle = SshSessionActionBundle(
         executor=executor,  # type: ignore[arg-type]
         request=SshSessionRequest(

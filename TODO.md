@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; post-1.0 quality improvements ongoing
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-08-14
+**Last Roadmap Review:** 2026-08-24
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -115,12 +115,23 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] Continue current-dev realism assessment only if a separately approved future loop is needed;
   use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
   for handoff notes, latest loop outcomes, and next target selection.
-- [ ] **P1** Complete the V2 family-level realism foundations: scalable indexed state,
+- [x] **P1** Complete the V2 family-level realism foundations: scalable indexed state,
   execution/effect reconciliation, append-only lifecycle authority, one timing/clock runtime,
   compiled deployment/content identity, explicit collection policy, and persistent application
   channels. Preserve legacy authored inputs through boundary normalization and prove flat lookup,
-  bounded retention, deterministic output, and fresh blind-panel improvement. See the
-  [implementation worklog](docs/worklog/2026-08-16-v2-family-foundations.md).
+  bounded retention and deterministic output, then record a fresh blind-panel measurement. The
+  final automated score is 96.8965 and the frozen blind average is 75.75: 6.25 points worse than
+  the immediate Loop 30 baseline, but 17.5 better than the later post-P1 checkpoint. See the
+  [implementation worklog](docs/worklog/2026-08-16-v2-family-foundations.md) and
+  [final assessment](docs/design/realism-review/v2-family-foundations-final/REPORT.md).
+- [ ] **P1** Close the final V2 blind-panel endpoint contradictions: canonical Sysmon occurrence
+  timing, process-dependent-before-create/after-terminate rejection, complete RDP bootstrap and
+  Windows logon identity, and OS-build-aware bootstrap binary hashes. Keep the independent report
+  evidence and priorities in the
+  [final V2 assessment](docs/design/realism-review/v2-family-foundations-final/REPORT.md).
+- [ ] **P2** Improve the final V2 panel's lower-confidence realism findings: explicit proxy DNS
+  cache causality, role-appropriate NTP coverage, shell-pipeline process ownership, and more
+  user-specific administrator command pacing and vocabulary.
 - [ ] **P1** Feed the latest post-fix Host-review priors into the next
   assessment loop: dataset-wide uniform Sysmon collection/event-family shape,
   tight eCAR wrapper/child timing around DC service/task execution, residual

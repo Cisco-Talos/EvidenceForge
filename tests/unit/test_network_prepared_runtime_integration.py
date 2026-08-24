@@ -1046,7 +1046,7 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
     )
     state.materialize_process(process_plan)
     generator._ip_to_system = {source.ip: source}
-    generator.process_source_create_time = Mock(return_value=_START + timedelta(milliseconds=10))
+    generator.process_source_create_bound = Mock(return_value=_START + timedelta(milliseconds=10))
     timing_before = generator._source_timing_planner.state_digest()
 
     def _reject() -> None:
@@ -1075,7 +1075,7 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
         )
 
     assert generator._source_timing_planner.state_digest() == timing_before
-    generator.process_source_create_time.assert_called()
+    generator.process_source_create_bound.assert_called_with(source, process_plan.identity.pid)
     emitter.emit.assert_not_called()
 
 

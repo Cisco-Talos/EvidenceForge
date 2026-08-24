@@ -76,6 +76,7 @@ class _ExactPublicationAuthorityRecord:
     batch_ref: ReferenceType[ExactPublicationBatch]
     token_id: int
     token_ref: ReferenceType[_ExactPublicationToken]
+    capacity_reserved: bool = False
     prepared: bool = False
     retained_rows: int = 0
     retained_bytes: int = 0
@@ -201,18 +202,89 @@ class ExactPublicationAuthority:
                 or record.prepared
             ):
                 raise ExactPublicationError("Exact publication preparation lost its authority")
-            if self._retained_rows + retained_rows > self._row_capacity:
-                raise ExactPublicationError("Exact publication row capacity is exhausted")
-            if self._retained_bytes + retained_bytes > self._byte_capacity:
-                raise ExactPublicationError("Exact publication byte capacity is exhausted")
+            if record.capacity_reserved:
+                if retained_rows > record.retained_rows or retained_bytes > record.retained_bytes:
+                    raise ExactPublicationError(
+                        "Exact publication preparation exceeds its reserved capacity"
+                    )
+            else:
+                if self._retained_rows + retained_rows > self._row_capacity:
+                    raise ExactPublicationError("Exact publication row capacity is exhausted")
+                if self._retained_bytes + retained_bytes > self._byte_capacity:
+                    raise ExactPublicationError("Exact publication byte capacity is exhausted")
+                record.retained_rows = retained_rows
+                record.retained_bytes = retained_bytes
+                self._retained_rows += retained_rows
+                self._retained_bytes += retained_bytes
+                self._high_water_rows = max(self._high_water_rows, self._retained_rows)
+                self._high_water_bytes = max(self._high_water_bytes, self._retained_bytes)
             record.prepared = True
-            record.retained_rows = retained_rows
-            record.retained_bytes = retained_bytes
+            if not record.capacity_reserved:
+                self._prepared_batches += 1
+
+    def _reserve_capacity(
+        self,
+        batch: ExactPublicationBatch,
+        token: _ExactPublicationToken,
+        *,
+        row_budget: int,
+        byte_budget: int,
+    ) -> None:
+        """Charge one bounded batch before any caller-owned root may commit."""
+
+        if type(row_budget) is not int or row_budget <= 0:
+            raise ExactPublicationError("Exact publication row budget must be a positive exact int")
+        if type(byte_budget) is not int or byte_budget <= 0:
+            raise ExactPublicationError(
+                "Exact publication byte budget must be a positive exact int"
+            )
+        with self._lock:
+            record = self._records.get(token.ordinal)
+            if (
+                record is None
+                or record.batch_id != id(batch)
+                or record.batch_ref() is not batch
+                or record.token_id != id(token)
+                or record.token_ref() is not token
+                or record.capacity_reserved
+                or record.prepared
+            ):
+                raise ExactPublicationError("Exact publication capacity lost its authority")
+            if self._retained_rows + row_budget > self._row_capacity:
+                raise ExactPublicationError("Exact publication row capacity is exhausted")
+            if self._retained_bytes + byte_budget > self._byte_capacity:
+                raise ExactPublicationError("Exact publication byte capacity is exhausted")
+            record.capacity_reserved = True
+            record.retained_rows = row_budget
+            record.retained_bytes = byte_budget
             self._prepared_batches += 1
-            self._retained_rows += retained_rows
-            self._retained_bytes += retained_bytes
+            self._retained_rows += row_budget
+            self._retained_bytes += byte_budget
             self._high_water_rows = max(self._high_water_rows, self._retained_rows)
             self._high_water_bytes = max(self._high_water_bytes, self._retained_bytes)
+
+    def _rollback_prepared_capacity(
+        self,
+        batch: ExactPublicationBatch,
+        token: _ExactPublicationToken,
+    ) -> None:
+        """Return one precharged ready batch to its still-reserved capacity shell."""
+
+        with self._lock:
+            record = self._records.get(token.ordinal)
+            if (
+                record is None
+                or record.batch_id != id(batch)
+                or record.batch_ref() is not batch
+                or record.token_id != id(token)
+                or record.token_ref() is not token
+                or not record.capacity_reserved
+                or not record.prepared
+            ):
+                raise ExactPublicationError(
+                    "Exact publication prepared-capacity rollback lost its authority"
+                )
+            record.prepared = False
 
     def _release(
         self,
@@ -229,7 +301,7 @@ class ExactPublicationAuthority:
                 or record.token_ref() is not token
             ):
                 raise ExactPublicationError("Exact publication batch lost its issuing authority")
-            if record.prepared:
+            if record.capacity_reserved or record.prepared:
                 self._prepared_batches -= 1
                 self._retained_rows -= record.retained_rows
                 self._retained_bytes -= record.retained_bytes
@@ -427,6 +499,22 @@ class ExactPublicationBatch:
                 if self._active_thread == owner_thread:
                     self._active_thread = None
                 self._condition.notify_all()
+
+    def reserve_capacity(self, *, row_budget: int, byte_budget: int) -> None:
+        """Reserve exact row and byte capacity before an external root may commit."""
+
+        self._require_authority()
+        with self._condition:
+            if self._active_thread is not None or self._state != "issued":
+                raise ExactPublicationError(
+                    "Exact publication capacity must reserve before rendering"
+                )
+            self._authority._reserve_capacity(
+                self,
+                self._token,
+                row_budget=row_budget,
+                byte_budget=byte_budget,
+            )
 
     def _detach_participants_locked(self) -> tuple[_ExactPublicationParticipant, ...]:
         """Detach callbacks exactly once while the caller holds the batch condition."""
@@ -721,6 +809,30 @@ class ExactPublicationBatch:
             self._invoke_participants(detached, operation="abort")
         finally:
             del retired_rows, retired_result, detached
+
+    def rollback_ready_to_reserved_capacity(self) -> None:
+        """Discard frozen rows while retaining the exact pre-root capacity and writers."""
+
+        retired_rows: tuple[_ExactPublicationRow, ...] | None
+        retired_result: object
+        with self._condition:
+            self._require_authority()
+            if (
+                self._active_thread is not None
+                or self._state != "ready"
+                or self._commit_cursor != 0
+            ):
+                raise ExactPublicationError(
+                    "Only an inactive uncommitted ready batch may roll back to reserved capacity"
+                )
+            self._authority._rollback_prepared_capacity(self, self._token)
+            retired_rows = self._prepared_rows
+            retired_result = self._prepared_result
+            self._prepared_rows = None
+            self._prepared_result = None
+            self._retained_bytes = 0
+            self._state = "issued"
+        del retired_rows, retired_result
 
     @property
     def state(self) -> str:

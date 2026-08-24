@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import random
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -256,6 +256,7 @@ def test_ad_srv_hourly_point_backing_plateaus_from_seven_to_thirty_days() -> Non
             _emit_sensor_startup=Mock(),
             _report_progress=Mock(),
         )
+        engine._baseline_pass_end = MethodType(BaselineMixin._baseline_pass_end, engine)
 
         def generate_hour(
             current: datetime,

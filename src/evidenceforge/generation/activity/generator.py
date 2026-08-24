@@ -211,7 +211,9 @@ from evidenceforge.generation.actions import (
     PasswordChangeRequest,
     PasswordResetActionBundle,
     PasswordResetRequest,
+    PersistentSmbApplicationIntent,
     PersistentSmbRootIntent,
+    PersistentSmbTerminalContinuation,
     PersistentSmbTerminalContinuationAuthority,
     PersistentSmbTerminalContinuationCensus,
     ProcessAccessActionBundle,
@@ -359,6 +361,7 @@ from evidenceforge.generation.state_manager import (
     MaterializationBatchPlan,
     ProcessMaterializationPlan,
     SessionMaterializationPlan,
+    SmbFileMutationJournal,
     StateManager,
 )
 from evidenceforge.generation.timing import (
@@ -529,10 +532,6 @@ _HTTP_PERSISTENT_TRANSACTION_GAP = timedelta(microseconds=1)
 _RECENT_CONNECTION_REUSE_WINDOW_SECONDS = 86_400.0
 _TLS_RESUMPTION_STATE_HORIZON = timedelta(hours=24)
 _NETWORK_RUNTIME_WATERMARK_PAGE = 4_096
-_GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS: ContextVar[frozenset[str]] = ContextVar(
-    "generic_logoff_frozen_process_object_ids",
-    default=frozenset(),
-)
 
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
@@ -752,6 +751,7 @@ _LINUX_SHELL_MAX_SCAN_CHARS = 32768
 _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT = 4096
 _LINUX_SUDO_TTY_RECONCILE_ATTEMPTS = 8
 _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT = 256
+_PROCESS_SOURCE_BOUND_MAX_ANCESTORS = 65_536
 _NMAP_PORT_SERVICES = {
     21: "ftp",
     22: "ssh",
@@ -1268,6 +1268,7 @@ def _attach_http_file_transfers(
                         method=event.proxy.method,
                         status_code=event.proxy.status_code,
                         cache_result=event.proxy.cache_result,
+                        stable_id=f"{scope.stable_id}:proxy-request-duration",
                     ),
                 )
         content_identity = (
@@ -1337,6 +1338,7 @@ def _attach_http_file_transfers(
                     method=event.proxy.method,
                     status_code=event.proxy.status_code,
                     cache_result=event.proxy.cache_result,
+                    stable_id=f"{scope.stable_id}:proxy-response-duration",
                 ),
             )
 
@@ -2244,6 +2246,21 @@ def _windows_foreground_lifetime(
     if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
         return (2.0, 25.0)
     return None
+
+
+def _process_termination_delay_after_activity_seconds(
+    *,
+    hostname: str,
+    pid: int,
+    last_activity_time: datetime,
+) -> float:
+    """Return the stable grace period after a process's last activity."""
+    delay_rng = random.Random(
+        _stable_seed(
+            f"process_terminate_after_activity:{hostname}:{pid}:{last_activity_time.isoformat()}"
+        )
+    )
+    return delay_rng.uniform(2.0, 30.0)
 
 
 _DNS_QTYPE_RDATA_LENGTHS = {
@@ -4772,6 +4789,26 @@ class _GenericLogoffProcessClosePlan:
 
 
 @dataclass(frozen=True, slots=True)
+class _GenericLogoffFrozenSchedule:
+    """Exact generic-logoff owner, session, and process-close handoff."""
+
+    owner: object = field(repr=False, compare=False)
+    session_identity: SessionIdentity
+    owning_session_end_plan: SessionEndPlan | None
+    termination_end_plan: SessionEndPlan | None
+    from_storyline: bool
+    closes: tuple[_GenericLogoffProcessClosePlan, ...]
+
+
+_GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE: ContextVar[_GenericLogoffFrozenSchedule | None] = (
+    ContextVar(
+        "generic_logoff_frozen_process_schedule",
+        default=None,
+    )
+)
+
+
+@dataclass(frozen=True, slots=True)
 class _LinuxSudoRouteClosePreimage:
     """Frozen six-map facts for one exact route owned at journal installation."""
 
@@ -5321,10 +5358,10 @@ class ActivityGenerator:
         lifecycle_shadow: LifecycleShadow | None = None,
         lifecycle_authority: GeneratorLifecycleAuthority | None = None,
         application_channel_registry: ApplicationChannelRegistry | None = None,
-        rdp_session_manager: RdpReconnectStateManager | None = None,
         generation_window_start: datetime | None = None,
         generation_window_end: datetime | None = None,
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
+        rdp_session_manager: RdpReconnectStateManager | None = None,
     ):
         """Initialize activity generator.
 
@@ -5349,13 +5386,13 @@ class ActivityGenerator:
                 authority.
             application_channel_registry: Optional engine-owned common application
                 registry.
-            rdp_session_manager: Optional engine-owned reconnectable RDP owner.
             generation_window_start: Earliest canonical generation time admitted by
                 bounded application registries.
             generation_window_end: Exclusive canonical generation boundary for
                 bounded application registries.
             runtime_content_manager: Optional engine-owned local artifact/content
                 identity manager. Production shares the dispatcher's exact registry.
+            rdp_session_manager: Optional engine-owned reconnectable RDP owner.
         """
         self.state_manager = state_manager
         self._execution_effect_audit = ExecutionEffectAuditCounter()
@@ -5555,7 +5592,9 @@ class ActivityGenerator:
             window_end=proxy_window_end,
         )
         self._persistent_smb_traffic_authority = PersistentSmbTrafficRebindAuthority()
-        self._persistent_smb_terminal_continuations = PersistentSmbTerminalContinuationAuthority()
+        self._persistent_smb_terminal_continuations = PersistentSmbTerminalContinuationAuthority(
+            smb_channel_manager=self._smb_channel_manager
+        )
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
         self._http_persistent_connections: dict[
@@ -5623,6 +5662,7 @@ class ActivityGenerator:
         )
         self._lifecycle_authority.bind_http_channel_manager(self._http_channel_manager)
         self._lifecycle_authority.bind_explicit_proxy_manager(self._proxy_channel_manager)
+        self._lifecycle_authority.bind_smb_channel_manager(self._smb_channel_manager)
         self._lifecycle_authority.bind_ssh_channel_manager(self._ssh_channel_manager)
         if rdp_manager_requires_eager_binding:
             self._lifecycle_authority.bind_rdp_session_manager(self._rdp_session_manager)
@@ -5687,6 +5727,7 @@ class ActivityGenerator:
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int, datetime | None], datetime] = {}
+        self._process_source_create_bounds: dict[tuple[str, int, datetime, str], datetime] = {}
         self._process_source_terminate_times: dict[tuple[str, int, datetime | None], datetime] = {}
         self._process_source_create_latest: dict[
             tuple[str, int], tuple[datetime | None, datetime]
@@ -5941,6 +5982,18 @@ class ActivityGenerator:
             for key, source_time in self._process_source_create_times.items()
             if key in active or source_time >= normalized_cutoff
         }
+        retained_process_source_bounds: dict[tuple[str, int, datetime, str], datetime] = {}
+        for key, source_time in self._process_source_create_bounds.items():
+            hostname, pid, started_at, object_id = key
+            identity = self.state_manager.get_process_identity_by_object_id(object_id)
+            if identity is not None and (
+                identity.hostname,
+                identity.pid,
+                identity.started_at,
+                identity.object_id,
+            ) == (hostname, pid, started_at, object_id):
+                retained_process_source_bounds[key] = source_time
+        self._process_source_create_bounds = retained_process_source_bounds
         self._process_source_terminate_times = {
             key: source_time
             for key, source_time in self._process_source_terminate_times.items()
@@ -6408,6 +6461,7 @@ class ActivityGenerator:
                 pid=key[1],
                 process_name=running.image or process_name,
                 logon_id=running.logon_id or logon_id,
+                session_end_plan=session.end_plan if session is not None else None,
             )
 
     def _defer_ssh_session_close(
@@ -7328,9 +7382,6 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 session_end_plan=session_end_plan,
             )
-            source_termination_time = self.process_source_terminate_time(system.hostname, pid)
-            if source_termination_time is not None:
-                return max(resolved_termination_time, source_termination_time)
         return tracked_termination_time
 
     def _is_within_scenario_window(self, event_time: datetime) -> bool:
@@ -8239,6 +8290,28 @@ class ActivityGenerator:
                 and session.session_kind not in _LINUX_REMOTE_SESSION_KINDS
                 and _session_active_for_activity(session, time)
             )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: ensure_utc(session.start_time))
+
+    def _active_user_linux_process_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest Linux session that can own foreground process activity."""
+        if _get_os_category(system.os) != "linux":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind not in {"network", "service"}
+            and session.logon_type in {2, 10, 11}
+            and _session_active_for_activity(session, time)
         ]
         if not candidates:
             return None
@@ -9454,15 +9527,15 @@ class ActivityGenerator:
     def _process_source_visible_by(
         self,
         *,
-        hostname: str,
+        system: System,
         pid: int,
         deadline: datetime | None,
     ) -> bool:
-        """Return whether an existing process has finalized source visibility in time."""
+        """Return whether a process's format-independent source bound fits a deadline."""
 
         if deadline is None:
             return True
-        source_time = self.process_source_create_time(hostname, pid)
+        source_time = self._process_source_frontier_or_bound(system=system, pid=pid)
         return source_time is not None and source_time <= ensure_utc(deadline)
 
     def _process_source_bound_visible_by(
@@ -9472,7 +9545,7 @@ class ActivityGenerator:
         pid: int,
         deadline: datetime | None,
     ) -> bool:
-        """Accept exact visibility or a conservative bound for legacy process state."""
+        """Return whether a conservative process-source bound fits a deadline."""
 
         if deadline is None:
             return True
@@ -9489,10 +9562,27 @@ class ActivityGenerator:
     ) -> datetime:
         """Return the conservative finalized source frontier for one process create."""
 
+        return self._process_create_source_bound_for_os(
+            os_category=_get_os_category(system.os),
+            canonical_time=canonical_time,
+            parent_source_time=parent_source_time,
+            session_source_time=session_source_time,
+        )
+
+    def _process_create_source_bound_for_os(
+        self,
+        *,
+        os_category: str,
+        canonical_time: datetime,
+        parent_source_time: datetime | None = None,
+        session_source_time: datetime | None = None,
+    ) -> datetime:
+        """Return a process-create source bound for one canonical OS family."""
+
         canonical_time = ensure_utc(canonical_time)
         return canonical_time + self._source_timing_planner.process_create_positive_headroom(
             canonical_time,
-            _get_os_category(system.os),
+            os_category,
             parent_source_time=parent_source_time,
             session_source_time=session_source_time,
         )
@@ -9502,35 +9592,88 @@ class ActivityGenerator:
         *,
         system: System,
         pid: int,
-        seen_pids: frozenset[int] = frozenset(),
     ) -> datetime | None:
-        """Return finalized process visibility or a read-only conservative projection."""
+        """Return the frozen conservative bound for one exact process instance."""
 
-        finalized = self.process_source_create_time(system.hostname, pid)
-        if finalized is not None:
-            return finalized
-        process = self.state_manager.get_process(system.hostname, pid)
-        if process is None or pid in seen_pids:
+        process = self.state_manager.get_process_identity(system.hostname, pid)
+        if process is None:
             return None
-        next_seen = seen_pids | {pid}
-        parent_source_time = (
-            self._process_source_frontier_or_bound(
-                system=system,
-                pid=process.parent_pid,
-                seen_pids=next_seen,
+        return self._process_identity_source_bound(
+            os_category=_get_os_category(system.os),
+            process=process,
+        )
+
+    def _process_identity_source_bound(
+        self,
+        *,
+        os_category: str,
+        process: ProcessIdentity,
+    ) -> datetime | None:
+        """Freeze one exact process bound through a bounded iterative ancestry walk."""
+
+        cache = self._process_source_create_bounds
+        process_key = (
+            process.hostname,
+            process.pid,
+            process.started_at,
+            process.object_id,
+        )
+        cached = cache.get(process_key)
+        if cached is not None:
+            return cached
+
+        chain: list[ProcessIdentity] = []
+        seen_object_ids: set[str] = set()
+        cursor = process
+        parent_source_time: datetime | None = None
+        for _ in range(_PROCESS_SOURCE_BOUND_MAX_ANCESTORS):
+            cursor_key = (
+                cursor.hostname,
+                cursor.pid,
+                cursor.started_at,
+                cursor.object_id,
             )
-            if process.parent_pid > 0 and process.parent_pid != pid
-            else None
-        )
-        session = self.state_manager.get_session(process.logon_id) if process.logon_id else None
-        return self._process_create_source_bound(
-            system=system,
-            canonical_time=process.start_time,
-            parent_source_time=parent_source_time,
-            session_source_time=(
-                _session_source_ready_time(session) if session is not None else None
-            ),
-        )
+            cached = cache.get(cursor_key)
+            if cached is not None:
+                parent_source_time = cached
+                break
+            if cursor.object_id in seen_object_ids:
+                return None
+            seen_object_ids.add(cursor.object_id)
+            chain.append(cursor)
+            if cursor.parent_pid <= 0 or cursor.parent_pid == cursor.pid:
+                break
+            parent = self.state_manager.get_process_identity(
+                cursor.hostname,
+                cursor.parent_pid,
+            )
+            if parent is None or parent.started_at > cursor.started_at:
+                break
+            cursor = parent
+        else:
+            return None
+
+        for identity in reversed(chain):
+            session = (
+                self.state_manager.get_session(identity.logon_id) if identity.logon_id else None
+            )
+            parent_source_time = self._process_create_source_bound_for_os(
+                os_category=os_category,
+                canonical_time=identity.started_at,
+                parent_source_time=parent_source_time,
+                session_source_time=(
+                    _session_source_ready_time(session) if session is not None else None
+                ),
+            )
+            cache[
+                (
+                    identity.hostname,
+                    identity.pid,
+                    identity.started_at,
+                    identity.object_id,
+                )
+            ] = parent_source_time
+        return parent_source_time
 
     def _profiled_service_manager_parent_pid(
         self,
@@ -9597,7 +9740,7 @@ class ActivityGenerator:
                 command_line=worker.command_line,
             )
             if singleton_worker_pid is not None and not self._process_source_visible_by(
-                hostname=system.hostname,
+                system=system,
                 pid=singleton_worker_pid,
                 deadline=source_deadline,
             ):
@@ -9662,7 +9805,7 @@ class ActivityGenerator:
         )
         if worker_pid is not None and source_deadline is not None:
             if not self._process_source_visible_by(
-                hostname=system.hostname,
+                system=system,
                 pid=worker_pid,
                 deadline=source_deadline,
             ):
@@ -10124,7 +10267,7 @@ class ActivityGenerator:
             else None
         )
         if running is not None and not self._process_source_visible_by(
-            hostname=client_system.hostname,
+            system=client_system,
             pid=actor_pid,
             deadline=source_visible_by,
         ):
@@ -10298,7 +10441,7 @@ class ActivityGenerator:
         if running_candidates:
             proc = max(running_candidates, key=lambda candidate: candidate.start_time)
             if not self._process_source_visible_by(
-                hostname=source_system.hostname,
+                system=source_system,
                 pid=proc.pid,
                 deadline=source_visible_by,
             ):
@@ -10487,7 +10630,7 @@ class ActivityGenerator:
                 )
             ):
                 if not self._process_source_visible_by(
-                    hostname=system.hostname,
+                    system=system,
                     pid=candidate.pid,
                     deadline=source_visible_by,
                 ):
@@ -12213,11 +12356,24 @@ class ActivityGenerator:
         user = self._user_model_for_username(session.username)
 
         image_lower = image.lower()
+        browser_owner_logon_ids = {session.logon_id}
+        if session.logon_type == 7:
+            # A Type 7 unlock re-authenticates an existing local desktop. Keep a
+            # still-live browser from that user's active desktop instead of
+            # inventing a duplicate process under the re-authentication LUID.
+            browser_owner_logon_ids.update(
+                candidate.logon_id
+                for candidate in self.state_manager.get_active_sessions_for_user_at(
+                    user.username,
+                    time,
+                )
+                if candidate.system == source_system.hostname and candidate.logon_type in {2, 7, 11}
+            )
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
-            and proc.logon_id == session.logon_id
+            and proc.logon_id in browser_owner_logon_ids
             and proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
@@ -13448,6 +13604,12 @@ class ActivityGenerator:
             explicit_source_system = source_system
             if explicit_source_system is None and source_ip is not None:
                 explicit_source_system = self._ip_to_system.get(source_ip)
+            # Preserve an authored transport source without assigning impossible mstsc ownership.
+            if (
+                explicit_source_system is not None
+                and _get_os_category(explicit_source_system.os) != "windows"
+            ):
+                explicit_source_system = None
             _, rendered_logon_id = self._execute_rdp_session_bundle(
                 user=user,
                 target_system=system,
@@ -16275,15 +16437,12 @@ class ActivityGenerator:
                         milliseconds=25
                     )
                 else:
-                    delay_rng = random.Random(
-                        _stable_seed(
-                            "process_terminate_after_activity:"
-                            f"{session.system}:{process.pid}:"
-                            f"{process.last_activity_time.isoformat()}"
-                        )
-                    )
                     terminate_at = ensure_utc(process.last_activity_time) + timedelta(
-                        seconds=delay_rng.uniform(2.0, 30.0)
+                        seconds=_process_termination_delay_after_activity_seconds(
+                            hostname=session.system,
+                            pid=process.pid,
+                            last_activity_time=process.last_activity_time,
+                        )
                     )
             terminate_at = self._held_process_termination_time(
                 system=system,
@@ -17004,15 +17163,12 @@ class ActivityGenerator:
                         milliseconds=25
                     )
                 else:
-                    delay_rng = random.Random(
-                        _stable_seed(
-                            "process_terminate_after_activity:"
-                            f"{session.system}:{identity.pid}:"
-                            f"{process.last_activity_time.isoformat()}"
-                        )
-                    )
                     terminate_at = ensure_utc(process.last_activity_time) + timedelta(
-                        seconds=delay_rng.uniform(2.0, 30.0)
+                        seconds=_process_termination_delay_after_activity_seconds(
+                            hostname=session.system,
+                            pid=identity.pid,
+                            last_activity_time=process.last_activity_time,
+                        )
                     )
 
             if (
@@ -17121,7 +17277,7 @@ class ActivityGenerator:
                 )
 
             visible_create_delta: _FrozenActivityTimingDelta | None = None
-            if os_category == "windows":
+            if os_category == "windows" and not authoritative:
                 visible_create_time = self.process_source_create_time(session.system, identity.pid)
                 if visible_create_time is not None and terminate_at <= visible_create_time:
                     relationship_key = "windows.process_exit_after_visible_create"
@@ -17158,14 +17314,6 @@ class ActivityGenerator:
                 raise StateError(
                     "Authoritative generic logoff cannot fit its process graph before "
                     f"the exact session end: process={identity.object_id}"
-                )
-            if (
-                authoritative_latest_allowed is not None
-                and terminate_at > authoritative_latest_allowed
-            ):
-                raise StateError(
-                    "Authoritative generic logoff cannot preserve its frozen process "
-                    f"close before the exact deadline clamp: process={identity.object_id}"
                 )
             plan = _GenericLogoffProcessClosePlan(
                 identity=identity,
@@ -17250,6 +17398,63 @@ class ActivityGenerator:
             )
         return tuple(plans), projected_session_frontier
 
+    def _execute_bundle_owned_rdp_logoff(
+        self,
+        request: LogoffRequest,
+        session: ActiveSession,
+    ) -> bool:
+        """Delegate an authored RDP logoff to its retained exact lifecycle owner."""
+
+        if not session.closure_owned_by_bundle:
+            return False
+        if session.session_kind != "rdp":
+            raise StateError(
+                "Bundle-owned session cannot enter generic logoff without a supported owner: "
+                f"{session.system} logon_id={session.logon_id} kind={session.session_kind}"
+            )
+        end_plan = request.session_end_plan
+        if end_plan is None or not end_plan.is_authoritative:
+            raise StateError(
+                "Bundle-owned RDP logoff requires its authoritative session end plan: "
+                f"{session.system} logon_id={session.logon_id}"
+            )
+        canonical_end = ensure_utc(end_plan.canonical_end)
+        if (
+            request.logon_id != session.logon_id
+            or request.system.hostname != session.system
+            or request.user.username.casefold() != session.username.casefold()
+            or ensure_utc(request.time) != canonical_end
+            or session.end_plan != end_plan
+        ):
+            raise StateError(
+                "Bundle-owned RDP logoff disagrees with its live session identity or end plan"
+            )
+        session_identity = self.state_manager.get_session_identity(session.logon_id)
+        if (
+            session_identity is None
+            or session_identity.object_id != session.ecar_object_id
+            or session_identity.hostname != session.system
+            or session_identity.logon_id != session.logon_id
+            or session_identity.session_kind != "rdp"
+        ):
+            raise StateError("Bundle-owned RDP logoff lost its exact live session identity")
+        with self._rdp_lifecycle_journal_lock:
+            entries = tuple(
+                entry
+                for entry in self._pending_rdp_lifecycle_continuations.values()
+                if entry.continuation.prepared.session_identity == session_identity
+            )
+        if len(entries) != 1:
+            raise StateError("Bundle-owned RDP logoff has no unique retained lifecycle owner")
+        continuation = entries[0].continuation
+        if continuation.prepared.hard_deadline != canonical_end:
+            raise StateError("Bundle-owned RDP logoff changed its retained lifecycle deadline")
+
+        self.advance_rdp_session_lifecycle_watermark(canonical_end)
+        if self.state_manager.get_session(session.logon_id) is not None:
+            raise StateError("Bundle-owned RDP logoff returned before exact session closure")
+        return True
+
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
         pending_linux_sudo = self._claim_pending_linux_sudo_logoff(request)
@@ -17274,6 +17479,8 @@ class ActivityGenerator:
         session = self.state_manager.get_session(logon_id)
         if session is not None:
             logon_type = session.logon_type
+            if self._execute_bundle_owned_rdp_logoff(request, session):
+                return
         has_linux_sudo_route = bool(
             session is not None
             and _get_os_category(system.os) == "linux"
@@ -17552,6 +17759,14 @@ class ActivityGenerator:
                 finally:
                     self._release_linux_sudo_logoff_claim(continuation)
                 return
+            frozen_session_identity = self.state_manager.get_session_identity(logon_id)
+            if (
+                frozen_session_identity is None
+                or frozen_session_identity.object_id != session.ecar_object_id
+                or frozen_session_identity.hostname != session.system
+                or frozen_session_identity.logon_id != session.logon_id
+            ):
+                raise StateError("Generic logoff lost its exact live session identity")
             generic_process_closes, projected_session_frontier = (
                 self._plan_generic_logoff_process_closes(
                     system=system,
@@ -17571,17 +17786,23 @@ class ActivityGenerator:
                     )
             if authoritative_end_plan is not None:
                 self.state_manager.plan_session_end(logon_id, authoritative_end_plan)
+            if self.state_manager.get_session_identity(logon_id) != frozen_session_identity:
+                raise StateError("Generic logoff session identity drifted after close planning")
             prior_visible_termination = self._session_process_source_terminate_times.get(
                 (session.system, logon_id)
             )
             visible_termination_times = (
                 [prior_visible_termination] if prior_visible_termination is not None else []
             )
-            frozen_process_object_ids = frozenset(
-                process_close.identity.object_id for process_close in generic_process_closes
-            )
-            frozen_process_token = _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.set(
-                frozen_process_object_ids
+            frozen_process_schedule_token = _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.set(
+                _GenericLogoffFrozenSchedule(
+                    owner=self,
+                    session_identity=frozen_session_identity,
+                    owning_session_end_plan=session.end_plan,
+                    termination_end_plan=authoritative_end_plan,
+                    from_storyline=from_storyline,
+                    closes=generic_process_closes,
+                )
             )
             try:
                 for process_close in generic_process_closes:
@@ -17615,7 +17836,7 @@ class ActivityGenerator:
                     if visible_termination_time is not None:
                         visible_termination_times.append(visible_termination_time)
             finally:
-                _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.reset(frozen_process_token)
+                _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.reset(frozen_process_schedule_token)
             if visible_termination_times and authoritative_end_plan is None:
                 latest_visible_termination = max(visible_termination_times)
                 observation_gap = self.dispatcher.observation_policy.maximum_delay_difference(
@@ -18106,7 +18327,7 @@ class ActivityGenerator:
             if preferred:
                 proc = max(preferred, key=lambda candidate: candidate.start_time)
                 if not self._process_source_visible_by(
-                    hostname=system.hostname,
+                    system=system,
                     pid=proc.pid,
                     deadline=source_visible_by,
                 ):
@@ -18121,7 +18342,7 @@ class ActivityGenerator:
         ]
         chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
         if not self._process_source_visible_by(
-            hostname=system.hostname,
+            system=system,
             pid=chosen.pid,
             deadline=source_visible_by,
         ):
@@ -18179,7 +18400,7 @@ class ActivityGenerator:
             key=lambda candidate: candidate.last_activity_time or candidate.start_time,
         )
         if not self._process_source_visible_by(
-            hostname=system.hostname,
+            system=system,
             pid=chosen.pid,
             deadline=source_visible_by,
         ):
@@ -18560,10 +18781,7 @@ class ActivityGenerator:
             request.system.hostname,
             candidate_pid,
         )
-        source_frontier = self.process_source_create_time(
-            request.system.hostname,
-            candidate_pid,
-        )
+        source_frontier = self.process_source_create_bound(request.system, candidate_pid)
         if running is None or identity is None or source_frontier is None:
             return True, None
         if source_frontier > ensure_utc(request.source_visible_by):
@@ -18618,6 +18836,7 @@ class ActivityGenerator:
                     full_name=intent.username,
                     email=f"{intent.username}@example.local",
                 )
+                session = self.state_manager.get_session(running.logon_id or intent.logon_id)
                 self.generate_process_termination(
                     user=process_user,
                     system=system,
@@ -18625,6 +18844,7 @@ class ActivityGenerator:
                     pid=intent.pid,
                     process_name=running.image or intent.process_name,
                     logon_id=running.logon_id or intent.logon_id,
+                    session_end_plan=session.end_plan if session is not None else None,
                 )
             if not exhaust:
                 if self._lifecycle_authority.has_due_process_closes(normalized_cutoff):
@@ -19723,7 +19943,7 @@ class ActivityGenerator:
             return 0
         identity = self.state_manager.get_process_identity(intent.hostname, intent.pid)
         running = self.state_manager.get_process(intent.hostname, intent.pid)
-        source_frontier = self.process_source_create_time(intent.hostname, intent.pid)
+        source_frontier = self.process_source_create_bound(request.system, intent.pid)
         if (
             identity is None
             or running is None
@@ -20101,7 +20321,7 @@ class ActivityGenerator:
         )
         if singleton_pid is not None:
             if not self._process_source_visible_by(
-                hostname=system.hostname,
+                system=system,
                 pid=singleton_pid,
                 deadline=source_visible_by,
             ):
@@ -20129,7 +20349,7 @@ class ActivityGenerator:
             )
             if singleton_service_pid is not None:
                 if not self._process_source_visible_by(
-                    hostname=system.hostname,
+                    system=system,
                     pid=singleton_service_pid,
                     deadline=source_visible_by,
                 ):
@@ -20158,7 +20378,7 @@ class ActivityGenerator:
             )
             if persistent_app_pid is not None:
                 if not self._process_source_visible_by(
-                    hostname=system.hostname,
+                    system=system,
                     pid=persistent_app_pid,
                     deadline=source_visible_by,
                 ):
@@ -20183,7 +20403,7 @@ class ActivityGenerator:
             )
             if browser_pid is not None:
                 if not self._process_source_visible_by(
-                    hostname=system.hostname,
+                    system=system,
                     pid=browser_pid,
                     deadline=source_visible_by,
                 ):
@@ -20224,6 +20444,21 @@ class ActivityGenerator:
                 logon_id=process_logon_id,
                 process_name=process_name,
                 command_line=command_line,
+                parent_pid=parent_pid,
+                process_username=process_username,
+            )
+        if prepared_actor is not None and not self._is_valid_process_parent_at(
+            system=system,
+            parent_pid=parent_pid,
+            time=time,
+        ):
+            # Legacy repair may select a future shell because non-prepared callers
+            # can move the child after it. A prepared actor's start is immutable.
+            parent_pid = self._resolve_existing_prepared_process_parent(
+                system=system,
+                user=user,
+                time=time,
+                logon_id=process_logon_id,
                 parent_pid=parent_pid,
                 process_username=process_username,
             )
@@ -21152,6 +21387,7 @@ class ActivityGenerator:
         start_time = event.process.start_time if event.process is not None else None
         if start_time is None:
             return
+        self._remember_process_source_create_bound(hostname, pid, event)
         visible_create_time = self._source_timing_planner.admitted_process_create_frontier(
             hostname=hostname,
             pid=pid,
@@ -21168,6 +21404,33 @@ class ActivityGenerator:
                 visible_create_time,
             )
 
+    def _remember_process_source_create_bound(
+        self,
+        hostname: str,
+        pid: int,
+        event: OccurrenceBuilder,
+    ) -> None:
+        """Freeze format-independent source timing for a finalized process create."""
+
+        host = event.src_host
+        process_context = event.process
+        if (
+            host is None
+            or process_context is None
+            or host.hostname != hostname
+            or process_context.pid != pid
+            or process_context.start_time is None
+            or host.os_category not in {"windows", "linux"}
+        ):
+            return
+        identity = self.state_manager.get_process_identity(hostname, pid)
+        if identity is None or identity.started_at != ensure_utc(process_context.start_time):
+            return
+        self._process_identity_source_bound(
+            os_category=host.os_category,
+            process=identity,
+        )
+
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the latest rendered source-create timestamp for a process."""
         return self._process_cached_time(
@@ -21176,6 +21439,11 @@ class ActivityGenerator:
             hostname,
             pid,
         )
+
+    def process_source_create_bound(self, system: System, pid: int) -> datetime | None:
+        """Return the conservative process-create frontier used by canonical planning."""
+
+        return self._process_source_frontier_or_bound(system=system, pid=pid)
 
     def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the rendered source-terminate timestamp for a process."""
@@ -21198,7 +21466,7 @@ class ActivityGenerator:
         """Keep fast same-process dependents after visible Windows process creation."""
         if pid <= 0 or _get_os_category(system.os) != "windows":
             return time
-        visible_create_time = self.process_source_create_time(system.hostname, pid)
+        visible_create_time = self.process_source_create_bound(system, pid)
         if visible_create_time is None or time > visible_create_time:
             return time
         return visible_create_time + self._sample_profile_activity_gap(
@@ -21304,7 +21572,7 @@ class ActivityGenerator:
         """Return Linux process creation and source-visible dependent floors."""
         if pid <= 0 or _get_os_category(system.os) != "linux":
             return None
-        visible_create_time = self.process_source_create_time(system.hostname, pid)
+        visible_create_time = self.process_source_create_bound(system, pid)
         if visible_create_time is None:
             return None
         required_floor = visible_create_time
@@ -21470,26 +21738,24 @@ class ActivityGenerator:
         proc = event.process
         if host is None or proc is None or proc.start_time is None:
             return
-        process_create_ts = self.process_source_create_time(host.hostname, proc.pid)
-        if process_create_ts is None:
-            create_anchor_event = OccurrenceBuilder(
-                timestamp=proc.start_time,
-                event_type="process_create",
-                src_host=host,
-                process=proc,
+        process_start = ensure_utc(proc.start_time)
+        identity_lookup = getattr(
+            getattr(self, "state_manager", None), "get_process_identity", None
+        )
+        identity = identity_lookup(host.hostname, proc.pid) if callable(identity_lookup) else None
+        process_create_ts = (
+            self._process_identity_source_bound(
+                os_category=host.os_category,
+                process=identity,
             )
-            self._plan_process_source_create_times(create_anchor_event)
-            source_timing = create_anchor_event.source_timing
-            if source_timing is not None:
-                ecar_create_times = [
-                    timestamp
-                    for key, timestamp in source_timing.source_times.items()
-                    if key.startswith("source.ecar_process_create|")
-                ]
-                if ecar_create_times:
-                    process_create_ts = max(ecar_create_times)
+            if identity is not None and identity.started_at == process_start
+            else None
+        )
         if process_create_ts is None:
-            process_create_ts = proc.start_time
+            process_create_ts = self._process_create_source_bound_for_os(
+                os_category=host.os_category,
+                canonical_time=process_start,
+            )
         canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
         self._source_timing_planner.source_time(
             event,
@@ -21660,10 +21926,7 @@ class ActivityGenerator:
     ) -> _NmapProbeAnchorPlan:
         """Freeze one source-ready anchor shared by all probes from an nmap process."""
 
-        visible_create_time = self.process_source_create_time(
-            request.system.hostname,
-            request.pid,
-        )
+        visible_create_time = self.process_source_create_bound(request.system, request.pid)
         if visible_create_time is None:
             return _NmapProbeAnchorPlan(request.time, None)
         timing_delta = self._freeze_profile_activity_gap(
@@ -22793,6 +23056,31 @@ class ActivityGenerator:
             )
         return pid, image
 
+    def has_implicit_ssh_client_owner(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        time: datetime,
+        required_until: datetime | None = None,
+    ) -> bool:
+        """Return allocation-free eligibility for an implicit SSH client actor."""
+
+        os_category = _get_os_category(source_system.os)
+        if os_category == "linux":
+            return (
+                self._active_source_linux_session(
+                    user,
+                    source_system,
+                    time,
+                    required_until=required_until,
+                )
+                is not None
+            )
+        if os_category == "windows":
+            return self._select_explicit_proxy_client_session(source_system, time) is not None
+        return False
+
     def _active_source_linux_session(
         self,
         user: User,
@@ -23054,6 +23342,61 @@ class ActivityGenerator:
         )
         ProcessTerminationActionBundle(self, request).execute()
 
+    def _frozen_generic_logoff_process_close(
+        self,
+        request: ProcessTerminationRequest,
+        running_process: RunningProcess | None,
+    ) -> _GenericLogoffProcessClosePlan | None:
+        """Authenticate an exact generic-logoff process close before mutation."""
+
+        schedule = _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.get()
+        if schedule is None:
+            return None
+        if schedule.owner is not self:
+            raise StateError("Generic logoff process schedule belongs to another generator")
+
+        session_identity = schedule.session_identity
+        current_session = self.state_manager.get_session(session_identity.logon_id)
+        current_session_identity = self.state_manager.get_session_identity(
+            session_identity.logon_id
+        )
+        if (
+            request.system.hostname != session_identity.hostname
+            or request.logon_id != session_identity.logon_id
+            or request.user.username.casefold() != session_identity.principal.casefold()
+            or request.session_end_plan != schedule.termination_end_plan
+            or request.from_storyline is not schedule.from_storyline
+            or current_session is None
+            or current_session_identity != session_identity
+            or current_session.end_plan != schedule.owning_session_end_plan
+        ):
+            raise StateError("Generic logoff process close disagrees with its frozen session owner")
+
+        matching_closes = tuple(
+            close
+            for close in schedule.closes
+            if close.identity.hostname == request.system.hostname
+            and close.identity.pid == request.pid
+        )
+        if len(matching_closes) != 1:
+            raise StateError("Generic logoff process close has no unique frozen PID owner")
+        frozen_close = matching_closes[0]
+        current_identity = self.state_manager.get_process_identity(
+            request.system.hostname,
+            request.pid,
+        )
+        if (
+            running_process is None
+            or current_identity != frozen_close.identity
+            or running_process.ecar_object_id != frozen_close.identity.object_id
+            or running_process.start_time != frozen_close.identity.started_at
+            or request.process_name != frozen_close.identity.image
+        ):
+            raise StateError("Generic logoff process identity drifted from its frozen schedule")
+        if ensure_utc(request.time) != frozen_close.end_time:
+            raise StateError("Generic logoff process close drifted from its frozen schedule")
+        return frozen_close
+
     def _execute_process_termination_bundle(self, request: ProcessTerminationRequest) -> None:
         """Expand a process-termination bundle through the compatibility adapter."""
         from evidenceforge.events.contexts import ProcessContext
@@ -23066,8 +23409,15 @@ class ActivityGenerator:
         logon_id = request.logon_id
         from_storyline = request.from_storyline
         authoritative_end_plan = request.session_end_plan
+        authoritative_latest_allowed: datetime | None = None
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        frozen_generic_close = self._frozen_generic_logoff_process_close(request, running_proc)
+        frozen_generic_close_time = (
+            frozen_generic_close.end_time if frozen_generic_close is not None else None
+        )
+        if frozen_generic_close_time is not None:
+            time = frozen_generic_close_time
         if self._process_termination_recorded(
             system.hostname,
             pid,
@@ -23077,20 +23427,19 @@ class ActivityGenerator:
 
         if (
             running_proc is not None
+            and frozen_generic_close_time is None
             and running_proc.last_activity_time is not None
             and time <= running_proc.last_activity_time
         ):
             if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
                 time = ensure_utc(running_proc.last_activity_time) + timedelta(milliseconds=25)
             else:
-                delay_rng = random.Random(
-                    _stable_seed(
-                        "process_terminate_after_activity:"
-                        f"{system.hostname}:{pid}:{running_proc.last_activity_time.isoformat()}"
-                    )
-                )
                 time = running_proc.last_activity_time + timedelta(
-                    seconds=delay_rng.uniform(2.0, 30.0)
+                    seconds=_process_termination_delay_after_activity_seconds(
+                        hostname=system.hostname,
+                        pid=pid,
+                        last_activity_time=running_proc.last_activity_time,
+                    )
                 )
         if running_proc is not None:
             process_name = running_proc.image
@@ -23140,7 +23489,11 @@ class ActivityGenerator:
                 if session_end_time is None
                 else min(ensure_utc(session_end_time), ssh_transport_end)
             )
-        if session_end_time is not None and time >= session_end_time:
+        if (
+            frozen_generic_close_time is None
+            and session_end_time is not None
+            and time >= session_end_time
+        ):
             end_margin_ms = 150 + (
                 _stable_seed(
                     f"process_terminate_before_logoff:{system.hostname}:{pid}:{process_logon_id}"
@@ -23163,14 +23516,21 @@ class ActivityGenerator:
                     f"{system.hostname} pid={pid} hold={ensure_utc(hold_until).isoformat()} "
                     f"end={deadline.isoformat()}"
                 )
-            end_margin_ms = 25 + (
-                _stable_seed(
-                    "process_terminate_before_authoritative_logoff:"
-                    f"{system.hostname}:{pid}:{process_logon_id}:{deadline.isoformat()}"
+            if frozen_generic_close_time is not None:
+                if frozen_generic_close_time >= deadline:
+                    raise StateError(
+                        "Generic logoff process close is not before its authoritative end"
+                    )
+            else:
+                end_margin_ms = 25 + (
+                    _stable_seed(
+                        "process_terminate_before_authoritative_logoff:"
+                        f"{system.hostname}:{pid}:{process_logon_id}:{deadline.isoformat()}"
+                    )
+                    % 176
                 )
-                % 176
-            )
-            time = min(ensure_utc(time), deadline - timedelta(milliseconds=end_margin_ms))
+                authoritative_latest_allowed = deadline - timedelta(milliseconds=end_margin_ms)
+                time = min(ensure_utc(time), authoritative_latest_allowed)
         else:
             time = self._held_process_termination_time(
                 system=system,
@@ -23190,12 +23550,17 @@ class ActivityGenerator:
                 )
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
-        time = self._clamp_after_visible_process_create(
-            system,
-            pid,
-            time,
-            "windows.process_exit_after_visible_create",
-        )
+        if authoritative_latest_allowed is None and frozen_generic_close_time is None:
+            time = self._clamp_after_visible_process_create(
+                system,
+                pid,
+                time,
+                "windows.process_exit_after_visible_create",
+            )
+        elif authoritative_latest_allowed is not None:
+            # Source-native ordering is planned below. It must not move the
+            # canonical process lifecycle outside its authoritative session.
+            time = min(ensure_utc(time), authoritative_latest_allowed)
         self.state_manager.get_process_object_id(system.hostname, pid)
         process_session_id = (
             running_proc.auth_session_id
@@ -23246,18 +23611,12 @@ class ActivityGenerator:
             )
             is not None
         ):
-            visible_termination = self.process_source_terminate_time(system.hostname, pid)
             self._remember_foreground_shell_available(
                 system=system,
                 username=running_proc.username,
                 logon_id=running_proc.logon_id,
                 parent_pid=running_proc.parent_pid,
-                termination_time=max(
-                    ensure_utc(event.timestamp),
-                    ensure_utc(visible_termination)
-                    if visible_termination is not None
-                    else ensure_utc(event.timestamp),
-                ),
+                termination_time=ensure_utc(event.timestamp),
                 seed_text=running_proc.command_line,
                 concurrency_group_id=running_proc.concurrency_group_id,
             )
@@ -23294,9 +23653,15 @@ class ActivityGenerator:
         if child is None or _get_os_category(system.os) != "windows" or child.parent_pid <= 0:
             return
         parent = self.state_manager.get_process(system.hostname, child.parent_pid)
+        frozen_schedule = _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.get()
         if (
             parent is not None
-            and parent.ecar_object_id in _GENERIC_LOGOFF_FROZEN_PROCESS_OBJECT_IDS.get()
+            and frozen_schedule is not None
+            and frozen_schedule.owner is self
+            and any(
+                close.identity.object_id == parent.ecar_object_id
+                for close in frozen_schedule.closes
+            )
         ):
             return
         if parent is None or not self._is_one_shot_shell_command(parent.image, parent.command_line):
@@ -23694,6 +24059,10 @@ class ActivityGenerator:
         deferred_session_authority: DeferredSessionNetworkAuthority | None = None,
         identity_capture: NetworkConnectionIdentityCapture | None = None,
         persistent_smb_root_intent: PersistentSmbRootIntent | None = None,
+        persistent_smb_application_intent: PersistentSmbApplicationIntent | None = None,
+        persistent_smb_file_mutation_journal: SmbFileMutationJournal | None = None,
+        persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None = None,
+        persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None = None,
         defer_source_publication: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
@@ -23788,6 +24157,10 @@ class ActivityGenerator:
                 if persistent_smb_root_intent is None
                 else persistent_smb_root_intent.identity_snapshot()
             ),
+            persistent_smb_application_intent=persistent_smb_application_intent,
+            persistent_smb_file_mutation_journal=persistent_smb_file_mutation_journal,
+            persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+            persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
             defer_source_publication=defer_source_publication,
         )
         return NetworkConnectionActionBundle(
@@ -29934,19 +30307,8 @@ class ActivityGenerator:
             requested_time,
             command,
         )
-        sessions = [
-            session
-            for session in self.state_manager.get_sessions_for_user(user.username)
-            if session.system == system.hostname
-            and session.session_kind not in {"network", "service"}
-            and session.logon_type not in {3, 5}
-            and _session_active_for_activity(session, requested_time)
-        ]
-        logon_id = (
-            max(sessions, key=lambda session: ensure_utc(session.start_time)).logon_id
-            if sessions
-            else ""
-        )
+        active_session = self._active_user_linux_process_session(user, system, requested_time)
+        logon_id = active_session.logon_id if active_session is not None else ""
         key = (system.hostname, user.username, logon_id)
         scheduled_time = max(
             requested_time,
@@ -30462,7 +30824,7 @@ class ActivityGenerator:
             )
         if singleton_service_pid is not None:
             if not self._process_source_visible_by(
-                hostname=system.hostname,
+                system=system,
                 pid=singleton_service_pid,
                 deadline=source_deadline,
             ):
@@ -32262,6 +32624,28 @@ class ActivityGenerator:
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
             os_category = _get_os_category(system.os)
+            # Resolve compiled host support before session bootstrap or RNG use. A bound
+            # registry is authoritative, so an unknown host must fail closed without
+            # creating activity that cannot be backed by compiled deployment truth.
+            category_map = {
+                "process_user_apps": "user_app",
+                "process_code": "code",
+                "process_build": "build",
+                "process_query": "query",
+            }
+            catalog_category = category_map.get(activity_type)
+            deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
+            host_deployment = (
+                deployment_registry.host_deployment(system.hostname)
+                if catalog_category is not None and deployment_registry is not None
+                else None
+            )
+            if (
+                catalog_category is not None
+                and deployment_registry is not None
+                and host_deployment is None
+            ):
+                return
             if (
                 os_category == "windows"
                 and self._locked_user_interactive_windows_session(user, system, time) is not None
@@ -32274,22 +32658,10 @@ class ActivityGenerator:
                     system,
                     time,
                 )
+            elif os_category == "linux":
+                active_session = self._active_user_linux_process_session(user, system, time)
             else:
-                sessions = self.state_manager.get_sessions_for_user(user.username)
-                active_session = (
-                    next(
-                        (
-                            s
-                            for s in sessions
-                            if s.system == system.hostname
-                            and _session_active_for_activity(s, time)
-                            and s.logon_type in (2, 10, 11)
-                        ),
-                        None,
-                    )
-                    if sessions
-                    else None
-                )
+                active_session = None
 
             if active_session:
                 logon_id = active_session.logon_id
@@ -32317,16 +32689,6 @@ class ActivityGenerator:
                         logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
                     logon_id = self.generate_logon(user, system, logon_time)
 
-            # Phase 2.10: OS-aware process template selection
-            # Map activity_type to catalog category
-            _CATEGORY_MAP = {
-                "process_user_apps": "user_app",
-                "process_code": "code",
-                "process_build": "build",
-                "process_query": "query",
-            }
-            catalog_category = _CATEGORY_MAP.get(activity_type)
-
             if catalog_category in ("user_app", "browser", "office") and system.type in (
                 "server",
                 "domain_controller",
@@ -32336,11 +32698,9 @@ class ActivityGenerator:
             # Prefer compiled assignment truth; retain the catalog only for legacy callers.
             if catalog_category:
                 rng = _get_rng()
-                deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
                 result: tuple[str, str] | None = None
                 singleton_per_session = False
                 if deployment_registry is not None:
-                    host_deployment = deployment_registry.host_deployment(system.hostname)
                     user_profile = (
                         deployment_registry.user_profile_for(
                             system.hostname,
@@ -32486,6 +32846,16 @@ class ActivityGenerator:
                             process_time
                         ):
                             return
+                        active_session = self._active_user_linux_process_session(
+                            user,
+                            system,
+                            process_time,
+                        )
+                        if active_session is None:
+                            raise StateError(
+                                "Scheduled Linux catalog process lost its session owner"
+                            )
+                        logon_id = active_session.logon_id
                         source_process_groups = _linux_catalog_process_groups_from_shell_command(
                             process_name,
                             shell_command_line,
@@ -32783,6 +33153,14 @@ class ActivityGenerator:
                     )
                     if process_time is None or not self._is_within_scenario_window(process_time):
                         return
+                    active_session = self._active_user_linux_process_session(
+                        user,
+                        system,
+                        process_time,
+                    )
+                    if active_session is None:
+                        raise StateError("Scheduled Linux system process lost its session owner")
+                    logon_id = active_session.logon_id
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -34020,13 +34398,25 @@ class ActivityGenerator:
                 pid,
             )
             return
+        candidate_time = time
         if process is not None:
-            time = self._clamp_after_visible_process_create(
+            candidate_time = self._clamp_after_visible_process_create(
                 system,
                 pid,
                 time,
                 "source.windows_wfp_connection",
             )
+        if network.closed_at is not None and candidate_time >= ensure_utc(network.closed_at):
+            logger.debug(
+                "Skipping WFP 5156 because process visibility falls outside transport: "
+                "host=%s pid=%s candidate=%s close=%s",
+                system.hostname,
+                pid,
+                candidate_time.isoformat(),
+                ensure_utc(network.closed_at).isoformat(),
+            )
+            return
+        time = candidate_time
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="wfp_connection",

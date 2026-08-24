@@ -6,17 +6,19 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import secrets
 import struct
 import sys
 from collections import OrderedDict
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from json.encoder import encode_basestring
 from threading import Condition, Lock, RLock
-from typing import Self
+from typing import Literal, Self
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -28,13 +30,20 @@ from evidenceforge.events.application import (
 )
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    FileSensorObservation,
+    NatSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
+    NetworkTuple,
 )
 from evidenceforge.generation.application_channels import (
+    ApplicationChannelAdmissionReceipt,
+    ApplicationChannelAdmissionResult,
+    ApplicationChannelAdmissionToken,
     ApplicationChannelCloseRequest,
     ApplicationChannelCloseToken,
+    ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
 )
 from evidenceforge.generation.indexes import CompactIndexedStore, PackedHandleExpiryIndex
@@ -429,6 +438,61 @@ class SmbHandleView:
 
 
 @dataclass(frozen=True, slots=True)
+class SmbCompletedHandlePlan:
+    """One file-handle lifetime completed inside a prepared SMB operation."""
+
+    file_id: str
+    content_version: int
+    access: str
+    opened_at: datetime
+    closed_at: datetime
+    deny_write: bool = False
+    role: str = "operation"
+
+
+@dataclass(frozen=True, slots=True)
+class SmbCompletedOperationPlan:
+    """One completed member of a prepared terminal SMB batch."""
+
+    semantic_operation_id: str
+    started_at: datetime
+    ended_at: datetime
+    initiator_bytes: int
+    responder_bytes: int
+    handles: tuple[SmbCompletedHandlePlan, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SmbCompletedHandleView:
+    """Canonical immutable identity for one handle born and closed in a batch."""
+
+    handle_id: str
+    channel_id: str
+    tree_id: str
+    operation_id: str
+    file_id: str
+    content_version: int
+    access: str
+    opened_at: datetime
+    closed_at: datetime
+    deny_write: bool
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
+class SmbCompletedOperationView:
+    """Canonical immutable result for one completed batch operation."""
+
+    operation_id: str
+    ordinal: int
+    started_at: datetime
+    ended_at: datetime
+    initiator_bytes: int
+    responder_bytes: int
+    handles: tuple[SmbCompletedHandleView, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SmbOperationLease:
     """Frozen session/tree/transport identity for one admitted SMB action."""
 
@@ -454,6 +518,8 @@ class SmbOperationLease:
     reused_session: bool
     created_tree: bool
     operation_completed: bool = False
+    _manager_id: str = field(default="", repr=False, compare=False)
+    _integrity: str = field(default="", repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +534,333 @@ class SmbChannelClosure:
     lifecycle_group_id: str
     closed_at: datetime
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class SmbClosedSessionBatch:
+    """One terminal SMB session/tree and its completed operation members."""
+
+    session: SmbSessionView
+    tree: SmbTreeView
+    operations: tuple[SmbCompletedOperationView, ...]
+    closure: SmbChannelClosure
+
+
+_SMB_ADMISSION_GRAPH_TYPES = frozenset(
+    {
+        SmbSessionView,
+        SmbTreeView,
+        SmbCompletedHandleView,
+        SmbCompletedOperationView,
+        SmbChannelClosure,
+        SmbClosedSessionBatch,
+        DirectionalTrafficLedger,
+        NetworkTrafficLedger,
+        NetworkTuple,
+        NatSensorObservation,
+        FileSensorObservation,
+        NetworkSensorObservation,
+        NetworkTransactionPlan,
+    }
+)
+_SMB_ADMISSION_MAX_GRAPH_NODES = 65_536
+_SMB_ADMISSION_MAX_SCALAR_BYTES = 16 * 1024 * 1024
+
+
+def _append_smb_admission_scalar(buffer: bytearray, tag: bytes, payload: bytes) -> None:
+    """Append one exactly typed length-framed scalar to an admission snapshot."""
+
+    if len(payload) > _SMB_ADMISSION_MAX_SCALAR_BYTES:
+        raise StateError("SMB admission scalar exceeds its exact byte bound")
+    buffer.extend(tag)
+    buffer.extend(len(payload).to_bytes(8, "big"))
+    buffer.extend(payload)
+
+
+def _smb_admission_graph_bytes(value: object) -> bytes:
+    """Encode one bounded exact-type graph without invoking nested ``repr`` hooks."""
+
+    buffer = bytearray()
+    remaining_nodes = _SMB_ADMISSION_MAX_GRAPH_NODES
+
+    def encode(item: object, *, depth: int) -> None:
+        nonlocal remaining_nodes
+        remaining_nodes -= 1
+        if remaining_nodes < 0 or depth > 32:
+            raise StateError("SMB admission graph exceeds its exact structural bound")
+        item_type = type(item)
+        if item is None:
+            buffer.extend(b"n")
+        elif item_type is bool:
+            buffer.extend(b"b1" if item else b"b0")
+        elif item_type is int:
+            _append_smb_admission_scalar(buffer, b"i", str(item).encode("ascii"))
+        elif item_type is float:
+            _append_smb_admission_scalar(buffer, b"f", struct.pack("!d", item))
+        elif item_type is str:
+            _append_smb_admission_scalar(buffer, b"s", item.encode("utf-8"))
+        elif item_type is bytes:
+            _append_smb_admission_scalar(buffer, b"y", item)
+        elif item_type is datetime:
+            _append_smb_admission_scalar(
+                buffer,
+                b"d",
+                item.isoformat(timespec="microseconds").encode("ascii"),
+            )
+        elif item_type is tuple:
+            if len(item) > _SMB_ADMISSION_MAX_GRAPH_NODES:
+                raise StateError("SMB admission tuple exceeds its exact member bound")
+            buffer.extend(b"t")
+            buffer.extend(len(item).to_bytes(8, "big"))
+            for member in item:
+                encode(member, depth=depth + 1)
+        elif item_type is frozenset:
+            if len(item) > 64 or any(type(member) is not str for member in item):
+                raise StateError("SMB admission set has an invalid exact shape")
+            encoded_members = tuple(sorted(member.encode("utf-8") for member in item))
+            buffer.extend(b"r")
+            buffer.extend(len(encoded_members).to_bytes(8, "big"))
+            for member in encoded_members:
+                _append_smb_admission_scalar(buffer, b"m", member)
+        elif item_type in _SMB_ADMISSION_GRAPH_TYPES:
+            _append_smb_admission_scalar(
+                buffer,
+                b"c",
+                f"{item_type.__module__}.{item_type.__qualname__}".encode("ascii"),
+            )
+            declared_fields = fields(item_type)
+            buffer.extend(len(declared_fields).to_bytes(8, "big"))
+            for declared in declared_fields:
+                _append_smb_admission_scalar(buffer, b"k", declared.name.encode("ascii"))
+                encode(object.__getattribute__(item, declared.name), depth=depth + 1)
+        else:
+            raise StateError("SMB admission graph contains an unsupported or inexact nested type")
+        if len(buffer) > _SMB_ADMISSION_MAX_SCALAR_BYTES:
+            raise StateError("SMB admission graph exceeds its exact byte bound")
+
+    encode(value, depth=0)
+    return bytes(buffer)
+
+
+def _smb_closed_session_batch_digest(result: SmbClosedSessionBatch) -> str:
+    """Return a strict digest over one exact terminal SMB batch."""
+
+    if (
+        type(result) is not SmbClosedSessionBatch
+        or type(result.operations) is not tuple
+        or not 1 <= len(result.operations) <= 64
+    ):
+        raise StateError("SMB terminal sidecar result has an invalid exact shape")
+    return hashlib.sha256(
+        b"smb-channel-sidecar-result-v2\x00" + _smb_admission_graph_bytes(result)
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SmbChannelAdmissionToken:
+    """Opaque manager reservation for one terminal SMB/common-channel batch."""
+
+    kind: Literal["fresh_completed_batch_close"]
+    application_token: ApplicationChannelAdmissionToken = field(repr=False)
+    result: SmbClosedSessionBatch
+    _manager_token: int = field(repr=False, default=0)
+    _reservation_id: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def linearization_time(self) -> datetime:
+        """Return the canonical frontier protected by the common capability."""
+
+        return self.application_token.linearization_time
+
+    @property
+    def publication_token(self) -> str:
+        """Return the stable opaque manager capability binding."""
+
+        return self._integrity_token
+
+
+def _smb_admission_integrity_token(
+    authority_secret: bytes,
+    token: SmbChannelAdmissionToken,
+) -> str:
+    """Authenticate the common capability and complete terminal SMB result."""
+
+    if (
+        type(token) is not SmbChannelAdmissionToken
+        or type(token.application_token) is not ApplicationChannelAdmissionToken
+        or type(token.kind) is not str
+        or type(token._manager_token) is not int
+        or type(token._reservation_id) is not int
+    ):
+        raise StateError("SMB channel admission token has an invalid exact type")
+    canonical = _smb_admission_graph_bytes(
+        (
+            "smb-channel-admission-v2",
+            token.kind,
+            token.application_token.publication_token,
+            _smb_closed_session_batch_digest(token.result),
+            token._manager_token,
+            token._reservation_id,
+        )
+    )
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _SmbAdmissionCapability:
+    """Manager-owned immutable locator for one terminal SMB admission."""
+
+    token_id: int
+    reservation_id: int
+    integrity_token: str
+    application_token: ApplicationChannelAdmissionToken
+    trusted_result: SmbClosedSessionBatch
+
+
+def smb_channel_sidecar_result_digest(result: SmbClosedSessionBatch) -> str:
+    """Return a stable digest over every terminal SMB session/member fact."""
+
+    return _smb_closed_session_batch_digest(result)
+
+
+@dataclass(frozen=True, slots=True)
+class SmbChannelAdmissionReceipt:
+    """Authenticated proof of one committed SMB/common terminal batch."""
+
+    manager_kind: Literal["smb"]
+    manager_id: str
+    kind: Literal["fresh_completed_batch_close"]
+    publication_token: str
+    application_receipt: ApplicationChannelAdmissionReceipt
+    application_receipt_token: str
+    channel_id: str
+    operation_id: str
+    operation_ids: tuple[str, ...]
+    transport_id: str
+    sidecar_result: SmbClosedSessionBatch
+    sidecar_result_digest: str
+    _manager_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def receipt_token(self) -> str:
+        """Return the keyed proof over the complete manager result."""
+
+        return self._integrity_token
+
+
+def _smb_admission_receipt_integrity_token(
+    authority_secret: bytes,
+    receipt: SmbChannelAdmissionReceipt,
+) -> str:
+    """Authenticate exact manager, common receipt, and terminal SMB membership."""
+
+    if (
+        type(receipt) is not SmbChannelAdmissionReceipt
+        or type(receipt.application_receipt) is not ApplicationChannelAdmissionReceipt
+        or type(receipt.operation_ids) is not tuple
+        or any(type(operation_id) is not str for operation_id in receipt.operation_ids)
+        or type(receipt._manager_token) is not int
+    ):
+        raise StateError("SMB channel admission receipt has an invalid exact type")
+    sidecar_digest = _smb_closed_session_batch_digest(receipt.sidecar_result)
+    if not hmac.compare_digest(sidecar_digest, receipt.sidecar_result_digest):
+        raise StateError("SMB channel admission receipt sidecar changed after commit")
+    canonical = _smb_admission_graph_bytes(
+        (
+            "smb-channel-admission-receipt-v2",
+            receipt.manager_kind,
+            receipt.manager_id,
+            receipt.kind,
+            receipt.publication_token,
+            receipt.application_receipt_token,
+            receipt.channel_id,
+            receipt.operation_id,
+            receipt.operation_ids,
+            receipt.transport_id,
+            receipt.sidecar_result_digest,
+            receipt._manager_token,
+        )
+    )
+    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SmbChannelAdmissionResult:
+    """Frozen terminal SMB result plus common and manager proofs."""
+
+    result: SmbClosedSessionBatch
+    application: ApplicationChannelAdmissionResult
+    receipt: SmbChannelAdmissionReceipt
+
+
+class SmbChannelPreparedCommit:
+    """No-lock-body capability for one terminal SMB/common-channel commit."""
+
+    __slots__ = (
+        "_active",
+        "_application_commit",
+        "_committed",
+        "_manager",
+        "_result",
+        "_token",
+    )
+
+    def __init__(
+        self,
+        manager: SmbApplicationChannelManager,
+        token: SmbChannelAdmissionToken,
+        application_commit: ApplicationChannelPreparedCommit,
+    ) -> None:
+        self._manager = manager
+        self._token = token
+        self._application_commit = application_commit
+        self._active = True
+        self._committed = False
+        self._result: SmbChannelAdmissionResult | None = None
+
+    @property
+    def committed(self) -> bool:
+        """Return whether this exact manager claim has committed."""
+
+        return self._committed
+
+    @property
+    def result(self) -> SmbChannelAdmissionResult | None:
+        """Return the frozen terminal result after commit."""
+
+        return self._result
+
+    def commit_no_fail(self) -> SmbChannelAdmissionResult:
+        """Publish or adopt the common terminal batch and seal its SMB proof."""
+
+        if not self._active:
+            raise StateError("SMB channel prepared commit is no longer active")
+        if self._committed:
+            raise StateError("SMB channel prepared admission was already committed")
+        application_result = (
+            self._application_commit.result
+            if self._application_commit.committed
+            else self._application_commit.commit_no_fail()
+        )
+        if application_result is None:  # pragma: no cover - guarded by committed contract
+            raise AssertionError("SMB common admission retained no committed result")
+        self._result = self._manager._issue_claimed_admission_result(
+            self._token,
+            application_result,
+        )
+        self._committed = True
+        self._manager._release_committed_admission(self._token)
+        return self._result
+
+    def commit(self) -> SmbChannelAdmissionResult:
+        """Compatibility alias for :meth:`commit_no_fail`."""
+
+        return self.commit_no_fail()
+
+    def _close(self) -> None:
+        self._active = False
 
 
 class SmbClosurePage(Sequence[SmbChannelClosure]):
@@ -590,6 +983,9 @@ class SmbChannelCensus:
     primary_compaction_work: int
     primary_compaction_seconds: float
     application: ApplicationChannelCensus
+    prepared_admissions: int = 0
+    claimed_admissions: int = 0
+    estimated_prepared_bytes: int = 0
 
 
 class _SmbMutationGate:
@@ -1227,18 +1623,148 @@ class SmbApplicationChannelManager:
         if registry_window_start != self._window_start or registry_window_end != self._window_end:
             raise ValueError("SMB and shared application-channel windows must match exactly")
         self._registry = application_registry
+        self._manager_id = secrets.token_hex(16)
+        self._lease_secret = secrets.token_bytes(32)
         self._shards: dict[int, _SmbShard] = {}
         self._directory_lock = RLock()
         self._gate = _SmbMutationGate()
         self._watermark_lane = Lock()
         self._compaction_cursor = 0
         self._exact_route_cache: OrderedDict[bytes, int] = OrderedDict()
+        self._prepared_lock = RLock()
+        self._admission_secret = secrets.token_bytes(32)
+        self._next_prepared_reservation_id = 1
+        self._prepared_admissions: dict[int, SmbChannelAdmissionToken] = {}
+        self._prepared_capabilities: dict[int, _SmbAdmissionCapability] = {}
+        self._claimed_admissions: set[int] = set()
+        self._cancelling_admissions: set[int] = set()
 
     @property
     def application_registry(self) -> ApplicationChannelRegistry:
         """Return the injected engine-owned application-channel registry."""
 
         return self._registry
+
+    @property
+    def manager_id(self) -> str:
+        """Return the stable opaque identity of this manager instance."""
+
+        return self._manager_id
+
+    def _active_prepared_admission_locked(
+        self,
+        token: SmbChannelAdmissionToken,
+    ) -> _SmbAdmissionCapability:
+        """Return the manager-owned capability for one intact exact token."""
+
+        capability = self._prepared_capabilities.get(id(token))
+        if capability is None:
+            if token._manager_token != id(self):
+                raise StateError("SMB channel admission token belongs to another manager")
+            raise StateError("SMB channel admission token is stale or already consumed")
+        if self._prepared_admissions.get(capability.reservation_id) is not token:
+            raise StateError("SMB channel admission token is stale or already consumed")
+        if token.application_token is not capability.application_token:
+            raise StateError("SMB token no longer binds its exact common capability")
+        if token.result is not capability.trusted_result:
+            raise StateError("SMB token no longer binds its exact terminal sidecar")
+        expected = _smb_admission_integrity_token(self._admission_secret, token)
+        if not (
+            hmac.compare_digest(token._integrity_token, capability.integrity_token)
+            and hmac.compare_digest(expected, capability.integrity_token)
+        ):
+            raise StateError("SMB channel admission token integrity validation failed")
+        return capability
+
+    def authenticates_admission_token(self, token: SmbChannelAdmissionToken) -> bool:
+        """Return whether one intact manager/common terminal token remains active."""
+
+        if type(token) is not SmbChannelAdmissionToken:
+            return False
+        with self._prepared_lock:
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                return False
+        return self._registry.authenticates_admission_token(capability.application_token)
+
+    def authenticates_admission_receipt(self, receipt: SmbChannelAdmissionReceipt) -> bool:
+        """Return whether this manager issued the exact terminal batch receipt."""
+
+        return bool(
+            self.authenticates_admission_receipt_proof(receipt)
+            and self._registry.authenticates_admission_receipt(receipt.application_receipt)
+        )
+
+    def authenticates_admission_receipt_proof(
+        self,
+        receipt: SmbChannelAdmissionReceipt,
+    ) -> bool:
+        """Authenticate one issued manager/common proof after terminal acknowledgement."""
+
+        if (
+            type(receipt) is not SmbChannelAdmissionReceipt
+            or receipt.manager_kind != "smb"
+            or receipt.manager_id != self._manager_id
+            or receipt._manager_token != id(self)
+            or type(receipt.application_receipt) is not ApplicationChannelAdmissionReceipt
+        ):
+            return False
+        if not self._registry.authenticates_admission_receipt_proof(receipt.application_receipt):
+            return False
+        try:
+            expected = _smb_admission_receipt_integrity_token(self._admission_secret, receipt)
+            common = receipt.application_receipt
+            return (
+                hmac.compare_digest(receipt._integrity_token, expected)
+                and common.kind == "open_completed_batch_close"
+                and common.close_token is None
+                and common.snapshot.closed_at is not None
+                and common.snapshot.active_operations == 0
+                and receipt.application_receipt_token == common.receipt_token
+                and receipt.channel_id == common.channel_id
+                and receipt.operation_id == common.operation_id
+                and receipt.operation_ids == common.operation_ids
+                and receipt.transport_id == common.snapshot.identity.binding.transport_id
+                and receipt.sidecar_result.session.channel_id == receipt.channel_id
+                and receipt.sidecar_result.session.transport_id == receipt.transport_id
+                and receipt.sidecar_result_digest
+                == smb_channel_sidecar_result_digest(receipt.sidecar_result)
+            )
+        except (AttributeError, StateError, TypeError, ValueError):
+            return False
+
+    def authenticates_admission_result(self, result: object) -> bool:
+        """Authenticate one exact SMB/common outer result and every identity link."""
+
+        if type(result) is not SmbChannelAdmissionResult:
+            return False
+        receipt = result.receipt
+        application = result.application
+        return bool(
+            type(receipt) is SmbChannelAdmissionReceipt
+            and type(application) is ApplicationChannelAdmissionResult
+            and result.result is receipt.sidecar_result
+            and application.receipt is receipt.application_receipt
+            and self.authenticates_admission_receipt(receipt)
+            and self._registry.authenticates_admission_result(application)
+        )
+
+    def authenticates_admission_result_proof(self, result: object) -> bool:
+        """Authenticate one intact outer result after its recovery owners are released."""
+
+        if type(result) is not SmbChannelAdmissionResult:
+            return False
+        receipt = result.receipt
+        application = result.application
+        return bool(
+            type(receipt) is SmbChannelAdmissionReceipt
+            and type(application) is ApplicationChannelAdmissionResult
+            and result.result is receipt.sidecar_result
+            and application.receipt is receipt.application_receipt
+            and self.authenticates_admission_receipt_proof(receipt)
+            and self._registry.authenticates_admission_result_proof(application)
+        )
 
     def _shard(self, owner_id: str, *, create: bool) -> _SmbShard | None:
         shard_id = self._registry.owner_partition_id(owner_id)
@@ -1494,8 +2020,8 @@ class SmbApplicationChannelManager:
             connected_at=canonical_connected_at,
         ), True
 
-    @staticmethod
     def _lease(
+        self,
         session: SmbSessionView,
         tree: SmbTreeView,
         reservation: ApplicationOperationReservation,
@@ -1504,7 +2030,7 @@ class SmbApplicationChannelManager:
         created_tree: bool,
         operation_completed: bool = False,
     ) -> SmbOperationLease:
-        return SmbOperationLease(
+        lease = SmbOperationLease(
             channel_id=session.channel_id,
             session_id=session.session_id,
             tree_id=tree.tree_id,
@@ -1527,7 +2053,489 @@ class SmbApplicationChannelManager:
             reused_session=reused_session,
             created_tree=created_tree,
             operation_completed=operation_completed,
+            _manager_id=self._manager_id,
         )
+        object.__setattr__(lease, "_integrity", self._lease_integrity(lease))
+        return lease
+
+    def _lease_integrity(self, lease: SmbOperationLease) -> str:
+        """Bind one exact lease object to every immutable operation fact."""
+
+        payload = repr(
+            (
+                "smb-operation-lease-v1",
+                id(lease),
+                lease._manager_id,
+                lease.channel_id,
+                lease.session_id,
+                lease.tree_id,
+                lease.operation_id,
+                lease.ordinal,
+                lease.started_at,
+                lease.ended_at,
+                lease.transport_plan,
+                lease.sensor_observations,
+                lease.ground_truth_transport_uid,
+                lease.logon_id,
+                lease.auth_session_ref,
+                lease.principal,
+                lease.auth_protocol,
+                lease.account_scope,
+                lease.effective_uid,
+                lease.effective_gid,
+                lease.client_access,
+                lease.lifecycle_group_id,
+                lease.reused_session,
+                lease.created_tree,
+                lease.operation_completed,
+            )
+        ).encode("utf-8")
+        return hmac.new(self._lease_secret, payload, hashlib.sha256).hexdigest()
+
+    def _authenticate_lease(self, lease: SmbOperationLease) -> None:
+        """Reject copied, foreign, stale-shaped, or mutated lease carriers."""
+
+        if (
+            type(lease) is not SmbOperationLease
+            or lease._manager_id != self._manager_id
+            or type(lease._integrity) is not str
+            or len(lease._integrity) != 64
+            or not hmac.compare_digest(lease._integrity, self._lease_integrity(lease))
+        ):
+            raise StateError("SMB operation lease is copied, foreign, or tampered")
+
+    def prepare_fresh_session_with_completed_operations_and_close(
+        self,
+        affinity: SmbChannelAffinity,
+        *,
+        transport_plan: NetworkTransactionPlan,
+        sensor_observations: tuple[NetworkSensorObservation, ...],
+        ground_truth_transport_uid: str,
+        logon_id: str,
+        auth_session_ref: str,
+        principal: str,
+        auth_protocol: str,
+        account_scope: str,
+        effective_uid: int | None,
+        effective_gid: int | None,
+        client_access: str,
+        server_hostname: str,
+        client_ip: str,
+        lifecycle_group_id: str,
+        share_ref: str,
+        tree_connected_at: datetime,
+        operations: tuple[SmbCompletedOperationPlan, ...],
+        idle_timeout: timedelta,
+        closed_at: datetime,
+        reason: str = "logoff",
+    ) -> SmbChannelAdmissionToken:
+        """Prepare one 1..64-member SMB session that is born terminal at root commit."""
+
+        if type(operations) is not tuple or not operations or len(operations) > 64:
+            raise ValueError("Prepared SMB terminal batches require 1..64 operations")
+        if any(type(item) is not SmbCompletedOperationPlan for item in operations):
+            raise TypeError("Prepared SMB operations must be exact immutable models")
+        if transport_plan.closed_at is None:
+            raise StateError("Prepared SMB terminal batches require an immutable transport close")
+        transport_open = ensure_utc(transport_plan.started_at)
+        transport_close = ensure_utc(transport_plan.closed_at)
+        canonical_tree_time = ensure_utc(tree_connected_at)
+        canonical_close = ensure_utc(closed_at)
+        if transport_close > self._window_end:
+            raise StateError("SMB transport close must be inside the application window")
+        if idle_timeout <= timedelta(0):
+            raise ValueError("SMB idle_timeout must be positive")
+        if not transport_open <= canonical_tree_time <= canonical_close <= transport_close:
+            raise StateError("SMB tree/session terminal times must stay inside the transport")
+
+        canonical_ground_truth_uid = _required_text(
+            ground_truth_transport_uid,
+            "ground_truth_transport_uid",
+        )
+        canonical_logon_id = _required_text(logon_id, "logon_id")
+        canonical_auth_session_ref = _required_text(auth_session_ref, "auth_session_ref")
+        canonical_principal = _required_text(principal, "principal")
+        canonical_auth_protocol = _required_text(auth_protocol, "auth_protocol")
+        canonical_account_scope = _required_text(account_scope, "account_scope")
+        canonical_client_access = _required_text(client_access, "client_access")
+        canonical_server_hostname = _required_text(server_hostname, "server_hostname")
+        canonical_client_ip = _required_text(client_ip, "client_ip")
+        canonical_lifecycle_group_id = _required_text(
+            lifecycle_group_id,
+            "lifecycle_group_id",
+        )
+        canonical_share_ref = _required_text(share_ref, "share_ref")
+        canonical_reason = _required_text(reason, "reason")
+        canonical_observations = tuple(sensor_observations)
+
+        channel_id = self._channel_id(affinity, transport_plan.stable_id)
+        session_id = self._session_id(channel_id)
+        tree_id = self._tree_id(session_id, canonical_share_ref)
+        operation_ids: set[str] = set()
+        handle_ids: set[str] = set()
+        handle_spans: dict[str, list[SmbCompletedHandleView]] = {}
+        operation_views: list[SmbCompletedOperationView] = []
+        reservations: list[ApplicationOperationReservation] = []
+        previous_end = canonical_tree_time
+        for ordinal, plan in enumerate(operations):
+            semantic_operation_id = _required_text(
+                plan.semantic_operation_id,
+                "semantic_operation_id",
+            )
+            started_at = ensure_utc(plan.started_at)
+            ended_at = ensure_utc(plan.ended_at)
+            if started_at < previous_end or ended_at < started_at or ended_at > canonical_close:
+                raise StateError("Prepared SMB operation spans must be ordered inside the session")
+            if ordinal and started_at <= previous_end:
+                raise StateError("Prepared SMB operation spans require a strict ordering gap")
+            if plan.initiator_bytes < 0 or plan.responder_bytes < 0:
+                raise ValueError("Prepared SMB operation bytes must be non-negative")
+            if type(plan.handles) is not tuple or len(plan.handles) > 4:
+                raise ValueError("Prepared SMB operations support at most four completed handles")
+            operation_id = self._operation_id(channel_id, semantic_operation_id)
+            if operation_id in operation_ids:
+                raise StateError("Prepared SMB terminal batch repeats an operation identity")
+            operation_ids.add(operation_id)
+            completed_handles: list[SmbCompletedHandleView] = []
+            for handle_plan in plan.handles:
+                if type(handle_plan) is not SmbCompletedHandlePlan:
+                    raise TypeError("Prepared SMB handles must be exact immutable models")
+                file_id = _required_text(handle_plan.file_id, "file_id")
+                access = _required_text(handle_plan.access, "access")
+                role = _required_text(handle_plan.role, "role")
+                opened_at = ensure_utc(handle_plan.opened_at)
+                handle_closed_at = ensure_utc(handle_plan.closed_at)
+                if handle_plan.content_version <= 0:
+                    raise ValueError("Prepared SMB handle content_version must be positive")
+                if not started_at <= opened_at <= handle_closed_at <= ended_at:
+                    raise StateError("Prepared SMB handle lifetime must stay inside its operation")
+                handle_id = self._handle_id(
+                    operation_id=operation_id,
+                    tree_id=tree_id,
+                    file_id=file_id,
+                    content_version=handle_plan.content_version,
+                    access=access,
+                    role=role,
+                )
+                if handle_id in handle_ids:
+                    raise StateError("Prepared SMB terminal batch repeats a handle identity")
+                handle_ids.add(handle_id)
+                view = SmbCompletedHandleView(
+                    handle_id=handle_id,
+                    channel_id=channel_id,
+                    tree_id=tree_id,
+                    operation_id=operation_id,
+                    file_id=file_id,
+                    content_version=handle_plan.content_version,
+                    access=access,
+                    opened_at=opened_at,
+                    closed_at=handle_closed_at,
+                    deny_write=handle_plan.deny_write,
+                    role=role,
+                )
+                for retained in handle_spans.get(file_id, ()):
+                    overlaps = (
+                        opened_at < retained.closed_at and retained.opened_at < handle_closed_at
+                    )
+                    write_conflict = "write" in {access, retained.access} and (
+                        handle_plan.deny_write or retained.deny_write
+                    )
+                    if overlaps and write_conflict:
+                        raise StateError("Prepared SMB handles violate deny-write sharing")
+                handle_spans.setdefault(file_id, []).append(view)
+                completed_handles.append(view)
+            operation_views.append(
+                SmbCompletedOperationView(
+                    operation_id=operation_id,
+                    ordinal=ordinal,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    initiator_bytes=plan.initiator_bytes,
+                    responder_bytes=plan.responder_bytes,
+                    handles=tuple(completed_handles),
+                )
+            )
+            reservations.append(
+                ApplicationOperationReservation(
+                    operation_id=operation_id,
+                    channel_id=channel_id,
+                    ordinal=ordinal,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    initiator_bytes=plan.initiator_bytes,
+                    responder_bytes=plan.responder_bytes,
+                )
+            )
+            previous_end = ended_at
+
+        initiator_bytes = sum(item.initiator_bytes for item in operation_views)
+        responder_bytes = sum(item.responder_bytes for item in operation_views)
+        if (
+            initiator_bytes != transport_plan.traffic.orig.payload_bytes
+            or responder_bytes != transport_plan.traffic.resp.payload_bytes
+        ):
+            raise StateError("Prepared SMB batch bytes must equal the canonical transport ledger")
+        binding = ApplicationTransportBinding(
+            transport_id=transport_plan.stable_id,
+            opened_at=transport_open,
+            closes_at=transport_close,
+        )
+        identity = ApplicationChannelIdentity(
+            channel_id=channel_id,
+            protocol="smb",
+            owner_id=affinity.owner_id,
+            affinity_digest=affinity.digest,
+            binding=binding,
+            opened_at=transport_open,
+            idle_timeout=idle_timeout,
+            hard_deadline=transport_close,
+            budget=ApplicationChannelBudget(
+                initiator_bytes=initiator_bytes,
+                responder_bytes=responder_bytes,
+                operations=len(operation_views),
+            ),
+        )
+        session = SmbSessionView(
+            channel_id=channel_id,
+            session_id=session_id,
+            affinity_digest=affinity.digest,
+            transport_plan=transport_plan,
+            sensor_observations=canonical_observations,
+            ground_truth_transport_uid=canonical_ground_truth_uid,
+            logon_id=canonical_logon_id,
+            auth_session_ref=canonical_auth_session_ref,
+            principal=canonical_principal,
+            auth_protocol=canonical_auth_protocol,
+            account_scope=canonical_account_scope,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+            client_access=canonical_client_access,
+            server_hostname=canonical_server_hostname,
+            client_ip=canonical_client_ip,
+            lifecycle_group_id=canonical_lifecycle_group_id,
+        )
+        result = SmbClosedSessionBatch(
+            session=session,
+            tree=SmbTreeView(
+                tree_id=tree_id,
+                channel_id=channel_id,
+                session_id=session_id,
+                share_ref=canonical_share_ref,
+                connected_at=canonical_tree_time,
+            ),
+            operations=tuple(operation_views),
+            closure=SmbChannelClosure(
+                channel_id=channel_id,
+                session_id=session_id,
+                logon_id=canonical_logon_id,
+                principal=canonical_principal,
+                server_hostname=canonical_server_hostname,
+                lifecycle_group_id=canonical_lifecycle_group_id,
+                closed_at=canonical_close,
+                reason=canonical_reason,
+            ),
+        )
+        application_token = self._registry.prepare_open_channel_with_completed_operations_and_close(
+            identity,
+            tuple(reservations),
+            closed_at=canonical_close,
+            reason=canonical_reason,
+        )
+        try:
+            with self._prepared_lock:
+                reservation_id = self._next_prepared_reservation_id
+                self._next_prepared_reservation_id += 1
+                token = SmbChannelAdmissionToken(
+                    kind="fresh_completed_batch_close",
+                    application_token=application_token,
+                    result=result,
+                    _manager_token=id(self),
+                    _reservation_id=reservation_id,
+                )
+                token = replace(
+                    token,
+                    _integrity_token=_smb_admission_integrity_token(
+                        self._admission_secret,
+                        token,
+                    ),
+                )
+                capability = _SmbAdmissionCapability(
+                    token_id=id(token),
+                    reservation_id=reservation_id,
+                    integrity_token=token._integrity_token,
+                    application_token=application_token,
+                    trusted_result=result,
+                )
+                self._prepared_admissions[reservation_id] = token
+                self._prepared_capabilities[id(token)] = capability
+                return token
+        except BaseException:
+            self._registry.cancel_prepared_admission(application_token)
+            raise
+
+    def cancel_prepared_admission(self, token: SmbChannelAdmissionToken) -> bool:
+        """Cancel one unclaimed SMB/common terminal reservation."""
+
+        validation_error: StateError | None = None
+        with self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return False
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError as error:
+                validation_error = error
+            if capability.reservation_id in self._claimed_admissions:
+                return False
+            self._cancelling_admissions.add(capability.reservation_id)
+        self._registry.cancel_prepared_admission(capability.application_token)
+        if self._registry.authenticates_admission_token(capability.application_token):
+            raise StateError("SMB cancellation did not retire its exact common reservation")
+        with self._prepared_lock:
+            retained = self._prepared_capabilities.get(capability.token_id)
+            if retained is capability:
+                self._release_prepared_capability_locked(capability)
+            self._cancelling_admissions.discard(capability.reservation_id)
+        if validation_error is not None:
+            raise validation_error
+        return True
+
+    def _release_prepared_capability_locked(self, capability: _SmbAdmissionCapability) -> None:
+        """Release one manager reservation using only its immutable locator."""
+
+        self._claimed_admissions.discard(capability.reservation_id)
+        self._cancelling_admissions.discard(capability.reservation_id)
+        self._prepared_admissions.pop(capability.reservation_id, None)
+        self._prepared_capabilities.pop(capability.token_id, None)
+        if not self._prepared_admissions:
+            self._prepared_admissions.clear()
+            self._prepared_capabilities.clear()
+            self._claimed_admissions.clear()
+            self._cancelling_admissions.clear()
+
+    def _claim_prepared_admission(self, token: SmbChannelAdmissionToken) -> _SmbAdmissionCapability:
+        """Claim and revalidate one manager token without retaining locks."""
+
+        with self._prepared_lock:
+            capability = self._active_prepared_admission_locked(token)
+            if capability.reservation_id in self._cancelling_admissions:
+                raise StateError("SMB channel admission token is being cancelled")
+            if capability.reservation_id in self._claimed_admissions:
+                raise StateError("SMB channel admission token is already claimed")
+            if not self._registry.authenticates_admission_token(capability.application_token):
+                self._release_prepared_capability_locked(capability)
+                raise StateError("SMB admission's common token failed authentication")
+            self._claimed_admissions.add(capability.reservation_id)
+            return capability
+
+    @contextmanager
+    def prepared_admission(
+        self,
+        token: SmbChannelAdmissionToken,
+    ) -> Iterator[SmbChannelPreparedCommit]:
+        """Claim SMB and common capabilities while retaining no manager locks."""
+
+        capability = self._claim_prepared_admission(token)
+        transaction: SmbChannelPreparedCommit | None = None
+        try:
+            with self._registry.prepared_admission(
+                capability.application_token
+            ) as application_commit:
+                transaction = SmbChannelPreparedCommit(self, token, application_commit)
+                try:
+                    yield transaction
+                finally:
+                    transaction._close()
+        finally:
+            if transaction is None or not transaction.committed:
+                self._cancel_claimed_admission(token)
+
+    def _cancel_claimed_admission(self, token: SmbChannelAdmissionToken) -> None:
+        """Release one manager claim after its outer transaction aborts."""
+
+        with self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return
+            try:
+                capability = self._active_prepared_admission_locked(token)
+            except StateError:
+                self._release_prepared_capability_locked(capability)
+                return
+            if capability.reservation_id not in self._claimed_admissions:
+                raise StateError("SMB channel admission token is not claimed")
+            self._release_prepared_capability_locked(capability)
+
+    def _issue_claimed_admission_result(
+        self,
+        token: SmbChannelAdmissionToken,
+        application_result: ApplicationChannelAdmissionResult,
+    ) -> SmbChannelAdmissionResult:
+        """Validate one committed common batch and issue its typed SMB proof."""
+
+        with self._prepared_lock:
+            capability = self._active_prepared_admission_locked(token)
+            if capability.reservation_id not in self._claimed_admissions:
+                raise StateError("SMB channel admission token is not claimed")
+            common = application_result.receipt
+            if common is None or not self._registry.authenticates_admission_result(
+                application_result
+            ):
+                raise AssertionError("SMB common admission returned no authentic receipt")
+            trusted = capability.trusted_result
+            operation_ids = tuple(item.operation_id for item in trusted.operations)
+            snapshot = application_result.snapshot
+            assert common.kind == "open_completed_batch_close"
+            assert common.publication_token == capability.application_token.publication_token
+            assert common.operation_ids == operation_ids
+            assert common.channel_id == trusted.session.channel_id
+            assert common.close_token is None and application_result.close_token is None
+            assert snapshot.closed_at == trusted.closure.closed_at
+            assert snapshot.active_operations == 0
+            assert snapshot.completed_operations == len(operation_ids)
+            assert snapshot.reserved_operations == len(operation_ids)
+            assert snapshot.reserved_initiator_bytes == sum(
+                item.initiator_bytes for item in trusted.operations
+            )
+            assert snapshot.reserved_responder_bytes == sum(
+                item.responder_bytes for item in trusted.operations
+            )
+            receipt = SmbChannelAdmissionReceipt(
+                manager_kind="smb",
+                manager_id=self._manager_id,
+                kind="fresh_completed_batch_close",
+                publication_token=capability.integrity_token,
+                application_receipt=common,
+                application_receipt_token=common.receipt_token,
+                channel_id=common.channel_id,
+                operation_id=common.operation_id,
+                operation_ids=operation_ids,
+                transport_id=snapshot.identity.binding.transport_id,
+                sidecar_result=trusted,
+                sidecar_result_digest=smb_channel_sidecar_result_digest(trusted),
+                _manager_token=id(self),
+            )
+            receipt = replace(
+                receipt,
+                _integrity_token=_smb_admission_receipt_integrity_token(
+                    self._admission_secret,
+                    receipt,
+                ),
+            )
+            return SmbChannelAdmissionResult(
+                result=trusted,
+                application=application_result,
+                receipt=receipt,
+            )
+
+    def _release_committed_admission(self, token: SmbChannelAdmissionToken) -> None:
+        """Release one manager claim after its immutable result is safely cached."""
+
+        with self._prepared_lock:
+            capability = self._prepared_capabilities.get(id(token))
+            if capability is None:
+                return
+            self._release_prepared_capability_locked(capability)
 
     def open_session(
         self,
@@ -1752,7 +2760,7 @@ class SmbApplicationChannelManager:
                     updated.identity.binding.closes_at,
                 ).timestamp(),
             )
-            return SmbOperationLease(
+            lease = SmbOperationLease(
                 channel_id=channel_id,
                 session_id=session_id,
                 tree_id=tree_id,
@@ -1775,7 +2783,10 @@ class SmbApplicationChannelManager:
                 reused_session=False,
                 created_tree=True,
                 operation_completed=operation_completes_immediately,
+                _manager_id=self._manager_id,
             )
+            object.__setattr__(lease, "_integrity", self._lease_integrity(lease))
+            return lease
         finally:
             shard.lock.release()
             self._gate.exit_mutation()
@@ -1793,6 +2804,57 @@ class SmbApplicationChannelManager:
     ) -> SmbReuseResult:
         """Reserve one exact compatible SMB operation without scanning other sessions."""
 
+        return self._reserve_reuse(
+            affinity,
+            exact_channel_id=None,
+            share_ref=share_ref,
+            semantic_operation_id=semantic_operation_id,
+            requested_at=requested_at,
+            required_until=required_until,
+            initiator_bytes=initiator_bytes,
+            responder_bytes=responder_bytes,
+        )
+
+    def reserve_channel_reuse(
+        self,
+        anchor_lease: SmbOperationLease,
+        affinity: SmbChannelAffinity,
+        *,
+        share_ref: str,
+        semantic_operation_id: str,
+        requested_at: datetime,
+        required_until: datetime,
+        initiator_bytes: int,
+        responder_bytes: int,
+    ) -> SmbReuseResult:
+        """Reserve reuse on the exact channel proven by an authenticated lease."""
+
+        self._authenticate_lease(anchor_lease)
+        return self._reserve_reuse(
+            affinity,
+            exact_channel_id=anchor_lease.channel_id,
+            share_ref=share_ref,
+            semantic_operation_id=semantic_operation_id,
+            requested_at=requested_at,
+            required_until=required_until,
+            initiator_bytes=initiator_bytes,
+            responder_bytes=responder_bytes,
+        )
+
+    def _reserve_reuse(
+        self,
+        affinity: SmbChannelAffinity,
+        *,
+        exact_channel_id: str | None,
+        share_ref: str,
+        semantic_operation_id: str,
+        requested_at: datetime,
+        required_until: datetime,
+        initiator_bytes: int,
+        responder_bytes: int,
+    ) -> SmbReuseResult:
+        """Reserve one compatible operation, optionally on one exact proven channel."""
+
         canonical_start = ensure_utc(requested_at)
         canonical_end = ensure_utc(required_until)
         if canonical_end < canonical_start:
@@ -1803,13 +2865,21 @@ class SmbApplicationChannelManager:
         if shard is None:
             return SmbReuseResult(lease=None)
         with self._gate.mutation(), shard.lock:
-            channel_key = next(
-                shard.sessions.find_key_iter("affinity", self._affinity_key(affinity)),
-                None,
+            channel_key = (
+                self._channel_key(exact_channel_id)
+                if exact_channel_id is not None
+                else next(
+                    shard.sessions.find_key_iter("affinity", self._affinity_key(affinity)),
+                    None,
+                )
             )
             if channel_key is None:
                 return SmbReuseResult(lease=None)
-            record = shard.sessions[channel_key]
+            record = shard.sessions.get(channel_key)
+            if record is None:
+                return SmbReuseResult(lease=None)
+            if record.affinity_key != self._affinity_key(affinity):
+                raise StateError("SMB exact-channel reuse changed its authenticated affinity")
             session = self._cached_session_view_locked(shard, channel_key, record)
             snapshot = self._registry.get(session.channel_id)
             if snapshot is None or not snapshot.is_open:
@@ -1844,19 +2914,20 @@ class SmbApplicationChannelManager:
                     reason="capacity",
                 )
                 return SmbReuseResult(lease=None, closures=(closure,))
-            reusable = self._registry.find_reusable(
-                affinity_digest=affinity.digest,
-                owner_id=affinity.owner_id,
-                at=max(canonical_start, session.transport_plan.started_at),
-            )
-            if reusable is None or reusable.channel_id != session.channel_id:
-                closure = self._retire_locked(
-                    shard,
-                    session,
-                    at=max(canonical_start, snapshot.last_activity_at),
-                    reason="not reusable",
+            if exact_channel_id is None:
+                reusable = self._registry.find_reusable(
+                    affinity_digest=affinity.digest,
+                    owner_id=affinity.owner_id,
+                    at=max(canonical_start, session.transport_plan.started_at),
                 )
-                return SmbReuseResult(lease=None, closures=(closure,))
+                if reusable is None or reusable.channel_id != session.channel_id:
+                    closure = self._retire_locked(
+                        shard,
+                        session,
+                        at=max(canonical_start, snapshot.last_activity_at),
+                        reason="not reusable",
+                    )
+                    return SmbReuseResult(lease=None, closures=(closure,))
             reservation = ApplicationOperationReservation(
                 operation_id=self._operation_id(session.channel_id, semantic_operation_id),
                 channel_id=session.channel_id,
@@ -1987,6 +3058,7 @@ class SmbApplicationChannelManager:
     ) -> SmbHandleView:
         """Open one versioned handle inside an active operation."""
 
+        self._authenticate_lease(lease)
         if content_version <= 0:
             raise ValueError("SMB handle content_version must be positive")
         if lease.operation_completed:
@@ -2058,6 +3130,7 @@ class SmbApplicationChannelManager:
     ) -> bool:
         """Close and evict one active handle idempotently."""
 
+        self._authenticate_lease(lease)
         if handle.operation_id != lease.operation_id or handle.channel_id != lease.channel_id:
             raise StateError("SMB handle close lease does not own the exact handle operation")
         canonical_close = ensure_utc(closed_at)
@@ -2093,6 +3166,7 @@ class SmbApplicationChannelManager:
     def has_write_conflict(self, lease: SmbOperationLease, file_id: str) -> bool:
         """Return whether an exact channel/file bucket contains a deny-write handle."""
 
+        self._authenticate_lease(lease)
         snapshot = self._registry.get(lease.channel_id)
         if snapshot is None:
             return False
@@ -2114,6 +3188,7 @@ class SmbApplicationChannelManager:
     def finalize_operation(self, lease: SmbOperationLease) -> bool:
         """Finalize an operation after proving it owns no active handles."""
 
+        self._authenticate_lease(lease)
         if lease.operation_completed:
             return False
         snapshot = self._registry.get(lease.channel_id)
@@ -2438,6 +3513,23 @@ class SmbApplicationChannelManager:
     def census(self) -> SmbChannelCensus:
         """Return constant-time state, memory, and amplification metrics."""
 
+        with self._prepared_lock:
+            prepared_admissions = len(self._prepared_admissions)
+            claimed_admissions = len(self._claimed_admissions)
+            estimated_prepared_bytes = (
+                sys.getsizeof(self._prepared_admissions)
+                + sys.getsizeof(self._prepared_capabilities)
+                + sys.getsizeof(self._claimed_admissions)
+                + sys.getsizeof(self._cancelling_admissions)
+                + sum(
+                    sys.getsizeof(key) + sys.getsizeof(value)
+                    for key, value in self._prepared_admissions.items()
+                )
+                + sum(
+                    sys.getsizeof(key) + sys.getsizeof(value)
+                    for key, value in self._prepared_capabilities.items()
+                )
+            )
         with self._directory_lock:
             shards = tuple(self._shards.values())
             route_index_bytes = sys.getsizeof(self._exact_route_cache) + sum(
@@ -2499,7 +3591,7 @@ class SmbApplicationChannelManager:
                 compaction_work += session_metrics.primary_compaction_work
                 compaction_seconds += session_metrics.primary_compaction_seconds
         application = self._registry.census()
-        sidecar_estimated_bytes = estimated_values + estimated_indexes
+        sidecar_estimated_bytes = estimated_values + estimated_indexes + estimated_prepared_bytes
         return SmbChannelCensus(
             open_sessions=open_sessions,
             open_trees=open_trees,
@@ -2527,4 +3619,7 @@ class SmbApplicationChannelManager:
             primary_compaction_work=compaction_work,
             primary_compaction_seconds=compaction_seconds,
             application=application,
+            prepared_admissions=prepared_admissions,
+            claimed_admissions=claimed_admissions,
+            estimated_prepared_bytes=estimated_prepared_bytes,
         )

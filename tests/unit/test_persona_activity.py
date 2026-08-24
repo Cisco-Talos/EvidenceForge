@@ -27,10 +27,10 @@ flows into event generation for realistic temporal distributions.
 """
 
 from datetime import datetime
-from unittest.mock import Mock
 
 from evidenceforge.generation.activity import BASELINE_PATTERNS, ActivityGenerator
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
@@ -271,7 +271,7 @@ class TestActivityIntensityOverrides:
         )
         emitters = {}
         generator = ActivityGenerator(
-            state_manager=Mock(),
+            state_manager=StateManager(),
             emitters=emitters,
         )
 
@@ -293,7 +293,7 @@ class TestActivityIntensityOverrides:
             name="developer", activity_intensity={"process_code": 0, "connection_web": 0}
         )
         generator = ActivityGenerator(
-            state_manager=Mock(),
+            state_manager=StateManager(),
             emitters={},
         )
 
@@ -307,7 +307,7 @@ class TestActivityIntensityOverrides:
         """Without activity_intensity, should use hardcoded patterns."""
         persona = _make_persona(name="developer", activity_intensity=None)
         generator = ActivityGenerator(
-            state_manager=Mock(),
+            state_manager=StateManager(),
             emitters={},
         )
 
@@ -317,7 +317,7 @@ class TestActivityIntensityOverrides:
     def test_no_persona_uses_default(self):
         """Without persona, should use default pattern."""
         generator = ActivityGenerator(
-            state_manager=Mock(),
+            state_manager=StateManager(),
             emitters={},
         )
 

@@ -32,6 +32,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import HostCapability, WorldModel, WorldPlanner
@@ -686,7 +687,19 @@ def test_world_planner_bootstraps_ssh_session(
         systems["DB-01"].hostname,
         datetime(2024, 1, 6, 10, 15, 0, tzinfo=UTC),
     )
+    state_manager.register_boot_time(
+        systems["WKS-01"].hostname,
+        datetime(2024, 1, 15, 9, 50, 0, tzinfo=UTC),
+    )
     state_manager.set_current_time(seed_time)
+    smss_pid = state_manager.create_process(
+        systems["WKS-01"].hostname,
+        0,
+        r"C:\Windows\System32\smss.exe",
+        r"C:\Windows\System32\smss.exe",
+        "SYSTEM",
+        "System",
+    )
     systemd_pid = state_manager.create_process(
         systems["DB-01"].hostname,
         0,
@@ -704,7 +717,8 @@ def test_world_planner_bootstraps_ssh_session(
         "System",
     )
     activity_generator._system_pids = {
-        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
+        systems["WKS-01"].hostname: {"smss": smss_pid},
+        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid},
     }
     activity_generator._users_by_username = {users["alice.admin"].username: users["alice.admin"]}
     state_manager.create_session(
@@ -1240,13 +1254,15 @@ def test_rdp_preserved_network_only_source_skips_modeled_host_rediscovery(
 
 
 def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
-    """RDP canonical authentication should not absorb source-observation latency."""
+    """RDP auth without a modeled source should use only the transport phase gap."""
     scenario = _make_scenario()
     target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
     user = scenario.environment.users[0]
     base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    executor = Mock()
+    executor._ip_to_system = {}
     bundle = RdpSessionActionBundle(
-        executor=Mock(),
+        executor=executor,
         request=RdpSessionRequest(
             user=user,
             target_system=target,
@@ -1264,8 +1280,8 @@ def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
     assert logon_time <= base_time + timedelta(milliseconds=1600)
 
 
-def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
-    """Dispatcher source timing, not canonical RDP time, owns endpoint delay."""
+def test_rdp_target_logon_reserves_modeled_source_flow_and_clock_headroom() -> None:
+    """Modeled RDP auth must remain after source FLOW across valid endpoint clocks."""
 
     scenario = _make_scenario()
     source = next(system for system in scenario.environment.systems if system.hostname == "WKS-01")
@@ -1274,7 +1290,10 @@ def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
     base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
     executor = Mock()
     executor.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
-    executor._source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    executor._source_timing_planner = source_timing_planner
+    executor.dispatcher.source_timing_planner = source_timing_planner
+    executor._ip_to_system = {source.ip: source, target.ip: target}
     bundle = RdpSessionActionBundle(
         executor=executor,
         request=RdpSessionRequest(
@@ -1292,8 +1311,27 @@ def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
         transport_start_time=base_time,
     )
 
-    assert base_time + timedelta(milliseconds=900) <= logon_time
-    assert logon_time <= base_time + timedelta(milliseconds=1600)
+    source_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
+        base_time,
+        "windows",
+    )
+    target_clock_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+        base_time + source_clock_headroom,
+        "windows",
+    )
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=180,
+        default_max_ms=1800,
+        default_position="after",
+        default_class="source_latency",
+    )
+    assert logon_time > (
+        base_time
+        + source_clock_headroom
+        + target_clock_headroom
+        + timedelta(milliseconds=flow_window.max_ms + 25)
+    )
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(

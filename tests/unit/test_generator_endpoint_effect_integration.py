@@ -1592,6 +1592,119 @@ def test_nested_parent_admission_rejection_cancels_outer_plan_without_mutation()
     assert _events(emitter) == []
 
 
+def test_prepared_linux_actor_re_resolves_future_session_shell_without_time_drift() -> None:
+    """A prepared child keeps its frozen time and selects an already-active parent."""
+
+    generator, state, _emitter, user, _system, timestamp = _fixture()
+    linux = System(
+        hostname="LNX-001",
+        ip="10.10.2.20",
+        os="Ubuntu 24.04 LTS",
+        architecture="x64",
+        type="server",
+    )
+    authority = generator._lifecycle_authority
+    session_plan = state.plan_session_materialization(
+        username=user.username,
+        system=linux.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=timestamp - timedelta(hours=1),
+        session_kind="ssh",
+        lifecycle_group_id="test:prepared-future-shell",
+        session_id=42,
+    )
+    session, _session_receipt = authority.materialize_session(session_plan)
+    systemd_plan = state.plan_process_materialization(
+        system=linux.hostname,
+        parent_pid=0,
+        image="/usr/lib/systemd/systemd",
+        command_line="/usr/lib/systemd/systemd --system",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        start_time=timestamp - timedelta(hours=2),
+        lifecycle_group_id="test:systemd",
+    )
+    systemd, _systemd_receipt = authority.materialize_process(systemd_plan)
+    sshd_plan = state.plan_process_materialization(
+        system=linux.hostname,
+        parent_pid=systemd.pid,
+        image="/usr/sbin/sshd",
+        command_line="/usr/sbin/sshd -D",
+        username="root",
+        integrity_level="System",
+        os_category="linux",
+        start_time=timestamp - timedelta(minutes=90),
+        lifecycle_group_id="test:sshd",
+    )
+    sshd, _sshd_receipt = authority.materialize_process(sshd_plan)
+    hidden_shell_plan = state.plan_process_materialization(
+        system=linux.hostname,
+        parent_pid=sshd.pid,
+        image="/bin/bash",
+        command_line="-bash",
+        username=user.username,
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=session.logon_id,
+        start_time=timestamp - timedelta(minutes=30),
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+        lifecycle_group_id="test:hidden-shell",
+    )
+    hidden_shell, _hidden_shell_receipt = authority.materialize_process(hidden_shell_plan)
+    future_shell_plan = state.plan_process_materialization(
+        system=linux.hostname,
+        parent_pid=sshd.pid,
+        image="/bin/bash",
+        command_line="-bash",
+        username=user.username,
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id=session.logon_id,
+        start_time=timestamp + timedelta(minutes=25),
+        require_session=True,
+        auth_session_id=session.session_id,
+        auth_logon_type=session.logon_type,
+        lifecycle_group_id="test:future-shell",
+    )
+    future_shell, _future_shell_receipt = authority.materialize_process(future_shell_plan)
+    session.session_shell_pid = future_shell.pid
+    generator._system_pids = {
+        linux.hostname: {
+            "systemd": systemd.pid,
+            "sshd": sshd.pid,
+        }
+    }
+    generator._scenario_start_time = timestamp - timedelta(minutes=10)
+
+    with patch.object(
+        generator,
+        "_process_endpoint_effect_rng",
+        return_value=_NoAmbientEffectsRandom(),
+    ):
+        child_pid = generator.generate_process(
+            user,
+            linux,
+            timestamp,
+            session.logon_id,
+            "/usr/bin/find",
+            "find / -perm -4000 -type f 2>/dev/null",
+            parent_pid=hidden_shell.pid,
+            suppress_command_file_effect=True,
+        )
+
+    child = state.get_process(linux.hostname, child_pid)
+    assert child is not None
+    parent = state.get_process(linux.hostname, child.parent_pid)
+    assert parent is not None
+    assert child.start_time == timestamp
+    assert child.parent_pid != future_shell.pid
+    assert parent.start_time <= child.start_time
+
+
 def test_linux_root_runtime_binary_uses_system_profile_without_fabricated_user() -> None:
     """Linux root is a typed system artifact owner and never needs a fake user profile."""
 

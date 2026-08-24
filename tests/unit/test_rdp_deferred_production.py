@@ -24,7 +24,7 @@ from evidenceforge.events.collection_policy import (
 )
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationDecision, ObservationPolicy
 from evidenceforge.events.rdp import RdpSessionState
@@ -568,6 +568,94 @@ def test_hourly_logoff_drains_exact_rdp_source_before_generic_session_teardown(
     assert len(source_terminations) == (0 if output_start_time is not None else 1)
 
 
+def test_explicit_logoff_delegates_bundle_owned_rdp_graph_to_exact_owner(
+    tmp_path: Path,
+) -> None:
+    """An authored logoff drains its exact RDP owner, including session child apps."""
+
+    end_plan = SessionEndPlan(
+        _START + timedelta(hours=2, minutes=35),
+        "explicit_storyline",
+        "evt-033",
+    )
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        modeled_source=False,
+        session_end_plan=end_plan,
+    )
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None
+    assert session.explorer_pid is not None
+    session.storyline_protected = True
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    child_pid = harness.generator.generate_process(
+        user,
+        target,
+        _START + timedelta(minutes=10),
+        harness.logon_id,
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "powershell.exe -NoProfile Get-Process",
+        parent_pid=session.explorer_pid,
+        from_storyline=True,
+    )
+    child_identity = harness.state.get_process_identity(harness.target_hostname, child_pid)
+    assert child_identity is not None
+
+    harness.generator.generate_logoff(
+        user,
+        target,
+        end_plan.canonical_end,
+        harness.logon_id,
+        logon_type=10,
+        from_storyline=True,
+        session_end_plan=end_plan,
+    )
+
+    assert harness.state.get_session(harness.logon_id) is None
+    assert harness.state.get_process(harness.target_hostname, child_pid) is None
+    journal = harness.generator.rdp_lifecycle_journal_census()
+    assert journal.prepared_reservations == 0
+    assert journal.pending_generations == 0
+    assert journal.disconnected_generations == 0
+    manager = harness.generator.rdp_session_manager.census()
+    assert manager.connected_sessions == 0
+    assert manager.disconnected_sessions == 0
+    assert manager.logged_out_sessions == 1
+    assert manager.active_operations == 0
+    assert manager.active_leases == 0
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    child_terminations = [
+        row
+        for row in ecar_rows
+        if row.get("object") == "PROCESS"
+        and row.get("action") == "TERMINATE"
+        and row.get("objectID") == child_identity.object_id
+    ]
+    target_logouts = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and row.get("object") == "USER_SESSION"
+        and row.get("action") == "LOGOUT"
+    ]
+    assert len(child_terminations) == 1
+    assert len(target_logouts) == 1
+    assert child_terminations[0]["timestamp_ms"] < target_logouts[0]["timestamp_ms"]
+
+
 def test_hourly_stale_cleanup_drains_due_rdp_before_consuming_exact_mstsc(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -922,6 +1010,86 @@ def test_visible_rdp_process_terminal_rejects_a_zero_row_renderer(
 
     harness.generator.finalize_rdp_session_lifecycles(_END)
     harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    for object_id in harness.terminal_process_object_ids:
+        assert (
+            sum(
+                row.get("object") == "PROCESS"
+                and row.get("action") == "TERMINATE"
+                and row.get("objectID") == object_id
+                for row in ecar_rows
+            )
+            == 1
+        )
+
+
+@pytest.mark.parametrize("tampered_auth_field", ("session_id", "logon_type"))
+def test_rdp_target_process_terminal_rejects_tampered_auth_and_retries_exactly(
+    tampered_auth_field: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A target child close fails closed on session-auth drift and retries exactly once."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    original_terminal_event = RdpSessionActionBundle._terminal_process_event
+    injected_identity: ProcessIdentity | None = None
+
+    def tampered_terminal_event(
+        owner: RdpSessionActionBundle,
+        *,
+        identity: ProcessIdentity,
+        terminate_time: datetime,
+        system: System,
+        session_identity: SessionIdentity | None,
+    ) -> OccurrenceBuilder:
+        nonlocal injected_identity
+        event = original_terminal_event(
+            owner,
+            identity=identity,
+            terminate_time=terminate_time,
+            system=system,
+            session_identity=session_identity,
+        )
+        if (
+            injected_identity is None
+            and session_identity is not None
+            and session_identity.session_kind == "rdp"
+            and session_identity.principal == identity.principal
+        ):
+            injected_identity = identity
+            assert event.auth is not None
+            if tampered_auth_field == "session_id":
+                event.auth = replace(event.auth, session_id=event.auth.session_id + 1)
+            else:
+                event.auth = replace(event.auth, logon_type=2)
+        return event
+
+    with monkeypatch.context() as fault:
+        fault.setattr(
+            RdpSessionActionBundle,
+            "_terminal_process_event",
+            tampered_terminal_event,
+        )
+        with pytest.raises(
+            EventContractError,
+            match="Exact RDP process close disagrees with its live process identity",
+        ):
+            harness.generator.finalize_rdp_session_lifecycles(_END)
+
+    assert injected_identity is not None
+    assert harness.state.get_process(injected_identity.hostname, injected_identity.pid) is not None
+    retained = harness.generator.rdp_lifecycle_journal_census()
+    assert retained.prepared_reservations == 0
+    assert retained.pending_generations == 1
+    assert harness.dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+    assert harness.dispatcher.action_cohort_publication_census().prepared_batches == 0
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
     _close_rdp_terminal_harness(harness)
 
     ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
@@ -1335,6 +1503,44 @@ def test_process_overlay_finishes_real_rdp_output_before_action_deadline(
     ]
     assert len(zeek_rows) == 1
     assert datetime.fromtimestamp(zeek_rows[0]["ts"] + zeek_rows[0]["duration"], tz=UTC) < deadline
+
+
+def test_unmodeled_initial_rdp_reserves_zero_skew_flow_latency_before_dependents(
+    tmp_path: Path,
+) -> None:
+    """A high-delay inbound FLOW must precede every exact initial RDP dependent."""
+
+    open_time = _START + timedelta(seconds=6)
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        clock_profile_name="complete",
+        modeled_source=False,
+        open_time=open_time,
+    )
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    inbound_flows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and row.get("object") == "FLOW"
+        and row.get("action") == "CONNECT"
+    ]
+    initial_dependents = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and (row.get("object"), row.get("action"))
+        in {("USER_SESSION", "LOGIN"), ("PROCESS", "CREATE")}
+    ]
+    assert len(inbound_flows) == 1
+    assert len(initial_dependents) == 4
+    flow_timestamp_ms = inbound_flows[0]["timestamp_ms"]
+    assert flow_timestamp_ms >= int(open_time.timestamp() * 1_000) + 1_500
+    assert all(flow_timestamp_ms < row["timestamp_ms"] for row in initial_dependents)
 
 
 def test_modeled_rdp_source_positive_clock_omits_flow_actor_and_finalizes(
@@ -2064,6 +2270,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         for output in (harness.output_root / "sysmon").rglob("*.xml")
     )
     event_one_rows = _xml_events(rendered, 1)
+    assert not _xml_events(rendered, 3)
 
     def _field(event: str, name: str) -> str:
         match = re.search(rf'<Data Name="{name}">(.*?)</Data>', event)
@@ -2411,6 +2618,80 @@ def test_initial_rdp_session_publishes_one_exact_transport_and_windows_cohort(tm
     ]
     assert len(ecar_rows) >= 6
     assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+
+
+def test_generic_type10_from_modeled_linux_source_uses_exact_rdp_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic Type 10 preserves a Linux source IP without assigning it mstsc ownership."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    emitters = {"ecar": ecar, "zeek_conn": zeek}
+    dispatcher = EventDispatcher(state, emitters)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="LT-01",
+        ip="10.10.0.25",
+        os="Ubuntu 22.04",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    original_generate_logon = generator.generate_logon
+    generate_logon_calls = 0
+
+    def counted_generate_logon(*args: object, **kwargs: object) -> str:
+        nonlocal generate_logon_calls
+        generate_logon_calls += 1
+        return original_generate_logon(*args, **kwargs)
+
+    monkeypatch.setattr(generator, "generate_logon", counted_generate_logon)
+
+    logon_id = generator.generate_logon(
+        user=user,
+        system=target,
+        time=_START,
+        logon_type=10,
+        source_ip=source.ip,
+    )
+
+    session = state.get_session(logon_id)
+    assert generate_logon_calls == 1
+    assert session is not None
+    assert session.session_kind == "rdp"
+    assert session.source_ip == source.ip
+    assert session.closure_owned_by_bundle
+    with generator._rdp_lifecycle_journal_lock:
+        journal_entries = tuple(generator._pending_rdp_lifecycle_continuations.values())
+    assert len(journal_entries) == 1
+    continuation = journal_entries[0].continuation
+    assert continuation.prepared.source_system is None
+    assert continuation.prepared.session_identity.object_id == session.ecar_object_id
+
+    ecar.close()
+    zeek.close()
 
 
 def test_rdp_journal_capacity_rejects_before_transport_or_state_publication(tmp_path) -> None:

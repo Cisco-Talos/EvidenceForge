@@ -39,7 +39,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Lock, RLock, get_ident
@@ -183,6 +183,7 @@ _DEFAULT_ACTION_COHORT_PREPARATION_CAPACITY = 1_024
 _DEFAULT_ACTION_COHORT_MEMBER_CAPACITY = 65_536
 _DEFAULT_ACTION_COHORT_BYTE_CAPACITY = 64 * 1_024 * 1_024
 _DEFAULT_ACTION_COHORT_RECEIPT_CAPACITY = 4_096
+_MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 1_024
 _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS = 256
 _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS = 4_096
 _PERSISTENT_SMB_PROJECTION_TARGET_ORDER = (
@@ -365,6 +366,16 @@ class PreparedPersistentSmbSourcePublication:
         self._publication_id = publication_id
         self._integrity_token = integrity_token
         self._consumed = False
+
+
+@dataclass(frozen=True, slots=True, eq=False, repr=False)
+class PersistentSmbPreparedTransportConsumptionReceipt:
+    """Stateless exact proof that one retained SMB transport projection was consumed."""
+
+    occurrence_id: str
+    lifecycle_receipt_token: str
+    _prepared_identity: int = field(repr=False)
+    _integrity: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True, eq=False, repr=False)
@@ -804,6 +815,7 @@ class _PersistentSmbSourcePublicationRecord:
 
     publication_id: int
     carrier_id: int
+    carrier: PreparedPersistentSmbSourcePublication
     carrier_ref: ReferenceType[PreparedPersistentSmbSourcePublication]
     group: PersistentSmbProjectionGroupToken
     group_id: int
@@ -812,12 +824,14 @@ class _PersistentSmbSourcePublicationRecord:
     publication_binding_digest: str
     target_formats: tuple[str, ...]
     exact_publication_batch: ExactPublicationBatch
-    projections: tuple[_PreparedProjection, ...]
-    projection_identifiers: tuple[tuple[tuple[str, str], ...], ...]
-    row_facts: tuple[tuple[str, str, int], ...]
+    row_budget: int
+    byte_budget: int
     retained_bytes: int
     integrity_token: str
-    state: str = "prepared"
+    projections: tuple[_PreparedProjection, ...] = ()
+    projection_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
+    row_facts: tuple[tuple[str, str, int], ...] = ()
+    state: str = "reserved"
     active_thread_id: int | None = None
     commit_receipts: tuple[PersistentSmbProjectionMemberCommitReceipt, ...] = ()
     result: PersistentSmbSourcePublicationResult | None = None
@@ -1309,6 +1323,7 @@ class _PersistentSmbGroupTopologySnapshot:
 
     group_id: int
     generation_id: str
+    route_generation_digest: str
     configuration_digest: str
     targets: tuple[_PersistentSmbProjectionTargetSnapshot, ...]
     semantic_bytes: int
@@ -1551,12 +1566,18 @@ class EventDispatcher:
             int,
             _PersistentSmbGroupTopologySnapshot,
         ] = {}
+        self._persistent_smb_projection_groups_by_route: dict[
+            str,
+            PersistentSmbProjectionGroupToken,
+        ] = {}
         self._persistent_smb_next_target_generation = 1
         self._persistent_smb_target_generation_capacity = 16_385
         self._persistent_smb_target_generation_semantic_bytes = 0
-        self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
-            self._persistent_smb_target_generations
-        ) + sys.getsizeof(self._persistent_smb_group_topologies)
+        self._persistent_smb_target_generation_table_backing_bytes = (
+            sys.getsizeof(self._persistent_smb_target_generations)
+            + sys.getsizeof(self._persistent_smb_group_topologies)
+            + sys.getsizeof(self._persistent_smb_projection_groups_by_route)
+        )
         self._persistent_smb_group_topology_semantic_bytes = 0
         self._persistent_smb_high_water_target_generations = 0
         self._persistent_smb_high_water_target_generation_table_backing_bytes = (
@@ -1878,6 +1899,8 @@ class EventDispatcher:
         self,
         preparation: _PersistentSmbTopologyPreparation,
         group: PersistentSmbProjectionGroupToken,
+        *,
+        route_generation_digest: str,
     ) -> None:
         """Install staged global and per-group weak topology snapshots."""
 
@@ -1886,6 +1909,10 @@ class EventDispatcher:
         configuration_digest = object.__getattribute__(
             group,
             "projection_configuration_digest",
+        )
+        route_digest = self._persistent_smb_sha256_digest(
+            route_generation_digest,
+            "persistent SMB route generation digest",
         )
         if (
             type(group_id) is not int
@@ -1901,10 +1928,11 @@ class EventDispatcher:
             + sys.getsizeof(target.target_ref)
             + sys.getsizeof(target.target_generation)
             for target in targets
-        )
+        ) + sys.getsizeof(route_digest)
         group_topology = _PersistentSmbGroupTopologySnapshot(
             group_id=group_id,
             generation_id=generation_id,
+            route_generation_digest=route_digest,
             configuration_digest=configuration_digest,
             targets=targets,
             semantic_bytes=semantic_bytes,
@@ -1932,6 +1960,7 @@ class EventDispatcher:
             self._persistent_smb_target_generation_table_backing_bytes = (
                 preparation.target_generation_table_backing_bytes
                 + sys.getsizeof(staged_group_topologies)
+                + sys.getsizeof(self._persistent_smb_projection_groups_by_route)
             )
             self._persistent_smb_high_water_target_generations = max(
                 self._persistent_smb_high_water_target_generations,
@@ -1951,32 +1980,48 @@ class EventDispatcher:
             topology = self._persistent_smb_group_topologies.pop(group_id, None)
             if topology is None:
                 raise EventContractError("Persistent SMB group topology is missing or stale")
+            retained_group = self._persistent_smb_projection_groups_by_route.get(
+                topology.route_generation_digest
+            )
+            if retained_group is not None and retained_group.group_id == group_id:
+                self._persistent_smb_projection_groups_by_route.pop(
+                    topology.route_generation_digest,
+                    None,
+                )
             self._persistent_smb_group_topology_semantic_bytes -= topology.semantic_bytes
             if not self._persistent_smb_group_topologies:
                 self._persistent_smb_group_topologies.clear()
-            self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
-                self._persistent_smb_target_generations
-            ) + sys.getsizeof(self._persistent_smb_group_topologies)
+            self._persistent_smb_target_generation_table_backing_bytes = (
+                sys.getsizeof(self._persistent_smb_target_generations)
+                + sys.getsizeof(self._persistent_smb_group_topologies)
+                + sys.getsizeof(self._persistent_smb_projection_groups_by_route)
+            )
 
     def _persistent_smb_retire_projection_topology(self) -> None:
         """Drop every weak topology row after the last group is reclaimed."""
 
         empty_registry: dict[int, tuple[ReferenceType[object], str]] = {}
         empty_group_topologies: dict[int, _PersistentSmbGroupTopologySnapshot] = {}
+        empty_group_routes: dict[str, PersistentSmbProjectionGroupToken] = {}
         with self._persistent_smb_topology_lock:
             released_registry: dict[int, tuple[ReferenceType[object], str]] = (
                 self._persistent_smb_target_generations
             )
             released_group_topologies = self._persistent_smb_group_topologies
+            released_group_routes = self._persistent_smb_projection_groups_by_route
             self._persistent_smb_target_generations = empty_registry
             self._persistent_smb_group_topologies = empty_group_topologies
+            self._persistent_smb_projection_groups_by_route = empty_group_routes
             self._persistent_smb_target_generation_semantic_bytes = 0
             self._persistent_smb_group_topology_semantic_bytes = 0
-            self._persistent_smb_target_generation_table_backing_bytes = sys.getsizeof(
-                empty_registry
-            ) + sys.getsizeof(empty_group_topologies)
+            self._persistent_smb_target_generation_table_backing_bytes = (
+                sys.getsizeof(empty_registry)
+                + sys.getsizeof(empty_group_topologies)
+                + sys.getsizeof(empty_group_routes)
+            )
         released_registry.clear()
         released_group_topologies.clear()
+        released_group_routes.clear()
 
     @staticmethod
     def _persistent_smb_projection_target_types() -> dict[str, type[object]]:
@@ -2121,6 +2166,18 @@ class EventDispatcher:
     ) -> PersistentSmbProjectionGroupToken:
         """Reserve one empty detached group before canonical SMB open mutation."""
 
+        route_digest = self._persistent_smb_sha256_digest(
+            route_generation_digest,
+            "persistent SMB route generation digest",
+        )
+        recovered = self.recover_persistent_smb_projection_group(
+            route_generation_digest=route_digest,
+            member_budget=member_budget,
+            byte_budget=byte_budget,
+            required_target_formats=required_target_formats,
+        )
+        if recovered is not None:
+            return recovered
         while True:
             members, retained_bytes = (
                 self._persistent_smb_projection_authority._preflight_group_reservation(
@@ -2133,6 +2190,25 @@ class EventDispatcher:
             )
             try:
                 with self._persistent_smb_group_lock:
+                    existing = self._persistent_smb_projection_groups_by_route.get(route_digest)
+                    if existing is not None:
+                        if (
+                            not self._persistent_smb_projection_authority.authenticates_group(
+                                existing
+                            )
+                            or existing.member_budget != members
+                            or existing.byte_budget != retained_bytes
+                        ):
+                            raise EventContractError(
+                                "Persistent SMB route names different retained group facts"
+                            )
+                        if required_target_formats is not None:
+                            self._persistent_smb_projection_target_intent(
+                                group_id=existing.group_id,
+                                generation_id=existing.generation_id,
+                                target_formats=required_target_formats,
+                            )
+                        return existing
                     members, retained_bytes = (
                         self._persistent_smb_projection_authority._preflight_group_reservation(
                             member_budget=members,
@@ -2152,8 +2228,19 @@ class EventDispatcher:
                     )
                     topology_installed = False
                     try:
-                        self._persistent_smb_commit_projection_configuration(topology, group)
+                        self._persistent_smb_commit_projection_configuration(
+                            topology,
+                            group,
+                            route_generation_digest=route_digest,
+                        )
                         topology_installed = True
+                        self._persistent_smb_projection_groups_by_route[route_digest] = group
+                        with self._persistent_smb_topology_lock:
+                            self._persistent_smb_target_generation_table_backing_bytes = (
+                                sys.getsizeof(self._persistent_smb_target_generations)
+                                + sys.getsizeof(self._persistent_smb_group_topologies)
+                                + sys.getsizeof(self._persistent_smb_projection_groups_by_route)
+                            )
                         if required_target_formats is not None:
                             self._persistent_smb_projection_target_intent(
                                 group_id=group.group_id,
@@ -2170,6 +2257,44 @@ class EventDispatcher:
                     return group
             finally:
                 del retained_targets
+
+    def recover_persistent_smb_projection_group(
+        self,
+        *,
+        route_generation_digest: str,
+        member_budget: int,
+        byte_budget: int,
+        required_target_formats: tuple[str, ...] | None = None,
+    ) -> PersistentSmbProjectionGroupToken | None:
+        """Recover one exact route-keyed group after an unseen reserve return."""
+
+        route_digest = self._persistent_smb_sha256_digest(
+            route_generation_digest,
+            "persistent SMB route generation digest",
+        )
+        if type(member_budget) is not int or member_budget <= 0:
+            raise EventContractError("Persistent SMB group member budget must be positive")
+        if type(byte_budget) is not int or byte_budget <= 0:
+            raise EventContractError("Persistent SMB group byte budget must be positive")
+        with self._persistent_smb_group_lock:
+            group = self._persistent_smb_projection_groups_by_route.get(route_digest)
+            if group is None:
+                return None
+            if (
+                not self._persistent_smb_projection_authority.authenticates_group(group)
+                or group.member_budget != member_budget
+                or group.byte_budget != byte_budget
+            ):
+                raise EventContractError(
+                    "Persistent SMB route names different retained group facts"
+                )
+            if required_target_formats is not None:
+                self._persistent_smb_projection_target_intent(
+                    group_id=group.group_id,
+                    generation_id=group.generation_id,
+                    target_formats=required_target_formats,
+                )
+            return group
 
     def prepare_persistent_smb_projection_member(
         self,
@@ -2371,6 +2496,17 @@ class EventDispatcher:
             timing_planner=self.source_timing_planner,
         )
 
+    def authenticates_cancellable_persistent_smb_projection_member(
+        self,
+        token: object,
+    ) -> bool:
+        """Return whether one exact uncommitted member still needs cancellation."""
+
+        return self._persistent_smb_projection_authority.authenticates_cancellable_member_token(
+            token,
+            timing_planner=self.source_timing_planner,
+        )
+
     def cancel_empty_persistent_smb_projection_group(
         self,
         group: PersistentSmbProjectionGroupToken,
@@ -2388,6 +2524,14 @@ class EventDispatcher:
             self._persistent_smb_retire_group_topology(group_id)
             if self._persistent_smb_projection_authority.census().retained_groups == 0:
                 self._persistent_smb_retire_projection_topology()
+
+    def authenticates_empty_persistent_smb_projection_group(
+        self,
+        group: object,
+    ) -> bool:
+        """Return whether one exact empty projection reservation remains active."""
+
+        return self._persistent_smb_projection_authority.authenticates_group(group)
 
     def persistent_smb_projection_group_census(
         self,
@@ -2455,6 +2599,8 @@ class EventDispatcher:
                 record.publication_key,
                 record.publication_binding_digest,
                 record.target_formats,
+                record.row_budget,
+                record.byte_budget,
                 tuple((digest, size) for _row, digest, size in record.row_facts),
                 record.state,
                 record.acknowledge_cursor,
@@ -2478,7 +2624,7 @@ class EventDispatcher:
             if publication_id is not None
             else None
         )
-        if record is None or record.carrier_ref() is not carrier:
+        if record is None or record.carrier is not carrier or record.carrier_ref() is not carrier:
             raise EventContractError("Persistent SMB source publication is stale")
         expected = self._persistent_smb_source_publication_integrity(carrier, record)
         if (
@@ -2513,6 +2659,7 @@ class EventDispatcher:
         )
         if (
             record is None
+            or record.carrier is not carrier
             or record.carrier_ref() is not carrier
             or record.result is not result
             or record.state != "acknowledged"
@@ -2599,16 +2746,16 @@ class EventDispatcher:
                     )
         return tuple(participants)
 
-    def prepare_persistent_smb_source_publication(
+    def reserve_persistent_smb_source_publication(
         self,
         group: PersistentSmbProjectionGroupToken,
-        projections: tuple[PreparedActionCohortProjection, ...],
         *,
         target_formats: tuple[str, ...],
         publication_key: str,
-        publication_binding_digest: str,
+        row_budget: int,
+        byte_budget: int,
     ) -> PreparedPersistentSmbSourcePublication:
-        """Stage immutable filtered SMB rows without writing any public sink."""
+        """Reserve the exact source slot, writers, rows, and bytes before an SMB root."""
 
         from evidenceforge.generation.persistent_smb_projection import (
             PersistentSmbProjectionGroupToken,
@@ -2616,21 +2763,19 @@ class EventDispatcher:
 
         if type(group) is not PersistentSmbProjectionGroupToken:
             raise EventContractError("Persistent SMB source publication requires its exact group")
-        if type(projections) is not tuple or not projections or len(projections) > 16:
+        if type(row_budget) is not int or row_budget <= 0:
             raise EventContractError(
-                "Persistent SMB source publication requires a bounded non-empty projection tuple"
+                "Persistent SMB source row budget must be a positive exact int"
             )
-        if any(type(item) is not PreparedActionCohortProjection for item in projections):
-            raise EventContractError("Persistent SMB source projections require exact carriers")
+        if type(byte_budget) is not int or byte_budget <= 0:
+            raise EventContractError(
+                "Persistent SMB source byte budget must be a positive exact int"
+            )
         key = self._persistent_smb_bounded_utf8(
             publication_key,
             "persistent SMB source publication key",
             maximum=512,
         ).decode("utf-8")
-        binding_digest = self._persistent_smb_sha256_digest(
-            publication_binding_digest,
-            "persistent SMB source publication binding digest",
-        )
         if not self._persistent_smb_projection_authority.authenticates_group(group):
             raise EventContractError("Persistent SMB source publication group is foreign or stale")
         canonical_targets, _topology = self._persistent_smb_projection_target_intent(
@@ -2646,11 +2791,13 @@ class EventDispatcher:
                 else None
             )
             if existing is not None:
-                carrier = existing.carrier_ref()
+                carrier = existing.carrier
                 if (
-                    carrier is not None
-                    and existing.publication_binding_digest == binding_digest
+                    existing.carrier_ref() is carrier
+                    and existing.state == "reserved"
                     and existing.target_formats == canonical_targets
+                    and existing.row_budget == row_budget
+                    and existing.byte_budget == byte_budget
                 ):
                     self._active_persistent_smb_source_publication_locked(carrier)
                     return carrier
@@ -2663,6 +2810,261 @@ class EventDispatcher:
             ):
                 raise EventContractError("Persistent SMB source publication capacity is exhausted")
 
+        participants = self._persistent_smb_exact_projection_participants((), canonical_targets)
+        batch = self._exact_publication_authority.issue_batch()
+        try:
+            batch.reserve_participants(cast(tuple[object, ...], participants))
+            batch.reserve_capacity(row_budget=row_budget, byte_budget=byte_budget)
+            with self._persistent_smb_source_publication_lock:
+                if (group.group_id, key) in self._persistent_smb_source_publication_keys:
+                    raise EventContractError(
+                        "Persistent SMB source publication was reserved concurrently"
+                    )
+                if (
+                    len(self._persistent_smb_source_publications)
+                    >= self._persistent_smb_source_publication_capacity
+                ):
+                    raise EventContractError(
+                        "Persistent SMB source publication capacity is exhausted"
+                    )
+                publication_id = self._next_persistent_smb_source_publication_id
+                self._next_persistent_smb_source_publication_id += 1
+                carrier = PreparedPersistentSmbSourcePublication(
+                    dispatcher_token=id(self),
+                    publication_id=publication_id,
+                    integrity_token="",
+                )
+                publication = _PersistentSmbSourcePublicationRecord(
+                    publication_id=publication_id,
+                    carrier_id=id(carrier),
+                    carrier=carrier,
+                    carrier_ref=ref(carrier),
+                    group=group,
+                    group_id=group.group_id,
+                    generation_id=group.generation_id,
+                    publication_key=key,
+                    publication_binding_digest="",
+                    target_formats=canonical_targets,
+                    exact_publication_batch=batch,
+                    row_budget=row_budget,
+                    byte_budget=byte_budget,
+                    retained_bytes=0,
+                    integrity_token="",
+                )
+                integrity = self._persistent_smb_source_publication_integrity(
+                    carrier,
+                    publication,
+                )
+                publication.integrity_token = integrity
+                carrier._integrity_token = integrity
+                self._persistent_smb_source_publications[publication_id] = publication
+                self._persistent_smb_source_publication_locators[id(carrier)] = publication_id
+                self._persistent_smb_source_publication_keys[(group.group_id, key)] = publication_id
+                return carrier
+        except BaseException:
+            if batch.state in {"issued", "ready"}:
+                batch.cancel()
+            raise
+
+    def recover_reserved_persistent_smb_source_publication(
+        self,
+        group: PersistentSmbProjectionGroupToken,
+        *,
+        target_formats: tuple[str, ...],
+        publication_key: str,
+        row_budget: int,
+        byte_budget: int,
+    ) -> PreparedPersistentSmbSourcePublication | None:
+        """Recover one exact reserved source carrier after an unseen public return."""
+
+        from evidenceforge.generation.persistent_smb_projection import (
+            PersistentSmbProjectionGroupToken,
+        )
+
+        if type(group) is not PersistentSmbProjectionGroupToken:
+            raise EventContractError("Persistent SMB source recovery requires its exact group")
+        if type(row_budget) is not int or row_budget <= 0:
+            raise EventContractError("Persistent SMB source row budget must be positive")
+        if type(byte_budget) is not int or byte_budget <= 0:
+            raise EventContractError("Persistent SMB source byte budget must be positive")
+        key = self._persistent_smb_bounded_utf8(
+            publication_key,
+            "persistent SMB source publication key",
+            maximum=512,
+        ).decode("utf-8")
+        if not self._persistent_smb_projection_authority.authenticates_group(group):
+            raise EventContractError("Persistent SMB source recovery group is foreign or stale")
+        canonical_targets, _topology = self._persistent_smb_projection_target_intent(
+            group_id=group.group_id,
+            generation_id=group.generation_id,
+            target_formats=target_formats,
+        )
+        with self._persistent_smb_source_publication_lock:
+            publication_id = self._persistent_smb_source_publication_keys.get((group.group_id, key))
+            if publication_id is None:
+                return None
+            record = self._persistent_smb_source_publications.get(publication_id)
+            if (
+                record is None
+                or record.group is not group
+                or record.state != "reserved"
+                or record.target_formats != canonical_targets
+                or record.row_budget != row_budget
+                or record.byte_budget != byte_budget
+            ):
+                raise EventContractError(
+                    "Persistent SMB source key names different retained reservation facts"
+                )
+            carrier = record.carrier
+            self._active_persistent_smb_source_publication_locked(carrier)
+            return carrier
+
+    def cancel_reserved_persistent_smb_source_publication(
+        self,
+        carrier: PreparedPersistentSmbSourcePublication,
+    ) -> None:
+        """Release one exact never-prepared source reservation."""
+
+        with self._persistent_smb_source_publication_lock:
+            record = self._active_persistent_smb_source_publication_locked(carrier)
+            if record.state not in {"reserved", "cancelling"}:
+                raise EventContractError(
+                    "Only a reserved persistent SMB source publication may cancel"
+                )
+            if record.state == "reserved":
+                record.state = "cancelling"
+                integrity = self._persistent_smb_source_publication_integrity(carrier, record)
+                record.integrity_token = integrity
+                carrier._integrity_token = integrity
+            batch = record.exact_publication_batch
+        batch.cancel()
+        with self._persistent_smb_source_publication_lock:
+            current = self._active_persistent_smb_source_publication_locked(carrier)
+            if current is not record or batch.state != "canceled":
+                raise EventContractError(
+                    "Persistent SMB source cancellation changed its exact reservation"
+                )
+            self._persistent_smb_source_publications.pop(record.publication_id)
+            self._persistent_smb_source_publication_locators.pop(record.carrier_id, None)
+            self._persistent_smb_source_publication_keys.pop(
+                (record.group_id, record.publication_key),
+                None,
+            )
+            record.state = "cancelled"
+            carrier._consumed = True
+
+    def authenticates_reserved_persistent_smb_source_publication(
+        self,
+        carrier: object,
+    ) -> bool:
+        """Return whether an exact pre-root source reservation still needs cleanup."""
+
+        if type(carrier) is not PreparedPersistentSmbSourcePublication:
+            return False
+        with self._persistent_smb_source_publication_lock:
+            try:
+                record = self._active_persistent_smb_source_publication_locked(carrier)
+            except (AttributeError, EventContractError, TypeError, ValueError):
+                return False
+            return record.state in {"reserved", "cancelling"}
+
+    def authenticates_prepared_persistent_smb_source_publication(
+        self,
+        carrier: object,
+    ) -> bool:
+        """Return whether frozen uncommitted rows still require exact rollback."""
+
+        if type(carrier) is not PreparedPersistentSmbSourcePublication:
+            return False
+        with self._persistent_smb_source_publication_lock:
+            try:
+                record = self._active_persistent_smb_source_publication_locked(carrier)
+            except (AttributeError, EventContractError, TypeError, ValueError):
+                return False
+            return record.state in {"prepared", "rolling_back"}
+
+    def rollback_prepared_persistent_smb_source_publication(
+        self,
+        carrier: PreparedPersistentSmbSourcePublication,
+    ) -> None:
+        """Discard uncommitted rows without surrendering pre-root writer capacity."""
+
+        with self._persistent_smb_source_publication_lock:
+            record = self._active_persistent_smb_source_publication_locked(carrier)
+            if record.state == "reserved":
+                return
+            if record.state not in {"prepared", "rolling_back"}:
+                raise EventContractError(
+                    "Only a prepared persistent SMB source publication may roll back"
+                )
+            if record.state == "prepared":
+                record.state = "rolling_back"
+                integrity = self._persistent_smb_source_publication_integrity(carrier, record)
+                record.integrity_token = integrity
+                carrier._integrity_token = integrity
+            batch = record.exact_publication_batch
+        if batch.state == "ready":
+            batch.rollback_ready_to_reserved_capacity()
+        elif batch.state != "issued":
+            raise EventContractError(
+                "Persistent SMB source rollback changed its exact publication batch"
+            )
+        with self._persistent_smb_source_publication_lock:
+            current = self._active_persistent_smb_source_publication_locked(carrier)
+            if current is not record or record.state != "rolling_back" or batch.state != "issued":
+                raise EventContractError(
+                    "Persistent SMB source rollback changed its exact reservation"
+                )
+            self._persistent_smb_source_retained_rows -= len(record.row_facts)
+            self._persistent_smb_source_retained_bytes -= record.retained_bytes
+            record.publication_binding_digest = ""
+            record.projections = ()
+            record.projection_identifiers = ()
+            record.row_facts = ()
+            record.retained_bytes = 0
+            record.commit_receipts = ()
+            record.result = None
+            record.acknowledge_cursor = 0
+            record.state = "reserved"
+            integrity = self._persistent_smb_source_publication_integrity(carrier, record)
+            record.integrity_token = integrity
+            carrier._integrity_token = integrity
+
+    def prepare_persistent_smb_source_publication(
+        self,
+        carrier: PreparedPersistentSmbSourcePublication,
+        projections: tuple[PreparedActionCohortProjection, ...],
+        *,
+        publication_binding_digest: str,
+    ) -> PreparedPersistentSmbSourcePublication:
+        """Fill one pre-root reserved source slot without any new admission."""
+
+        if (
+            type(projections) is not tuple
+            or not projections
+            or len(projections) > _MAX_PERSISTENT_SMB_SOURCE_MEMBERS
+        ):
+            raise EventContractError(
+                "Persistent SMB source publication requires a bounded non-empty projection tuple"
+            )
+        if any(type(item) is not PreparedActionCohortProjection for item in projections):
+            raise EventContractError("Persistent SMB source projections require exact carriers")
+        binding_digest = self._persistent_smb_sha256_digest(
+            publication_binding_digest,
+            "persistent SMB source publication binding digest",
+        )
+        with self._persistent_smb_source_publication_lock:
+            publication = self._active_persistent_smb_source_publication_locked(carrier)
+            if publication.state == "prepared":
+                if publication.publication_binding_digest != binding_digest:
+                    raise EventContractError(
+                        "Persistent SMB source publication binding changed on retry"
+                    )
+                return carrier
+            if publication.state != "reserved":
+                raise EventContractError("Persistent SMB source publication is not reserved")
+            canonical_targets = publication.target_formats
+
         with self._action_cohort_lock:
             records = tuple(
                 self._active_action_cohort_projection_locked(item) for item in projections
@@ -2671,13 +3073,12 @@ class EventDispatcher:
             if not self._action_cohort_projection_record_authenticates(record):
                 raise EventContractError("Persistent SMB source projection failed authentication")
         trusted_projections = tuple(record.projection for record in records)
-        participants = self._persistent_smb_exact_projection_participants(
+        self._persistent_smb_exact_projection_participants(
             trusted_projections,
             canonical_targets,
         )
-        batch = self._exact_publication_authority.issue_batch()
+        batch = publication.exact_publication_batch
         try:
-            batch.reserve_participants(cast(tuple[object, ...], participants))
             prepared = batch.prepare(
                 lambda: tuple(
                     tuple(sorted(self._publish_action_cohort_projection(projection).items()))
@@ -2706,8 +3107,11 @@ class EventDispatcher:
             retained_bytes = sum(size for _row, _digest, size in row_facts)
 
             with self._action_cohort_lock:
-                for carrier, record in zip(projections, records, strict=True):
-                    if self._active_action_cohort_projection_locked(carrier) is not record:
+                for projection_carrier, record in zip(projections, records, strict=True):
+                    if (
+                        self._active_action_cohort_projection_locked(projection_carrier)
+                        is not record
+                    ):
                         raise EventContractError(
                             "Persistent SMB source projection changed during exact staging"
                         )
@@ -2729,45 +3133,29 @@ class EventDispatcher:
                         "Persistent SMB source projection timing group is incomplete"
                     )
                 with self._persistent_smb_source_publication_lock:
-                    if (group.group_id, key) in self._persistent_smb_source_publication_keys:
+                    current = self._active_persistent_smb_source_publication_locked(carrier)
+                    if current is not publication or publication.state != "reserved":
                         raise EventContractError(
-                            "Persistent SMB source publication was installed concurrently"
+                            "Persistent SMB source publication changed during preparation"
                         )
-                    publication_id = self._next_persistent_smb_source_publication_id
-                    self._next_persistent_smb_source_publication_id += 1
-                    carrier = PreparedPersistentSmbSourcePublication(
-                        dispatcher_token=id(self),
-                        publication_id=publication_id,
-                        integrity_token="",
-                    )
-                    publication = _PersistentSmbSourcePublicationRecord(
-                        publication_id=publication_id,
-                        carrier_id=id(carrier),
-                        carrier_ref=ref(carrier),
-                        group=group,
-                        group_id=group.group_id,
-                        generation_id=group.generation_id,
-                        publication_key=key,
-                        publication_binding_digest=binding_digest,
-                        target_formats=canonical_targets,
-                        exact_publication_batch=batch,
-                        projections=trusted_projections,
-                        projection_identifiers=projection_identifiers,
-                        row_facts=row_facts,
-                        retained_bytes=retained_bytes,
-                        integrity_token="",
-                    )
+                    if len(row_facts) > publication.row_budget or retained_bytes > (
+                        publication.byte_budget
+                    ):
+                        raise EventContractError(
+                            "Persistent SMB rendered source exceeded its pre-root reservation"
+                        )
+                    publication.publication_binding_digest = binding_digest
+                    publication.projections = trusted_projections
+                    publication.projection_identifiers = projection_identifiers
+                    publication.row_facts = row_facts
+                    publication.retained_bytes = retained_bytes
+                    publication.state = "prepared"
                     integrity = self._persistent_smb_source_publication_integrity(
                         carrier,
                         publication,
                     )
                     publication.integrity_token = integrity
                     carrier._integrity_token = integrity
-                    self._persistent_smb_source_publications[publication_id] = publication
-                    self._persistent_smb_source_publication_locators[id(carrier)] = publication_id
-                    self._persistent_smb_source_publication_keys[(group.group_id, key)] = (
-                        publication_id
-                    )
                     self._persistent_smb_source_retained_rows += len(row_facts)
                     self._persistent_smb_source_retained_bytes += retained_bytes
                     detached = self._detach_action_cohort_projection_group_locked(
@@ -2780,8 +3168,6 @@ class EventDispatcher:
                         )
                     return carrier
         except BaseException:
-            if batch.state in {"issued", "ready"}:
-                batch.cancel()
             raise
 
     def _persistent_smb_commit_receipts(
@@ -2795,7 +3181,11 @@ class EventDispatcher:
             PersistentSmbProjectionMemberCommitReceipt,
         )
 
-        if type(receipts) is not tuple or not receipts or len(receipts) > 16:
+        if (
+            type(receipts) is not tuple
+            or not receipts
+            or len(receipts) > _MAX_PERSISTENT_SMB_SOURCE_MEMBERS
+        ):
             raise EventContractError(
                 "Persistent SMB publication requires committed member receipts"
             )
@@ -3283,6 +3673,10 @@ class EventDispatcher:
                 authored_intent_id=authored_intent_id,
             )
         event.contract_seal = shadow_seal(event)
+        for violation in event.contract_seal.violations:
+            self._contract_violation_counts[violation.code.value] += 1
+            self._contract_violations_by_event[(event.event_type, violation.code.value)] += 1
+            logger.debug("Canonical event-contract violation: %s", violation.message)
         if event.contract_seal.violations:
             details = "; ".join(violation.message for violation in event.contract_seal.violations)
             raise EventContractError(f"Cannot dispatch invalid canonical event: {details}")
@@ -5184,6 +5578,8 @@ class EventDispatcher:
     def dispatch(self, event: CanonicalOccurrence) -> dict[str, str]:
         """Prepare then publish an already sealed occurrence through the compatibility path."""
 
+        if not isinstance(event, CanonicalOccurrence):
+            raise TypeError("EventDispatcher.dispatch() accepts only sealed CanonicalOccurrence")
         return self.publish_prepared(self.prepare_occurrence(event, _defer_projection=True))
 
     def publish_prepared(
@@ -5416,16 +5812,75 @@ class EventDispatcher:
             )
         return transaction, observations
 
+    def _persistent_smb_transport_consumption_receipt(
+        self,
+        prepared: PreparedDispatch,
+        lifecycle_receipt_token: str,
+    ) -> PersistentSmbPreparedTransportConsumptionReceipt:
+        """Construct one deterministic authority proof without retaining a second record."""
+
+        payload = repr(
+            (
+                "persistent-smb-prepared-transport-consumption-v1",
+                id(prepared),
+                prepared.occurrence_id,
+                prepared._integrity_token,
+                lifecycle_receipt_token,
+            )
+        ).encode("utf-8")
+        return PersistentSmbPreparedTransportConsumptionReceipt(
+            occurrence_id=prepared.occurrence_id,
+            lifecycle_receipt_token=lifecycle_receipt_token,
+            _prepared_identity=id(prepared),
+            _integrity=hmac.new(
+                self._prepared_dispatch_secret,
+                payload,
+                hashlib.sha256,
+            ).hexdigest(),
+        )
+
+    def authenticates_persistent_smb_prepared_transport_consumption(
+        self,
+        prepared: object,
+        receipt: object,
+    ) -> bool:
+        """Authenticate one consumed exact dispatch and its stateless receipt."""
+
+        if (
+            type(prepared) is not PreparedDispatch
+            or type(receipt) is not PersistentSmbPreparedTransportConsumptionReceipt
+        ):
+            return False
+        try:
+            self.validate_prepared(prepared, before_materialization=False)
+            expected = self._persistent_smb_transport_consumption_receipt(
+                prepared,
+                receipt.lifecycle_receipt_token,
+            )
+            with prepared._lock:
+                return bool(
+                    prepared._consumed
+                    and receipt.occurrence_id == expected.occurrence_id
+                    and receipt._prepared_identity == expected._prepared_identity
+                    and hmac.compare_digest(
+                        receipt.lifecycle_receipt_token,
+                        expected.lifecycle_receipt_token,
+                    )
+                    and hmac.compare_digest(receipt._integrity, expected._integrity)
+                )
+        except (AttributeError, EventContractError, TypeError, ValueError):
+            return False
+
     def consume_persistent_smb_prepared_transport(
         self,
         prepared: PreparedDispatch,
         *,
-        materialization_receipt: object,
-    ) -> None:
-        """Retire the deferred opening projection after exact close rows are frozen."""
+        lifecycle_binding: object,
+    ) -> PersistentSmbPreparedTransportConsumptionReceipt:
+        """Idempotently retire a deferred opening projection after exact close staging."""
 
         from evidenceforge.generation.lifecycle_authority import (
-            LifecyclePreparedNetworkReceipt,
+            LifecycleDetachedNetworkReceiptBinding,
         )
         from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
 
@@ -5436,27 +5891,51 @@ class EventDispatcher:
         timing_receipt = timing_preparation.receipt if timing_preparation is not None else None
         root = prepared._lifecycle_ticket
         authority = self._lifecycle_authority
+        fingerprint = (
+            root.state_plan.physical_transport_fingerprint
+            if type(root) is PreparedNetworkTransactionRoot
+            else None
+        )
         if (
             prepared._state_intent is not PreparedDispatchStateIntent.EXTERNAL_TRANSPORT
             or type(root) is not PreparedNetworkTransactionRoot
-            or type(materialization_receipt) is not LifecyclePreparedNetworkReceipt
+            or type(lifecycle_binding) is not LifecycleDetachedNetworkReceiptBinding
             or timing_preparation is None
             or not timing_preparation.committed
             or timing_receipt is None
-            or materialization_receipt.timing_binding_token != timing_preparation.binding_token
-            or materialization_receipt.timing_receipt != timing_receipt
             or authority is None
             or prepared._expected_state_version != root.state_plan.expected_version
-            or not authority.authenticates_prepared_network_receipt(
-                root,
-                materialization_receipt,
-            )
+            or not authority.authenticates_detached_network_receipt_binding(lifecycle_binding)
+            or fingerprint is None
+            or lifecycle_binding.transaction_id != root.transaction.stable_id
+            or lifecycle_binding.state_publication_token != root.state_plan.publication_token
+            or lifecycle_binding.runtime_publication_token != root.runtime_token.publication_token
+            or lifecycle_binding.physical_transport_id != fingerprint.transport_id
+            or lifecycle_binding.conn_id != fingerprint.conn_id
+            or lifecycle_binding.zeek_uid != fingerprint.zeek_uid
+            or lifecycle_binding.tuple_key != fingerprint.tuple_key
+            or lifecycle_binding.started_at != fingerprint.started_at
+            or lifecycle_binding.closed_at != fingerprint.closed_at
         ):
             raise EventContractError(
-                "Persistent SMB transport consumption requires its exact materialization receipt"
+                "Persistent SMB transport consumption requires its exact lifecycle binding"
             )
         self._persistent_smb_prepared_transport_payload(prepared)
-        prepared._claim()
+        lifecycle_receipt_token = lifecycle_binding.source_receipt_token
+        receipt = self._persistent_smb_transport_consumption_receipt(
+            prepared,
+            lifecycle_receipt_token,
+        )
+        with prepared._lock:
+            prepared._consumed = True
+        if not self.authenticates_persistent_smb_prepared_transport_consumption(
+            prepared,
+            receipt,
+        ):
+            raise EventContractError(
+                "Persistent SMB transport consumption did not retain exact proof"
+            )
+        return receipt
 
     def rebind_persistent_smb_close(
         self,
@@ -7611,8 +8090,46 @@ class EventDispatcher:
             identity = identity_plan.subject
             termination = plan.process_terminations[0]
             executable = identity.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+            session_identity = identity_plan.session
+            session_patch = (
+                plan.session_activity_patches[0]
+                if len(plan.session_activity_patches) == 1
+                else None
+            )
+            has_exact_session_activity = bool(
+                (
+                    session_identity is None
+                    and session_patch is None
+                    and event.auth.session_id == 0
+                    and event.auth.logon_type == 2
+                )
+                or (
+                    type(session_identity) is SessionIdentity
+                    and session_patch is not None
+                    and EventDispatcher._action_cohort_target_identity(session_patch.target)
+                    == session_identity
+                    and session_patch.activity_time == event.timestamp
+                    and event.auth.session_id == session_identity.session_id
+                    and event.auth.logon_type
+                    == (10 if session_identity.session_kind == "rdp" else 2)
+                )
+            )
+            is_rdp_target_member = bool(
+                type(session_identity) is SessionIdentity
+                and session_identity.session_kind == "rdp"
+                and session_identity.hostname == identity.hostname
+                and session_identity.logon_id == identity.logon_id
+                and session_identity.principal == identity.principal
+                and has_exact_session_activity
+            )
+            is_rdp_source_mstsc = executable == "mstsc.exe" and has_exact_session_activity
+            is_rdp_target_system_winlogon = bool(
+                executable == "winlogon.exe"
+                and identity.principal.casefold() == "system"
+                and has_exact_session_activity
+            )
             if (
-                executable not in {"mstsc.exe", "explorer.exe", "userinit.exe", "winlogon.exe"}
+                not (is_rdp_target_member or is_rdp_source_mstsc or is_rdp_target_system_winlogon)
                 or termination.identity != identity
                 or termination.end_time != event.timestamp
                 or event.src_host.hostname != identity.hostname
@@ -14436,6 +14953,8 @@ class EventDispatcher:
     ) -> _PreparedProjection:
         """Freeze the direct-emitter compatibility projection without publishing it."""
 
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+
         event = self.source_timing_planner.initialize_event(event)
         filtered_formats: set[str] = set()
         matching_emitters = self._get_matching_emitters(
@@ -14521,6 +15040,28 @@ class EventDispatcher:
                         emitter=emitter,
                         status="out_of_window",
                     )
+                )
+                continue
+            if (
+                format_name == "windows_event_sysmon"
+                and type(emitter) is SysmonEventEmitter
+                and planned_event.event_type is EventKind.CONNECTION
+                and planned_event.dns is None
+                and not SysmonEventEmitter._event3_projection_eligible(
+                    emitter,
+                    planned_event,
+                )
+            ):
+                targets.append(
+                    _LegacyProjectionTarget(
+                        format_name=format_name,
+                        emitter=emitter,
+                        status="filtered",
+                    )
+                )
+                event = replace(
+                    event,
+                    _observed_formats=event._observed_formats - {format_name},
                 )
                 continue
             targets.append(

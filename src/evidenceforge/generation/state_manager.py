@@ -1848,6 +1848,7 @@ class _SmbConnectionPinPreparation:
     expected_pin: SmbConnectionPin
     connection: OpenConnection
     session_preparation: "_PreparedActionCohortSessionStart"
+    process_preparations: tuple["_PreparedActionCohortProcessStart", ...]
     capability: _SmbConnectionPinCapability
     result: "ConnectionCompositeMaterializationResult"
 
@@ -5783,6 +5784,196 @@ class StateManager:
         if type(plan._integrity_token) is not str or len(plan._integrity_token) != 64:
             raise StateError("SMB connection root session token is malformed")
 
+    def _preflight_smb_connection_process_identity_safe(
+        self,
+        identity: ProcessIdentity,
+        *,
+        label: str,
+    ) -> None:
+        """Bound one process identity before a legacy plan HMAC may repr it."""
+
+        if type(identity) is not ProcessIdentity:
+            raise StateError(f"SMB connection {label} has an invalid exact type")
+        for value, field_name, allow_blank in (
+            (identity.hostname, "hostname", False),
+            (identity.object_id, "object ID", False),
+            (identity.image, "image", True),
+            (identity.command_line, "command line", True),
+            (identity.principal, "principal", True),
+            (identity.logon_id, "LogonID", True),
+            (identity.lifecycle_group_id, "lifecycle group", False),
+            (identity.parent_lifecycle_group_id, "parent lifecycle group", True),
+        ):
+            self._bounded_smb_connection_text(
+                value,
+                label=f"{label} {field_name}",
+                allow_blank=allow_blank,
+            )
+        self._bounded_smb_connection_int(identity.pid, label=f"{label} PID")
+        self._bounded_smb_connection_int(identity.parent_pid, label=f"{label} parent PID")
+        self._require_smb_utc_datetime(identity.started_at, label=f"{label} start")
+        thread = identity.primary_thread
+        if thread is None:
+            return
+        if type(thread) is not ThreadIdentity:
+            raise StateError(f"SMB connection {label} primary thread has an invalid exact type")
+        for value, field_name in (
+            (thread.hostname, "hostname"),
+            (thread.process_object_id, "process object ID"),
+            (thread.object_id, "object ID"),
+            (thread.kind, "kind"),
+        ):
+            self._bounded_smb_connection_text(
+                value,
+                label=f"{label} primary thread {field_name}",
+            )
+        self._bounded_smb_connection_int(thread.pid, label=f"{label} primary thread PID")
+        self._bounded_smb_connection_int(thread.tid, label=f"{label} primary thread TID")
+        self._require_smb_utc_datetime(
+            thread.started_at,
+            label=f"{label} primary thread start",
+        )
+
+    def _preflight_smb_connection_process_plan_safe(
+        self,
+        plan: ProcessMaterializationPlan,
+    ) -> None:
+        """Validate staged client-process primitives before legacy dataclass repr()."""
+
+        if type(plan) is not ProcessMaterializationPlan:
+            raise StateError("SMB connection root process plan has an invalid exact type")
+        self._bounded_smb_connection_int(plan._expected_version, label="root process version")
+        self._preflight_smb_connection_process_identity_safe(
+            plan._identity,
+            label="root process identity",
+        )
+        payload = plan._payload
+        if type(payload) is not _ProcessMaterializationPayload:
+            raise StateError("SMB connection root process payload has an invalid exact type")
+        self._bounded_smb_connection_text(
+            payload.integrity_level,
+            label="root process integrity level",
+            allow_blank=True,
+        )
+        self._bounded_smb_connection_text(
+            payload.concurrency_group_id,
+            label="root process concurrency group",
+            allow_blank=True,
+        )
+        self._bounded_smb_connection_int(
+            payload.pid_logical_position,
+            label="root process logical PID position",
+        )
+        self._require_smb_utc_datetime(payload.state_time, label="root process State time")
+        if payload.parent_identity is not None:
+            self._preflight_smb_connection_process_identity_safe(
+                payload.parent_identity,
+                label="root process parent identity",
+            )
+        for value, label in (
+            (payload.virtual_parent_pid, "root process virtual parent PID"),
+            (payload.auth_session_id, "root process session ID"),
+            (payload.auth_logon_type, "root process logon type"),
+        ):
+            if value is not None:
+                self._bounded_smb_connection_int(value, label=label)
+        if payload.parent_activity_time is not None:
+            self._require_smb_utc_datetime(
+                payload.parent_activity_time,
+                label="root process parent activity",
+            )
+        if type(payload.require_session) is not bool:
+            raise StateError("SMB connection root process session requirement is malformed")
+
+        patch = plan._allocator_patch
+        if type(patch) is not _ProcessAllocatorPatch:
+            raise StateError("SMB connection root process allocator patch is malformed")
+
+        def text_int_pair(value: object, label: str) -> None:
+            if type(value) is not tuple or len(value) != 2:
+                raise StateError(f"SMB connection {label} is malformed")
+            self._bounded_smb_connection_text(value[0], label=f"{label} host")
+            self._bounded_smb_connection_int(value[1], label=f"{label} value")
+
+        for value, label in (
+            (patch.pid_counter, "root process PID counter"),
+            (patch.fixed_pid, "root process fixed PID"),
+            (patch.thread_counter, "root process thread counter"),
+        ):
+            if value is not None:
+                text_int_pair(value, label)
+        if patch.pid_os is not None:
+            if type(patch.pid_os) is not tuple or len(patch.pid_os) != 2:
+                raise StateError("SMB connection root process PID OS patch is malformed")
+            self._bounded_smb_connection_text(patch.pid_os[0], label="root process PID OS host")
+            self._bounded_smb_connection_text(patch.pid_os[1], label="root process PID OS value")
+        for value, label in (
+            (patch.pid_rng_state, "root process PID RNG"),
+            (patch.thread_rng_state, "root process thread RNG"),
+        ):
+            if value is None:
+                continue
+            if type(value) is not tuple or len(value) != 2:
+                raise StateError(f"SMB connection {label} patch is malformed")
+            self._bounded_smb_connection_text(value[0], label=f"{label} host")
+            self._validate_smb_random_state_safe(value[1])
+        if patch.pid_epoch is not None:
+            if type(patch.pid_epoch) is not tuple or len(patch.pid_epoch) != 2:
+                raise StateError("SMB connection root process PID epoch patch is malformed")
+            self._bounded_smb_connection_text(
+                patch.pid_epoch[0],
+                label="root process PID epoch host",
+            )
+            self._require_smb_utc_datetime(
+                patch.pid_epoch[1],
+                label="root process PID epoch",
+            )
+        if patch.pid_weekly_prefix is not None:
+            if type(patch.pid_weekly_prefix) is not tuple or len(patch.pid_weekly_prefix) != 2:
+                raise StateError("SMB connection root process PID prefix patch is malformed")
+            host, prefix = patch.pid_weekly_prefix
+            self._bounded_smb_connection_text(host, label="root process PID prefix host")
+            if type(prefix) is not tuple or not prefix or len(prefix) > _MINUTES_PER_WEEK + 1:
+                raise StateError("SMB connection root process PID prefix is malformed")
+            for value in prefix:
+                self._bounded_smb_connection_int(value, label="root process PID prefix value")
+        if patch.linux_allocation is not None:
+            if type(patch.linux_allocation) is not tuple or len(patch.linux_allocation) != 3:
+                raise StateError("SMB connection root Linux PID allocation is malformed")
+            self._bounded_smb_connection_text(
+                patch.linux_allocation[0],
+                label="root process Linux allocation host",
+            )
+            self._require_smb_utc_datetime(
+                patch.linux_allocation[1],
+                label="root process Linux allocation time",
+            )
+            self._bounded_smb_connection_int(
+                patch.linux_allocation[2],
+                label="root process Linux allocation position",
+            )
+        if patch.pid_bucket_offset is not None:
+            if type(patch.pid_bucket_offset) is not tuple or len(patch.pid_bucket_offset) != 2:
+                raise StateError("SMB connection root PID bucket patch is malformed")
+            key, offset = patch.pid_bucket_offset
+            if type(key) is not tuple or len(key) != 2:
+                raise StateError("SMB connection root PID bucket key is malformed")
+            self._bounded_smb_connection_text(key[0], label="root process PID bucket host")
+            self._require_smb_utc_datetime(key[1], label="root process PID bucket time")
+            self._bounded_smb_connection_int(offset, label="root process PID bucket offset")
+        self._bounded_smb_connection_int(
+            patch.pid_allocation_count_delta,
+            label="root process PID allocation delta",
+        )
+        self._bounded_smb_connection_int(
+            patch.pid_candidate_probe_delta,
+            label="root process PID probe delta",
+        )
+        self._bounded_smb_connection_hex_token(
+            plan._integrity_token,
+            label="root process token",
+        )
+
     def _preflight_smb_connection_composite_safe(
         self,
         plan: ConnectionCompositeMaterializationPlan,
@@ -5856,7 +6047,8 @@ class StateManager:
             raise StateError("SMB connection root requires an exact session batch")
         if (
             type(batch._processes) is not tuple
-            or batch._processes
+            or len(batch._processes) > 1
+            or any(type(item) is not ProcessMaterializationPlan for item in batch._processes)
             or type(batch._boot_times) is not tuple
             or batch._boot_times
             or type(batch._session_process_links) is not _SessionProcessMaterializationLinks
@@ -5886,6 +6078,8 @@ class StateManager:
         if type(batch._integrity_token) is not str or len(batch._integrity_token) != 64:
             raise StateError("SMB connection root batch token is malformed")
         self._preflight_smb_connection_session_plan_safe(batch._session)
+        for process in batch._processes:
+            self._preflight_smb_connection_process_plan_safe(process)
         file_binding = plan._smb_file_mutation_terminalization
         if file_binding is not None:
             if type(file_binding) is not _SmbFileMutationTerminalBinding:
@@ -5962,7 +6156,8 @@ class StateManager:
             raise StateError("SMB connection root requires an exact session batch")
         if (
             type(batch._processes) is not tuple
-            or batch._processes
+            or len(batch._processes) > 1
+            or any(type(item) is not ProcessMaterializationPlan for item in batch._processes)
             or type(batch._boot_times) is not tuple
             or batch._boot_times
             or type(batch._session_process_links) is not _SessionProcessMaterializationLinks
@@ -5998,6 +6193,8 @@ class StateManager:
             label="root batch token",
         )
         self._preflight_smb_connection_session_plan_safe(batch._session)
+        for process in batch._processes:
+            self._preflight_smb_connection_process_plan_safe(process)
         file_binding = cursor._smb_file_mutation_terminalization
         if file_binding is not None:
             if type(file_binding) is not _SmbFileMutationTerminalBinding:
@@ -6089,7 +6286,7 @@ class StateManager:
         if plan._smb_file_mutation_terminalization is not None:
             if type(plan._smb_file_mutation_terminalization) is not _SmbFileMutationTerminalBinding:
                 raise StateError("Connection composite SMB terminalization is malformed")
-            self._active_smb_file_mutation_for_terminal_binding_locked(
+            self._retained_smb_file_mutation_for_terminal_binding_locked(
                 plan._smb_file_mutation_terminalization
             )
         expected = _connection_composite_integrity_token(
@@ -6226,7 +6423,7 @@ class StateManager:
         if plan._smb_file_mutation_terminalization is not None:
             if type(plan._smb_file_mutation_terminalization) is not _SmbFileMutationTerminalBinding:
                 raise StateError("Action cohort SMB file terminalization is malformed")
-            self._active_smb_file_mutation_for_terminal_binding_locked(
+            self._retained_smb_file_mutation_for_terminal_binding_locked(
                 plan._smb_file_mutation_terminalization
             )
 
@@ -7080,10 +7277,6 @@ class StateManager:
                 raise StateError("SMB connection pin is already terminal")
             active = authority
             self._validate_smb_connection_active_canonical_locked(active)
-            if active.install_receipt is not None:
-                raise StateError(
-                    "SMB connection pin install receipt must be acknowledged before close"
-                )
             detached_final = self._detach_smb_connection_transaction(final_transaction)
             detached_identity = self._detach_smb_connection_session_identity(session_identity)
             effective_end = self._require_smb_utc_datetime(
@@ -17780,8 +17973,6 @@ class StateManager:
             raise StateError("SMB connection finalization is fenced by terminal release")
         active = authority
         self._validate_smb_connection_active_canonical_locked(active)
-        if active.install_receipt is not None:
-            raise StateError("SMB connection pin install receipt must be acknowledged before close")
         if (
             binding.pin is not active.pin
             or binding.final_transaction is active.initial_transaction
@@ -19146,6 +19337,8 @@ class StateManager:
         transaction: NetworkTransactionPlan,
         batch: MaterializationBatchPlan | None,
         mode: ConnectionMaterializationMode,
+        source_system: str,
+        initiating_pid: int,
         target_hostname: str,
         existing_session_patch: ConnectionExistingSessionPatch | None,
     ) -> SessionMaterializationPlan:
@@ -19183,8 +19376,8 @@ class StateManager:
             raise StateError("SMB connection pin requires a newly generated Type-3 session")
         if batch is None or batch.session is None:
             raise StateError("SMB connection pin requires one exact Type-3 session batch")
-        if batch.processes or batch.boot_times:
-            raise StateError("SMB connection pin root batch must contain only its Type-3 session")
+        if len(batch.processes) > 1 or batch.boot_times:
+            raise StateError("SMB connection pin root batch has unsupported members")
         session = batch.session
         identity = session.identity
         payload = session._payload
@@ -19223,6 +19416,22 @@ class StateManager:
             or payload.smb_principal != identity.principal
         ):
             raise StateError("SMB connection Type-3 session disagrees with its transport root")
+        client_process = batch.processes[0] if batch.processes else None
+        if client_process is not None:
+            process_identity = client_process.identity
+            if (
+                not source_system
+                or process_identity.hostname != source_system
+                or process_identity.hostname == identity.hostname
+                or process_identity.logon_id == identity.logon_id
+                or process_identity.started_at > transaction.started_at
+                or initiating_pid not in {-1, process_identity.pid}
+            ):
+                raise StateError("SMB connection client process disagrees with its transport root")
+        elif initiating_pid > 0:
+            process_identity = self.get_process_identity(source_system, initiating_pid)
+            if process_identity is None or process_identity.hostname != source_system:
+                raise StateError("SMB connection initiating PID is not an exact source process")
         return session
 
     def _smb_connection_retention_deadline(self, end_time: datetime) -> float:
@@ -19333,6 +19542,8 @@ class StateManager:
             transaction=plan.transaction,
             batch=plan.batch,
             mode=plan.mode,
+            source_system=plan._source_system,
+            initiating_pid=plan._initiating_pid,
             target_hostname=plan._hostname,
             existing_session_patch=plan.existing_session_patch,
         )
@@ -19348,6 +19559,10 @@ class StateManager:
         detached_identity = self._detach_smb_connection_session_identity(session_plan.identity)
         receipt_identity = self._detach_smb_connection_session_identity(session_plan.identity)
         session_preparation = self._prepare_action_cohort_session_start(session_plan)
+        process_preparations = tuple(
+            self._prepare_action_cohort_process_start(process)
+            for process in (plan.batch.processes if plan.batch is not None else ())
+        )
         session_preparation.session.end_plan = self._detach_smb_connection_session_end_plan(
             session_plan._payload.end_plan
         )
@@ -19430,7 +19645,7 @@ class StateManager:
         prebuilt_result = ConnectionCompositeMaterializationResult(
             connection=result_connection,
             session=None,
-            processes=(),
+            processes=tuple(item.process for item in process_preparations),
             smb_file_mutation=smb_file_mutation,
             smb_connection_pin_install=receipt,
         )
@@ -19438,6 +19653,7 @@ class StateManager:
             expected_pin=pin,
             connection=connection,
             session_preparation=session_preparation,
+            process_preparations=process_preparations,
             capability=capability,
             result=prebuilt_result,
         )
@@ -19467,6 +19683,12 @@ class StateManager:
             cap.pin is not preparation.expected_pin
             or cap.connection is not preparation.connection
             or type(preparation.session_preparation) is not _PreparedActionCohortSessionStart
+            or type(preparation.process_preparations) is not tuple
+            or any(
+                type(item) is not _PreparedActionCohortProcessStart
+                for item in preparation.process_preparations
+            )
+            or type(preparation.result) is not ConnectionCompositeMaterializationResult
             or cap.session is not None
             or self._smb_connection_census_authority(census, cap.trusted.conn_id) is not None
         ):
@@ -19477,6 +19699,13 @@ class StateManager:
             self._smb_connection_session_identity_bytes(cap.session_identity),
         ):
             raise StateError("SMB connection pin preparation changed its Type-3 identity")
+        if preparation.result.processes != tuple(
+            item.process for item in preparation.process_preparations
+        ) or any(
+            item.plan.identity.object_id != item.process.ecar_object_id
+            for item in preparation.process_preparations
+        ):
+            raise StateError("SMB connection pin preparation changed its client process")
         if (
             self._smb_connection_census_session_owner(census, cap.session_identity.logon_id)
             is not None
@@ -19529,7 +19758,6 @@ class StateManager:
             type(preparation.result) is not ConnectionCompositeMaterializationResult
             or preparation.result.smb_connection_pin_install is not receipt
             or preparation.result.session is not None
-            or preparation.result.processes != ()
             or preparation.result.connection is None
             or preparation.result.connection is cap.connection
             or preparation.result.connection.traffic_ledger is cap.connection.traffic_ledger
@@ -19678,6 +19906,45 @@ class StateManager:
             except (AttributeError, StateError, TypeError, ValueError):
                 return False
             return True
+
+    def authenticates_acknowledged_smb_connection_pin_install(self, receipt: object) -> bool:
+        """Prove an exact install receipt was acknowledged while its pin remains owned."""
+
+        if type(receipt) is not SmbConnectionPinInstallReceipt:
+            return False
+        with self._lock:
+            try:
+                if type(receipt.pin) is not SmbConnectionPin:
+                    return False
+                authority = self._smb_connection_authority_for_pin_locked(receipt.pin)
+                active = self._smb_connection_active_capability(authority)
+                self._validate_smb_connection_pin_public(receipt.pin, trusted=active.trusted)
+                if receipt.pin is not active.pin or active.install_receipt is not None:
+                    return False
+                receipt_identity = self._smb_connection_session_identity_bytes(
+                    receipt.session_identity
+                )
+                active_identity = self._smb_connection_session_identity_bytes(
+                    active.session_identity
+                )
+                return bool(
+                    receipt.session_identity is not active.session_identity
+                    and hmac.compare_digest(receipt_identity, active_identity)
+                    and hmac.compare_digest(
+                        receipt.initial_transaction_digest,
+                        self._smb_connection_transaction_digest(active.initial_transaction),
+                    )
+                    and hmac.compare_digest(
+                        receipt._integrity_token,
+                        self._smb_connection_pin_install_receipt_token(
+                            trusted=active.trusted,
+                            session_identity=receipt.session_identity,
+                            initial_transaction_digest=receipt.initial_transaction_digest,
+                        ),
+                    )
+                )
+            except (AttributeError, StateError, TypeError, ValueError):
+                return False
 
     def recover_smb_connection_pin_install(
         self,
@@ -20239,6 +20506,8 @@ class StateManager:
                     transaction=transaction,
                     batch=batch,
                     mode=mode,
+                    source_system=source_system,
+                    initiating_pid=initiating_pid,
                     target_hostname=hostname,
                     existing_session_patch=rdp_existing_session_patch,
                 )
@@ -20407,6 +20676,8 @@ class StateManager:
                     transaction=plan.transaction,
                     batch=plan.batch,
                     mode=plan.mode,
+                    source_system=plan._source_system,
+                    initiating_pid=plan._initiating_pid,
                     target_hostname=plan._hostname,
                     existing_session_patch=plan.existing_session_patch,
                 )
@@ -20673,6 +20944,20 @@ class StateManager:
                     update_state_time=False,
                     prepared=smb_connection_pin.session_preparation,
                     emit_log=False,
+                )
+                processes = tuple(
+                    self._commit_prevalidated_process_materialization(
+                        process_plan,
+                        advance_version=False,
+                        update_state_time=False,
+                        prepared=process_preparation,
+                        emit_log=False,
+                    )
+                    for process_plan, process_preparation in zip(
+                        plan.batch.processes,
+                        smb_connection_pin.process_preparations,
+                        strict=True,
+                    )
                 )
             else:
                 session, processes = self._commit_prevalidated_materialization_batch_unclaimed(
@@ -22477,6 +22762,38 @@ class StateManager:
                 return False
             return True
 
+    def authenticates_smb_file_mutation_journal_cleanup(
+        self,
+        journal: SmbFileMutationJournal,
+    ) -> bool:
+        """Return whether one exact active or cancelling journal still needs cleanup."""
+
+        if type(journal) is not SmbFileMutationJournal:
+            return False
+        with self._lock:
+            try:
+                retained = self._retained_smb_file_mutation_journal(
+                    journal,
+                    allow_exact_tamper_for_release=True,
+                )
+            except (StateError, TypeError, ValueError):
+                return False
+            if type(retained) is not _SmbFileMutationJournalCapability:
+                return False
+            locator = self._smb_file_mutation_locator_by_journal_identity.get(id(journal))
+            return bool(
+                locator is not None
+                and locator.journal is journal
+                and locator.active is retained
+                and locator.phase in {"active", "cancelling"}
+                and type(journal._journal_id) is str
+                and journal._journal_id == retained.journal_id
+                and type(journal._operation_id) is str
+                and journal._operation_id == retained.operation_id
+                and type(journal._integrity_token) is str
+                and hmac.compare_digest(journal._integrity_token, retained.integrity_token)
+            )
+
     def _smb_file_mutation_commit_fault(self, stage: str) -> None:
         """Fault-injection seam around terminalization and idempotent cleanup."""
 
@@ -22511,11 +22828,11 @@ class StateManager:
             _integrity_token=integrity_token,
         )
 
-    def _active_smb_file_mutation_for_terminal_binding_locked(
+    def _retained_smb_file_mutation_for_terminal_binding_locked(
         self,
         binding: _SmbFileMutationTerminalBinding,
-    ) -> _SmbFileMutationJournalCapability:
-        """Resolve one intact detached binding to its exact current private owner."""
+    ) -> _SmbFileMutationJournalCapability | _SmbFileMutationCommittedCapability:
+        """Resolve one intact binding to its exact active or retained terminal owner."""
 
         if (
             type(binding) is not _SmbFileMutationTerminalBinding
@@ -22545,15 +22862,18 @@ class StateManager:
         if not hmac.compare_digest(binding._integrity_token, expected_integrity):
             raise StateError("SMB file mutation terminal binding failed integrity validation")
         retained = self._smb_file_mutation_journals.get(binding.journal_id)
-        if type(retained) is not _SmbFileMutationJournalCapability:
+        if type(retained) not in {
+            _SmbFileMutationJournalCapability,
+            _SmbFileMutationCommittedCapability,
+        }:
             raise StateError("SMB file mutation terminal binding is stale")
-        active = retained
+        active = self._smb_file_mutation_active_capability(retained)
         if active.operation_id != binding.operation_id or not hmac.compare_digest(
             active.integrity_token,
             binding.journal_publication_token,
         ):
             raise StateError("SMB file mutation terminal binding names another journal generation")
-        if self._retained_smb_file_mutation_journal(active.journal) is not active:
+        if self._retained_smb_file_mutation_journal(active.journal) is not retained:
             raise StateError("SMB file mutation terminal binding lost its exact journal")
         self._validate_smb_file_mutation_active_capability_shape(
             active,
@@ -22561,7 +22881,25 @@ class StateManager:
         )
         if self._smb_file_mutation_postimage_digest(active) != (binding.expected_postimage_digest):
             raise StateError("SMB file mutation terminal binding postimage changed")
-        return active
+        if type(retained) is _SmbFileMutationCommittedCapability:
+            if (
+                retained.active is not active
+                or retained.result.postimage_digest != binding.expected_postimage_digest
+                or not self._authenticates_smb_file_mutation_terminal(retained)
+            ):
+                raise StateError("SMB file mutation terminal binding lost its committed result")
+        return retained
+
+    def _active_smb_file_mutation_for_terminal_binding_locked(
+        self,
+        binding: _SmbFileMutationTerminalBinding,
+    ) -> _SmbFileMutationJournalCapability:
+        """Resolve one intact detached binding to its exact active private owner."""
+
+        retained = self._retained_smb_file_mutation_for_terminal_binding_locked(binding)
+        if type(retained) is not _SmbFileMutationJournalCapability:
+            raise StateError("SMB file mutation terminal binding is already committed")
+        return retained
 
     def _prepare_smb_file_mutation_terminal_from_binding_locked(
         self,

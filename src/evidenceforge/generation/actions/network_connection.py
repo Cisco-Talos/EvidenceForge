@@ -27,7 +27,6 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from enum import StrEnum
 from math import isfinite
 from threading import Lock
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -83,9 +82,22 @@ from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
     DeferredSessionDependentOccurrenceSpec,
 )
+from evidenceforge.generation.persistent_smb_continuation import (
+    NetworkConnectionPublicationOutcome,
+    PersistentSmbClientProcessPreparation,
+    PersistentSmbRootHandoff,
+    PersistentSmbTerminalContinuation,
+    PersistentSmbTerminalContinuationAuthority,
+)
 from evidenceforge.generation.rdp_sessions import (
     RdpReconnectStateManager,
     RdpSessionAdmissionToken,
+)
+from evidenceforge.generation.smb_channels import (
+    SmbApplicationChannelManager,
+    SmbChannelAdmissionToken,
+    SmbChannelAffinity,
+    SmbCompletedOperationPlan,
 )
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanningRuntime,
@@ -106,6 +118,7 @@ from evidenceforge.generation.state_manager import (
     MaterializationBatchPlan,
     ProcessActivityPatch,
     SessionActivityPatch,
+    SmbFileMutationJournal,
     StateManager,
 )
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
@@ -121,10 +134,8 @@ if TYPE_CHECKING:
         ExplicitProxyRequestPreparation,
     )
     from evidenceforge.generation.lifecycle_authority import LifecyclePreparedNetworkReceipt
-    from evidenceforge.generation.network_observation import NetworkSensorObservation
     from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
     from evidenceforge.generation.source_timing import SourceTimingPreparation
-    from evidenceforge.generation.state_manager import SmbConnectionPinInstallReceipt
 
 TransportLifecycleRequestMode = Literal["network", "deferred_session"]
 TransportLifecyclePlanMode = Literal["network", "deferred_session", "application_child"]
@@ -144,6 +155,9 @@ class PersistentSmbRootIntent:
     auth_session_ref: str
     effective_uid: int | None = None
     effective_gid: int | None = None
+    client_process: PersistentSmbClientProcessPreparation = field(
+        default_factory=PersistentSmbClientProcessPreparation.none
+    )
 
     def __post_init__(self) -> None:
         """Normalize the bounded immutable coordinator intent."""
@@ -160,13 +174,15 @@ class PersistentSmbRootIntent:
         if any(type(value) is not str or not value.strip() for value in required):
             raise ValueError("Persistent SMB root intent requires complete exact identity")
         object.__setattr__(self, "auth_time", ensure_utc(self.auth_time))
+        if type(self.client_process) is not PersistentSmbClientProcessPreparation:
+            raise TypeError("Persistent SMB root requires an exact client process recipe")
 
     def prepare(
         self,
         state_manager: StateManager,
         transaction: NetworkTransactionPlan,
     ) -> MaterializationBatchPlan:
-        """Prepare the sole Type-3 session admitted with the physical root."""
+        """Prepare the Type-3 session and optional source process in one physical root."""
 
         if (
             transaction.protocol != "tcp"
@@ -203,7 +219,94 @@ class PersistentSmbRootIntent:
                 authority="action_bundle",
             ),
         )
+        process = self.client_process
+        if process.disposition != "none":
+            assert process.started_at is not None
+            if process.started_at > transaction.started_at:
+                raise StateError("Persistent SMB client process must start before its transport")
+            session_identity = state_manager.get_session_identity(process.logon_id)
+            if (
+                session_identity is None
+                or session_identity.hostname != process.hostname
+                or session_identity.object_id != process.session_object_id
+                or session_identity.session_id != process.session_id
+            ):
+                raise StateError("Persistent SMB client process changed its owning session")
+            live_session = state_manager.get_session(process.logon_id)
+            if live_session is None or live_session.logon_type != process.logon_type:
+                raise StateError("Persistent SMB client process changed its session type")
+            parent_identity = (
+                state_manager.get_process_identity(process.hostname, process.parent_pid)
+                if process.parent_pid > 0
+                else None
+            )
+            if process.parent_object_id and (
+                parent_identity is None or parent_identity.object_id != process.parent_object_id
+            ):
+                raise StateError("Persistent SMB client process changed its exact parent")
+            if process.disposition == "materialize":
+                builder.plan_process(
+                    system=process.hostname,
+                    parent_pid=process.parent_pid,
+                    image=process.image,
+                    command_line=process.command_line,
+                    username=process.username,
+                    integrity_level=process.integrity_level,
+                    os_category=process.os_category,
+                    logon_id=process.logon_id,
+                    lifecycle_group_id=process.lifecycle_group_id,
+                    concurrency_group_id=f"persistent-smb:{self.lifecycle_group_id}",
+                    start_time=process.started_at,
+                    require_session=True,
+                    auth_session_id=process.session_id,
+                    auth_logon_type=process.logon_type,
+                )
+            elif process.disposition == "reuse":
+                identity = state_manager.get_process_identity(process.hostname, process.pid)
+                if (
+                    identity is None
+                    or identity.object_id != process.process_object_id
+                    or identity.parent_pid != process.parent_pid
+                    or identity.image != process.image
+                    or identity.command_line != process.command_line
+                    or identity.principal != process.username
+                    or identity.logon_id != process.logon_id
+                    or identity.started_at != process.started_at
+                    or identity.lifecycle_group_id != process.lifecycle_group_id
+                ):
+                    raise StateError("Persistent SMB client process reuse changed exact identity")
         return builder.seal()
+
+    def client_process_identity(
+        self,
+        state_manager: StateManager,
+        batch: MaterializationBatchPlan,
+    ) -> ProcessIdentity | None:
+        """Resolve the exact staged or reused source actor without reselection."""
+
+        process = self.client_process
+        if process.disposition == "none":
+            return None
+        if process.disposition == "materialize":
+            if len(batch.processes) != 1:
+                raise StateError("Persistent SMB root lost its staged client process")
+            identity = batch.processes[0].identity
+        else:
+            if batch.processes:
+                raise StateError("Persistent SMB reused client process became staged")
+            identity = state_manager.get_process_identity(process.hostname, process.pid)
+        if (
+            identity is None
+            or identity.hostname != process.hostname
+            or identity.image != process.image
+            or identity.command_line != process.command_line
+            or identity.principal != process.username
+            or identity.logon_id != process.logon_id
+            or identity.started_at != process.started_at
+            or (process.disposition == "reuse" and identity.object_id != process.process_object_id)
+        ):
+            raise StateError("Persistent SMB root changed its frozen client actor")
+        return identity
 
     def identity_snapshot(self) -> tuple[object, ...]:
         """Return the exact scalar request identity carried through network planning."""
@@ -219,14 +322,15 @@ class PersistentSmbRootIntent:
             self.auth_session_ref,
             self.effective_uid,
             self.effective_gid,
+            self.client_process.identity_snapshot(),
         )
 
     @classmethod
     def from_identity_snapshot(cls, snapshot: object) -> PersistentSmbRootIntent:
         """Reconstruct one validated coordinator intent from its scalar identity."""
 
-        if type(snapshot) is not tuple or len(snapshot) != 10:
-            raise TypeError("Persistent SMB root snapshot requires ten exact scalar fields")
+        if type(snapshot) is not tuple or len(snapshot) not in {10, 11}:
+            raise TypeError("Persistent SMB root snapshot requires ten or eleven scalar fields")
         (
             username,
             system,
@@ -238,6 +342,7 @@ class PersistentSmbRootIntent:
             auth_session_ref,
             effective_uid,
             effective_gid,
+            *tail,
         ) = snapshot
         if type(auth_time) is not datetime:
             raise TypeError("Persistent SMB root snapshot requires an exact authentication time")
@@ -258,16 +363,113 @@ class PersistentSmbRootIntent:
             auth_session_ref=auth_session_ref,
             effective_uid=effective_uid,
             effective_gid=effective_gid,
+            client_process=(
+                PersistentSmbClientProcessPreparation.none()
+                if not tail
+                else PersistentSmbClientProcessPreparation.from_identity_snapshot(tail[0])
+            ),
         )
 
 
 @dataclass(frozen=True, slots=True)
-class PersistentSmbRootHandoff:
-    """Exact retained owners needed to continue one committed SMB root."""
+class PersistentSmbApplicationIntent:
+    """Terminal SMB manager values resolved after TCP and Type-3 identities freeze."""
 
-    prepared_dispatch: PreparedDispatch = field(compare=False, repr=False)
-    observations: tuple[NetworkSensorObservation, ...]
-    pin_install_receipt: SmbConnectionPinInstallReceipt
+    manager: SmbApplicationChannelManager = field(compare=False, repr=False)
+    affinity: SmbChannelAffinity
+    auth_session_ref: str
+    principal: str
+    auth_protocol: str
+    account_scope: str
+    effective_uid: int | None
+    effective_gid: int | None
+    client_access: str
+    server_hostname: str
+    client_ip: str
+    lifecycle_group_id: str
+    share_ref: str
+    tree_connected_at: datetime
+    operations: tuple[SmbCompletedOperationPlan, ...]
+    idle_timeout: timedelta
+    closed_at: datetime
+    reason: str = "logoff"
+
+    def __post_init__(self) -> None:
+        """Normalize exact terminal preparation inputs before network planning."""
+
+        if type(self.manager) is not SmbApplicationChannelManager:
+            raise TypeError("Persistent SMB application intent requires its exact manager")
+        if type(self.affinity) is not SmbChannelAffinity:
+            raise TypeError("Persistent SMB application intent requires an exact affinity")
+        if type(self.operations) is not tuple or not 1 <= len(self.operations) <= 64:
+            raise ValueError("Persistent SMB application intent requires 1..64 operations")
+        if any(type(item) is not SmbCompletedOperationPlan for item in self.operations):
+            raise TypeError("Persistent SMB application operations changed exact type")
+        if self.idle_timeout <= timedelta(0):
+            raise ValueError("Persistent SMB application idle timeout must be positive")
+        if any(
+            type(value) is not str or not value.strip()
+            for value in (
+                self.auth_session_ref,
+                self.principal,
+                self.auth_protocol,
+                self.account_scope,
+                self.client_access,
+                self.server_hostname,
+                self.client_ip,
+                self.lifecycle_group_id,
+                self.share_ref,
+                self.reason,
+            )
+        ):
+            raise ValueError("Persistent SMB application intent requires complete identity")
+        object.__setattr__(self, "tree_connected_at", ensure_utc(self.tree_connected_at))
+        object.__setattr__(self, "closed_at", ensure_utc(self.closed_at))
+
+    def prepare(
+        self,
+        session_identity: SessionIdentity,
+        transaction: NetworkTransactionPlan,
+    ) -> SmbChannelAdmissionToken:
+        """Reserve one typed terminal SMB/common admission for the physical root."""
+
+        if transaction.closed_at is None:
+            raise StateError("Persistent SMB application requires a closed transport")
+        if (
+            transaction.protocol != "tcp"
+            or transaction.dst_port != 445
+            or transaction.service != "smb"
+            or transaction.conn_state != "SF"
+        ):
+            raise StateError("Persistent SMB application requires successful TCP/445")
+        if (
+            session_identity.hostname != transaction.hostname
+            or session_identity.session_kind != "network"
+        ):
+            raise StateError("Persistent SMB application targets another Type-3 session")
+        return self.manager.prepare_fresh_session_with_completed_operations_and_close(
+            self.affinity,
+            transport_plan=transaction,
+            sensor_observations=(),
+            ground_truth_transport_uid=transaction.zeek_uid,
+            logon_id=session_identity.logon_id,
+            auth_session_ref=self.auth_session_ref,
+            principal=self.principal,
+            auth_protocol=self.auth_protocol,
+            account_scope=self.account_scope,
+            effective_uid=self.effective_uid,
+            effective_gid=self.effective_gid,
+            client_access=self.client_access,
+            server_hostname=self.server_hostname,
+            client_ip=self.client_ip,
+            lifecycle_group_id=self.lifecycle_group_id,
+            share_ref=self.share_ref,
+            tree_connected_at=self.tree_connected_at,
+            operations=self.operations,
+            idle_timeout=self.idle_timeout,
+            closed_at=self.closed_at,
+            reason=self.reason,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1644,13 +1846,6 @@ class DeferredSessionNetworkAuthority:
         )
 
 
-class NetworkConnectionPublicationOutcome(StrEnum):
-    """Typed internal disposition of one committed canonical network root."""
-
-    PUBLISHED = "published"
-    COMMITTED_SUPPRESSED = "committed_suppressed"
-
-
 class _NetworkConnectionIdentityCaptureClaim:
     """Exact private one-shot capability for one empty identity capture."""
 
@@ -1673,6 +1868,7 @@ class NetworkConnectionIdentityCapture:
         "_outcome",
         "_prepared_dispatch",
         "_prepared_root",
+        "_persistent_smb_root_handoff",
         "_receipt",
         "_source_timing_preparation",
         "_transaction",
@@ -1684,6 +1880,7 @@ class NetworkConnectionIdentityCapture:
         self._prepared_root: PreparedNetworkTransactionRoot | None = None
         self._source_timing_preparation: SourceTimingPreparation | None = None
         self._prepared_dispatch: PreparedDispatch | None = None
+        self._persistent_smb_root_handoff: PersistentSmbRootHandoff | None = None
         self._receipt: LifecyclePreparedNetworkReceipt | None = None
         self._application_receipt: object | None = None
         self._outcome: NetworkConnectionPublicationOutcome | None = None
@@ -1719,6 +1916,12 @@ class NetworkConnectionIdentityCapture:
         """Return the transferred deferred transport dispatch, if any."""
 
         return self._prepared_dispatch
+
+    @property
+    def persistent_smb_root_handoff(self) -> PersistentSmbRootHandoff | None:
+        """Return the exact typed persistent-SMB root handoff, if committed."""
+
+        return self._persistent_smb_root_handoff
 
     @property
     def receipt(self) -> LifecyclePreparedNetworkReceipt | None:
@@ -1806,7 +2009,7 @@ class NetworkConnectionIdentityCapture:
         root: PreparedNetworkTransactionRoot,
         receipt: LifecyclePreparedNetworkReceipt,
         application_receipt: object | None = None,
-        prepared_dispatch: object | None = None,
+        persistent_smb_root_handoff: PersistentSmbRootHandoff | None = None,
         outcome: NetworkConnectionPublicationOutcome,
     ) -> None:
         """Publish one authenticated committed root and its internal disposition."""
@@ -1816,7 +2019,7 @@ class NetworkConnectionIdentityCapture:
             self._transaction = root.transaction
             self._lifecycle_mode = root.runtime_token.lifecycle_mode
             self._prepared_root = root
-            self._prepared_dispatch = prepared_dispatch  # type: ignore[assignment]
+            self._persistent_smb_root_handoff = persistent_smb_root_handoff
             self._receipt = receipt
             self._application_receipt = application_receipt
             self._outcome = outcome
@@ -1830,7 +2033,7 @@ class NetworkConnectionIdentityCapture:
         root: PreparedNetworkTransactionRoot,
         receipt: LifecyclePreparedNetworkReceipt,
         application_receipt: object | None,
-        prepared_dispatch: object | None = None,
+        persistent_smb_root_handoff: PersistentSmbRootHandoff | None = None,
         outcome: NetworkConnectionPublicationOutcome,
     ) -> bool:
         """Authenticate the exact postcondition before its boundary drops the claim."""
@@ -1845,7 +2048,7 @@ class NetworkConnectionIdentityCapture:
                 and self._transaction is root.transaction
                 and self._lifecycle_mode == root.runtime_token.lifecycle_mode
                 and self._prepared_root is root
-                and self._prepared_dispatch is prepared_dispatch
+                and self._persistent_smb_root_handoff is persistent_smb_root_handoff
                 and self._receipt is receipt
                 and self._application_receipt is application_receipt
                 and self._outcome is outcome
@@ -1910,7 +2113,7 @@ class NetworkConnectionIdentityCapture:
     def require_persistent_smb_root_handoff(self) -> PersistentSmbRootHandoff:
         """Return the exact deferred-source owners for a persistent SMB root."""
 
-        handoff = self.prepared_dispatch
+        handoff = self.persistent_smb_root_handoff
         if type(handoff) is not PersistentSmbRootHandoff:
             raise ValueError("Network connection did not publish a persistent SMB root handoff")
         return handoff
@@ -1985,6 +2188,26 @@ class NetworkConnectionRequest:
         repr=False,
     )
     persistent_smb_root_intent: tuple[object, ...] | None = None
+    persistent_smb_application_intent: PersistentSmbApplicationIntent | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    persistent_smb_file_mutation_journal: SmbFileMutationJournal | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     defer_source_publication: bool = False
     prepared_application_token: object | None = field(
         default=None,
@@ -2016,7 +2239,9 @@ class NetworkConnectionRequest:
             if self.transport_lifecycle_mode != "deferred_session":
                 raise ValueError("Deferred session authority requires deferred_session mode")
         if self.persistent_smb_root_intent is not None:
-            PersistentSmbRootIntent.from_identity_snapshot(self.persistent_smb_root_intent)
+            persistent_root = PersistentSmbRootIntent.from_identity_snapshot(
+                self.persistent_smb_root_intent
+            )
             if (
                 self.transport_lifecycle_mode != "network"
                 or self.identity_capture is None
@@ -2028,11 +2253,54 @@ class NetworkConnectionRequest:
                 raise ValueError(
                     "Persistent SMB roots require captured deferred-source TCP/445 SMB mode"
                 )
+            if (
+                type(self.persistent_smb_application_intent) is not PersistentSmbApplicationIntent
+                or type(self.persistent_smb_file_mutation_journal) is not SmbFileMutationJournal
+                or type(self.persistent_smb_terminal_authority)
+                is not PersistentSmbTerminalContinuationAuthority
+                or type(self.persistent_smb_terminal_continuation)
+                is not PersistentSmbTerminalContinuation
+                or not self.persistent_smb_terminal_authority.authenticates_claimed(
+                    self.persistent_smb_terminal_continuation
+                )
+            ):
+                raise ValueError(
+                    "Persistent SMB roots require exact application, file, and continuation owners"
+                )
+            application = self.persistent_smb_application_intent
+            affinity = application.affinity
+            if (
+                application.auth_session_ref != persistent_root.auth_session_ref
+                or application.principal != persistent_root.smb_principal
+                or application.auth_protocol != persistent_root.auth_protocol
+                or application.account_scope != persistent_root.account_scope
+                or application.effective_uid != persistent_root.effective_uid
+                or application.effective_gid != persistent_root.effective_gid
+                or application.server_hostname != persistent_root.system
+                or application.lifecycle_group_id != persistent_root.lifecycle_group_id
+                or application.client_ip != self.src_ip
+                or affinity.client_ip != application.client_ip
+                or affinity.server_ip != self.dst_ip
+                or affinity.server_identity != application.server_hostname.strip().casefold()
+                or affinity.principal != application.principal.strip().casefold()
+                or affinity.auth_protocol != application.auth_protocol.strip().casefold()
+                or affinity.account_scope != application.account_scope.strip().casefold()
+                or affinity.client_access != application.client_access.strip().casefold()
+            ):
+                raise ValueError("Persistent SMB root and application identities disagree")
         elif self.defer_source_publication:
             raise ValueError("Deferred source publication is reserved for persistent SMB roots")
+        elif (
+            self.persistent_smb_application_intent is not None
+            or self.persistent_smb_file_mutation_journal is not None
+            or self.persistent_smb_terminal_authority is not None
+            or self.persistent_smb_terminal_continuation is not None
+        ):
+            raise ValueError("Persistent SMB child owners require a persistent root intent")
         application_preparation_count = sum(
             value is not None
             for value in (
+                self.persistent_smb_application_intent,
                 self.prepared_application_token,
                 self.explicit_proxy_open_preparation,
                 self.explicit_proxy_request_preparation,

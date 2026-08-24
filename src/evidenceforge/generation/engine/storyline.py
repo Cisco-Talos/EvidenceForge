@@ -59,10 +59,13 @@ from evidenceforge.generation.actions import (
     WebScanActionBundle,
     WebScanRequest,
     dhcp_renewal_interval_seconds,
+    dns_transport_close_headroom_seconds,
+    network_transport_open_positive_headroom_seconds,
 )
 from evidenceforge.generation.actions.rdp_session import (
     RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS,
-    RDP_TRANSPORT_DURATION_MAX_SECONDS,
+    rdp_action_deadline_source_tail,
+    rdp_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
@@ -559,6 +562,8 @@ def _iter_periodic_ticks(
     count: int | None,
     jitter: float,
     rng,
+    *,
+    exclusive_end_time: datetime | None = None,
 ):
     """Yield timestamps for periodic bulk events.
 
@@ -572,6 +577,8 @@ def _iter_periodic_ticks(
         count: Exact number of events to emit (None when using duration).
         jitter: Fraction of interval to randomize (0.0–1.0).
         rng: Random number generator instance.
+        exclusive_end_time: Optional scenario fence. Ticks that cannot land
+            before this timestamp are not sampled; later candidates are not yielded.
 
     Yields:
         datetime for each tick.
@@ -579,20 +586,28 @@ def _iter_periodic_ticks(
     t = 0.0
     emitted = 0
     end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
+    if exclusive_fence is not None and ensure_utc(start_time) >= exclusive_fence:
+        return
     last_tick = None
     while True:
         if duration_sec is not None and t > duration_sec:
             break
         if count is not None and emitted >= count:
             break
+        earliest_tick = start_time + timedelta(seconds=max(0.0, t - jitter * interval_sec))
+        if exclusive_fence is not None and ensure_utc(earliest_tick) >= exclusive_fence:
+            break
         jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
         tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
-        # Clamp to window end (jitter can push past duration)
+        # Clamp to the inclusive campaign end (jitter can push past duration).
         if end_time is not None and tick_time > end_time:
             tick_time = end_time
         # Ensure monotonic ordering (jitter can cause inversions)
         if last_tick is not None and tick_time < last_tick:
             tick_time = last_tick + timedelta(milliseconds=1)
+        if exclusive_fence is not None and ensure_utc(tick_time) >= exclusive_fence:
+            break
         last_tick = tick_time
         yield tick_time
         emitted += 1
@@ -606,24 +621,106 @@ def _iter_dns_tunnel_ticks(
     count: int | None,
     jitter: float,
     rng,
+    *,
+    exclusive_end_time: datetime | None = None,
 ):
-    """Yield DNS tunnel timestamps with pauses, skips, and variable pacing."""
+    """Yield DNS tunnel timestamps with transactional pauses, skips, and pacing.
+
+    A campaign that admits no paced tick restores its owner RNG so terminal
+    boundary rejection cannot perturb later storyline choices.
+    """
     end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
     pause_offset = 0.0
-    for tick_index, tick_time in enumerate(
-        _iter_periodic_ticks(start_time, interval_sec, duration_sec, count, jitter, rng)
-    ):
-        if tick_index > 0 and rng.random() < 0.045:
-            pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
-        if tick_index > 0 and rng.random() < 0.055:
-            continue
-        local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
-        if tick_index > 0 and rng.random() < 0.11:
-            local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
-        paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
-        if end_time is not None and paced_time > end_time:
-            break
-        yield paced_time
+    initial_rng_state = rng.getstate()
+    admitted_any = False
+    try:
+        for tick_index, tick_time in enumerate(
+            _iter_periodic_ticks(
+                start_time,
+                interval_sec,
+                duration_sec,
+                count,
+                jitter,
+                rng,
+                exclusive_end_time=exclusive_fence,
+            )
+        ):
+            if tick_index > 0 and rng.random() < 0.045:
+                pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
+            if tick_index > 0 and rng.random() < 0.055:
+                continue
+            local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
+            if tick_index > 0 and rng.random() < 0.11:
+                local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
+            paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
+            if end_time is not None and paced_time > end_time:
+                break
+            if exclusive_fence is not None and ensure_utc(paced_time) >= exclusive_fence:
+                break
+            admitted_any = True
+            yield paced_time
+    finally:
+        if not admitted_any:
+            rng.setstate(initial_rng_state)
+
+
+def _dns_periodic_exclusive_start_fence(
+    activity_generator: Any,
+    *,
+    window_start: datetime,
+    exclusive_end_time: datetime | None,
+    maximum_rtt_seconds: float,
+) -> datetime | None:
+    """Return the allocation-free exclusive fence for a fully rendered DNS request.
+
+    The canonical bound composes the transport-open displacement with DNS RTT and
+    teardown. The source tail uses every configured sensor route; checking both ends
+    of the canonical window bounds each profile's affine clock-drift adjustment.
+    """
+
+    if exclusive_end_time is None:
+        return None
+    canonical_headroom = timedelta(
+        seconds=(
+            network_transport_open_positive_headroom_seconds()
+            + dns_transport_close_headroom_seconds(
+                caller_rtt_maximum=maximum_rtt_seconds,
+            )
+        )
+    )
+    exclusive_fence = ensure_utc(exclusive_end_time)
+    source_tail = timedelta(0)
+    network_observation_planner = getattr(
+        getattr(activity_generator, "dispatcher", None),
+        "network_observation_planner",
+        None,
+    )
+    resolve_source_tail = getattr(
+        network_observation_planner,
+        "network_sensor_close_positive_headroom",
+        None,
+    )
+    if callable(resolve_source_tail):
+        earliest_close = min(
+            ensure_utc(window_start) + canonical_headroom,
+            exclusive_fence,
+        )
+        candidates = tuple(
+            resolve_source_tail(
+                canonical_time,
+                protocol="udp",
+                conn_state="SF",
+                payload_bytes=1,
+            )
+            for canonical_time in (earliest_close, exclusive_fence)
+        )
+        if any(
+            type(candidate) is not timedelta or candidate < timedelta(0) for candidate in candidates
+        ):
+            raise ValueError("DNS source-close planner returned an invalid positive headroom")
+        source_tail = max(candidates, default=timedelta(0))
+    return exclusive_fence - canonical_headroom - source_tail
 
 
 def _range_or_value(value: int | list[int] | None, rng: random.Random) -> int | None:
@@ -2090,6 +2187,20 @@ class StorylineMixin:
         logoff_id = self._storyline_start_to_logoff.get(spec_id)
         return self._storyline_session_end_plans.get(logoff_id or "")
 
+    def _authored_rdp_session_end_plan(self) -> SessionEndPlan | None:
+        """Return the explicit RDP end or one action-owned scenario fence."""
+
+        explicit = self._session_end_plan_for_current_start()
+        if explicit is not None:
+            return explicit
+        scenario_end = getattr(self, "end_time", None)
+        if not isinstance(scenario_end, datetime):
+            return None
+        return SessionEndPlan(
+            canonical_end=ensure_utc(scenario_end),
+            authority="action_bundle",
+        )
+
     def _session_end_plan_for_current_logoff(self) -> tuple[str, SessionEndPlan] | None:
         """Return the exact session and close plan paired with the current logoff."""
         self._ensure_storyline_session_end_pairs()
@@ -3022,10 +3133,10 @@ class StorylineMixin:
         """Keep process-owned storyline network evidence after visible process creation."""
         if system is None or pid <= 0:
             return network_time
-        source_time_getter = getattr(self.activity_generator, "process_source_create_time", None)
+        source_time_getter = getattr(self.activity_generator, "process_source_create_bound", None)
         if not callable(source_time_getter):
             return network_time
-        process_source_time = source_time_getter(system.hostname, pid)
+        process_source_time = source_time_getter(system, pid)
         if not isinstance(process_source_time, datetime) or network_time > process_source_time:
             return network_time
         return process_source_time + timedelta(milliseconds=rng.randint(120, 700))
@@ -3412,12 +3523,12 @@ class StorylineMixin:
         )
         if latest_anchor is None:
             raise StateError("Authored RDP admission lost its guarded action shape")
-        session_end_plan_getter = getattr(self, "_session_end_plan_for_current_start", None)
+        session_end_plan_getter = getattr(self, "_authored_rdp_session_end_plan", None)
         session_end_plan = session_end_plan_getter() if callable(session_end_plan_getter) else None
         explicit_anchor_limit = (
             ensure_utc(session_end_plan.canonical_end)
             - timedelta(milliseconds=RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS)
-            if session_end_plan is not None
+            if session_end_plan is not None and session_end_plan.is_authoritative
             else None
         )
         if explicit_anchor_limit is not None and latest_anchor >= explicit_anchor_limit:
@@ -3426,18 +3537,44 @@ class StorylineMixin:
                 f"latest action anchor {latest_anchor.isoformat()} must precede "
                 f"{explicit_anchor_limit.isoformat()}"
             )
-        scenario_end = getattr(self, "end_time", None)
-        scenario_anchor_limit = (
-            ensure_utc(scenario_end)
-            - timedelta(seconds=RDP_TRANSPORT_DURATION_MAX_SECONDS)
-            - _AUTHORED_RDP_FRONTIER_EPSILON
-            if scenario_end is not None
+        activity_dispatcher = getattr(self.activity_generator, "dispatcher", None)
+        action_source_deadline = (
+            ensure_utc(session_end_plan.canonical_end)
+            if session_end_plan is not None and not session_end_plan.is_authoritative
             else None
         )
-        if scenario_anchor_limit is not None and latest_anchor >= scenario_anchor_limit:
+        if action_source_deadline is not None:
+            source_timing_planner = getattr(
+                activity_dispatcher,
+                "source_timing_planner",
+                None,
+            )
+            network_observation_planner = getattr(
+                activity_dispatcher,
+                "network_observation_planner",
+                None,
+            )
+            source_tail = rdp_action_deadline_source_tail(
+                source_deadline=action_source_deadline,
+                source_timing_planner=source_timing_planner,
+                network_observation_planner=network_observation_planner,
+                source_ip=getattr(spec, "source_ip", None) or "",
+                target_ip=system.ip,
+            )
+            transport_headroom = timedelta(
+                seconds=rdp_action_deadline_transport_headroom_seconds(
+                    source_deadline=action_source_deadline,
+                    source_timing_planner=source_timing_planner,
+                    modeled_source=True,
+                )
+            )
+            scenario_anchor_limit = action_source_deadline - source_tail - transport_headroom
+        else:
+            scenario_anchor_limit = None
+        if scenario_anchor_limit is not None and latest_anchor > scenario_anchor_limit:
             raise StateError(
                 "Authored RDP cannot be serialized before the scenario end: "
-                f"latest action anchor {latest_anchor.isoformat()} must precede "
+                f"latest action anchor {latest_anchor.isoformat()} must not follow "
                 f"{scenario_anchor_limit.isoformat()}"
             )
         return shifted_child_time, shifted_cumulative
@@ -3796,6 +3933,12 @@ class StorylineMixin:
 
         if spec.type == "logon":
             session_end_plan = self._session_end_plan_for_current_start()
+            if (
+                spec.logon_type == 10
+                and _get_os_category(system.os) == "windows"
+                and spec.source_ip not in {"-", system.ip}
+            ):
+                session_end_plan = self._authored_rdp_session_end_plan()
             if spec.logon_type == 9:
                 caller, caller_logon_id = self._storyline_new_credentials_caller(
                     actor,
@@ -5272,7 +5415,7 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
-                    session_end_plan=self._session_end_plan_for_current_start(),
+                    session_end_plan=self._authored_rdp_session_end_plan(),
                     ids_alerts=authored_ids_alerts,
                 )
             else:
@@ -5282,6 +5425,7 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    session_end_plan=self._authored_rdp_session_end_plan(),
                     ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)
@@ -5961,7 +6105,13 @@ class StorylineMixin:
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
                 tick_sequence_entry: BeaconHttpSequenceEntry | dict[str, Any] | None = None
@@ -6427,6 +6577,14 @@ class StorylineMixin:
             success_spec = spec.success
             success_account = success_spec.get("account") if success_spec else None
             success_after = success_spec.get("after", 0) if success_spec else 0
+            success_session_end_plan = (
+                self._authored_rdp_session_end_plan()
+                if success_account
+                and spec.logon_type == 10
+                and _get_os_category(system.os) == "windows"
+                and spray_src_ip not in {"-", system.ip}
+                else None
+            )
 
             # Resolve target accounts — include service accounts as synthetic User
             # objects so credential_spray targets resolve for both failed and success logons
@@ -6458,7 +6616,13 @@ class StorylineMixin:
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
 
@@ -6472,6 +6636,7 @@ class StorylineMixin:
                         time=tick_time,
                         logon_type=spec.logon_type,
                         source_ip=spray_src_ip,
+                        session_end_plan=success_session_end_plan,
                     )
                     attempt_count += 1
                     malicious_event["success_account"] = success_account
@@ -6546,7 +6711,13 @@ class StorylineMixin:
             nxdomain_count = 0
             domain_sample = []
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
 
@@ -6651,6 +6822,43 @@ class StorylineMixin:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
 
+            exclusive_end_time = getattr(self, "end_time", None)
+            min_rtt, max_rtt = dns_tunnel_rtt_range()
+            scenario_start_time = getattr(self, "start_time", None)
+            dns_window_start = (
+                max(ensure_utc(start), ensure_utc(scenario_start_time))
+                if scenario_start_time is not None
+                else ensure_utc(start)
+            )
+            dns_start_fence = _dns_periodic_exclusive_start_fence(
+                self.activity_generator,
+                window_start=dns_window_start,
+                exclusive_end_time=exclusive_end_time,
+                maximum_rtt_seconds=max_rtt,
+            )
+            tunnel_ticks = _iter_dns_tunnel_ticks(
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=dns_start_fence,
+            )
+            # Freeze one real cadence tick before any background publication. This
+            # intentionally moves cadence RNG ahead of payload/background RNG so the
+            # owner cannot emit cover traffic for a campaign with no admitted query.
+            first_tick = next(tunnel_ticks, None)
+            if first_tick is None:
+                malicious_event["base_domain"] = spec.base_domain
+                malicious_event["encoding"] = spec.encoding
+                malicious_event["qtype"] = spec.qtype
+                malicious_event["total_queries"] = 0
+                malicious_event["bytes_exfiltrated"] = 0
+                if getattr(spec, "ids_alerts", []):
+                    malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
+                return malicious_event
+
             query_src_ip = spec.source_ip or system.ip
             dns_server_ips = activity_dns_resolver_ips(
                 self.activity_generator,
@@ -6691,7 +6899,6 @@ class StorylineMixin:
                 chunks = [b""]
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
-            min_rtt, max_rtt = dns_tunnel_rtt_range()
             response_templates = dns_tunnel_response_templates() or ["status={token}"]
             response_primary_template = rng.choice(response_templates)
             response_secondary_templates = [
@@ -6724,7 +6931,29 @@ class StorylineMixin:
                 if duration_sec is not None
                 else interval_sec * float(count if count is not None else 120)
             )
-            if background_systems and background_window_sec > 0:
+            background_earliest = start - timedelta(seconds=240.0)
+            background_latest = start + timedelta(seconds=background_window_sec + 240.0)
+            if scenario_start_time is not None:
+                background_earliest = max(
+                    ensure_utc(background_earliest),
+                    ensure_utc(scenario_start_time),
+                )
+            if dns_start_fence is not None:
+                # Sample once from the valid intersection instead of retrying
+                # post-fence candidates and drifting the owner RNG.
+                background_latest = min(
+                    ensure_utc(background_latest),
+                    dns_start_fence - timedelta(microseconds=1),
+                )
+            background_span_sec = max(
+                0.0,
+                (ensure_utc(background_latest) - ensure_utc(background_earliest)).total_seconds(),
+            )
+            if (
+                background_systems
+                and background_window_sec > 0
+                and ensure_utc(background_earliest) <= ensure_utc(background_latest)
+            ):
                 background_count = min(36, max(12, len(background_systems) * 2 + rng.randint(3, 9)))
                 for _ in range(background_count):
                     bg_system = rng.choice(background_systems)
@@ -6745,8 +6974,9 @@ class StorylineMixin:
                         rejected=False,
                         rtt=bg_rtt,
                     )
-                    bg_offset = rng.uniform(-240.0, background_window_sec + 240.0)
-                    bg_time = start + timedelta(seconds=bg_offset)
+                    bg_time = background_earliest + timedelta(
+                        seconds=rng.uniform(0.0, background_span_sec)
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=bg_system.ip,
                         dst_ip=rng.choice(dns_server_ips),
@@ -6761,9 +6991,7 @@ class StorylineMixin:
                         source_system=bg_system,
                     )
 
-            for tick_time in _iter_dns_tunnel_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
-            ):
+            for tick_time in itertools.chain((first_tick,), tunnel_ticks):
                 self.state_manager.set_current_time(tick_time)
 
                 if spec.label_length >= 24:
@@ -7464,7 +7692,13 @@ class StorylineMixin:
 
         pause_until: datetime | None = None
         for tick_time in _iter_periodic_ticks(
-            start, interval_sec, duration_sec, count, spec.jitter, rng
+            start,
+            interval_sec,
+            duration_sec,
+            count,
+            spec.jitter,
+            rng,
+            exclusive_end_time=getattr(self, "end_time", None),
         ):
             if pause_until is not None and tick_time < pause_until:
                 continue

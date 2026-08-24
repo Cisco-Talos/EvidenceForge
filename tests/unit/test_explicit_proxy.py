@@ -4068,7 +4068,7 @@ class TestExplicitProxyVisibility:
             root,
             receipt,
             application_receipt=None,
-            prepared_dispatch=None,
+            persistent_smb_root_handoff=None,
             outcome,
         ):
             lifecycle_modes.append(root.runtime_token.lifecycle_mode)
@@ -4078,7 +4078,7 @@ class TestExplicitProxyVisibility:
                 root=root,
                 receipt=receipt,
                 application_receipt=application_receipt,
-                prepared_dispatch=prepared_dispatch,
+                persistent_smb_root_handoff=persistent_smb_root_handoff,
                 outcome=outcome,
             )
 
@@ -4200,7 +4200,7 @@ class TestExplicitProxyVisibility:
             root: object,
             receipt: object,
             application_receipt: object | None = None,
-            prepared_dispatch: object | None = None,
+            persistent_smb_root_handoff: object | None = None,
             outcome: object,
         ) -> None:
             original_publish(
@@ -4209,7 +4209,7 @@ class TestExplicitProxyVisibility:
                 root=root,
                 receipt=receipt,
                 application_receipt=application_receipt,
-                prepared_dispatch=prepared_dispatch,
+                persistent_smb_root_handoff=persistent_smb_root_handoff,
                 outcome=outcome,
             )
             publications.append(capture)

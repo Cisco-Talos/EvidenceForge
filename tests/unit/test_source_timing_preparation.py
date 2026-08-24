@@ -485,7 +485,7 @@ def test_preparation_census_is_bounded_and_watermark_rejects_during_claim() -> N
                 source_hostname="win-01",
             )
     census = preparation.census()
-    assert census.cache_family_count == 16
+    assert census.cache_family_count == len(planner.index_family_specs)
     assert 0 < census.staged_cache_keys <= census.staged_cache_operations <= 256
     assert census.clock_live_entries <= census.clock_capacity == 8
     assert planner.census().live_entries == 0
@@ -518,7 +518,7 @@ def test_preparation_census_is_bounded_and_watermark_rejects_during_claim() -> N
 
 
 def test_production_claim_site_enforces_global_timing_before_authority_lock_order() -> None:
-    """Every production claim must surround authority commit and its timing callback."""
+    """Every production claim must be an authority fence or a source-only commit."""
 
     repository_root = Path(__file__).resolve().parents[2]
     production_root = repository_root / "src" / "evidenceforge"
@@ -541,19 +541,42 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
                 ):
                     claim_sites.append((path.relative_to(repository_root), function.name, node))
 
-    expected_sites = {
+    expected_materialization_sites = {
         (
             "src/evidenceforge/generation/lifecycle_authority.py",
-            "materialize_prepared_network_transaction",
+            "_materialize_prepared_network_transaction",
         ): "materialize_connection_composite",
+        (
+            "src/evidenceforge/generation/activity/generator.py",
+            "_execute_process_create_bundle",
+        ): "materialize_process",
+        (
+            "src/evidenceforge/generation/activity/generator.py",
+            "_ensure_parent_chain",
+        ): "materialize_process",
     }
-    assert {
-        (path.as_posix(), function): expected_sites[(path.as_posix(), function)]
-        for path, function, _node in claim_sites
-    } == expected_sites
+    expected_source_only_sites = {
+        (
+            "src/evidenceforge/generation/actions/smb_activity.py",
+            "_execute_persistent_windows",
+        ): 1,
+        (
+            "src/evidenceforge/generation/actions/smb_activity.py",
+            "_resume_persistent_smb_source_prepared",
+        ): 2,
+    }
+    expected_site_counts = {
+        **{site: 1 for site in expected_materialization_sites},
+        **expected_source_only_sites,
+    }
+    observed_site_counts: dict[tuple[str, str], int] = {}
+    for path, function, _node in claim_sites:
+        site = (path.as_posix(), function)
+        observed_site_counts[site] = observed_site_counts.get(site, 0) + 1
+    assert observed_site_counts == expected_site_counts
 
     for path, function, claim_body in claim_sites:
-        materialize_name = expected_sites[(path.as_posix(), function)]
+        site = (path.as_posix(), function)
         assert not any(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -561,6 +584,19 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
             for statement in claim_body.body
             for node in ast.walk(statement)
         )
+        if site in expected_source_only_sites:
+            commit_calls = [
+                node
+                for statement in claim_body.body
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "commit_no_fail"
+            ]
+            assert len(commit_calls) == 1
+            continue
+
+        materialize_name = expected_materialization_sites[site]
         materialize_calls = [
             node
             for statement in claim_body.body
@@ -589,6 +625,10 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
         assert any(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "commit_no_fail"
+            and node.func.attr
+            in {
+                "commit_no_fail",
+                "_commit_source_timing_recoverably",
+            }
             for node in ast.walk(callback_definitions[0])
         )

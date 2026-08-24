@@ -104,8 +104,16 @@ def _build_nat_scenario(
         policy=default_policy,
         nat_rules=nat_rules,
     )
+    zeek_sensor = NetworkSensor(
+        type="network",
+        name="zeek01",
+        hostname="zeek01",
+        monitoring_segments=[segment.name for segment in segments],
+        direction="bidirectional",
+        log_formats=["zeek_conn"],
+    )
 
-    network = NetworkConfig(segments=segments, sensors=[sensor])
+    network = NetworkConfig(segments=segments, sensors=[sensor, zeek_sensor])
 
     return Scenario(
         version="1.0",

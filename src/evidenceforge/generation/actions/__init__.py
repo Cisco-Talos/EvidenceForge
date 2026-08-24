@@ -133,6 +133,7 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     NetworkConnectionPublicationOutcome,
     NetworkConnectionRequest,
+    PersistentSmbApplicationIntent,
     PersistentSmbRootHandoff,
     PersistentSmbRootIntent,
 )
@@ -140,6 +141,7 @@ from evidenceforge.generation.actions.network_transaction_planner import (
     NetworkTransactionPlanner,
     dns_transport_close_headroom_seconds,
     http_completed_transport_close_bound_seconds,
+    network_transport_open_positive_headroom_seconds,
     ntp_transport_close_headroom_seconds,
     tls_completed_extension_headroom_seconds,
     tls_completed_transport_close_bound_seconds,
@@ -185,11 +187,8 @@ from evidenceforge.generation.actions.scanner_probe import (
     estimate_nmap_command_probe_occurrences,
 )
 from evidenceforge.generation.actions.smb_activity import (
-    PersistentSmbTerminalContinuationAuthority,
-    PersistentSmbTerminalContinuationCensus,
     SmbActivityActionBundle,
     SmbActivityRequest,
-    SmbActivityResult,
 )
 from evidenceforge.generation.actions.ssh_session import (
     SshSessionActionBundle,
@@ -227,6 +226,12 @@ from evidenceforge.generation.actions.windows_remote_authentication import (
     WindowsRemoteAuthenticationActionBundle,
     WindowsRemoteAuthenticationPlanner,
     WindowsRemoteAuthenticationRequest,
+)
+from evidenceforge.generation.persistent_smb_continuation import (
+    PersistentSmbTerminalContinuation,
+    PersistentSmbTerminalContinuationAuthority,
+    PersistentSmbTerminalContinuationCensus,
+    SmbActivityResult,
 )
 
 __all__ = [
@@ -324,10 +329,12 @@ __all__ = [
     "NetworkConnectionPublicationOutcome",
     "NetworkConnectionRequest",
     "PersistentSmbRootHandoff",
+    "PersistentSmbApplicationIntent",
     "PersistentSmbRootIntent",
     "NetworkTransactionPlanner",
     "dns_transport_close_headroom_seconds",
     "http_completed_transport_close_bound_seconds",
+    "network_transport_open_positive_headroom_seconds",
     "ntp_transport_close_headroom_seconds",
     "tls_completed_extension_headroom_seconds",
     "tls_completed_transport_close_bound_seconds",

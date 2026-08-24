@@ -421,6 +421,94 @@ def test_system_process_accepts_exact_runtime_source_bound() -> None:
     assert child_visible <= deadline
 
 
+def test_process_source_bound_handles_deep_parent_chain_iteratively() -> None:
+    """A process chain deeper than Python recursion remains bounded and resolvable."""
+
+    generator, state, _emitters = _generator()
+    system = _linux_system()
+    parent_pid = 0
+    depth = 1_105
+    for ordinal in range(depth):
+        started_at = _START + timedelta(microseconds=ordinal)
+        state.set_current_time(started_at)
+        pid = 20_000 + ordinal
+        state.register_process(
+            system=system.hostname,
+            pid=pid,
+            parent_pid=parent_pid,
+            image=f"/usr/bin/process-{ordinal}",
+            command_line=f"process-{ordinal}",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+            start_time=started_at,
+        )
+        parent_pid = pid
+
+    bound = generator.process_source_create_bound(system, parent_pid)
+
+    assert bound is not None
+    assert bound > _START
+    assert len(generator._process_source_create_bounds) == depth
+
+
+def test_process_source_bound_survives_parent_termination_and_retention() -> None:
+    """A finalized child keeps its exact bound after its parent identity expires."""
+
+    generator, state, _emitters = _generator()
+    system = _windows_system()
+    state.set_current_time(_START)
+    parent_pid = 1000
+    state.register_process(
+        system=system.hostname,
+        pid=parent_pid,
+        parent_pid=0,
+        image=r"C:\Windows\System32\services.exe",
+        command_line="services.exe",
+        username="SYSTEM",
+        integrity_level="System",
+        os_category="windows",
+        start_time=_START,
+    )
+    child_pid = generator.generate_system_process(
+        system=system,
+        time=_START + timedelta(milliseconds=1),
+        process_name=r"C:\Windows\System32\taskhostw.exe",
+        command_line="taskhostw.exe",
+        parent_pid=parent_pid,
+    )
+    child_identity = state.get_process_identity(system.hostname, child_pid)
+    assert child_identity is not None
+    child_key = (
+        system.hostname,
+        child_pid,
+        child_identity.started_at,
+        child_identity.object_id,
+    )
+    frozen_bound = generator._process_source_create_bounds[child_key]
+
+    parent_end = _START + timedelta(seconds=1)
+    state.set_current_time(parent_end)
+    assert state.end_process(system.hostname, parent_pid, parent_end)
+    child_end = _START + timedelta(minutes=30)
+    state.set_current_time(child_end)
+    assert state.end_process(system.hostname, child_pid, child_end)
+    retention_cutoff = parent_end + timedelta(hours=48, minutes=1)
+    state.set_current_time(retention_cutoff)
+    generator.advance_process_state_watermark(retention_cutoff)
+
+    assert state.get_process_identity(system.hostname, parent_pid) is None
+    assert state.get_process_identity(system.hostname, child_pid) == child_identity
+    assert generator.process_source_create_bound(system, child_pid) == frozen_bound
+
+    final_cutoff = child_end + timedelta(hours=49)
+    state.set_current_time(final_cutoff)
+    generator.advance_process_state_watermark(final_cutoff)
+
+    assert state.get_process_identity(system.hostname, child_pid) is None
+    assert child_key not in generator._process_source_create_bounds
+
+
 def test_profiled_worker_rejects_before_new_manager_and_accepts_exact_deadline() -> None:
     """A bounded profiled family creates neither member unless both source views fit."""
 
@@ -783,9 +871,12 @@ def test_uwp_overlay_singleton_reuse_rejects_without_duplicate_or_activity_mutat
         parent_pid=1000,
     )
     visible = generator.process_source_create_time(system.hostname, pid)
+    canonical_bound = generator.process_source_create_bound(system, pid)
     assert visible is not None
+    assert canonical_bound is not None
+    assert canonical_bound >= visible
     assert visible == max(_emitted_process_create_source_times(generator, emitters))
-    deadline = visible - timedelta(microseconds=1)
+    deadline = canonical_bound - timedelta(microseconds=1)
     assert _START + timedelta(milliseconds=1) <= deadline
     processes_before = _process_state_snapshot(state, system.hostname)
     frontier_before = state.get_current_time()
@@ -813,7 +904,7 @@ def test_uwp_overlay_singleton_reuse_rejects_without_duplicate_or_activity_mutat
         process_name=image,
         command_line=command,
         parent_pid=1000,
-        source_visible_by=visible,
+        source_visible_by=canonical_bound,
     )
 
     assert reused_pid == pid
@@ -1760,8 +1851,10 @@ def test_direct_process_exact_reuse_and_token_drift_are_fail_closed() -> None:
         suppress_command_file_effect=True,
     )
     frontier = generator.process_source_create_time(system.hostname, pid)
+    canonical_bound = generator.process_source_create_bound(system, pid)
     running = state.get_process(system.hostname, pid)
-    assert frontier is not None and running is not None
+    assert frontier is not None and canonical_bound is not None and running is not None
+    assert canonical_bound >= frontier
     activity_before = running.last_activity_time
     emitted_before = {name: len(emitter.emit.call_args_list) for name, emitter in emitters.items()}
 
@@ -1774,7 +1867,7 @@ def test_direct_process_exact_reuse_and_token_drift_are_fail_closed() -> None:
         command_line="OUTLOOK.EXE",
         parent_pid=1000,
         suppress_command_file_effect=True,
-        source_visible_by=frontier - timedelta(microseconds=1),
+        source_visible_by=canonical_bound - timedelta(microseconds=1),
     )
     assert late_pid == 0
     assert running.last_activity_time == activity_before
@@ -1788,7 +1881,7 @@ def test_direct_process_exact_reuse_and_token_drift_are_fail_closed() -> None:
             command_line="OUTLOOK.EXE",
             parent_pid=1000,
             suppress_command_file_effect=True,
-            source_visible_by=frontier,
+            source_visible_by=canonical_bound,
         )
         == pid
     )
@@ -1806,7 +1899,7 @@ def test_direct_process_exact_reuse_and_token_drift_are_fail_closed() -> None:
             command_line="OUTLOOK.EXE",
             parent_pid=1000,
             suppress_command_file_effect=True,
-            source_visible_by=frontier,
+            source_visible_by=canonical_bound,
         )
     )
     assert prepared is not None and prepared.reuse_intent is not None

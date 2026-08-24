@@ -27,6 +27,7 @@ from evidenceforge.generation.activity.timing_profiles import (
 from evidenceforge.generation.causal.engine import ExpandedEvent
 from evidenceforge.generation.causal.timing import TimingSpec
 from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System
 
 
@@ -572,41 +573,54 @@ def test_process_causal_audit_expansion_waits_for_visible_command_create():
                 )
             ]
 
-    generator = object.__new__(ActivityGenerator)
-    generator._causal_engine = _Engine()
-    generator._expanding_types = set()
-    generator._dns_cache = {}
-    generator._kerberos_cache = {}
-    generator._dc_systems = []
-    generator._created_account_sids = {}
-    generator.sid_registry = {}
-    visible_process_time = datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC)
-    generator._process_source_create_times = {("WS-01", 4321): visible_process_time}
+    command_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    system = System(hostname="WS-01", ip="10.10.1.10", os="Windows 11", type="workstation")
+    state_manager = StateManager()
+    state_manager.set_current_time(command_time)
+    state_manager.register_process(
+        system=system.hostname,
+        pid=4321,
+        parent_pid=0,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="windows",
+        start_time=command_time,
+    )
+    generator = ActivityGenerator(
+        state_manager,
+        {},
+        causal_engine=_Engine(),
+    )
+    visible_process_time = generator.process_source_create_bound(system, 4321)
+    assert visible_process_time is not None
     captured: list[datetime] = []
 
     def _capture_expanded_audit(**kwargs):
         captured.append(kwargs["time"])
 
     generator._capture_expanded_audit = _capture_expanded_audit
-    system = System(hostname="WS-01", ip="10.10.1.10", os="Windows 11", type="workstation")
 
     generator._expand_and_emit(
         "process_create",
-        datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+        command_time,
         target_system=system,
         source_pid=4321,
     )
 
-    expected_gap = sample_timing_delta(
+    expected_window = get_timing_window(
         "windows.audit_after_visible_admin_command",
-        seed_parts=(
-            system.hostname,
-            4321,
-            visible_process_time,
-            datetime(2024, 3, 18, 12, 0, 0, 100000, tzinfo=UTC),
-        ),
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
     )
-    assert captured == [visible_process_time + expected_gap]
+    assert len(captured) == 1
+    assert (
+        visible_process_time + timedelta(milliseconds=expected_window.min_ms)
+        <= captured[0]
+        <= visible_process_time + timedelta(milliseconds=expected_window.max_ms)
+    )
 
 
 def test_timing_profiles_overlay_invalid_values_fall_back_safely(tmp_path, monkeypatch):

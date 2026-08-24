@@ -1958,6 +1958,12 @@ def test_scope_cleanup_rescans_and_clears_real_lazily_imported_beacon_cache(
     """A module first imported inside a scope cannot retain its provider data."""
 
     module_name = "evidenceforge.config.beacon_profiles"
+    config_package = importlib.import_module("evidenceforge.config")
+    missing_package_attribute = object()
+    prior_package_attribute = vars(config_package).get(
+        "beacon_profiles",
+        missing_package_attribute,
+    )
     prior_module = sys.modules.pop(module_name, None)
     imported_module: Any | None = None
     effective = _effective_timing_config()
@@ -1991,6 +1997,10 @@ def test_scope_cleanup_rescans_and_clears_real_lazily_imported_beacon_cache(
             sys.modules.pop(module_name, None)
         else:
             sys.modules[module_name] = prior_module
+        if prior_package_attribute is missing_package_attribute:
+            vars(config_package).pop("beacon_profiles", None)
+        else:
+            vars(config_package)["beacon_profiles"] = prior_package_attribute
 
 
 def test_cleanup_coordinator_keyboardinterrupt_still_clears_real_storage_lru(

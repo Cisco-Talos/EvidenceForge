@@ -277,6 +277,8 @@ def test_public_api_exposes_only_explicit_member_lifecycle_operations() -> None:
 
     assert public_names == {
         "acknowledge_persistent_smb_projection_member",
+        "authenticates_cancellable_persistent_smb_projection_member",
+        "authenticates_empty_persistent_smb_projection_group",
         "cancel_empty_persistent_smb_projection_group",
         "cancel_persistent_smb_projection_member",
         "certify_persistent_smb_projection_member",
@@ -285,6 +287,7 @@ def test_public_api_exposes_only_explicit_member_lifecycle_operations() -> None:
         "prepare_persistent_smb_projection_member",
         "recover_committed_persistent_smb_projection_member",
         "recover_inactive_persistent_smb_projection_member",
+        "recover_persistent_smb_projection_group",
         "reserve_persistent_smb_projection_group",
     }
     assert not any("activate" in name.casefold() for name in public_names)
@@ -1280,11 +1283,20 @@ def test_dispatcher_bridge_privately_binds_route_and_target_generation() -> None
     )
     dispatcher.emitters["future_exact_source"] = _WeakTarget()
     replaced_topology = dispatcher.reserve_persistent_smb_projection_group(
-        route_generation_digest=_digest("route-1"),
+        route_generation_digest=_digest("route-3"),
         member_budget=1,
         byte_budget=8_192,
     )
 
+    assert same is first
+    assert (
+        dispatcher.recover_persistent_smb_projection_group(
+            route_generation_digest=_digest("route-1"),
+            member_budget=1,
+            byte_budget=8_192,
+        )
+        is first
+    )
     assert first.projection_configuration_digest == same.projection_configuration_digest
     assert (
         len(
@@ -1296,7 +1308,7 @@ def test_dispatcher_bridge_privately_binds_route_and_target_generation() -> None
         )
         == 3
     )
-    for group in (first, same, second_route, replaced_topology):
+    for group in (first, second_route, replaced_topology):
         dispatcher.cancel_empty_persistent_smb_projection_group(group)
 
 
@@ -1314,6 +1326,7 @@ def test_forced_target_nonce_collision_still_detects_same_type_replacement(
         member_budget=1,
         byte_budget=4_096,
     )
+    dispatcher.cancel_empty_persistent_smb_projection_group(first)
     dispatcher.emitters["future_exact_source"] = _WeakTarget()
     replacement = dispatcher.reserve_persistent_smb_projection_group(
         route_generation_digest=route_digest,
@@ -1322,7 +1335,6 @@ def test_forced_target_nonce_collision_still_detects_same_type_replacement(
     )
 
     assert first.projection_configuration_digest != replacement.projection_configuration_digest
-    dispatcher.cancel_empty_persistent_smb_projection_group(first)
     dispatcher.cancel_empty_persistent_smb_projection_group(replacement)
 
 
@@ -1355,7 +1367,12 @@ def test_dispatcher_target_generation_census_and_stale_cleanup_are_bounded() -> 
     )
     cleaned = dispatcher.persistent_smb_projection_group_census(estimate_bytes=True)
     assert cleaned.retained_target_generations == 0
-    assert cleaned.target_generation_semantic_bytes == 0
+    assert dispatcher._persistent_smb_target_generation_semantic_bytes == 0
+    assert (
+        cleaned.target_generation_semantic_bytes
+        == dispatcher._persistent_smb_group_topology_semantic_bytes
+        > 0
+    )
     assert (
         cleaned.target_generation_table_backing_bytes
         > baseline.target_generation_table_backing_bytes
@@ -1626,7 +1643,7 @@ def test_dispatcher_rejected_group_admission_never_mutates_topology_generation()
     exhausted_counter = dispatcher._persistent_smb_next_target_generation
     with pytest.raises(EventContractError, match="group capacity"):
         dispatcher.reserve_persistent_smb_projection_group(
-            route_generation_digest=route_digest,
+            route_generation_digest=_digest("failed-admission-neutrality-second"),
             member_budget=1,
             byte_budget=4_096,
         )
@@ -1668,7 +1685,7 @@ def test_dispatcher_member_and_byte_exhaustion_precede_topology_generation(
 
     with pytest.raises(EventContractError, match=error_match):
         dispatcher.reserve_persistent_smb_projection_group(
-            route_generation_digest=route_digest,
+            route_generation_digest=_digest(f"{error_match}-neutrality-second"),
             member_budget=1,
             byte_budget=first_byte_budget,
         )

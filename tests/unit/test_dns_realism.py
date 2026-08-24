@@ -24,6 +24,7 @@ import pytest
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import dns_transport_close_headroom_seconds
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -815,23 +816,11 @@ class TestHostnameConsistency:
         state_manager.set_current_time(timestamp)
         delegate_rng = random.Random(7)
 
-        class AlwaysFailureRollRng:
-            def random(self) -> float:
-                return 0.0
+        def always_failure_roll() -> float:
+            return 0.0
 
-            def randint(self, start: int, stop: int) -> int:
-                return delegate_rng.randint(start, stop)
-
-            def uniform(self, start: float, stop: float) -> float:
-                return delegate_rng.uniform(start, stop)
-
-            def choice(self, values):
-                return delegate_rng.choice(values)
-
-            def choices(self, *args, **kwargs):
-                return delegate_rng.choices(*args, **kwargs)
-
-        monkeypatch.setattr(generator_module, "_get_rng", lambda: AlwaysFailureRollRng())
+        delegate_rng.random = always_failure_roll
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: delegate_rng)
 
         activity_gen._emit_dns_lookup(
             src_ip="10.0.1.50",
@@ -1259,6 +1248,7 @@ class TestWeirdProtocolConstraint:
         assert any(char.islower() for char in event.network.history)
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes is not None
+        assert event.network.closed_at is not None
 
     def test_dns_txt_response_has_originator_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1376,7 +1366,12 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.network.duration == 0.35
+        assert event.dns.rtt == 0.35
+        assert (
+            0.35
+            < event.network.duration
+            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35)
+        )
 
     def test_dns_conn_duration_exact_anchor_still_uses_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1404,7 +1399,12 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.network.duration == 0.02
+        assert event.dns.rtt == 0.02
+        assert (
+            0.02
+            < event.network.duration
+            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.02)
+        )
 
     def test_explicit_dns_response_state_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1437,7 +1437,12 @@ class TestWeirdProtocolConstraint:
         assert event.network.history == "Dd"
         assert event.network.resp_pkts > 0
         assert event.network.resp_bytes > 0
-        assert event.network.duration == 0.08
+        assert event.dns.rtt == 0.08
+        assert (
+            0.08
+            < event.network.duration
+            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.08)
+        )
 
     def test_servfail_dns_response_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1509,19 +1514,16 @@ class TestWeirdProtocolConstraint:
         """TCP fallback DNS SERVFAIL accounting should retain TCP header overhead."""
         from evidenceforge.generation.activity import generator as generator_module
 
-        class TcpOnlyOverheadRng:
-            def __init__(self) -> None:
-                self._rng = random.Random(42)
-
-            def choices(self, population, weights=None, *, cum_weights=None, k=1):
-                assert population != generator_module._UDP_OVERHEAD_VALUES
-                return self._rng.choices(population, weights=weights, cum_weights=cum_weights, k=k)
-
-            def __getattr__(self, name: str):
-                return getattr(self._rng, name)
-
         state_manager.set_current_time(timestamp)
-        monkeypatch.setattr(generator_module, "_get_rng", TcpOnlyOverheadRng)
+        rng = random.Random(42)
+        original_choices = rng.choices
+
+        def tcp_only_choices(population, weights=None, *, cum_weights=None, k=1):
+            assert population != generator_module._UDP_OVERHEAD_VALUES
+            return original_choices(population, weights=weights, cum_weights=cum_weights, k=k)
+
+        rng.choices = tcp_only_choices
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -1568,7 +1570,12 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.network.duration == 0.08
+        assert event.dns.rtt == 0.08
+        assert (
+            0.08
+            < event.network.duration
+            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.08)
+        )
 
     def test_dns_a_query_accounting_is_clamped_to_dns_transaction(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1600,7 +1607,12 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.orig_bytes <= 260
         assert event.network.resp_bytes <= 512
-        assert event.network.duration == 0.019
+        assert event.dns.rtt == 0.019
+        assert (
+            0.019
+            < event.network.duration
+            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.019)
+        )
 
     def test_dns_authoritative_flag_is_consistent_for_internal_names(
         self, activity_gen, timestamp, state_manager, mock_emitters

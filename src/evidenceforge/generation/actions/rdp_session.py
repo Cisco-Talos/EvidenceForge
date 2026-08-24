@@ -112,6 +112,24 @@ _RDP_TERMINAL_PROCESS_RELATIONSHIPS = {
 }
 
 
+def has_exact_rdp_deferred_projection_owners(dispatcher: Any) -> bool:
+    """Return whether the installed sinks can own exact deferred RDP closure."""
+
+    emitters = getattr(dispatcher, "emitters", None)
+    if type(emitters) is not dict:
+        return False
+    from evidenceforge.generation.emitters.ecar import EcarEmitter
+    from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+    from evidenceforge.generation.emitters.zeek import ZeekEmitter
+
+    windows = emitters.get("windows_event_security")
+    return (
+        type(emitters.get("ecar")) is EcarEmitter
+        and type(emitters.get("zeek_conn")) is ZeekEmitter
+        and (windows is None or type(windows) is WindowsEventEmitter)
+    )
+
+
 class _NetworkSensorHeadroomPlanner(Protocol):
     """Read-only network-sensor deadline support consumed by action admission."""
 
@@ -1085,20 +1103,7 @@ class RdpSessionActionBundle:
     def _has_exact_deferred_projection_owners(self) -> bool:
         """Return whether the built-in transport and optional Windows sinks are present."""
 
-        dispatcher = getattr(self._executor, "dispatcher", None)
-        emitters = getattr(dispatcher, "emitters", None)
-        if type(emitters) is not dict:
-            return False
-        from evidenceforge.generation.emitters.ecar import EcarEmitter
-        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
-        from evidenceforge.generation.emitters.zeek import ZeekEmitter
-
-        windows = emitters.get("windows_event_security")
-        return (
-            type(emitters.get("ecar")) is EcarEmitter
-            and type(emitters.get("zeek_conn")) is ZeekEmitter
-            and (windows is None or type(windows) is WindowsEventEmitter)
-        )
+        return has_exact_rdp_deferred_projection_owners(getattr(self._executor, "dispatcher", None))
 
     def _uses_exact_initial_publication(
         self,
@@ -2404,7 +2409,13 @@ class RdpSessionActionBundle:
                 resolved + source_clock_headroom,
                 "windows",
             )
-        if self._request.logon_id or source_clock_headroom or target_clock_headroom:
+        if (
+            modeled_source
+            or self._has_exact_deferred_projection_owners()
+            or self._request.logon_id
+            or source_clock_headroom
+            or target_clock_headroom
+        ):
             flow_window = get_timing_window(
                 "source.ecar_flow",
                 default_min_ms=180,

@@ -41,6 +41,7 @@ def _timing_bundle(
     bundle.request = SimpleNamespace(
         spec=SimpleNamespace(
             operation=operation,
+            outcome="success",
             purpose="interactive",
             batch=SimpleNamespace(duration=duration) if duration is not None else None,
             source=None,
@@ -52,6 +53,7 @@ def _timing_bundle(
     )
     bundle._operation_time_scale = 1.0
     bundle._session_setup_scale = 1.0
+    bundle.outcome = "success"
     return bundle
 
 

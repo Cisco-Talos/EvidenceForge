@@ -208,11 +208,17 @@ def test_network_request_identity_field_census_matches_current_public_model() ->
         "parent_action_group_id",
         "preserve_start_time",
         "transport_lifecycle_mode",
+        "persistent_smb_root_intent",
+        "defer_source_publication",
         "source",
     )
     expected_carriers = {
         "deferred_session_authority",
         "identity_capture",
+        "persistent_smb_application_intent",
+        "persistent_smb_file_mutation_journal",
+        "persistent_smb_terminal_authority",
+        "persistent_smb_terminal_continuation",
         "prepared_application_token",
         "explicit_proxy_open_preparation",
         "explicit_proxy_request_preparation",
@@ -1335,11 +1341,11 @@ def test_network_request_identity_enforces_total_node_budget() -> None:
             member_count -= chunk_size
         return chunks
 
-    # The exact-1e8 request/email envelope consumes 77 occurrences, leaving
-    # 16,307 public payload members under the 16,384-node contract.
-    _ = _request_with_payload(payload_occurrences(16_307)).stable_id
+    # The exact-1e8 request/email envelope consumes 79 occurrences, leaving
+    # 16,305 public payload members under the 16,384-node contract.
+    _ = _request_with_payload(payload_occurrences(16_305)).stable_id
     with pytest.raises(ValueError, match="maximum of 16384 traversed nodes") as exc_info:
-        _ = _request_with_payload(payload_occurrences(16_308)).stable_id
+        _ = _request_with_payload(payload_occurrences(16_306)).stable_id
     assert type(exc_info.value) is ValueError
 
 

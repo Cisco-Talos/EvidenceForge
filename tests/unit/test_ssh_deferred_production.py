@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import random
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import dataclass, replace
@@ -2145,6 +2145,92 @@ def test_world_planner_real_ssh_bootstrap_uses_exact_bridge_and_defers_close(
     assert len(zeek_rows) == 1
 
 
+def test_world_planner_storyline_ssh_stays_inside_scenario_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unpaired late storyline SSH session gets one action-owned window fence."""
+
+    fixture = _fixture(tmp_path, production_timing_runtime=True)
+    scenario_end = fixture.generator._ssh_channel_manager.application_registry.window_end
+    activity_time = scenario_end - timedelta(minutes=45)
+    fixture.generator._scenario_start_time = scenario_end - timedelta(days=1)
+    fixture.generator._scenario_end_time = scenario_end
+    fixture.generator._users_by_username = {fixture.user.username: fixture.user}
+    fixture.state.create_session(
+        username=fixture.user.username,
+        system=fixture.source.hostname,
+        logon_type=2,
+        source_ip=fixture.source.ip,
+        session_kind="interactive",
+        start_time=activity_time - timedelta(hours=2),
+    )
+    plan = SessionPlan(
+        target_system=fixture.target,
+        source_system=fixture.source,
+        source_ip=fixture.source.ip,
+        logon_type=10,
+        session_kind="ssh",
+        requires_transport=True,
+    )
+    world = SimpleNamespace(
+        hosts={fixture.source.hostname: SimpleNamespace(os_category="windows")},
+        plan_session=lambda **_kwargs: plan,
+    )
+    planner = WorldPlanner(world, fixture.state, fixture.generator)  # type: ignore[arg-type]
+    original_exact_path = SshSessionActionBundle._uses_exact_deferred_publication
+    exact_path_decisions: list[bool] = []
+
+    def capture_exact_path(bundle: SshSessionActionBundle) -> bool:
+        decision = original_exact_path(bundle)
+        exact_path_decisions.append(decision)
+        return decision
+
+    monkeypatch.setattr(
+        SshSessionActionBundle,
+        "_uses_exact_deferred_publication",
+        capture_exact_path,
+    )
+    reset_thread_rng(2)
+
+    result = planner.bootstrap_user_session(
+        user=fixture.user,
+        target_system=fixture.target,
+        time=activity_time,
+        rng=random.Random(9),
+        session_kind="ssh",
+        source_system=fixture.source,
+        allow_existing=False,
+        source_ip_override=fixture.source.ip,
+        storyline_protected=True,
+    )
+
+    assert exact_path_decisions == [False]
+    session = fixture.state.get_session(result.session.logon_id)
+    assert session is not None
+    assert session.end_plan == SessionEndPlan(scenario_end, "action_bundle")
+    assert session.network_close_time is not None
+    assert activity_time < session.network_close_time < scenario_end
+    connection = fixture.state.get_connection_by_zeek_uid(result.network_uid)
+    assert connection is not None
+    assert connection.close_time is not None
+    assert connection.close_time <= fixture.generator._network_transaction_runtime.window_end
+    fixture.generator.finalize_ssh_session_lifecycles(scenario_end)
+    assert fixture.state.get_session(session.logon_id) is None
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert all(
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < scenario_end
+        for row in ecar_rows
+    )
+    assert all(
+        datetime.fromtimestamp(row["ts"] + row["duration"], tz=UTC) < scenario_end
+        for row in zeek_rows
+    )
+
+
 def test_exact_ssh_open_preserves_unresolved_source_process_compatibility(tmp_path: Path) -> None:
     """An unresolved authored source process stays on the compatibility path."""
 
@@ -2161,6 +2247,174 @@ def test_exact_ssh_open_preserves_unresolved_source_process_compatibility(tmp_pa
     )._uses_exact_deferred_publication()
     fixture.ecar.close()
     fixture.zeek.close()
+
+
+def test_no_ecar_uses_exact_bridge_only_for_wholly_suppressed_warmup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing eCAR sink preserves exact warm-up ownership but not visible cohorts."""
+
+    reset_thread_rng(42)
+    output_start = _START + timedelta(hours=2)
+    fixture = _fixture(tmp_path, output_start_time=output_start)
+    assert fixture.generator.dispatcher.emitters.pop("ecar") is fixture.ecar
+    visible = replace(fixture.request(), time=output_start)
+    assert not SshSessionActionBundle(
+        visible,
+        fixture.generator,
+    )._uses_exact_deferred_publication()
+    crossing_authoritative_close = replace(
+        fixture.request(),
+        session_end_plan=SessionEndPlan(
+            output_start + timedelta(hours=1),
+            "explicit_storyline",
+            "ssh-warmup-crossing-close",
+        ),
+    )
+    assert not SshSessionActionBundle(
+        crossing_authoritative_close,
+        fixture.generator,
+    )._uses_exact_deferred_publication()
+
+    owner_rng = random.Random(42)
+    monkeypatch.setattr(
+        "evidenceforge.generation.actions.ssh_session._get_rng",
+        lambda: owner_rng,
+    )
+    request = replace(
+        fixture.request(),
+        time=output_start - timedelta(minutes=59),
+        source_port=None,
+        duration=None,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    bundle = SshSessionActionBundle(request, fixture.generator)
+    rng_state = owner_rng.getstate()
+    assert bundle._uses_exact_deferred_publication()
+    assert owner_rng.getstate() == rng_state
+    uid, logon_id = bundle.execute_with_identity()
+
+    assert uid
+    assert fixture.state.get_session(logon_id) is not None
+    assert len(fixture.generator._pending_ssh_session_closures) == 1
+    assert fixture.generator._pending_ssh_session_closures[0].plan.logind_remove_time < output_start
+    fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=3))
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.generator._pending_ssh_session_closures == []
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    assert ecar_rows == []
+    assert zeek_rows == []
+
+
+@pytest.mark.parametrize("source_os", ("Windows 11", "Ubuntu 24.04"))
+def test_implicit_ssh_client_eligibility_is_allocation_free(
+    source_os: str,
+    tmp_path: Path,
+) -> None:
+    """An eligible implicit source actor keeps exact preparation mutation-free."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    fixture.source = System(
+        hostname=fixture.source.hostname,
+        ip=fixture.source.ip,
+        os=source_os,
+        type="workstation",
+    )
+    fixture.generator._ip_to_system[fixture.source.ip] = fixture.source
+    fixture.generator._users_by_username = {fixture.user.username: fixture.user}
+    fixture.generator.generate_logon(
+        fixture.user,
+        fixture.source,
+        _START,
+        logon_type=2,
+        source_ip=fixture.source.ip,
+        emit_network_evidence=False,
+    )
+    request = replace(fixture.request(), time=_START + timedelta(minutes=5))
+    before = fixture.state.materialization_digest()
+
+    assert fixture.generator.has_implicit_ssh_client_owner(
+        user=request.user,
+        source_system=fixture.source,
+        time=request.time,
+    )
+    assert not SshSessionActionBundle(
+        request,
+        fixture.generator,
+    )._uses_exact_deferred_publication()
+    assert fixture.state.materialization_digest() == before
+    fixture.close_and_read()
+
+
+def test_ecar_availability_does_not_change_implicit_ssh_source_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Renderer selection cannot change canonical SSH source-process attribution."""
+
+    attributions: dict[str, tuple[str, int]] = {}
+    for mode in ("ecar", "no_ecar"):
+        reset_thread_rng(42)
+        fixture = _fixture(tmp_path / mode)
+        fixture.generator._users_by_username = {fixture.user.username: fixture.user}
+        if mode == "no_ecar":
+            assert fixture.generator.dispatcher.emitters.pop("ecar") is fixture.ecar
+        source_logon = fixture.generator.generate_logon(
+            fixture.user,
+            fixture.source,
+            _START,
+            logon_type=2,
+            source_ip=fixture.source.ip,
+            emit_network_evidence=False,
+        )
+        source_image = r"C:\Windows\System32\OpenSSH\ssh.exe"
+        source_pid = fixture.generator.generate_process(
+            fixture.user,
+            fixture.source,
+            _START + timedelta(seconds=1),
+            source_logon,
+            source_image,
+            f"{source_image} {fixture.user.username}@{fixture.target.ip}",
+            parent_pid=0,
+            suppress_command_file_effect=True,
+        )
+
+        ensure_client = Mock(return_value=(source_pid, source_image))
+        observed_pids: list[int] = []
+        generate_connection = fixture.generator.generate_connection
+
+        def capture_connection(
+            *args: object,
+            _observed_pids: list[int] = observed_pids,
+            _generate_connection: Callable[..., str] = generate_connection,
+            **kwargs: object,
+        ) -> str:
+            if kwargs.get("service") == "ssh" and kwargs.get("dst_port") == 22:
+                pid = kwargs.get("pid")
+                assert isinstance(pid, int)
+                _observed_pids.append(pid)
+            return _generate_connection(*args, **kwargs)
+
+        request = replace(fixture.request(), time=_START + timedelta(minutes=5))
+        bundle = SshSessionActionBundle(request, fixture.generator)
+        assert not bundle._uses_exact_deferred_publication()
+        with monkeypatch.context() as patch:
+            patch.setattr(fixture.generator, "ensure_ssh_client_process", ensure_client)
+            patch.setattr(fixture.generator, "generate_connection", capture_connection)
+            uid = bundle.execute()
+
+        assert uid
+        ensure_client.assert_called_once()
+        assert len(observed_pids) == 1
+        assert observed_pids[0] == source_pid
+        attributions[mode] = (uid, observed_pids[0])
+        fixture.close_and_read()
+
+    assert attributions["ecar"] == attributions["no_ecar"]
 
 
 def test_storyline_scp_shape_uses_existing_source_process_in_exact_bridge(

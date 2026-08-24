@@ -1938,18 +1938,52 @@ class _PreparedSshCloseContinuation:
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
         emitters = getattr(self.dispatcher_owner, "emitters", None)
+        ecar_owner_is_exact = bool(
+            type(emitters) is dict
+            and dict.get(emitters, "ecar") is self.ecar_owner
+            and type(self.ecar_owner) is EcarEmitter
+            and getattr(self.ecar_owner, "supports_exact_projection_publication", None) is True
+        )
+        no_ecar_warmup_is_exact = bool(
+            type(emitters) is dict
+            and "ecar" not in emitters
+            and self.ecar_owner is None
+            and self._all_projection_times_are_warmup_suppressed()
+        )
         if (
             type(self.dispatcher_owner) is not EventDispatcher
             or type(emitters) is not dict
-            or emitters.get("ecar") is not self.ecar_owner
-            or emitters.get("zeek_conn") is not self.zeek_owner
-            or type(self.ecar_owner) is not EcarEmitter
+            or not (ecar_owner_is_exact or no_ecar_warmup_is_exact)
+            or dict.get(emitters, "zeek_conn") is not self.zeek_owner
             or type(self.zeek_owner) is not ZeekEmitter
-            or getattr(self.ecar_owner, "supports_exact_projection_publication", None) is not True
             or getattr(self.zeek_owner, "supports_exact_projection_publication", None) is not True
         ):
             raise StateError("Exact SSH close requires its original eCAR/Zeek projection owners")
         self.require_application_owner_shape()
+
+    def _all_projection_times_are_warmup_suppressed(self) -> bool:
+        """Prove every open and terminal occurrence precedes the output gate."""
+
+        output_start = getattr(self.dispatcher_owner, "output_start_time", None)
+        if type(output_start) is not datetime:
+            return False
+        plan = self.plan
+        projection_times = (
+            plan.open_time,
+            plan.session_started_at,
+            plan.receiver_started_at,
+            plan.auth_state.connection_time,
+            plan.auth_state.accepted_time,
+            plan.auth_state.pam_time,
+            plan.auth_state.logind_time,
+            plan.close_time,
+            plan.receiver_terminate_time,
+            plan.session_close_time,
+            plan.logind_remove_time,
+            *((plan.source_terminate_time,) if plan.source_terminate_time is not None else ()),
+        )
+        gate = ensure_utc(output_start)
+        return all(ensure_utc(timestamp) < gate for timestamp in projection_times)
 
     def require_projection_owner(self, executor: SshSessionExecutor) -> None:
         """Identity-bind every close retry to its original runtime and dispatcher."""
@@ -2459,6 +2493,17 @@ class SshSessionExecutor(Protocol):
         """Return the modeled source-side SSH client for any supported endpoint OS."""
         ...
 
+    def has_implicit_ssh_client_owner(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        time: datetime,
+        required_until: datetime | None = None,
+    ) -> bool:
+        """Return whether canonical State can own an implicit SSH client."""
+        ...
+
     def _clamp_after_visible_linux_process_create_with_runtime(
         self,
         system: System,
@@ -2827,6 +2872,21 @@ class SshSessionActionBundle:
             or _get_os_category(self.request.target_system.os) != "linux"
         ):
             return False
+        source_system = self._source_system()
+        if (
+            self.request.source_pid <= 0
+            and not self.request.source_process_image
+            and source_system is not None
+            and self.executor.has_implicit_ssh_client_owner(
+                user=self.request.user,
+                source_system=source_system,
+                time=self.request.time,
+            )
+        ):
+            # Compatibility owns implicit source-process creation and teardown.
+            # Exact preparation can bind a preexisting actor, but cannot publish
+            # a new prerequisite outside its State/projection rollback authority.
+            return False
         if (self.request.source_pid > 0 or self.request.source_process_image) and (
             self._deferred_source_process_binding() is None
         ):
@@ -2838,10 +2898,68 @@ class SshSessionActionBundle:
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
-        return (
-            type(emitters.get("ecar")) is EcarEmitter
-            and type(emitters.get("zeek_conn")) is ZeekEmitter
+        if type(dict.get(emitters, "zeek_conn")) is not ZeekEmitter:
+            return False
+        if type(dict.get(emitters, "ecar")) is EcarEmitter:
+            return True
+        return "ecar" not in emitters and self._no_ecar_cohort_is_provably_warmup()
+
+    def _no_ecar_cohort_is_provably_warmup(self) -> bool:
+        """Conservatively admit an exact no-eCAR cohort only when wholly suppressed."""
+
+        dispatcher = getattr(self.executor, "dispatcher", None)
+        output_start = getattr(dispatcher, "output_start_time", None)
+        if type(output_start) is not datetime:
+            return False
+        request = self.request
+        duration = 0.0
+        if request.bundle_owns_close:
+            duration = (
+                request.duration
+                if request.duration is not None
+                else self._preview_deferred_transport_duration()
+            )
+            if request.min_duration is not None:
+                duration = max(duration, request.min_duration)
+            duration = max(1.0, duration)
+        if request.session_end_plan is not None:
+            planned_duration = (
+                ensure_utc(request.session_end_plan.canonical_end) - ensure_utc(request.time)
+            ).total_seconds()
+            if planned_duration <= 0:
+                return False
+            duration = max(duration, planned_duration)
+        if not math.isfinite(duration):
+            return False
+        try:
+            required_headroom = ssh_action_deadline_transport_headroom_seconds(
+                min_duration_seconds=duration,
+                auth_method=request.auth_method,
+                public_key_type=request.public_key_type,
+                route_class="private" if self._source_system() is not None else "public",
+                **self._action_deadline_runtime_options(ensure_utc(output_start)),
+            )
+        except (StateError, TypeError, ValueError):
+            return False
+        return ensure_utc(request.time) + timedelta(seconds=required_headroom) < ensure_utc(
+            output_start
         )
+
+    def _preview_deferred_transport_duration(self) -> float:
+        """Preview the exact upcoming random duration without advancing its owner RNG."""
+
+        request = self.request
+        preview_rng = random.Random(0)
+        preview_rng.setstate(_get_rng().getstate())
+        self.executor.preview_ssh_source_port(
+            request.source_ip,
+            request.target_system.ip,
+            request.source_port,
+            preview_rng,
+            self._source_os(),
+            request.time,
+        )
+        return preview_rng.uniform(30.0, 3600.0)
 
     def _source_os(self) -> str:
         """Return the source OS category used for source-port reservation."""

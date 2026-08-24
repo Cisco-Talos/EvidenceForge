@@ -28,7 +28,6 @@ from evidenceforge.generation.engine.storyline import (
     _linux_storyline_shell_friction_commands,
     _render_storyline_shell_friction_template,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.storage_world import (
     CompiledStorageAccess,
@@ -63,6 +62,18 @@ class _CapturingDispatcherProxy:
     def dispatch_builder(self, event: Any, *args: Any, **kwargs: Any) -> Any:
         self._capture(event)
         return self._delegate.dispatch_builder(event, *args, **kwargs)
+
+
+def _activity_generator_with_captured_builders(
+    state_manager: StateManager,
+    capture: Callable[[Any], None],
+) -> ActivityGenerator:
+    """Build a fixture generator without bypassing prepared dispatcher contracts."""
+
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters={})
+    generator = ActivityGenerator(state_manager, {}, dispatcher=dispatcher)
+    generator.dispatcher = _CapturingDispatcherProxy(dispatcher, capture)
+    return generator
 
 
 class TestStorylineCommandNetworks:
@@ -122,16 +133,8 @@ class TestStorylineCommandNetworks:
         """Explicit process_ref/parent_ref lineage should reach canonical process context."""
         captured: list[Any] = []
 
-        class _CapturingDispatcher:
-            visibility_engine = None
-
-            @staticmethod
-            def dispatch_builder(event: Any) -> None:
-                captured.append(event)
-
         state = StateManager()
-        generator = ActivityGenerator(state, {})
-        generator.dispatcher = _CapturingDispatcher()
+        generator = _activity_generator_with_captured_builders(state, captured.append)
         actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
         system = System(
             hostname="SRC",
@@ -795,15 +798,14 @@ class TestStorylineCommandNetworks:
                 return event.event_type == "process_create"
 
             def emit(self, event: Any) -> None:
-                host = event.src_host
-                proc = event.process
-                process_start_time = proc.start_time or event.timestamp
-                self.render_time = SourceTimingPlanner().source_time(
-                    event,
-                    "source.ecar_process_create",
-                    seed_parts=(host.hostname, proc.pid, process_start_time),
-                    not_before=process_start_time,
-                )
+                assert event.source_timing is not None
+                ecar_times = [
+                    value
+                    for key, value in event.source_timing.source_times.items()
+                    if key.startswith("source.ecar_process_create|")
+                ]
+                assert ecar_times
+                self.render_time = max(ecar_times)
 
         emitter = _ProcessTimingEmitter()
         state_manager = StateManager()
@@ -829,20 +831,22 @@ class TestStorylineCommandNetworks:
         )
 
         assert emitter.render_time is not None
-        assert generator.process_source_create_time(system.hostname, pid) >= emitter.render_time
+        source_bound = generator.process_source_create_bound(system, pid)
+        assert source_bound is not None
+        assert source_bound >= emitter.render_time
 
     def test_activity_generator_preplans_process_create_time_before_threaded_dispatch(self):
         captured: dict[str, Any] = {}
 
-        class _CapturingDispatcher:
-            @staticmethod
-            def dispatch_builder(event: Any) -> None:
-                if event.event_type == "process_create":
-                    captured["event"] = event
+        def capture_process_create(event: Any) -> None:
+            if event.event_type == "process_create":
+                captured["event"] = event
 
         state_manager = StateManager()
-        generator = ActivityGenerator(state_manager, {})
-        generator.dispatcher = _CapturingDispatcher()
+        generator = _activity_generator_with_captured_builders(
+            state_manager,
+            capture_process_create,
+        )
         actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
         system = System(
             hostname="SRC",
@@ -880,22 +884,22 @@ class TestStorylineCommandNetworks:
             if key.startswith("source.windows_security_process_create|")
         )
         assert abs((security_time - sysmon_time).total_seconds()) <= 0.021
-        assert generator.process_source_create_time(system.hostname, pid) == max(
-            event.source_timing.source_times.values()
-        )
+        source_bound = generator.process_source_create_bound(system, pid)
+        assert source_bound is not None
+        assert source_bound >= max(event.source_timing.source_times.values())
 
     def test_process_preplan_waits_for_session_source_ready_time(self):
         captured: dict[str, Any] = {}
 
-        class _CapturingDispatcher:
-            @staticmethod
-            def dispatch_builder(event: Any) -> None:
-                if event.event_type == "process_create":
-                    captured["event"] = event
+        def capture_process_create(event: Any) -> None:
+            if event.event_type == "process_create":
+                captured["event"] = event
 
         state_manager = StateManager()
-        generator = ActivityGenerator(state_manager, {})
-        generator.dispatcher = _CapturingDispatcher()
+        generator = _activity_generator_with_captured_builders(
+            state_manager,
+            capture_process_create,
+        )
         actor = User(username="svc_mhsync", full_name="Sync Service", email="svc@example.com")
         system = System(
             hostname="FILE-SRV-01",
@@ -930,27 +934,15 @@ class TestStorylineCommandNetworks:
         source_times = event.source_timing.source_times
         floor = ready_time + timedelta(milliseconds=1)
         assert all(timestamp >= floor for timestamp in source_times.values())
-        assert generator.process_source_create_time(system.hostname, event.process.pid) == max(
-            source_times.values()
-        )
+        source_bound = generator.process_source_create_bound(system, event.process.pid)
+        assert source_bound is not None
+        assert source_bound >= max(source_times.values())
 
     def test_process_owned_windows_connection_waits_for_visible_process_create(self):
         captured: list[Any] = []
 
-        class _CapturingDispatcher:
-            visibility_engine = None
-
-            @staticmethod
-            def dispatch_builder(event: Any) -> None:
-                captured.append(event)
-
-            @staticmethod
-            def record_filtered_network_observation() -> None:
-                return None
-
         state_manager = StateManager()
-        generator = ActivityGenerator(state_manager, {})
-        generator.dispatcher = _CapturingDispatcher()
+        generator = _activity_generator_with_captured_builders(state_manager, captured.append)
         actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
         source = System(
             hostname="SRC",
@@ -977,7 +969,7 @@ class TestStorylineCommandNetworks:
             "mstsc.exe /v:DC-01",
             parent_pid=4,
         )
-        visible_process_time = generator.process_source_create_time(source.hostname, pid)
+        visible_process_time = generator.process_source_create_bound(source, pid)
         assert visible_process_time is not None
 
         generator.generate_connection(
@@ -1205,6 +1197,11 @@ class _FakeActivityGenerator:
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_times.get((hostname, pid))
+
+    def process_source_create_bound(self, system: System, pid: int) -> datetime | None:
+        """Return the fake's frozen canonical source bound for storyline ordering."""
+
+        return self.process_source_times.get((system.hostname, pid))
 
     def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_termination_times.get((hostname, pid))

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, Mock
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.contexts import HttpContext, ProxyContext
+from evidenceforge.events.contexts import HttpContext, NetworkTransactionDraft, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
@@ -20,10 +21,13 @@ from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
 )
-from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.generator import (
+    ActivityGenerator,
+    _attach_http_file_transfers,
+)
 from evidenceforge.generation.activity.proxy_phase_profiles import proxy_resolver_profiles
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.scenario import System
 from tests.network_factories import network_plan
 
@@ -102,6 +106,57 @@ def _proxy_context(
         cache_result=cache_result,
         proxy_fqdn="PROXY-01.example.org",
     )
+
+
+def test_proxy_timing_scope_accepts_connection_planning_rng() -> None:
+    """Large proxy transfers must use their exact scope with a revocable RNG."""
+
+    owner = random.Random(42)
+    owner_state = owner.getstate()
+    manager = StateManager()
+    cursor = manager.begin_connection_planning(owner)
+    event = OccurrenceBuilder(
+        timestamp=_BASE_TIME,
+        event_type="connection",
+        network=NetworkTransactionDraft(
+            src_ip="10.0.1.10",
+            src_port=51_000,
+            dst_ip="10.0.3.10",
+            dst_port=3128,
+            protocol="tcp",
+            service="http",
+            conn_state="SF",
+            duration=0.12,
+            orig_bytes=1_573_500,
+            resp_bytes=500,
+        ),
+        http=HttpContext(
+            method="POST",
+            host="support.example.test",
+            uri="/upload",
+            request_body_len=1_572_864,
+            request_content_type="application/octet-stream",
+        ),
+        proxy=_proxy_context(),
+    )
+
+    _attach_http_file_transfers(
+        event,
+        dst_ip="10.0.3.10",
+        rng=cursor.rng,
+        timing_runtime=TimingRuntime(reference_time=_BASE_TIME, namespace="proxy-upload"),
+        timing_scope=TimingScope(
+            stable_id="proxy-upload",
+            host="PROXY-01",
+            source="network",
+            lifecycle_id="proxy-upload",
+        ),
+    )
+
+    assert event.network.duration > 0.12
+    assert event.proxy.time_taken > 0
+    assert owner.getstate() == owner_state
+    cursor.cancel()
 
 
 def test_proxy_phase_plan_is_deterministic_ordered_and_immutable() -> None:

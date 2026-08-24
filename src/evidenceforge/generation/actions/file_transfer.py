@@ -1204,13 +1204,13 @@ class StagedArchiveSmbReadActionBundle:
             return transfer_time
         source_time_getter = getattr(
             self._executor.activity_generator,
-            "process_source_create_time",
+            "process_source_create_bound",
             None,
         )
         if not callable(source_time_getter):
             return transfer_time
         source_process_time = source_time_getter(
-            self._request.source_system.hostname,
+            self._request.source_system,
             self._request.source_pid,
         )
         if not isinstance(source_process_time, datetime) or transfer_time > source_process_time:
@@ -1667,12 +1667,12 @@ class StagedArchiveSmbReadActionBundle:
         )
         source_time_getter = getattr(
             self._executor.activity_generator,
-            "process_source_create_time",
+            "process_source_create_bound",
             None,
         )
         if callable(source_time_getter):
             source_process_time = source_time_getter(
-                self._request.source_system.hostname,
+                self._request.source_system,
                 source_process.pid,
             )
             if isinstance(source_process_time, datetime) and file_time <= source_process_time:
@@ -1776,12 +1776,12 @@ class StagedArchiveSmbReadActionBundle:
         )
         source_time_getter = getattr(
             self._executor.activity_generator,
-            "process_source_create_time",
+            "process_source_create_bound",
             None,
         )
         if callable(source_time_getter):
             source_process_time = source_time_getter(
-                self._request.source_system.hostname,
+                self._request.source_system,
                 reader_process.pid,
             )
             if isinstance(source_process_time, datetime) and file_time <= source_process_time:
@@ -2134,13 +2134,13 @@ class ScpReceiverFileActionBundle:
         )
         source_time_getter = getattr(
             self._executor.activity_generator,
-            "process_source_create_time",
+            "process_source_create_bound",
             None,
         )
         source_process_time: datetime | None = None
         if callable(source_time_getter):
             candidate = source_time_getter(
-                self._request.source_system.hostname,
+                self._request.source_system,
                 self._request.source_pid,
             )
             if isinstance(candidate, datetime):

@@ -17,17 +17,20 @@ from typing import Literal
 
 import pytest
 
-from evidenceforge.generation.actions.smb_activity import (
+from evidenceforge.events.dispatcher import PersistentSmbSourcePublicationResult
+from evidenceforge.generation.actions.smb_activity import SmbActivityActionBundle
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.persistent_smb_continuation import (
     PersistentSmbTerminalContinuation,
     PersistentSmbTerminalContinuationAuthority,
 )
-from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.resource_forecast import (
     ForecastRange,
     ResourceForecast,
     ResourceSnapshot,
 )
-from evidenceforge.models.exceptions import EventContractError
+from evidenceforge.generation.source_timing import SourceTimingPreparation
+from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng
@@ -90,8 +93,8 @@ class _PersistentPublicFault:
         raise _InjectedPublicError("injected persistent fail-before")
 
 
-class _InstallCapture:
-    """Capture the exact public continuation returned by one real installation."""
+class _ReservationCapture:
+    """Capture the exact continuation returned by one real pre-root reservation."""
 
     def __init__(self, original: Callable[..., PersistentSmbTerminalContinuation]) -> None:
         self.original = original
@@ -121,18 +124,18 @@ def _assert_terminal_continuation_capacity_is_neutral(arguments: dict[str, objec
 
     authority = PersistentSmbTerminalContinuationAuthority(capacity=1)
     capacity_arguments = dict(arguments)
-    retained = authority.install_claimed(**capacity_arguments)
+    retained = authority.reserve_claimed(**capacity_arguments)
     before = authority.census()
     capacity_arguments["action_id"] = f"{capacity_arguments['action_id']}:capacity"
     capacity_arguments["action_binding_digest"] = "d" * 64
     _assert_event_contract_error_without_traceback(
-        lambda: authority.install_claimed(**capacity_arguments)
+        lambda: authority.reserve_claimed(**capacity_arguments)
     )
     assert authority.census() == before
     assert before.retained_continuations == 1
-    assert authority.facts(retained).cursor == 0
-    authority.release_claim(retained)
-    assert authority.census().active_claims == 0
+    assert authority.root_facts(retained).phase == "reserved"
+    assert authority.cancel_uncommitted(retained)
+    assert authority.census().retained_continuations == 0
 
 
 def _forecast(output: Path) -> ResourceForecast:
@@ -157,6 +160,8 @@ def _windows_read_scenario(
     scenarios_dir: Path,
     *,
     output_formats: tuple[str, ...] = ("windows", "zeek", "ecar"),
+    file_count: int = 1,
+    outcome: Literal["success", "access_denied"] = "success",
 ) -> Scenario:
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
@@ -191,13 +196,21 @@ def _windows_read_scenario(
                         "volume": "data",
                         "root": "Departments\\Finance",
                         "preset": "department",
+                        "access": {
+                            "read": ["test_user"],
+                            "modify": ["test_user"],
+                            "deny": ["test_user"] if outcome == "access_denied" else [],
+                        },
                         "seed_files": [
                             {
-                                "ref": "forecast",
-                                "path": "Reports\\FY26\\forecast.xlsx",
-                                "size_bytes": 1_843_200,
+                                "ref": "forecast" if file_count == 1 else f"forecast-{index:02d}",
+                                "path": "Reports\\FY26\\forecast.xlsx"
+                                if file_count == 1
+                                else f"Reports\\FY26\\forecast-{index:02d}.xlsx",
+                                "size_bytes": 1_843_200 if file_count == 1 else 4_096 + index,
                                 "tags": ["finance"],
                             }
+                            for index in range(file_count)
                         ],
                     }
                 ],
@@ -218,9 +231,12 @@ def _windows_read_scenario(
                     "target": {
                         "type": "share",
                         "share": "FS-01.finance",
-                        "file_ref": "forecast",
+                        **({"file_ref": "forecast"} if file_count == 1 else {}),
                     },
-                    "outcome": "success",
+                    **(
+                        {"batch": {"count": file_count, "duration": "8m"}} if file_count > 1 else {}
+                    ),
+                    "outcome": outcome,
                 }
             ],
         }
@@ -437,8 +453,35 @@ def windows_read_control(tmp_path_factory: pytest.TempPathFactory) -> tuple[tupl
         _assert_transient_authorities_drained(engine)
     finally:
         engine._close_emitters()
+    connection_uids = {
+        str(row["uid"]) for row in _json_records(output, "conn.json") if row.get("service") == "smb"
+    }
+    assert result.transport_uids[0] in connection_uids
     _assert_exact_source_order(output)
     return _source_bytes(output)
+
+
+@pytest.fixture(scope="module")
+def windows_two_file_control(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, tuple[dict[str, object], ...], tuple[tuple[str, bytes], ...]]:
+    """Generate one exact two-file persistent-SMB control."""
+
+    output = tmp_path_factory.mktemp("persistent-smb-two-file-control")
+    scenario = _windows_read_scenario(
+        Path(__file__).parents[1] / "fixtures" / "scenarios",
+        file_count=2,
+    )
+    engine = GenerationEngine(scenario, output, resource_forecast=_forecast(output))
+    try:
+        engine._initialize()
+        result = _invoke_windows_read(engine, scenario)
+        assert len(result.operations) == 2
+        assert len(result.transport_uids) == 1
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+    return output, result.operations, _source_bytes(output)
 
 
 def test_generate_smb_activity_uses_one_persistent_windows_root(
@@ -455,6 +498,214 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
         "core-zeek/smb_files.json",
         "core-zeek/smb_mapping.json",
     )
+
+
+def test_persistent_smb_result_uses_exact_published_transport_identifier() -> None:
+    """Terminal activity truth selects the authenticated transport projection exactly."""
+
+    def source_result(
+        identifiers: tuple[tuple[str, str], ...],
+    ) -> PersistentSmbSourcePublicationResult:
+        return PersistentSmbSourcePublicationResult(
+            group_id=1,
+            generation_id="generation",
+            publication_key="publication",
+            publication_binding_digest="a" * 64,
+            target_formats=("zeek_conn",),
+            member_operation_ids=("activity:0:transport",),
+            row_facts=(),
+            projection_identifiers=(identifiers,),
+            publication_digest="b" * 64,
+        )
+
+    observed_uid = "C-observed"
+    canonical_uid = "C-canonical"
+    assert SmbActivityActionBundle._persistent_source_transport_uids(
+        source_result((("zeek_conn", observed_uid),)),
+        canonical_uid=canonical_uid,
+    ) == (observed_uid,)
+    assert SmbActivityActionBundle._persistent_source_transport_uids(
+        source_result(()),
+        canonical_uid=canonical_uid,
+    ) == (canonical_uid,)
+    assert SmbActivityActionBundle._persistent_source_transport_uids(
+        source_result((("snort_alert", ""), ("zeek_conn", ""))),
+        canonical_uid=canonical_uid,
+    ) == (canonical_uid,)
+    with pytest.raises(EventContractError, match="ambiguous"):
+        SmbActivityActionBundle._persistent_source_transport_uids(
+            source_result(
+                (
+                    ("zeek_conn", observed_uid),
+                    ("zeek_conn", "C-second-observation"),
+                )
+            ),
+            canonical_uid=canonical_uid,
+        )
+    with pytest.raises(EventContractError, match="ambiguous"):
+        SmbActivityActionBundle._persistent_source_transport_uids(
+            source_result((("zeek_conn", ""), ("zeek_conn", observed_uid))),
+            canonical_uid=canonical_uid,
+        )
+    with pytest.raises(EventContractError, match="malformed"):
+        SmbActivityActionBundle._persistent_source_transport_uids(
+            source_result((("", ""),)),
+            canonical_uid=canonical_uid,
+        )
+
+
+def test_persistent_smb_two_file_order_counters_and_transport_bytes(
+    windows_two_file_control: tuple[
+        Path,
+        tuple[dict[str, object], ...],
+        tuple[tuple[str, bytes], ...],
+    ],
+) -> None:
+    """Two files retain source order and exact aggregate read transport bytes."""
+
+    output, operations, _source = windows_two_file_control
+    operation_paths = [str(operation["path"]) for operation in operations]
+    server_rows = [
+        row for row in _json_records(output, "ecar.json") if row.get("hostname") == "FS-01"
+    ]
+    assert [row["action"] for row in server_rows] == [
+        "CONNECT",
+        "LOGIN",
+        "READ",
+        "READ",
+        "LOGOUT",
+    ]
+    assert [
+        row.get("properties", {}).get("file_path") for row in server_rows if row["action"] == "READ"
+    ] == [f"D:\\Departments\\Finance\\{path}" for path in operation_paths]
+
+    smb_rows = _json_records(output, "smb_files.json")
+    assert [row["action"] for row in smb_rows] == [
+        "SMB::FILE_OPEN",
+        "SMB::FILE_READ",
+        "SMB::FILE_OPEN",
+        "SMB::FILE_READ",
+    ]
+    assert [row["name"] for row in smb_rows] == [
+        operation_paths[0],
+        operation_paths[0],
+        operation_paths[1],
+        operation_paths[1],
+    ]
+    connection = _json_records(output, "conn.json")
+    assert len(connection) == 1
+    assert connection[0]["orig_bytes"] == 3_427
+    assert (
+        connection[0]["resp_bytes"]
+        == sum(int(operation["size_bytes"]) for operation in operations) + 4_412
+    )
+
+
+def test_persistent_smb_second_file_failure_is_neutral_and_replayable(
+    scenarios_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    windows_two_file_control: tuple[
+        Path,
+        tuple[dict[str, object], ...],
+        tuple[tuple[str, bytes], ...],
+    ],
+) -> None:
+    """A second-file preparation failure cancels every pre-root owner before replay."""
+
+    scenario = _windows_read_scenario(scenarios_dir, file_count=2)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        state = engine.activity_generator.state_manager
+        state_before = state.get_state_summary()
+        original = state.touch_smb_file
+        calls = 0
+
+        def fail_second_touch(*args: object, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise _InjectedPublicError("injected second-file preparation failure")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(state, "touch_smb_file", fail_second_touch)
+        with pytest.raises(_InjectedPublicError, match="second-file"):
+            _invoke_windows_read(engine, scenario)
+        assert calls == 2
+        assert state.get_state_summary() == state_before
+        assert _source_bytes(tmp_path) == ()
+        _assert_transient_authorities_drained(engine)
+
+        monkeypatch.setattr(state, "touch_smb_file", original)
+        result = _invoke_windows_read(engine, scenario)
+        assert len(result.operations) == 2
+        assert len(result.transport_uids) == 1
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+    assert _source_bytes(tmp_path) == windows_two_file_control[2]
+
+
+def test_persistent_smb_50_file_batch_uses_one_bounded_carrier(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """The supported 50-file scenario retains every operation on one carrier."""
+
+    scenario = _windows_read_scenario(scenarios_dir, output_formats=("zeek",), file_count=50)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        result = _invoke_windows_read(engine, scenario)
+        assert len(result.operations) == 50
+        assert len(result.transport_uids) == 1
+        assert len({str(operation["path"]) for operation in result.operations}) == 50
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+    assert len(_json_records(tmp_path, "conn.json")) == 1
+    smb_rows = _json_records(tmp_path, "smb_files.json")
+    assert len(smb_rows) == 100
+    assert [row["action"] for row in smb_rows[::2]] == ["SMB::FILE_OPEN"] * 50
+    assert [row["action"] for row in smb_rows[1::2]] == ["SMB::FILE_READ"] * 50
+
+
+def test_persistent_smb_denied_batch_is_short_framing_only_and_file_neutral(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """A denied batch emits one failure member per file without payload or mutation."""
+
+    scenario = _windows_read_scenario(scenarios_dir, file_count=2, outcome="access_denied")
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        state_before = engine.activity_generator.state_manager.get_state_summary()
+        result = _invoke_windows_read(engine, scenario)
+        assert len(result.operations) == 2
+        assert {str(operation["outcome"]) for operation in result.operations} == {"access_denied"}
+        assert all(operation["fuid"] is None for operation in result.operations)
+        state_after = engine.activity_generator.state_manager.get_state_summary()
+        assert state_after["smb_mutations"] == state_before["smb_mutations"]
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+
+    connection = _json_records(tmp_path, "conn.json")
+    assert len(connection) == 1
+    assert connection[0]["duration"] < 5.0
+    assert (connection[0]["orig_bytes"], connection[0]["resp_bytes"]) == (3_427, 4_412)
+    assert _json_records(tmp_path, "files.json") == []
+    assert _json_records(tmp_path, "smb_files.json") == []
+    windows_xml = next(tmp_path.rglob("windows_event_security.xml")).read_text(encoding="utf-8")
+    assert re.findall(r"<EventID[^>]*>(\d+)</EventID>", windows_xml) == [
+        "4624",
+        "5140",
+        "5145",
+        "5145",
+        "4634",
+    ]
 
 
 def test_persistent_smb_target_preflight_capacity_and_empty_cancel_are_neutral(
@@ -552,6 +803,68 @@ def test_persistent_smb_fail_before_transport_cancels_empty_group_and_replays(
     assert _source_bytes(tmp_path) == windows_read_control
 
 
+def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
+    scenarios_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new direct client actor appears only with its successful physical root."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    client = scenario.environment.systems[0]
+    client.os = "Ubuntu 24.04"
+    client.services = ["smbclient"]
+    actor = scenario.environment.users[0]
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        generator.generate_logon(
+            actor,
+            client,
+            engine.start_time + timedelta(minutes=1),
+            logon_type=2,
+        )
+        state = generator.state_manager
+        before = tuple(
+            (process.ecar_object_id, process.pid, process.image, process.command_line)
+            for process in state.get_processes_on_system(client.hostname)
+        )
+        state_before = state.get_state_summary()
+
+        original = generator.generate_connection
+        fault = _OneShotPublicFault(original, "fail_before")
+        monkeypatch.setattr(generator, "generate_connection", fault)
+        with pytest.raises(_InjectedPublicError):
+            _invoke_windows_read(engine, scenario)
+        assert fault.calls == 1
+        assert state.get_state_summary() == state_before
+        assert (
+            tuple(
+                (process.ecar_object_id, process.pid, process.image, process.command_line)
+                for process in state.get_processes_on_system(client.hostname)
+            )
+            == before
+        )
+        _assert_transient_authorities_drained(engine)
+
+        monkeypatch.setattr(generator, "generate_connection", original)
+        result = _invoke_windows_read(engine, scenario)
+        assert len(result.transport_uids) == 1
+        before_ids = {identity[0] for identity in before}
+        materialized = [
+            process
+            for process in state.get_processes_on_system(client.hostname)
+            if process.ecar_object_id not in before_ids
+        ]
+        assert len(materialized) == 1
+        assert materialized[0].image == "/usr/bin/smbclient"
+        assert "smbclient" in materialized[0].command_line
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+
+
 @pytest.mark.parametrize("mode", ("fail_before", "lost_return"))
 def test_persistent_smb_application_terminal_faults_converge_exactly_once(
     mode: Literal["fail_before", "lost_return"],
@@ -560,28 +873,24 @@ def test_persistent_smb_application_terminal_faults_converge_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
     windows_read_control: tuple[tuple[str, bytes], ...],
 ) -> None:
-    """Handle, operation, and session terminal failures retain then converge."""
+    """The retained common application result converges across either fault mode."""
 
     scenario = _windows_read_scenario(scenarios_dir)
     engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
-    faults: list[_OneShotPublicFault] = []
     try:
         engine._initialize()
-        manager = engine.activity_generator._smb_channel_manager
-        for method_name in ("close_handle", "finalize_operation", "close_session"):
-            fault = _OneShotPublicFault(
-                getattr(manager, method_name),
-                mode,
-                observe=lambda: _retained_smb_terminal_state(engine),
-            )
-            faults.append(fault)
-            monkeypatch.setattr(manager, method_name, fault)
+        registry = engine.activity_generator._smb_channel_manager.application_registry
+        fault = _OneShotPublicFault(
+            registry.acknowledge_committed_admission,
+            mode,
+            observe=lambda: _retained_smb_terminal_state(engine),
+        )
+        monkeypatch.setattr(registry, "acknowledge_committed_admission", fault)
         result = _invoke_windows_read(engine, scenario)
         assert len(result.transport_uids) == 1
-        for fault in faults:
-            assert fault.calls == 2
-            assert len([value for value in fault.results if value]) == 1
-            assert fault.observations == [(1, 0, 1, 0)]
+        assert fault.calls == (2 if mode == "fail_before" else 1)
+        assert len([value for value in fault.results if value]) == 1
+        assert len(fault.observations) == 1
         _assert_transient_authorities_drained(engine)
     finally:
         engine._close_emitters()
@@ -604,7 +913,7 @@ def test_persistent_smb_state_terminal_faults_recover_without_second_commit(
         engine._initialize()
         state = engine.activity_generator.state_manager
         file_fault = _OneShotPublicFault(
-            state.commit_smb_file_mutation_journal,
+            state.acknowledge_smb_file_mutation_commit,
             mode,
             observe=lambda: _retained_smb_terminal_state(engine),
         )
@@ -613,7 +922,7 @@ def test_persistent_smb_state_terminal_faults_recover_without_second_commit(
             mode,
             observe=lambda: _retained_smb_terminal_state(engine),
         )
-        monkeypatch.setattr(state, "commit_smb_file_mutation_journal", file_fault)
+        monkeypatch.setattr(state, "acknowledge_smb_file_mutation_commit", file_fault)
         monkeypatch.setattr(state, "materialize_action_cohort", finalization_fault)
         result = _invoke_windows_read(engine, scenario)
         assert len(result.transport_uids) == 1
@@ -622,8 +931,8 @@ def test_persistent_smb_state_terminal_faults_recover_without_second_commit(
         assert finalization_fault.calls == expected_calls
         assert len(file_fault.results) == 1
         assert len(finalization_fault.results) == 1
-        assert file_fault.observations[0][0] == 1
-        assert finalization_fault.observations[0][0:2] == (1, 1)
+        assert len(file_fault.observations) == 1
+        assert len(finalization_fault.observations) == 1
         _assert_transient_authorities_drained(engine)
     finally:
         engine._close_emitters()
@@ -645,6 +954,43 @@ def test_persistent_smb_projection_and_publication_faults_recover_exact_bytes(
     try:
         engine._initialize()
         dispatcher = engine.activity_generator.dispatcher
+        timing_commit_calls = 0
+        timing_fence_errors: list[BaseException] = []
+        timing_receipts: list[object] = []
+        original_timing_commit = SourceTimingPreparation.commit_no_fail
+
+        def lose_timing_commit_return(
+            preparation: SourceTimingPreparation,
+        ) -> object:
+            nonlocal timing_commit_calls
+            if object.__getattribute__(preparation, "_action_capacity") is None:
+                return original_timing_commit(preparation)
+            timing_commit_calls += 1
+            if timing_commit_calls == 1:
+                planner = preparation.owner
+                retained_bindings = tuple(planner._detached_bindings.values())
+                assert retained_bindings
+                binding = retained_bindings[0].binding_ref()
+                assert binding is not None
+                try:
+                    planner.discard_detached_preparation_binding(binding)
+                except BaseException as error:
+                    timing_fence_errors.append(error)
+                else:
+                    raise AssertionError(
+                        "Certified SMB timing allowed concurrent detached cancellation"
+                    )
+                receipt = original_timing_commit(preparation)
+                timing_receipts.append(receipt)
+                raise _InjectedPublicError("injected timing commit lost_return")
+            return original_timing_commit(preparation)
+
+        if mode == "lost_return":
+            monkeypatch.setattr(
+                SourceTimingPreparation,
+                "commit_no_fail",
+                lose_timing_commit_return,
+            )
         member_fault = _OneShotPublicFault(
             dispatcher.commit_persistent_smb_projection_member,
             mode,
@@ -672,7 +1018,16 @@ def test_persistent_smb_projection_and_publication_faults_recover_exact_bytes(
         assert publication_fault.calls == 2
         assert len(publication_fault.results) == (1 if mode == "fail_before" else 2)
         if mode == "lost_return":
+            assert timing_commit_calls == 1
+            assert len(timing_receipts) == 1
+            assert len(timing_fence_errors) == 1
+            assert isinstance(timing_fence_errors[0], StateError)
+            assert "active action commit" in str(timing_fence_errors[0])
             assert publication_fault.results[0] is publication_fault.results[1]
+            timing_receipts.clear()
+            timing_fence_errors[0].__traceback__ = None
+            timing_fence_errors.clear()
+            gc.collect()
         assert member_fault.observations == [(1, 1, 0, 1)]
         assert publication_fault.observations == [(1, 1, 0, 1)]
         _assert_transient_authorities_drained(engine)
@@ -777,19 +1132,23 @@ def _exercise_terminal_continuation_guards(
 
     generator = engine.activity_generator
     authority = generator._persistent_smb_terminal_continuations
-    capture = _InstallCapture(authority.install_claimed)
-    monkeypatch.setattr(authority, "install_claimed", capture)
+    capture = _ReservationCapture(authority.reserve_claimed)
+    monkeypatch.setattr(authority, "reserve_claimed", capture)
     dispatcher = generator.dispatcher
+    original_advance = authority.advance
+    captured_source: list[tuple[object, object]] = []
 
     def observe_terminal_proof() -> bool:
         continuation = capture.continuation
         assert continuation is not None
+        facts = authority.facts(continuation)
+        assert facts.cursor == 1
         _assert_event_contract_error_without_traceback(lambda: authority.facts(copy(continuation)))
         _assert_event_contract_error_without_traceback(
             lambda: PersistentSmbTerminalContinuationAuthority().facts(continuation)
         )
         _assert_event_contract_error_without_traceback(
-            lambda: authority.advance(continuation, expected_cursor=1)
+            lambda: original_advance(continuation, expected_cursor=0)
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(authority.facts, continuation)
@@ -797,9 +1156,10 @@ def _exercise_terminal_continuation_guards(
                 lambda completed=future: completed.result(timeout=2)
             )
             del future
-        source_carrier = capture.arguments["source_carrier"]
-        source_result = capture.arguments["source_result"]
-        assert dispatcher.authenticates_acknowledged_persistent_smb_source_publication(
+        source_carrier = facts.source_carrier
+        source_result = facts.source_result
+        captured_source.append((source_carrier, source_result))
+        assert dispatcher.authenticates_published_persistent_smb_source_publication(
             source_carrier,
             source_result,
         )
@@ -807,31 +1167,33 @@ def _exercise_terminal_continuation_guards(
             copied_source = copy(source_carrier)
         except TypeError:
             copied_source = object()
-        assert not dispatcher.authenticates_acknowledged_persistent_smb_source_publication(
+        assert not dispatcher.authenticates_published_persistent_smb_source_publication(
             copied_source,
             source_result,
         )
         return True
 
-    source_fault = _OneShotPublicFault(
-        dispatcher.acknowledge_persistent_smb_source_publication,
+    advance_fault = _OneShotPublicFault(
+        original_advance,
         "lost_return",
         observe=observe_terminal_proof,
     )
-    monkeypatch.setattr(
-        dispatcher,
-        "acknowledge_persistent_smb_source_publication",
-        source_fault,
-    )
+    monkeypatch.setattr(authority, "advance", advance_fault)
+    with pytest.raises(_InjectedPublicError, match="lost_return"):
+        _invoke_windows_read(engine, scenario)
+    assert advance_fault.observations == [True]
+    assert authority.census().retained_continuations == 1
+    monkeypatch.setattr(authority, "advance", original_advance)
     result = _invoke_windows_read(engine, scenario)
     assert len(result.transport_uids) == 1
-    assert source_fault.observations == [True]
     continuation = capture.continuation
     assert continuation is not None
     _assert_event_contract_error_without_traceback(lambda: authority.facts(continuation))
-    assert not dispatcher.authenticates_acknowledged_persistent_smb_source_publication(
-        capture.arguments["source_carrier"],
-        capture.arguments["source_result"],
+    assert len(captured_source) == 1
+    source_carrier, source_result = captured_source[0]
+    assert not dispatcher.authenticates_published_persistent_smb_source_publication(
+        source_carrier,
+        source_result,
     )
     _assert_terminal_continuation_capacity_is_neutral(capture.arguments)
     capture.arguments.clear()

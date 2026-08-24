@@ -289,7 +289,18 @@ def test_info_inventory_isolated_between_project_roots(tmp_path: Path) -> None:
             encoding="utf-8",
         )
         (activity / "application_catalog.yaml").write_text(
-            f"applications:\n  - id: root_{index}_app\n",
+            f"""schema_version: 2
+default_deployment:
+  kind: legacy_static
+applications:
+  - id: root_{index}_app
+    display_name: Root {index} App
+    platforms:
+      linux:
+        image_path: /opt/root_{index}_app/bin/root_{index}_app
+    categories: [user_app]
+    personas: [default]
+""",
             encoding="utf-8",
         )
 

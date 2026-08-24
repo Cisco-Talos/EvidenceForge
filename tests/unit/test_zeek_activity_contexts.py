@@ -703,6 +703,7 @@ class TestSslContextPopulation:
         )
 
         executor = MagicMock()
+        executor.dispatcher.source_timing_planner = None
         executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
                 requested_time
@@ -775,6 +776,7 @@ class TestSslContextPopulation:
             ),
         )
         executor = MagicMock()
+        executor.dispatcher.source_timing_planner = None
         executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key=("source.ecar_dependent_after_process_create"), **_kwargs: (
                 requested_time
@@ -985,6 +987,7 @@ class TestSslContextPopulation:
         executor.dispatcher.observation_policy.maximum_delay_difference.return_value = timedelta(
             milliseconds=900
         )
+        executor.dispatcher.source_timing_planner = None
         executor._clamp_after_visible_linux_process_create_with_runtime.side_effect = (
             lambda _system, _pid, requested_time, _relationship_key="", **_kwargs: max(
                 requested_time,
@@ -2440,7 +2443,10 @@ class TestSslContextPopulation:
         }
         assert syslog_pids == {transport_event.network.responding_pid}
 
-    def test_ssh_session_linux_source_uses_client_process_not_local_sshd(self, activity_gen):
+    def test_ssh_session_linux_source_omits_unavailable_client_not_local_sshd(
+        self,
+        activity_gen,
+    ):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -2489,13 +2495,13 @@ class TestSslContextPopulation:
         )
 
         transport_event = _ssh_transport_event(events)
-        assert transport_event.network.initiating_pid > 0
+        assert transport_event.network.initiating_pid == -1
         assert transport_event.network.initiating_pid != source_sshd_pid
-        assert transport_event.process is not None
-        assert transport_event.process.image == "/usr/bin/ssh"
-        assert transport_event.process.command_line.startswith("ssh ")
-        assert "admin@" in transport_event.process.command_line or "-l admin" in (
-            transport_event.process.command_line
+        assert transport_event.process is None
+        assert transport_event.identity_plan.actor is None
+        assert all(
+            process.image != "/usr/bin/ssh"
+            for process in gen.state_manager.get_processes_on_system(source.hostname)
         )
 
     def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
@@ -2587,16 +2593,16 @@ class TestSslContextPopulation:
         connection_syslog_event = next(
             event for event in syslog_events if event.syslog.message.startswith("Connection from")
         )
-        responder_source_time = gen.process_source_create_time(
-            target.hostname,
+        responder_source_bound = gen.process_source_create_bound(
+            target,
             conn_event.network.responding_pid,
         )
-        assert responder_source_time is not None
+        assert responder_source_bound is not None
         observation_gap = gen.dispatcher.observation_policy.maximum_delay_difference(
             "ecar",
             "syslog",
         )
-        assert connection_syslog_event.timestamp > responder_source_time + observation_gap
+        assert connection_syslog_event.timestamp > responder_source_bound + observation_gap
 
     def test_failed_logon_ssh_syslog_follows_responder_process_source_time(self, activity_gen):
         """Typed failed SSH auth shares the responder process observation floor."""

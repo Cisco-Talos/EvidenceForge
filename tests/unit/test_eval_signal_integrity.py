@@ -42,6 +42,17 @@ SCENARIOS_DIR = Path(__file__).parent.parent / "fixtures" / "scenarios"
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
+CAUSALITY_SUB_SCORE_KEYS = [
+    "causal_ordering",
+    "event_presence",
+    "indicator_accuracy",
+    "pivot_linkability",
+    "temporal_integrity",
+    "storyline_trace_coverage",
+    "intent_reconciliation",
+    "effect_reconciliation",
+]
+
 
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
     return ParsedRecord(
@@ -1471,7 +1482,7 @@ class TestEndToEnd:
         assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 
     def test_with_retail_scenario(self):
         """Run scorer on existing good fixtures with real scenario."""
@@ -1494,4 +1505,4 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         # Should produce a score (may be low since fixtures don't match storyline)
         assert result.score is not None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS

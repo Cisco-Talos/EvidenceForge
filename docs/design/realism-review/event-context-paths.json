@@ -11327,6 +11327,159 @@
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
             "auth",
+            "dst_host",
+            "identity_plan",
+            "lifecycle"
+          ],
+          "event_type_expression": "EventKind.RDP_DISCONNECT",
+          "event_type_literals": [
+            "rdp_disconnect"
+          ],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 6592,
+          "scope": "ActivityGenerator._publish_exact_rdp_disconnect"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "auth",
+        "dst_host",
+        "identity_plan",
+        "lifecycle"
+      ],
+      "emitter_consumers": [
+        "windows_event_security"
+      ],
+      "event_type": "rdp_disconnect",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "All discovered authored, baseline, causal, and internal entries converge on one occurrence-construction family. Several bundles are thin facades, which is tracked as an architectural risk rather than a second output path.",
+        "classification": "single_canonical_path",
+        "owner": "named action bundle or its current ActivityGenerator executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 8413,
+          "scope": "EventDispatcher._require_state_neutral_type_five_projection"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 12105,
+          "scope": "EventDispatcher._validate_deferred_session_target_proofs"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "kind": "call_keyword",
+          "line": 6592,
+          "scope": "ActivityGenerator._publish_exact_rdp_disconnect"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_rdp_deferred_production.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
+            "dst_host",
+            "identity_plan",
+            "lifecycle",
+            "src_host"
+          ],
+          "event_type_expression": "spec.event_type.value",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/actions/network_transaction_planner.py",
+          "line": 937,
+          "resolved_dynamically": true,
+          "scope": "NetworkTransactionPlanner._deferred_session_dependent_builders"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "auth",
+        "dst_host",
+        "identity_plan",
+        "lifecycle",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "windows_event_security"
+      ],
+      "event_type": "rdp_reconnect",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "All discovered authored, baseline, causal, and internal entries converge on one occurrence-construction family. Several bundles are thin facades, which is tracked as an architectural risk rather than a second output path.",
+        "classification": "single_canonical_path",
+        "owner": "named action bundle or its current ActivityGenerator executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 5045,
+          "scope": "EventDispatcher._validate_external_deferred_dependent_binding"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 12103,
+          "scope": "EventDispatcher._validate_deferred_session_target_proofs"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 12556,
+          "scope": "EventDispatcher.prepare_deferred_session_publication_batch"
+        },
+        {
+          "file": "src/evidenceforge/generation/actions/network_connection.py",
+          "kind": "comparison",
+          "line": 1646,
+          "scope": "DeferredSessionNetworkAuthority._validate_rdp_dependent_occurrences"
+        },
+        {
+          "file": "src/evidenceforge/generation/actions/network_transaction_planner.py",
+          "kind": "comparison",
+          "line": 935,
+          "scope": "NetworkTransactionPlanner._deferred_session_dependent_builders"
+        },
+        {
+          "call": "DeferredSessionDependentOccurrenceSpec",
+          "file": "src/evidenceforge/generation/actions/rdp_session.py",
+          "kind": "call_keyword",
+          "line": 1790,
+          "scope": "RdpSessionActionBundle._prepare_exact_reconnect"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/windows.py",
+          "kind": "comparison",
+          "line": 1521,
+          "scope": "WindowsEventEmitter._render_rdp_transition"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_rdp_deferred_production.py"
+      ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
             "process",
             "registry",
             "src_host"

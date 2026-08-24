@@ -307,7 +307,7 @@ def _runtime_owned_linux_visibility_clamp(
     """Invoke the generator's strict Linux visibility clamp without full construction."""
 
     generator = object.__new__(ActivityGenerator)
-    generator.process_source_create_time = lambda _hostname, _pid: _START
+    generator.process_source_create_bound = lambda _system, _pid: _START
     return generator._clamp_after_visible_linux_process_create_with_runtime(
         _request().target_system,
         4242,

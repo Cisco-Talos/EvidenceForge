@@ -102,6 +102,12 @@ def _string_literals(node: ast.AST | None) -> set[str]:
         return set()
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return {node.value}
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "EventKind"
+    ):
+        return {node.attr.casefold()}
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         values: set[str] = set()
         for item in node.elts:
@@ -604,6 +610,10 @@ def _dynamic_constructor_types(
         return {name for name in emitter_event_types if name.startswith("smb_")} | {
             "smb_directory_enumeration"
         }
+    if scope.endswith("NetworkTransactionPlanner._deferred_session_dependent_builders"):
+        if "process" in constructor["contexts_attached_at_construction"]:
+            return {"process_create", "system_process_create"}
+        return {"logon", "rdp_reconnect", "ssh_session"}
     return set()
 
 

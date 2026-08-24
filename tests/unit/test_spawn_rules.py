@@ -85,7 +85,7 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
 
     original_time = state_manager.state.current_time
     if original_time is not None:
-        state_manager.set_current_time(original_time.replace(hour=10, minute=0, second=0))
+        state_manager.set_current_time(original_time - timedelta(hours=4))
     engine = object.__new__(GenerationEngine)
     engine.state_manager = state_manager
     engine._system_pids = {}
@@ -511,16 +511,18 @@ class TestWindowsProcessTreeRealism:
     ):
         """A stale explicit parent PID should be replaced before process allocation."""
         ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         logon_id = ag.generate_logon(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_time,
             logon_type=2,
         )
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.explorer_pid is not None
 
+        state_manager.set_current_time(logon_time + timedelta(seconds=2))
         stale_parent = state_manager.create_process(
             win_system.hostname,
             session.explorer_pid,
@@ -531,12 +533,16 @@ class TestWindowsProcessTreeRealism:
             logon_id,
         )
         ag._record_user_process(win_system, user, stale_parent, r"C:\Windows\System32\cmd.exe")
-        assert state_manager.end_process(win_system.hostname, stale_parent)
+        assert state_manager.end_process(
+            win_system.hostname,
+            stale_parent,
+            end_time=logon_time + timedelta(seconds=3),
+        )
 
         child_pid = ag.generate_process(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_time + timedelta(seconds=5),
             logon_id,
             r"C:\Windows\System32\ipconfig.exe",
             "ipconfig.exe /all",
@@ -553,23 +559,28 @@ class TestWindowsProcessTreeRealism:
     ):
         """Stale Explorer session pointers should be rematerialized for GUI children."""
         ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         logon_id = ag.generate_logon(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_time,
             logon_type=2,
         )
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.explorer_pid is not None
         stale_explorer = session.explorer_pid
-        assert state_manager.end_process(win_system.hostname, stale_explorer)
+        assert state_manager.end_process(
+            win_system.hostname,
+            stale_explorer,
+            end_time=logon_time + timedelta(seconds=4),
+        )
         session.explorer_pid = stale_explorer
 
         child_pid = ag.generate_process(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_time + timedelta(seconds=5),
             logon_id,
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
@@ -632,7 +643,11 @@ class TestWindowsProcessTreeRealism:
 
         for day in range(1, 17):
             event_time = start + timedelta(days=day)
-            state_manager.end_process(win_system.hostname, stale_parent)
+            state_manager.end_process(
+                win_system.hostname,
+                stale_parent,
+                end_time=event_time - timedelta(seconds=1),
+            )
             session.explorer_pid = stale_parent
             child_pid = ag.generate_process(
                 user,
@@ -1132,12 +1147,8 @@ class TestWindowsProcessTreeRealism:
 
         logon_id = ag.generate_logon(user, win_system, datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC))
 
-        # Capture dispatched events
-        dispatched = []
-        ag.dispatcher = Mock()
-        ag.dispatcher.dispatch_builder = lambda event: dispatched.append(event)
-
-        ag.generate_process(
+        mock_emitters["ecar"].emit.reset_mock()
+        pid = ag.generate_process(
             user,
             win_system,
             datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC),
@@ -1148,9 +1159,13 @@ class TestWindowsProcessTreeRealism:
         )
 
         # Find the process create event
-        proc_events = [e for e in dispatched if e.event_type == "process_create"]
-        assert len(proc_events) > 0
-        proc_ctx = proc_events[0].process
+        proc_ctx = next(
+            call.args[0].process
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == pid
+        )
         assert proc_ctx.parent_command_line != "", "parent_command_line should be populated"
         assert proc_ctx.parent_command_line != "-", "parent_command_line should not be '-'"
 
@@ -1198,10 +1213,13 @@ class TestWindowsProcessTreeRealism:
         logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         process_time = datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC)
 
-        logon_id = ag.generate_service_logon(
-            system=win_system,
-            time=logon_time,
-            service_account=svc_user.username,
+        state_manager.set_current_time(logon_time)
+        logon_id = state_manager.create_session(
+            username=svc_user.username,
+            system=win_system.hostname,
+            logon_type=5,
+            source_ip="-",
+            session_kind="service",
         )
         parent_pid = ag._resolve_parent(
             win_system,

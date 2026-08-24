@@ -50,6 +50,7 @@ def _process(image: str, command_line: str, start_time: datetime) -> RunningProc
 def _linux_interactive_shell(
     *,
     session_kind: str,
+    emitter_name: str = "ecar",
 ) -> tuple[ActivityGenerator, StateManager, System, User, str, int, list[object]]:
     start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
     state = StateManager()
@@ -58,8 +59,9 @@ def _linux_interactive_shell(
     emitter = Mock()
     emitter.can_handle.return_value = True
     emitter.emit.side_effect = lambda event: events.append(event)
-    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
-    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    emitters = {emitter_name: emitter}
+    dispatcher = EventDispatcher(state_manager=state, emitters=emitters)
+    generator = ActivityGenerator(state, emitters, dispatcher=dispatcher)
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
     system = System(
         hostname="LNX-01",
@@ -211,6 +213,151 @@ def _materialize_detached_process(
     )
     process, _receipt = generator._lifecycle_authority.materialize_process(plan)
     return process
+
+
+def test_explicit_foreground_connection_pid_remains_owned_by_caller() -> None:
+    """A connection cannot consume a caller-owned foreground process lifecycle."""
+
+    start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    state = StateManager()
+    events: list[object] = []
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    emitter.emit.side_effect = lambda event: events.append(event)
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="LNX-OWNER-01",
+        ip="10.10.2.31",
+        os="Ubuntu 22.04",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    process = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start,
+        image="/usr/bin/curl",
+        command_line="curl -s https://example.test/status",
+    )
+    generator._ip_to_system = {system.ip: system}
+
+    generator.generate_connection(
+        src_ip=system.ip,
+        dst_ip="93.184.216.34",
+        time=start + timedelta(milliseconds=500),
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=2.0,
+        orig_bytes=500,
+        resp_bytes=2_500,
+        pid=process.pid,
+        source_system=system,
+        conn_state="SF",
+        process_image=process.image,
+        suppress_application_side_effects=True,
+        suppress_prereq_dns=True,
+    )
+
+    assert state.get_process(system.hostname, process.pid) is process
+    lifecycle = generator._lifecycle_authority.registry.get_process(process.ecar_object_id)
+    assert lifecycle is not None
+    assert lifecycle.closed_at is None
+    assert not [event for event in events if event.event_type == "process_terminate"]
+
+    generator._generate_bounded_foreground_process_termination(
+        user=user,
+        system=system,
+        start_time=process.start_time,
+        pid=process.pid,
+        process_name=process.image,
+        logon_id=process.logon_id,
+        lifetime=(4.0, 4.0),
+        rng=random.Random(1),
+    )
+
+    assert state.get_process(system.hostname, process.pid) is None
+    lifecycle = generator._lifecycle_authority.registry.get_process(process.ecar_object_id)
+    assert lifecycle is not None
+    assert lifecycle.closed_at is not None
+    terminate_events = [event for event in events if event.event_type == "process_terminate"]
+    assert len(terminate_events) == 1
+    assert terminate_events[0].process is not None
+    assert terminate_events[0].process.pid == process.pid
+
+
+def test_replaced_explicit_connection_pid_uses_replacement_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A synthesized replacement does not inherit ownership of the rejected caller PID."""
+
+    start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    state = StateManager()
+    events: list[object] = []
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    emitter.emit.side_effect = lambda event: events.append(event)
+    dispatcher = EventDispatcher(state_manager=state, emitters={"ecar": emitter})
+    generator = ActivityGenerator(state, {"ecar": emitter}, dispatcher=dispatcher)
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="LNX-OWNER-02",
+        ip="10.10.2.32",
+        os="Ubuntu 22.04",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    caller_process = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start - timedelta(seconds=2),
+        image="/usr/bin/python3",
+        command_line="python3 analyst_job.py",
+    )
+    replacement_process = _materialize_detached_process(
+        generator,
+        state,
+        system,
+        user,
+        start_time=start - timedelta(seconds=1),
+        image="/usr/bin/curl",
+        command_line="curl -s https://resolver.example.test/status",
+    )
+    generator._ip_to_system = {system.ip: system}
+    monkeypatch.setattr(
+        generator,
+        "_infer_connection_pid",
+        lambda _system, _service, _port, _proto: replacement_process.pid,
+    )
+
+    generator.generate_connection(
+        src_ip=system.ip,
+        dst_ip="10.10.1.53",
+        time=start,
+        dst_port=53,
+        proto="udp",
+        service="dns",
+        duration=0.02,
+        orig_bytes=68,
+        resp_bytes=156,
+        pid=caller_process.pid,
+        source_system=system,
+        suppress_application_side_effects=True,
+        suppress_prereq_dns=True,
+    )
+
+    assert state.get_process(system.hostname, caller_process.pid) is caller_process
+    assert state.get_process(system.hostname, replacement_process.pid) is None
+    terminate_events = [event for event in events if event.event_type == "process_terminate"]
+    assert len(terminate_events) == 1
+    assert terminate_events[0].process is not None
+    assert terminate_events[0].process.pid == replacement_process.pid
 
 
 def test_compatibility_close_resolver_registers_late_direct_state_child() -> None:
@@ -628,6 +775,47 @@ def test_linux_shell_serializes_unrelated_foreground_children(session_kind: str)
         and event.process.pid == first_pid
     )
     assert creates["kubectl get nodes -o wide"] > first_termination
+
+
+def test_linux_foreground_release_is_independent_of_endpoint_renderer() -> None:
+    """A process termination must release its shell identically without eCAR."""
+
+    def next_start(emitter_name: str) -> datetime:
+        generator, _state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+            session_kind="interactive",
+            emitter_name=emitter_name,
+        )
+        start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+        first_pid = generator.generate_process(
+            user=user,
+            system=system,
+            time=start,
+            logon_id=logon_id,
+            process_name="/usr/bin/journalctl",
+            command_line="journalctl -u smb-server --since '30 min ago'",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            concurrency_group_id="foreground:first",
+        )
+        generator.generate_process_termination(
+            user=user,
+            system=system,
+            time=start + timedelta(seconds=8),
+            pid=first_pid,
+            process_name="/usr/bin/journalctl",
+            logon_id=logon_id,
+        )
+        return generator.reserve_linux_foreground_process_start(
+            system=system,
+            username=user.username,
+            logon_id=logon_id,
+            parent_pid=shell_pid,
+            requested_time=start + timedelta(seconds=1),
+            process_name="/usr/bin/apt-cache",
+            command_line="apt-cache policy openssl",
+        )
+
+    assert next_start("ecar") == next_start("syslog")
 
 
 def test_linux_shell_allows_pipeline_and_background_concurrency() -> None:

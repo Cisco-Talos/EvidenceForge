@@ -229,13 +229,13 @@ def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) ->
     GenerationEngine(filtered_scenario, filtered_dir).generate()
 
     filtered_data = {
-        str(path.relative_to(filtered_dir / "data")): path.read_bytes()
-        for path in sorted((filtered_dir / "data").rglob("*"))
-        if path.is_file()
+        str(path.relative_to(filtered_dir)): path.read_bytes()
+        for path in sorted(filtered_dir.rglob("*"))
+        if path.is_file() and "core-zeek" in path.relative_to(filtered_dir).parts
     }
-    full_common_data = {
-        relative: (full_dir / "data" / relative).read_bytes() for relative in filtered_data
-    }
+    assert filtered_data
+    assert any(relative.startswith("core-zeek/") for relative in filtered_data)
+    full_common_data = {relative: (full_dir / relative).read_bytes() for relative in filtered_data}
     assert full_common_data == filtered_data
     assert (full_dir / "GROUND_TRUTH.json").read_bytes() == (
         filtered_dir / "GROUND_TRUTH.json"
@@ -337,13 +337,15 @@ def test_linux_smb_common_outputs_ignore_format_filter(tmp_path: Path) -> None:
     GenerationEngine(filtered_scenario, filtered_dir).generate()
 
     filtered_data = {
-        str(path.relative_to(filtered_dir / "data")): path.read_bytes()
-        for path in sorted((filtered_dir / "data").rglob("*"))
+        str(path.relative_to(filtered_dir)): path.read_bytes()
+        for path in sorted(filtered_dir.rglob("*"))
         if path.is_file()
+        and ("core-zeek" in path.relative_to(filtered_dir).parts or path.name == "syslog.log")
     }
-    full_common_data = {
-        relative: (full_dir / "data" / relative).read_bytes() for relative in filtered_data
-    }
+    assert filtered_data
+    assert any(relative.startswith("core-zeek/") for relative in filtered_data)
+    assert any(relative.endswith("/syslog.log") for relative in filtered_data)
+    full_common_data = {relative: (full_dir / relative).read_bytes() for relative in filtered_data}
     assert full_common_data == filtered_data
     full_truth = json.loads((full_dir / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
     filtered_truth = json.loads((filtered_dir / "GROUND_TRUTH.json").read_text(encoding="utf-8"))

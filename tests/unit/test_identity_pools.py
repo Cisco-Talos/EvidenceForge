@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import random
-import sys
 
 import pytest
 
@@ -41,12 +40,6 @@ def _reset_identity_pool_caches() -> None:
     reset_external_actor_profiles_cache()
     reset_suspicious_benign_cache()
     reset_command_parameter_pools_cache()
-    for module_name, module in list(sys.modules.items()):
-        if not module_name.startswith("evidenceforge."):
-            continue
-        for attr_name in dir(module):
-            if attr_name.startswith("_CACHED"):
-                setattr(module, attr_name, None)
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +73,17 @@ def test_identity_pool_defaults_are_loaded() -> None:
     }
     unusual = pick_unusual_connection(random.Random(5))
     assert unusual["hostname"] in {entry["hostname"] for entry in suspicious["unusual_connections"]}
+
+
+def test_identity_pool_cache_reset_preserves_timing_profile_coordinator() -> None:
+    from evidenceforge.generation.activity import timing_profiles
+
+    coordinator = timing_profiles._CACHED_TIMING_PROFILES
+
+    _reset_identity_pool_caches()
+
+    assert timing_profiles._CACHED_TIMING_PROFILES is coordinator
+    assert timing_profiles.load_timing_profiles()
 
 
 def test_identity_pool_overlays_are_loaded(tmp_path, monkeypatch) -> None:

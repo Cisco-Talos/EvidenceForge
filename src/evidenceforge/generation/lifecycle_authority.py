@@ -103,6 +103,12 @@ from evidenceforge.generation.rdp_sessions import (
     RdpSessionAdmissionToken,
     RdpSessionPreparedCommit,
 )
+from evidenceforge.generation.smb_channels import (
+    SmbApplicationChannelManager,
+    SmbChannelAdmissionResult,
+    SmbChannelAdmissionToken,
+    SmbChannelPreparedCommit,
+)
 from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparation,
@@ -151,6 +157,7 @@ _ApplicationAdmissionToken = (
     ApplicationChannelAdmissionToken
     | HttpChannelAdmissionToken
     | ExplicitProxyAdmissionToken
+    | SmbChannelAdmissionToken
     | SshChannelAdmissionToken
     | RdpSessionAdmissionToken
 )
@@ -158,6 +165,7 @@ _ApplicationAdmissionResult = (
     ApplicationChannelAdmissionResult
     | HttpChannelAdmissionResult
     | ExplicitProxyAdmissionCommitResult
+    | SmbChannelAdmissionResult
     | SshChannelAdmissionResult
     | RdpSessionAdmissionResult
 )
@@ -165,6 +173,7 @@ _ApplicationPreparedCommit = (
     ApplicationChannelPreparedCommit
     | HttpChannelPreparedCommit
     | ExplicitProxyPreparedCommit
+    | SmbChannelPreparedCommit
     | SshChannelPreparedCommit
     | RdpSessionPreparedCommit
 )
@@ -916,7 +925,7 @@ class LifecycleProcessServiceClosureCompositeResult:
 class ApplicationChannelCompositeProof:
     """Normalized authenticated proof from one engine-owned application manager."""
 
-    manager_kind: Literal["protocol_neutral", "http", "explicit_proxy", "ssh", "rdp"]
+    manager_kind: Literal["protocol_neutral", "http", "explicit_proxy", "smb", "ssh", "rdp"]
     manager_id: str
     manager_receipt_token: str
     common_receipt_token: str
@@ -2572,7 +2581,7 @@ def _prepared_network_durable_capture_matches(
         or type(receipt) is not LifecyclePreparedNetworkReceipt
         or type(capture) is not NetworkConnectionIdentityCapture
         or type(facts) is not tuple
-        or len(facts) != 9
+        or len(facts) != 10
     ):
         return False
     try:
@@ -2591,6 +2600,7 @@ def _prepared_network_durable_capture_matches(
             _object_getattribute(capture, "_prepared_root"),
             _object_getattribute(capture, "_source_timing_preparation"),
             _object_getattribute(capture, "_prepared_dispatch"),
+            _object_getattribute(capture, "_persistent_smb_root_handoff"),
             _object_getattribute(capture, "_receipt"),
             _object_getattribute(capture, "_application_receipt"),
             _object_getattribute(capture, "_outcome"),
@@ -2608,9 +2618,10 @@ def _prepared_network_durable_capture_matches(
         and type(lifecycle_mode) is str
         and facts[1] == lifecycle_mode
         and facts[2] is root
-        and facts[5] is receipt
-        and type(facts[7]) is NetworkConnectionPublicationOutcome
-        and facts[8] is None
+        and facts[4] is None
+        and facts[6] is receipt
+        and type(facts[8]) is NetworkConnectionPublicationOutcome
+        and facts[9] is None
     )
 
 
@@ -3074,6 +3085,7 @@ class GeneratorLifecycleAuthority:
         self._application_registry: ApplicationChannelRegistry | None = None
         self._http_channel_manager: HttpApplicationChannelManager | None = None
         self._explicit_proxy_manager: ExplicitProxyChannelManager | None = None
+        self._smb_channel_manager: SmbApplicationChannelManager | None = None
         self._ssh_channel_manager: SshApplicationChannelManager | None = None
         self._rdp_session_manager: RdpReconnectStateManager | None = None
         self._network_runtime: NetworkTransactionRuntime | None = None
@@ -3771,6 +3783,17 @@ class GeneratorLifecycleAuthority:
         if current is not None and current is not manager:
             raise StateError("Lifecycle authority is already bound to another proxy manager")
         self._explicit_proxy_manager = manager
+
+    def bind_smb_channel_manager(self, manager: SmbApplicationChannelManager) -> None:
+        """Bind the one engine-owned SMB terminal-batch verifier."""
+
+        if type(manager) is not SmbApplicationChannelManager:
+            raise TypeError("Lifecycle authority requires a typed SMB channel manager")
+        self.bind_application_channel_registry(manager.application_registry)
+        current = self._smb_channel_manager
+        if current is not None and current is not manager:
+            raise StateError("Lifecycle authority is already bound to another SMB manager")
+        self._smb_channel_manager = manager
 
     def bind_ssh_channel_manager(self, manager: SshApplicationChannelManager) -> None:
         """Bind the one engine-owned SSH sidecar verifier."""
@@ -4735,6 +4758,14 @@ class GeneratorLifecycleAuthority:
             if token.kind == "request":
                 return tunnel.client_transport_id, ()
             raise StateError(f"Unsupported explicit-proxy admission kind {token.kind!r}")
+        if isinstance(token, SmbChannelAdmissionToken):
+            manager = self._smb_channel_manager
+            if manager is None or not manager.authenticates_admission_token(token):
+                raise StateError("Connection composite has no authentic SMB admission token")
+            identity = self._common_application_token_identity(token.application_token)
+            if identity.protocol != "smb":
+                raise StateError("SMB admission's common channel has another protocol")
+            return identity.binding.transport_id, ()
         if isinstance(token, SshChannelAdmissionToken):
             manager = self._ssh_channel_manager
             if manager is None or not manager.authenticates_admission_token(token):
@@ -4849,6 +4880,7 @@ class GeneratorLifecycleAuthority:
             receipt.kind,
             receipt.channel_id,
             receipt.operation_id,
+            receipt.operation_ids,
             receipt.snapshot,
             receipt.close_token,
             receipt.receipt_token,
@@ -4898,6 +4930,26 @@ class GeneratorLifecycleAuthority:
                 prerequisite_transport_ids=receipt.prerequisite_transport_ids,
                 sidecar_result_digest=receipt.sidecar_result_digest,
             )
+        if isinstance(token, SmbChannelAdmissionToken):
+            manager = self._smb_channel_manager
+            if (
+                manager is None
+                or type(result) is not SmbChannelAdmissionResult
+                or not manager.authenticates_admission_result(result)
+            ):
+                raise AssertionError("SMB application commit returned an incompatible result")
+            receipt = result.receipt
+            return ApplicationChannelCompositeProof(
+                manager_kind="smb",
+                manager_id=receipt.manager_id,
+                manager_receipt_token=receipt.receipt_token,
+                common_receipt_token=receipt.application_receipt_token,
+                channel_id=receipt.channel_id,
+                operation_id=receipt.operation_id,
+                current_transport_id=receipt.transport_id,
+                prerequisite_transport_ids=(),
+                sidecar_result_digest=receipt.sidecar_result_digest,
+            )
         if isinstance(token, SshChannelAdmissionToken):
             manager = self._ssh_channel_manager
             if manager is None or not isinstance(result, SshChannelAdmissionResult):
@@ -4935,10 +4987,14 @@ class GeneratorLifecycleAuthority:
                 sidecar_result_digest=receipt.sidecar_result_digest,
             )
         registry = self._application_registry
-        if registry is None or not isinstance(result, ApplicationChannelAdmissionResult):
+        if (
+            registry is None
+            or type(result) is not ApplicationChannelAdmissionResult
+            or not registry.authenticates_admission_result(result)
+        ):
             raise AssertionError("Common application commit returned an incompatible result")
         receipt = result.receipt
-        if receipt is None or not registry.authenticates_admission_receipt(receipt):
+        if receipt is None:
             raise AssertionError("Common application registry returned no authentic receipt")
         return ApplicationChannelCompositeProof(
             manager_kind="protocol_neutral",
@@ -5051,6 +5107,11 @@ class GeneratorLifecycleAuthority:
             if manager is None:
                 raise StateError("Lifecycle authority has no bound proxy manager")
             return stack.enter_context(manager.prepared_admission(token))
+        if isinstance(token, SmbChannelAdmissionToken):
+            manager = self._smb_channel_manager
+            if manager is None:
+                raise StateError("Lifecycle authority has no bound SMB manager")
+            return stack.enter_context(manager.prepared_admission(token))
         if isinstance(token, SshChannelAdmissionToken):
             manager = self._ssh_channel_manager
             if manager is None:
@@ -5079,6 +5140,10 @@ class GeneratorLifecycleAuthority:
                     manager.cancel_prepared_admission(token)
             elif isinstance(token, ExplicitProxyAdmissionToken):
                 manager = self._explicit_proxy_manager
+                if manager is not None:
+                    manager.cancel_prepared_admission(token)
+            elif isinstance(token, SmbChannelAdmissionToken):
+                manager = self._smb_channel_manager
                 if manager is not None:
                     manager.cancel_prepared_admission(token)
             elif isinstance(token, SshChannelAdmissionToken):
@@ -5125,6 +5190,7 @@ class GeneratorLifecycleAuthority:
                 ApplicationChannelAdmissionResult,
                 HttpChannelAdmissionResult,
                 ExplicitProxyAdmissionCommitResult,
+                SmbChannelAdmissionResult,
                 SshChannelAdmissionResult,
                 RdpSessionAdmissionResult,
             ),
@@ -5199,6 +5265,7 @@ class GeneratorLifecycleAuthority:
                         ApplicationChannelAdmissionResult,
                         HttpChannelAdmissionResult,
                         ExplicitProxyAdmissionCommitResult,
+                        SmbChannelAdmissionResult,
                         SshChannelAdmissionResult,
                         RdpSessionAdmissionResult,
                     ),
@@ -5431,6 +5498,7 @@ class GeneratorLifecycleAuthority:
         capture: object,
         facts: tuple[object, ...],
         *,
+        expected_persistent_smb_root_handoff: object | None = None,
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
         ),
@@ -5444,6 +5512,8 @@ class GeneratorLifecycleAuthority:
             type(root) is not PreparedNetworkTransactionRoot
             or type(result) is not LifecyclePreparedNetworkResult
             or type(facts) is not tuple
+            or len(facts) != 10
+            or facts[5] is not expected_persistent_smb_root_handoff
         ):
             raise StateError("Prepared-network durable capture binding is malformed")
         root_id = id(root)

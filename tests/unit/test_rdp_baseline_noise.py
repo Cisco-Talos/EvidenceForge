@@ -35,9 +35,11 @@ from unittest.mock import Mock, call, patch
 
 import pytest
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.rdp_session import (
     RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS,
-    RDP_TRANSPORT_DURATION_MAX_SECONDS,
+    rdp_action_deadline_source_tail,
+    rdp_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.engine import GenerationEngine
@@ -683,7 +685,9 @@ class TestRDPBaselineNoise:
         actor = User(username="admin", full_name="Admin", email="admin@corp.com")
         scenario_end = datetime(2024, 1, 15, 12, tzinfo=UTC)
         scenario_limit = (
-            scenario_end - timedelta(seconds=RDP_TRANSPORT_DURATION_MAX_SECONDS) - epsilon
+            scenario_end
+            - rdp_action_deadline_source_tail()
+            - timedelta(seconds=rdp_action_deadline_transport_headroom_seconds())
         )
         child_time = scenario_limit - timedelta(seconds=30)
         frontier = {"value": scenario_limit - 2 * epsilon}
@@ -700,6 +704,10 @@ class TestRDPBaselineNoise:
             os="Windows Server 2022",
             type="server",
         )
+        assert harness._authored_rdp_session_end_plan() == SessionEndPlan(
+            scenario_end,
+            "action_bundle",
+        )
 
         shifted, cumulative = harness._shift_authored_rdp_child_after_frontier(
             actor=actor,
@@ -712,7 +720,18 @@ class TestRDPBaselineNoise:
         assert shifted == scenario_limit - epsilon
         assert cumulative == shifted - child_time
 
-        rejected_frontier = scenario_limit - epsilon
+        boundary_frontier = scenario_limit - epsilon
+        frontier["value"] = boundary_frontier
+        shifted, _cumulative = harness._shift_authored_rdp_child_after_frontier(
+            actor=actor,
+            spec=spec,
+            system=system,
+            child_time=child_time,
+            cumulative_shift=timedelta(0),
+        )
+        assert shifted == scenario_limit
+
+        rejected_frontier = scenario_limit
         frontier["value"] = rejected_frontier
         with pytest.raises(StateError, match="cannot be serialized before the scenario end"):
             harness._shift_authored_rdp_child_after_frontier(
@@ -729,9 +748,12 @@ class TestRDPBaselineNoise:
             milliseconds=RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS
         )
         harness.end_time = explicit_end + timedelta(hours=2)
-        harness._session_end_plan_for_current_start = lambda: SimpleNamespace(
-            canonical_end=explicit_end
+        explicit_plan = SessionEndPlan(
+            canonical_end=explicit_end,
+            authority="explicit_storyline",
+            storyline_event_id="evt-logoff",
         )
+        harness._session_end_plan_for_current_start = lambda: explicit_plan
         explicit_child_time = explicit_limit - timedelta(seconds=30)
         frontier["value"] = explicit_limit - 2 * epsilon
         shifted, _cumulative = harness._shift_authored_rdp_child_after_frontier(
@@ -775,7 +797,7 @@ class TestRDPBaselineNoise:
         scenario = _make_scenario([source, target])
         actor = scenario.environment.users[0]
         state_manager = StateManager()
-        scenario_end = datetime(2024, 1, 15, 12, tzinfo=UTC)
+        scenario_end = datetime(2024, 1, 15, 11, 1, 10, tzinfo=UTC)
         frontier = {"value": datetime(2024, 1, 15, 10, tzinfo=UTC)}
         harness = object.__new__(StorylineMixin)
         harness.start_time = scenario.time_window.start
@@ -844,6 +866,91 @@ class TestRDPBaselineNoise:
                 cumulative_shift=timedelta(0),
             )
         assert frontier["value"] == rdp_minimum
+
+    def test_authored_rdp_entry_paths_receive_action_owned_scenario_deadline(self):
+        """Every authored compatibility entrypoint must hand RDP the same hard fence."""
+
+        actor = User(username="admin", full_name="Admin", email="admin@corp.com")
+        target = System(
+            hostname="APP-01",
+            ip="10.10.20.20",
+            os="Windows Server 2022",
+            type="server",
+        )
+        event_time = datetime(2024, 1, 15, 10, tzinfo=UTC)
+        scenario_end = event_time + timedelta(hours=2)
+        expected_plan = SessionEndPlan(scenario_end, "action_bundle")
+        activity_generator = Mock()
+        activity_generator.generate_logon.return_value = "0xabc"
+        state_manager = Mock()
+        state_manager.get_session.return_value = None
+        world_planner = Mock()
+        world_planner.bootstrap_user_session.return_value = SimpleNamespace(
+            session=None,
+            network_uid="Crdp00000000001",
+        )
+        harness = object.__new__(StorylineMixin)
+        harness.end_time = scenario_end
+        harness.scenario = SimpleNamespace(
+            environment=SimpleNamespace(
+                domain="corp.local",
+                service_accounts=[],
+                systems=[target],
+                users=[actor],
+            )
+        )
+        harness.state_manager = state_manager
+        harness.activity_generator = activity_generator
+        harness.dispatcher = SimpleNamespace(storyline_cluster_id=None, visibility_engine=None)
+        harness.world_model = SimpleNamespace(system_for_ip=lambda _source_ip: None)
+        harness.world_planner = world_planner
+        harness._session_end_plan_for_current_start = lambda: None
+        harness._record_storyline_logon = Mock()
+
+        external_source = "198.51.100.10"
+        harness._execute_typed_event(
+            spec=LogonEventSpec(logon_type=10, source_ip=external_source),
+            actor=actor,
+            system=target,
+            time=event_time,
+            activity="remote interactive logon",
+            explicit_types={"logon"},
+        )
+        assert activity_generator.generate_logon.call_args.kwargs["session_end_plan"] == (
+            expected_plan
+        )
+
+        harness._execute_typed_event(
+            spec=CredentialSprayEventSpec(
+                count=2,
+                interval="1m",
+                jitter=0,
+                source_ip=external_source,
+                target_accounts=[actor.username],
+                logon_type=10,
+                success={"account": actor.username, "after": 1},
+            ),
+            actor=actor,
+            system=target,
+            time=event_time + timedelta(minutes=10),
+            activity="successful RDP credential spray",
+            explicit_types={"credential_spray"},
+        )
+        assert activity_generator.generate_logon.call_args.kwargs["session_end_plan"] == (
+            expected_plan
+        )
+
+        harness._execute_typed_event(
+            spec=RdpSessionEventSpec(source_ip=external_source),
+            actor=actor,
+            system=target,
+            time=event_time + timedelta(minutes=20),
+            activity="open RDP session",
+            explicit_types={"rdp_session"},
+        )
+        assert world_planner.bootstrap_user_session.call_args.kwargs["session_end_plan"] == (
+            expected_plan
+        )
 
     def test_prepared_rdp_anchors_obey_consecutive_hour_windows(self):
         """Adjacent hourly batches must retain disjoint final RDP anchor windows."""
@@ -1248,30 +1355,24 @@ class TestRDPBaselineNoise:
             engine = GenerationEngine(scenario, Path(tmpdir))
             engine._initialize()
 
-            rdp_connections = []
-            original = engine.dispatcher.dispatch
+            # Generate multiple hours for determinism. RDP owns a deferred-session
+            # publication batch, so verify the canonical transport materialized in
+            # State rather than spying on the legacy single-event dispatch path.
+            for h in range(4):
+                hour = datetime(2024, 1, 15, 10 + h, 0, 0, tzinfo=UTC)
+                engine._generate_system_traffic(hour)
 
-            def tracking(event):
-                if (
-                    event.event_type == "connection"
-                    and event.network is not None
-                    and event.network.dst_port == 3389
-                ):
-                    rdp_connections.append(event)
-                return original(event)
-
-            with patch.object(engine.dispatcher, "dispatch", side_effect=tracking):
-                # Generate multiple hours for determinism
-                for h in range(4):
-                    hour = datetime(2024, 1, 15, 10 + h, 0, 0, tzinfo=UTC)
-                    engine._generate_system_traffic(hour)
+            rdp_connections = [
+                connection
+                for connection in engine.state_manager.list_open_connections()
+                if connection.dst_port == 3389
+            ]
 
             assert len(rdp_connections) > 0, "No RDP baseline connections in 4 hours of generation"
             for conn in rdp_connections:
-                assert conn.network is not None
-                assert conn.network.dst_port == 3389
-                assert conn.network.protocol == "tcp"
-                assert conn.network.service == "rdp"
+                assert conn.dst_port == 3389
+                assert conn.protocol == "tcp"
+                assert conn.dst_ip in {"10.10.20.10", "10.10.100.10"}
 
     def test_no_rdp_noise_for_workstations_only(self):
         """Environment with only workstations should not get RDP admin connections."""
@@ -1285,21 +1386,13 @@ class TestRDPBaselineNoise:
             engine = GenerationEngine(scenario, Path(tmpdir))
             engine._initialize()
 
-            rdp_connections = []
-            original = engine.dispatcher.dispatch
-
-            def tracking(event):
-                if (
-                    event.event_type == "connection"
-                    and event.network is not None
-                    and event.network.dst_port == 3389
-                ):
-                    rdp_connections.append(event)
-                return original(event)
-
-            with patch.object(engine.dispatcher, "dispatch", side_effect=tracking):
-                hour = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-                engine._generate_system_traffic(hour)
+            hour = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            engine._generate_system_traffic(hour)
+            rdp_connections = [
+                connection
+                for connection in engine.state_manager.list_open_connections()
+                if connection.dst_port == 3389
+            ]
 
             assert len(rdp_connections) == 0, (
                 f"Got RDP connections to workstations: {rdp_connections}"

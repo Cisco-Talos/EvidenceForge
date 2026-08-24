@@ -55,6 +55,7 @@ from evidenceforge.generation.actions import (
     dns_transport_close_headroom_seconds,
     http_response_parent_duration_floor,
     linux_sudo_intrinsic_close_headroom,
+    network_transport_open_positive_headroom_seconds,
     ntp_transport_close_headroom_seconds,
     proxy_transaction_close_bound_seconds,
     tls_completed_extension_headroom_seconds,
@@ -136,6 +137,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     remote_auth_transport_max_duration_seconds,
 )
 from evidenceforge.generation.world_model import (
+    SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
     HostCapability,
     WorldModel,
     _PreparedRdpSessionBootstrap,
@@ -170,8 +172,6 @@ _BASELINE_EMAIL_PROFILE_PORTS = {25, 465, 587, 993, 995}
 _BASELINE_BROWSER_CLOSE_HEADROOM = timedelta(seconds=23)
 _BASELINE_EMAIL_DELIVERY_HEADROOM = timedelta(seconds=32)
 _BASELINE_AUTHORED_ROUTE_REQUEST_GAP_SECONDS = 2.4
-# BaselineTimingPlanner.packet_observation_delta samples through max_ms + 997 us.
-_BASELINE_NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS = 997
 
 
 def _require_seeded_windows_parent(
@@ -2227,26 +2227,31 @@ class BaselineMixin:
         scenario_start = getattr(self, "start_time", None)
         if scenario_start is not None and process_time < scenario_start:
             process_time = time - timedelta(milliseconds=500)
+
+        def generate_process() -> int:
+            self.state_manager.set_current_time(time)
+            return self.activity_generator.generate_system_process(
+                system=system,
+                time=process_time,
+                process_name=image,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+                source_visible_by=(
+                    time - timedelta(microseconds=1) if exclusive_end is not None else None
+                ),
+            )
+
         termination_time = None
-        if bounded_lifetime is not None and exclusive_end is not None:
-            termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
-            if termination_time > exclusive_end:
-                return None
-        self.state_manager.set_current_time(time)
-        pid = self.activity_generator.generate_system_process(
-            system=system,
-            time=process_time,
-            process_name=image,
-            command_line=command_line,
-            parent_pid=parent_pid,
-            username="SYSTEM",
-            source_visible_by=(
-                time - timedelta(microseconds=1) if exclusive_end is not None else None
-            ),
-        )
+        pid = generate_process() if bounded_lifetime is not None and exclusive_end is None else None
         if bounded_lifetime is not None:
-            if termination_time is None:
-                termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
+            termination_time = time + timedelta(seconds=rng.uniform(*bounded_lifetime))
+            if exclusive_end is not None and termination_time > exclusive_end:
+                return None
+        if pid is None:
+            pid = generate_process()
+        if bounded_lifetime is not None:
+            assert termination_time is not None
             self.activity_generator.generate_system_process_termination(
                 system=system,
                 time=termination_time,
@@ -3953,6 +3958,34 @@ class BaselineMixin:
                 severity=6,
             )
 
+    def _execute_authored_events_for_hour(self, current_hour: datetime) -> None:
+        """Execute same-hour storyline and red-herring entries in nominal time order."""
+
+        hour_key = int(current_hour.timestamp())
+        scheduled: list[tuple[datetime, Literal["storyline", "red_herring"], int]] = []
+        scheduled.extend(
+            (event_time, "storyline", event_idx)
+            for event_time, event_idx in self._storyline_by_hour.get(hour_key, [])
+        )
+        scheduled.extend(
+            (event_time, "red_herring", event_idx)
+            for event_time, event_idx in self._red_herring_by_hour.get(hour_key, [])
+        )
+        scheduled.sort(key=lambda item: (item[0], item[1] == "red_herring"))
+
+        for event_time, event_kind, event_idx in scheduled:
+            if event_kind == "storyline":
+                executed = self._storyline_executed
+                execute = self._execute_single_storyline_event
+            else:
+                executed = self._red_herring_executed
+                execute = self._execute_single_red_herring_event
+            if event_idx in executed:
+                continue
+            self.activity_generator.finalize_ssh_session_lifecycles(event_time)
+            execute(event_idx)
+            executed.add(event_idx)
+
     def _generate_hour(
         self,
         current_hour: datetime,
@@ -4047,18 +4080,7 @@ class BaselineMixin:
         self._generate_firewall_deny_baseline(current_hour)
 
         if emit_storylines:
-            hour_key = int(current_hour.timestamp())
-            for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
-                if event_idx not in self._storyline_executed:
-                    self.activity_generator.finalize_ssh_session_lifecycles(_event_time)
-                    self._execute_single_storyline_event(event_idx)
-                    self._storyline_executed.add(event_idx)
-
-            for _event_time, event_idx in self._red_herring_by_hour.get(hour_key, []):
-                if event_idx not in self._red_herring_executed:
-                    self.activity_generator.finalize_ssh_session_lifecycles(_event_time)
-                    self._execute_single_red_herring_event(event_idx)
-                    self._red_herring_executed.add(event_idx)
+            self._execute_authored_events_for_hour(current_hour)
 
         self._terminate_stale_processes(current_hour)
         self._generate_logoffs_for_hour(enabled_users, current_hour, planned_logoffs)
@@ -4232,15 +4254,8 @@ class BaselineMixin:
             raise ValueError("canonical network close bound must be finite and non-negative")
         if not self._baseline_pass_is_terminal(current_hour):
             return canonical_close_bound_seconds
-        transport_open_window = get_timing_window(
-            "network.connection_start_jitter",
-            default_min_ms=0,
-            default_max_ms=0,
-            default_position="after",
-        )
         transport_open_headroom = timedelta(
-            milliseconds=transport_open_window.max_ms,
-            microseconds=_BASELINE_NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_MICROSECONDS,
+            seconds=network_transport_open_positive_headroom_seconds(),
         )
         canonical_rendered_close_bound_seconds = (
             canonical_close_bound_seconds + transport_open_headroom.total_seconds()
@@ -4523,6 +4538,7 @@ class BaselineMixin:
         current_hour: datetime,
         *,
         transport_start: datetime,
+        post_activity_support_seconds: float = 30.0,
     ) -> SessionEndPlan | None:
         """Plan a bounded optional SSH family or reject it before bootstrap."""
 
@@ -4533,6 +4549,7 @@ class BaselineMixin:
             end=transport_start
             + timedelta(
                 seconds=ssh_action_deadline_transport_headroom_seconds(
+                    min_duration_seconds=post_activity_support_seconds,
                     source_deadline=pass_end,
                     source_timing_planner=self._baseline_source_timing_planner(),
                     network_observation_planner=(self._baseline_network_observation_planner()),
@@ -11485,13 +11502,17 @@ class BaselineMixin:
                         )
                         end_ts = (
                             gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
-                            if terminal_pass and lifetime is not None
+                            if lifetime is not None
                             else None
                         )
-                        if end_ts is not None and not self._baseline_pass_admits(
-                            current_hour,
-                            start=gpo_ts,
-                            end=end_ts,
+                        if (
+                            terminal_pass
+                            and end_ts is not None
+                            and not self._baseline_pass_admits(
+                                current_hour,
+                                start=gpo_ts,
+                                end=end_ts,
+                            )
                         ):
                             continue
                         self.state_manager.set_current_time(gpo_ts)
@@ -11508,12 +11529,7 @@ class BaselineMixin:
                                 else None
                             ),
                         )
-                        if lifetime is not None:
-                            if not terminal_pass:
-                                end_ts = gpo_ts + timedelta(
-                                    seconds=occurrence_rng.uniform(*lifetime)
-                                )
-                            assert end_ts is not None
+                        if end_ts is not None:
                             self.state_manager.set_current_time(end_ts)
                             self.activity_generator.generate_system_process_termination(
                                 system=system,
@@ -11664,6 +11680,7 @@ class BaselineMixin:
                             session_end_plan = self._baseline_ssh_terminal_end_plan(
                                 current_hour,
                                 transport_start=ts,
+                                post_activity_support_seconds=(SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
                             )
                             if session_end_plan is None:
                                 continue

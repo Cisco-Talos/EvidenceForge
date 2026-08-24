@@ -257,6 +257,7 @@ class ScenarioValidator:
         self._validate_adversarial_payload_events()
         self._validate_email_config()
         self._validate_storyline_linkability()
+        self._validate_account_creation_targets()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
         self._validate_storyline_time_window()
@@ -3609,6 +3610,52 @@ class ScenarioValidator:
             if hasattr(spec, "dst_ip") and spec.dst_ip:
                 ips.add(spec.dst_ip)
         return ips
+
+    def _validate_account_creation_targets(self) -> None:
+        """Reject account creation for identities that already exist."""
+        from evidenceforge.generation.identity import IdentityDirectory
+
+        initial_accounts = {
+            name.casefold() for name in IdentityDirectory.from_scenario(self.scenario).sid_registry
+        }
+        initial_accounts.update(
+            account.username.casefold() for account in self.scenario.environment.stale_accounts
+        )
+        claimed_accounts = set(initial_accounts)
+
+        for section_name, events in (
+            ("storyline", self.scenario.storyline or []),
+            ("red_herrings", self.scenario.red_herrings),
+        ):
+            for event_index, event in enumerate(events):
+                for spec_index, spec in enumerate(event.events):
+                    if spec.type != "account_created":
+                        continue
+                    target = spec.target_username
+                    target_key = target.casefold()
+                    if target_key in claimed_accounts:
+                        qualifier = (
+                            "already exists in the effective identity directory"
+                            if target_key in initial_accounts
+                            else "is created more than once"
+                        )
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=(
+                                    f"{section_name}.{event_index}.events."
+                                    f"{spec_index}.target_username"
+                                ),
+                                message=f"Account creation target '{target}' {qualifier}",
+                                suggestion=(
+                                    "Use a new target_username for the created account. "
+                                    "Delete-and-recreate identity lifecycles are not currently "
+                                    "supported."
+                                ),
+                            )
+                        )
+                        continue
+                    claimed_accounts.add(target_key)
 
     def _validate_storyline_causal_order(self) -> None:
         """Check causal ordering of storyline event types.

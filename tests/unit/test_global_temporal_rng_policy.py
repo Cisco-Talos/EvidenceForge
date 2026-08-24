@@ -37,13 +37,14 @@ _RAW_TEMPORAL_METHODS = frozenset(
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 4|actions/network_transaction_planner.py|_execute|uniform
 1|actions/rdp_session.py|execute|uniform
+1|actions/smb_activity.py|_directional_transport_byte_allocations|uniform
 1|actions/smb_activity.py|_duration|uniform
 1|actions/smb_activity.py|_operation_timing|lognormvariate
 3|actions/smb_activity.py|_operation_timing|uniform
 1|actions/smb_activity.py|_raw_session_setup_seconds|uniform
-1|actions/smb_activity.py|_transport_bytes|uniform
 1|actions/smb_activity.py|_updated_size|uniform
 1|actions/ssh_session.py|_plan_transport|uniform
+1|actions/ssh_session.py|_preview_deferred_transport_duration|uniform
 1|activity/browsing_session.py|_response_size_for_status_code|uniform
 8|activity/generator.py|_dns_rtt|uniform
 1|activity/generator.py|_email_date_header_for_route|uniform
@@ -72,11 +73,9 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|activity/generator.py|_execute_email_access_bundle|uniform
 1|activity/generator.py|_execute_email_delivery_bundle|uniform
 1|activity/generator.py|_execute_kerberos_preauth_failure_bundle|uniform
-1|activity/generator.py|_execute_logoff_bundle|uniform
 1|activity/generator.py|_execute_machine_account_logon_bundle|uniform
 1|activity/generator.py|_execute_nmap_command_probe_bundle|uniform
 1|activity/generator.py|_execute_process_create_bundle|uniform
-1|activity/generator.py|_execute_process_termination_bundle|uniform
 2|activity/generator.py|_external_sender_received_headers|uniform
 1|activity/generator.py|_factory|uniform
 1|activity/generator.py|_generate_bounded_foreground_process_termination|uniform
@@ -87,7 +86,9 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|activity/generator.py|_nmap_concurrent_probe_offsets|uniform
 4|activity/generator.py|_nmap_probe_profile|uniform
 1|activity/generator.py|_ntp_payload_accounting|uniform
+1|activity/generator.py|_plan_generic_logoff_process_closes|uniform
 4|activity/generator.py|_postfix_delays|uniform
+1|activity/generator.py|_process_termination_delay_after_activity_seconds|uniform
 1|activity/generator.py|_remember_system_connection_owner_finalizer|uniform
 8|activity/generator.py|_schedule_bash_history_time|uniform
 2|activity/generator.py|_smtp_transfer_sizes|uniform
@@ -121,6 +122,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|engine/baseline.py|_calculate_events_for_hour|gauss
 1|engine/baseline.py|_distribute_events_in_hour|uniform
 1|engine/baseline.py|_distribute_events_in_hour_uniform|uniform
+1|engine/baseline.py|_dns_query_seconds_for_hour|gauss
 4|engine/baseline.py|_emit_anacron_lifecycle|uniform
 1|engine/baseline.py|_emit_browsing_session|uniform
 1|engine/baseline.py|_emit_conn|gauss
@@ -143,7 +145,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|engine/baseline.py|_generate_scheduled_tasks|uniform
 3|engine/baseline.py|_generate_stale_account_noise|uniform
 3|engine/baseline.py|_generate_suspicious_noise|uniform
-6|engine/baseline.py|_generate_system_traffic|gauss
+5|engine/baseline.py|_generate_system_traffic|gauss
 23|engine/baseline.py|_generate_system_traffic|uniform
 1|engine/baseline.py|_generate_user_traffic_affinity|uniform
 1|engine/baseline.py|_gpo_refresh_interval_seconds|uniform
@@ -197,7 +199,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 3|storage_world.py|_file_size|uniform
 1|world_model.py|_align_rdp_source_after_future_workstation_session|uniform
 2|world_model.py|_bootstrap_ssh_session|uniform
-3|world_model.py|bootstrap_user_session|uniform
+2|world_model.py|bootstrap_user_session|uniform
 4|world_model.py|ensure_connection_process|uniform
 """.strip()
 
@@ -286,7 +288,7 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 164
+    assert len(caps) == 166
     assert sum(caps.values()) == 359
     assert not observed - caps
     assert len(observed) <= len(caps)

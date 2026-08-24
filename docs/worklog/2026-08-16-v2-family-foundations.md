@@ -1890,6 +1890,13 @@ deliberation, the effectiveness dashboard, and an A/B comparison to Loop 30 if s
 is ambiguous. Only after those proofs, a clean dev-sync, no-version-diff check, push, and draft PR to
 ``dev`` satisfy delivery.
 
+This completion contract was superseded on 2026-08-24 by the user-approved bounded closure plan.
+That plan requires exactly two final deterministic generations, one quantitative evaluation, one
+isolated four-person blind panel with protocol-triggered deliberation, durable reports, final hygiene
+checks, and one local commit. It does not add an A/B panel or dashboard, and it does not authorize
+dev sync, push, or a draft PR. The fresh blind panel records the outcome honestly; improvement
+against Loop 30 is no longer asserted as a closure condition.
+
 ### Bounded SSH source-port retention landed
 
 The first concrete completion-audit gap is closed in commit ``541ce9b4``
@@ -2643,3 +2650,74 @@ validation reports zero errors, warnings, or informational findings across 93 fi
 scenario's existing advisory warnings. The official full normal pytest suite, the separately run
 22-node slow suite, two deterministic generation/evaluation runs, and the final blind panel remain
 to be executed from this clean integrated revision.
+
+### Final release-gateway execution
+
+The bounded release-gateway plan completed the official test evidence without reinstating the
+permanently retired exhaustive foundation scale matrix or any comparable substitute. The normal
+suite passed 10,087 tests with 49 skips and 10 warnings in 6,422.41 seconds. The consolidated
+post-tail regression selection passed 3,112 tests with 22 skips and 10 warnings. The separate
+22-node slow selection produced 20 functional passes and two explicit non-release skips. These
+results supplement the focused owner/adversarial evidence above; no broad suite was rerun merely
+to duplicate an already-green gate.
+
+Two final real-generation failures exposed narrow terminal-window ownership gaps and were fixed at
+their owning layers before the definitive bundles were produced:
+
+- Same-hour authored storyline and red-herring entries now execute in nominal timestamp order, so
+  a later storyline-owned RDP logoff cannot advance the lifecycle frontier ahead of an earlier
+  red-herring RDP session. Authored RDP compatibility paths also receive an action-owned scenario
+  deadline and reserve the complete source/transport close budget before mutation. The combined
+  focused RDP regression selection passes 7/7, and independent review returned CLEAR with no
+  P0/P1/P2 finding.
+- Terminal organic Linux remote-administration SSH now reserves the WorldPlanner's full
+  90-second post-activity support before bootstrap. An optional late candidate is skipped before
+  State clock, session, or bundle mutation. The focused SSH selections pass 8/8 plus the dedicated
+  production-caller regression, and independent review returned CLEAR with no blocker.
+
+The definitive seed-42 bundle is
+``/private/tmp/eforge-v2-final-a12.HrzaXo``. An independent repeat under
+``PYTHONHASHSEED=99991`` is ``/private/tmp/eforge-v2-final-b1.Lxe3fn``. Each completed as an
+authoritative 117-file bundle and occupies 46,464 KiB. A recursive comparison found every data,
+artifact, ground-truth, resolved-scenario, collection, observation, storage, and artifact-manifest
+byte identical. Only ``GENERATION_MANIFEST.json`` differs, and its sole diff is the expected
+``created_at`` timestamp. Durable normalized manifest and data-tree digests are preserved in
+``docs/design/realism-review/v2-family-foundations-final/generation-evidence.json`` so this proof
+does not depend only on the temporary bundle paths.
+
+The one planned automated evaluation ran against the authoritative A12 bundle and passed all hard
+acceptance criteria: 88,187 records across 21 sources, overall score 96.89649234949579, and no
+flags. Pillars were parseability 99.9876399015728, plausibility 96.90923695030301, causality
+95.20215606567831, and timing 94.36176062514308. IDS integrity was 149/149, causal ordering
+11,295/11,295, intent reconciliation 108/108, and event presence 44/46. Lower but non-blocking
+diagnostic texture remains visible in pivot linkability, temporal coherence, and trace
+completeness; it is recorded as follow-on realism evidence rather than converted into another
+closure-time repair loop.
+
+### Final blind assessment and plan closure
+
+Four independent reviewers received only the common authenticity briefing, their own role, and the
+A12 data directory. Their frozen verdicts and synthetic-confidence scores were Threat Hunter
+Synthetic/66, Detection Engineer Synthetic/94, Network Forensics Inconclusive/47, and Host/EDR
+Synthetic/96. Average verdict confidence was 90.25; average synthetic confidence was 75.75. That
+is 6.25 points worse than this effort's immediate Loop 30 baseline at 69.5, while remaining 17.5
+points better than the later post-P1-blockers checkpoint at 93.25. The result is mixed by comparator
+and is not represented as a clean blind-improvement gate.
+
+Verdict disagreement and the 49-point score spread triggered the protocol's one bounded
+deliberation. After the endpoint evidence was cross-examined, all four final verdicts were Synthetic
+with scores 85, 95, 78, and 97 (average 88.75). The facilitator preserved the network family's
+strong result while concluding that widespread impossible Sysmon occurrence times, Windows
+lifecycle/identity gaps, and post-termination eCAR module loads determine the whole-dataset verdict.
+The independent initial average remains the trend measurement.
+
+The complete reports, deliberation, canonical score artifact, prioritized improvements, and
+automated-eval comparison are tracked under
+``docs/design/realism-review/v2-family-foundations-final/``. The current V2 foundation plan closes
+here: its official test, deterministic generation, automated acceptance, and fresh blind
+measurement are complete under the bounded closure pivot. Concrete panel findings are preserved as
+separate durable follow-on backlog; they do not open another closure-time assessment or repair loop.
+External dev sync, push, and PR creation remain unperformed and require separate authorization.
+Final repository Ruff lint and format checks, assessment-JSON validation, and ``git diff --check``
+are green. The final read-only integration audit returned CLEAR after verifying the comparator
+arithmetic, closure pivot, durable generation digests, intended commit scope, and late RDP/SSH seams.

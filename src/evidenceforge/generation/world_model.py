@@ -117,6 +117,8 @@ _DHCP_SERVER_SERVICES = {
 
 _SSH_RECEIVER_SERVICES = {"ssh", "sshd", "openssh-server"}
 _RDP_RECEIVER_SERVICES = {"rdp", "remote-desktop", "remote_desktop", "termservice"}
+SSH_REQUIRED_UNTIL_MIN_TAIL_SECONDS = 20.0
+SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS = 90.0
 RDP_BOOTSTRAP_MIN_LEAD_SECONDS = 0.5
 RDP_BOOTSTRAP_MAX_LEAD_SECONDS = 5.0
 RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS = 1.799999
@@ -1348,18 +1350,22 @@ class WorldPlanner:
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
-            if storyline_protected and session_end_plan is None and required_until is None:
+            if storyline_protected and session_end_plan is None:
                 scenario_end = getattr(self.activity_generator, "_scenario_end_time", None)
                 if isinstance(scenario_end, datetime):
-                    close_margin_seconds = 180 + (
-                        _stable_seed(
-                            "storyline_ssh_close_margin:"
-                            f"{user.username}:{target_system.hostname}:{logon_time.isoformat()}"
+                    scenario_end = ensure_utc(scenario_end)
+                    if required_until is None:
+                        close_margin_seconds = 180 + (
+                            _stable_seed(
+                                "storyline_ssh_close_margin:"
+                                f"{user.username}:{target_system.hostname}:{logon_time.isoformat()}"
+                            )
+                            % 421
                         )
-                        % 421
-                    )
-                    required_until = ensure_utc(scenario_end) - timedelta(
-                        seconds=close_margin_seconds
+                        required_until = scenario_end - timedelta(seconds=close_margin_seconds)
+                    session_end_plan = SessionEndPlan(
+                        canonical_end=scenario_end,
+                        authority="action_bundle",
                     )
             result = self._bootstrap_ssh_session(
                 user,
@@ -2026,7 +2032,9 @@ class WorldPlanner:
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
         )
-        if required_until is not None and session_end_plan is None:
+        if required_until is not None and (
+            session_end_plan is None or not session_end_plan.is_authoritative
+        ):
             required_until = (
                 required_until.replace(tzinfo=UTC)
                 if required_until.tzinfo is None
@@ -2034,7 +2042,11 @@ class WorldPlanner:
             )
             min_duration = max(
                 min_duration,
-                (required_until - logon_time).total_seconds() + rng.uniform(20.0, 90.0),
+                (required_until - logon_time).total_seconds()
+                + rng.uniform(
+                    SSH_REQUIRED_UNTIL_MIN_TAIL_SECONDS,
+                    SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+                ),
             )
         auth_method = baseline_ssh_auth_method(plan.source_ip, plan.target_system.ip, user.username)
         key_type, key_hash = baseline_ssh_client_key(plan.source_ip, user.username)
