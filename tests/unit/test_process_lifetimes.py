@@ -685,6 +685,10 @@ def test_linux_bounded_foreground_commands_use_executable_aware_lifetimes(
     assert lifetime[1] <= maximum
 
 
+def test_linux_test_utility_keeps_short_lifetime() -> None:
+    assert _linux_foreground_lifetime("/usr/bin/test", "test -f /etc/passwd") == (0.2, 2.0)
+
+
 def test_interactive_smbclient_is_not_forced_to_one_shot_lifetime() -> None:
     assert _linux_foreground_lifetime("/usr/bin/smbclient", "smbclient //FILE-SRV/Shared") is None
 

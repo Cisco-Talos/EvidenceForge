@@ -2721,3 +2721,50 @@ External dev sync, push, and PR creation remain unperformed and require separate
 Final repository Ruff lint and format checks, assessment-JSON validation, and ``git diff --check``
 are green. The final read-only integration audit returned CLEAR after verifying the comparator
 arithmetic, closure pivot, durable generation digests, intended commit scope, and late RDP/SSH seams.
+
+### 2026-08-25 worktree reconciliation and slow-suite audit
+
+The post-closure audit found that the active checkout was not based on the final integration branch.
+Before changing bases, its complete tracked and untracked overlay was preserved as commit
+``2a7724ddb`` on ``codex/v2-family-overlay-backup-20260825``. Reconciliation then restarted from
+``4f238be4d`` on ``origin/codex/v2-family-integration`` under the local branch
+``codex/v2-family-reconciled``. This keeps the original candidate recoverable while preventing its
+competing source-timing, lifecycle, SSH, and RDP ownership models from being merged wholesale.
+
+The branch/worktree comparison retained only changes that compose with the integrated owner model:
+
+- deferred-session binary-bearing transports now authenticate the exact live process, canonical
+  prepared network root, materialization plan, lifecycle identity, and deployment-registry binary;
+- terminal action-cohort audit capabilities remain strongly retained until a distinct successor is
+  registered, including cancel and committed-receipt recovery paths;
+- Linux ``test -f`` remains a short foreground utility instead of being mistaken for follow mode;
+- image-load activity resolves the deployed module identity once and skips modules absent from the
+  compiled host deployment; and
+- focused source-clock headroom and RDP deployment fixtures were retained where they exercise the
+  already-integrated implementation without replacing its ownership APIs.
+
+The audit intentionally did not port the alternate cancel/carrier source-timing rewrite, sealed
+callback-free lifecycle authority, numeric-``sleep`` deadline migration, SSH public-application
+watermark auto-finalization, or the RDP retained-prepared-network-recovery projection API. Those
+changes require mutually competing ownership semantics and failed existing integration contracts
+when tried narrowly; they remain recoverable in the safety commit instead of being represented as
+missing fixes.
+
+The authoritative full command ``uv run pytest --include-slow --no-cov`` collected 10,165 tests and
+completed in 9,013.23 seconds with 10,156 passes, seven skips, ten expected deprecation warnings,
+and two failures. Every slow workload and the network-root, SSH, RDP, persistent protocol, timing,
+and lifecycle matrices passed. The two failures were deterministic generic-logoff preflight cases,
+not another missed worktree family. Commit ``73e1aab11`` had required an authoritative process graph
+to preserve its frozen close margin; bulk completion commit ``7d3875a20`` removed that guard to
+allow a newer source-observation case, but left the canonical retained-frontier regressions in the
+suite. The reconciled rule permits canonical dependencies to relax the sampled 25--200 ms preferred
+margin while still rejecting graphs that cross its 25 ms hard floor. This preserves both fail-before-
+mutation ownership and the newer rule that source-visible process timing cannot push canonical
+teardown outside an exact session end.
+
+Post-fix validation passes all 100 selected generic-logoff/lifecycle regressions and then all 947
+tests in the complete affected files, including generic/sudo logoff, lifecycle registry, Phase 5
+logoff, terminal admission, process lifetimes, source-clock headroom, dispatcher retirement,
+deferred transport binary ownership, and SSH/RDP deferred production. Repository diff validation is
+clean. The 2.5-hour full slow-inclusive suite was not duplicated after the bounded
+generic-logoff repair; its only two failing nodes are included in the green 947-test rerun.

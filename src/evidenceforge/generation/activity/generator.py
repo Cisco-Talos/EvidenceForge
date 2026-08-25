@@ -2061,7 +2061,8 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     """Estimate foreground Linux command lifetime for shell-history ordering."""
     exe_name = process_name.rsplit("/", 1)[-1].lower()
     command = command_line.lower()
-    if any(pattern in command for pattern in ("tail -f", "watch ", "--follow", " -f ")):
+    follows_output = any(pattern in command for pattern in ("tail -f", "watch ", "--follow"))
+    if follows_output or (exe_name != "test" and " -f " in command):
         return None
     if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
         "/usr/lib/apt/methods/"
@@ -17314,6 +17315,17 @@ class ActivityGenerator:
                 raise StateError(
                     "Authoritative generic logoff cannot fit its process graph before "
                     f"the exact session end: process={identity.object_id}"
+                )
+            authoritative_hard_latest_allowed = (
+                deadline - timedelta(milliseconds=25) if deadline is not None else None
+            )
+            if (
+                authoritative_hard_latest_allowed is not None
+                and terminate_at > authoritative_hard_latest_allowed
+            ):
+                raise StateError(
+                    "Authoritative generic logoff cannot preserve its frozen process "
+                    f"close before the exact deadline clamp: process={identity.object_id}"
                 )
             plan = _GenericLogoffProcessClosePlan(
                 identity=identity,
@@ -36495,6 +36507,31 @@ class ActivityGenerator:
                 dll_path,
             )
             return
+        module_identity = None
+        deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
+        if deployment_registry is not None:
+            module_identity = deployment_registry.resolve_binary(
+                system.hostname,
+                dll_path,
+                "windows",
+                principal=proc.username or user.username,
+            )
+            if (
+                module_identity is None
+                or deployment_registry.host_module_handle(
+                    system.hostname,
+                    module_identity.content_id,
+                )
+                is None
+            ):
+                logger.debug(
+                    "Skipping image load for undeployed module: %s pid=%s image=%s dll=%s",
+                    system.hostname,
+                    pid,
+                    image,
+                    dll_path,
+                )
+                return
         if load_phase not in {"startup", "runtime"}:
             raise ValueError(f"load_phase must be 'startup' or 'runtime', got {load_phase!r}")
         if load_phase == "startup" and load_order <= 0:
@@ -36542,6 +36579,7 @@ class ActivityGenerator:
                 signature_status=signature_status,
                 load_phase=load_phase,
                 load_order=load_order,
+                binary_identity=module_identity,
             ),
             storyline_origin=from_storyline,
         )

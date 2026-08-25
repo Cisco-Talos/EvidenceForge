@@ -35,7 +35,7 @@ import json
 import logging
 import secrets
 import sys
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
@@ -1018,6 +1018,14 @@ class _ActionCohortPreparationCleanupRecord:
     exact_cleanup_complete: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _ActionCohortAuditRetirement:
+    """One terminal nested audit capability retained through successor registration."""
+
+    preparation: PreparedExecutionEffectAuditCommit
+    expected_receipt: ExecutionEffectAuditCommitReceipt | None
+
+
 class PreparedNetworkDependentBatch:
     """Opaque claimed batch of projection-only dependents for one network root."""
 
@@ -1458,6 +1466,9 @@ class EventDispatcher:
         self._action_cohort_claimed_batches = 0
         self._action_cohort_receipts: dict[int, ActionCohortPublicationReceipt] = {}
         self._action_cohort_committed_receipts = 0
+        self._action_cohort_audit_retirements: deque[_ActionCohortAuditRetirement] = deque(
+            maxlen=action_cohort_preparation_capacity,
+        )
         from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 
         self._exact_publication_authority = ExactPublicationAuthority(
@@ -9360,6 +9371,7 @@ class EventDispatcher:
                 published_provenances=published_provenance_tuple,
             )
             cleanup_record.audit_preparation = audit_preparation
+            self._release_action_cohort_audit_retirements_after_successor_registration()
             if intent_request is not None:
                 assert intent_ledger is not None
                 intent_token = intent_ledger.prepare_batch(intent_request)
@@ -9533,6 +9545,28 @@ class EventDispatcher:
             self._add_action_cohort_cleanup_notes(primary, cleanup_failures)
             raise
 
+    def _release_action_cohort_audit_retirements_after_successor_registration(self) -> None:
+        """Release terminal capabilities only after a distinct successor is registered."""
+
+        with self._action_cohort_lock:
+            self._action_cohort_audit_retirements.clear()
+
+    def _retire_action_cohort_audit_locked(
+        self,
+        preparation: PreparedExecutionEffectAuditCommit,
+        expected_receipt: ExecutionEffectAuditCommitReceipt | None,
+    ) -> None:
+        """Strongly retain one terminal audit identity until successor registration."""
+
+        if any(
+            retirement.preparation is preparation
+            for retirement in self._action_cohort_audit_retirements
+        ):
+            return
+        self._action_cohort_audit_retirements.append(
+            _ActionCohortAuditRetirement(preparation, expected_receipt)
+        )
+
     def _cancel_action_cohort_preparation_record(
         self,
         record: _ActionCohortPreparationCleanupRecord,
@@ -9700,6 +9734,11 @@ class EventDispatcher:
                     )
                 return failures
             if self._action_cohort_prepare_cleanups.get(record.cleanup_id) is record:
+                if record.audit_preparation is not None:
+                    self._retire_action_cohort_audit_locked(
+                        record.audit_preparation,
+                        None,
+                    )
                 self._action_cohort_prepare_cleanups.pop(record.cleanup_id)
                 self._action_cohort_retained_members -= len(record.dispatches)
                 self._action_cohort_retained_bytes -= record.retained_bytes
@@ -10273,6 +10312,10 @@ class EventDispatcher:
     ) -> None:
         """Detach one trusted outer record without touching nested owner locks."""
 
+        self._retire_action_cohort_audit_locked(
+            record.audit_preparation,
+            record.expected_audit_receipt,
+        )
         self._action_cohort_batches.pop(record.batch_id, None)
         self._action_cohort_batch_locators.pop(record.carrier_id, None)
         if record.capability_id is not None:
@@ -12300,6 +12343,109 @@ class EventDispatcher:
                 "Deferred-session all-suppressed projection changed its zero-row warm-up shape"
             )
 
+    def _validate_deferred_session_transport_binary_owner(
+        self,
+        prepared: PreparedDispatch,
+        root: object,
+    ) -> None:
+        """Authenticate one live binary-bearing actor against its exact network root."""
+
+        from evidenceforge.events.contexts import HostContext, ProcessContext
+        from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+        from evidenceforge.events.lifecycle import ActionLifecycleContext
+        from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
+        from evidenceforge.generation.state_manager import (
+            ConnectionCompositeMaterializationPlan,
+            ProcessActivityPatch,
+        )
+
+        event = prepared._occurrence
+        network = event.network
+        process = event.process
+        host = event.src_host
+        identity_plan = event.identity_plan
+        lifecycle = event.lifecycle
+        actor = identity_plan.actor if type(identity_plan) is EventIdentityPlan else None
+        if (
+            type(root) is not PreparedNetworkTransactionRoot
+            or prepared._state_intent is not PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+            or prepared._lifecycle_ticket is not root
+            or type(root.state_plan) is not ConnectionCompositeMaterializationPlan
+            or event.event_type is not EventKind.CONNECTION
+            or network is None
+            or network != root.transaction
+            or type(host) is not HostContext
+            or type(process) is not ProcessContext
+            or type(actor) is not ProcessIdentity
+            or type(lifecycle) is not ActionLifecycleContext
+        ):
+            raise EventContractError(
+                "Deferred-session binary transport lacks its exact canonical network owner"
+            )
+        state_plan = root.state_plan
+        root_version = self._validate_external_transport_binding(
+            event,
+            root,
+            allow_deferred_session=True,
+        )
+        binary = process.binary_identity
+        platform_name = host.os_category.casefold()
+        if platform_name not in {"windows", "linux", "macos"}:
+            raise EventContractError(
+                "Deferred-session binary transport uses an unsupported source platform"
+            )
+        resolved_binary = self.resolve_process_binary_identity(
+            host.hostname,
+            process.username,
+            process.image,
+            cast(Platform, platform_name),
+        )
+        matching_activity = tuple(
+            patch
+            for patch in state_plan.process_activity
+            if type(patch) is ProcessActivityPatch and patch.identity.object_id == actor.object_id
+        )
+        live_process = self.state_manager.get_process(host.hostname, process.pid)
+        live_by_pid = self.state_manager.get_process_identity(host.hostname, process.pid)
+        live_by_object = self.state_manager.get_process_identity_by_object_id(actor.object_id)
+        if (
+            not self.state_manager.authenticates_materialization_plan(state_plan)
+            or prepared._expected_state_version != root_version
+            or root.transaction.closed_at is None
+            or state_plan._source_system != host.hostname
+            or state_plan._source_hostname not in {host.hostname, host.fqdn}
+            or state_plan._initiating_pid != process.pid
+            or network.src_ip != host.ip
+            or network.initiating_pid != process.pid
+            or process.pid != actor.pid
+            or process.parent_pid != actor.parent_pid
+            or process.image != actor.image
+            or process.command_line != actor.command_line
+            or process.username != actor.principal
+            or process.logon_id != actor.logon_id
+            or process.start_time != actor.started_at
+            or live_process is None
+            or live_process.end_time is not None
+            or live_process.ecar_object_id != actor.object_id
+            or live_by_pid != actor
+            or live_by_object != actor
+            or len(matching_activity) != 1
+            or type(matching_activity[0].identity) is not ProcessIdentity
+            or matching_activity[0].identity != actor
+            or matching_activity[0].identity != live_by_pid
+            or matching_activity[0].activity_time != root.transaction.closed_at
+            or lifecycle.group_id != root.transaction.stable_id
+            or lifecycle.canonical_start != root.transaction.started_at
+            or lifecycle.phase != "start"
+            or lifecycle.parent_group_id is not None
+            or binary is None
+            or prepared._binary_identity_kind != getattr(binary, "identity_kind", None)
+            or resolved_binary is not binary
+        ):
+            raise EventContractError(
+                "Deferred-session binary transport actor is not the exact live root-owned process"
+            )
+
     @staticmethod
     def _deferred_session_allowed_state_members(root: object) -> tuple[object, ...]:
         """Return exact session/process/active-session members of one root."""
@@ -12612,12 +12758,15 @@ class EventDispatcher:
                     raise EventContractError(
                         "Deferred-session dependent has an unsupported State owner"
                     )
-            if prepared._binary_identity_kind and prepared._lifecycle_ticket not in (
-                *getattr(getattr(root.state_plan, "batch", None), "processes", ()),
-            ):
-                raise EventContractError(
-                    "Deferred-session binary projection lacks an exact root-owned process"
-                )
+            if prepared._binary_identity_kind:
+                if ordinal == 0:
+                    self._validate_deferred_session_transport_binary_owner(prepared, root)
+                elif prepared._lifecycle_ticket not in (
+                    *getattr(getattr(root.state_plan, "batch", None), "processes", ()),
+                ):
+                    raise EventContractError(
+                        "Deferred-session binary projection lacks an exact root-owned process"
+                    )
             occurrence_ids.add(prepared.occurrence_id)
             self.validate_prepared(prepared)
         if not coordinator.authenticates(composition):

@@ -22,6 +22,12 @@ from evidenceforge.events.collection_policy import (
     SourceCollectionPolicy,
     SourceInstanceIdentity,
 )
+from evidenceforge.events.content_identity import (
+    BinaryReleaseIdentity,
+    BinaryReleaseKey,
+    PeVersionInfo,
+    SoftwareInstallationIdentity,
+)
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
@@ -42,6 +48,10 @@ from evidenceforge.generation.application_channels import ApplicationChannelRegi
 from evidenceforge.generation.collection_deployment import (
     CompiledCollectionDeployment,
     SourceInstanceDeployment,
+)
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    HostDeploymentSpec,
 )
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -72,6 +82,75 @@ _TERMINAL_PROCESS_RELATIONSHIPS = frozenset(
         "source.sysmon_process_terminate",
     }
 )
+
+_RDP_WINDOWS_BINARY_PATHS = (
+    r"C:\Windows\System32\winlogon.exe",
+    r"C:\Windows\System32\userinit.exe",
+    r"C:\Windows\explorer.exe",
+    r"C:\Windows\System32\mstsc.exe",
+)
+
+
+def _rdp_test_deployment_registry(
+    source: System,
+    target: System,
+) -> DeploymentContentRegistry:
+    """Compile exact Windows binary placement for the production Sysmon fixture."""
+
+    releases: list[BinaryReleaseIdentity] = []
+    installations: list[SoftwareInstallationIdentity] = []
+    host_deployments: list[HostDeploymentSpec] = []
+    for system, build, roles in (
+        (source, "10.0.22631.3880", ("workstation",)),
+        (target, "10.0.20348.2655", ("server", "rdp")),
+    ):
+        product_id = f"microsoft-windows-rdp-fixture-{system.hostname.casefold()}"
+        host_releases = tuple(
+            BinaryReleaseIdentity(
+                key=BinaryReleaseKey(
+                    product_id=product_id,
+                    version=build,
+                    build=build,
+                    architecture="x64",
+                    platform="windows",
+                    artifact_name=path.rsplit("\\", 1)[-1],
+                ),
+                pe_version_info=PeVersionInfo(
+                    file_version=build,
+                    description="Microsoft Windows executable",
+                    product="Microsoft Windows Operating System",
+                    company="Microsoft Corporation",
+                    original_filename=path.rsplit("\\", 1)[-1],
+                ),
+            )
+            for path in _RDP_WINDOWS_BINARY_PATHS
+        )
+        releases.extend(host_releases)
+        installations.append(
+            SoftwareInstallationIdentity(
+                hostname=system.hostname,
+                application_id=product_id,
+                release_id=host_releases[0].release_id,
+                platform="windows",
+                scope="machine",
+                install_root=r"C:\Windows",
+                image_paths=_RDP_WINDOWS_BINARY_PATHS,
+            )
+        )
+        host_deployments.append(
+            HostDeploymentSpec(
+                hostname=system.hostname,
+                roles=roles,
+                platform="windows",
+                os_build=build,
+                architecture="x64",
+            )
+        )
+    return DeploymentContentRegistry(
+        binary_releases=tuple(releases),
+        installations=tuple(installations),
+        host_deployments=tuple(host_deployments),
+    )
 
 
 def _install_terminal_process_latency_overlay(
@@ -211,12 +290,26 @@ def _open_rdp_terminal_harness(
     production_timing_runtime: bool = False,
     open_time: datetime = _START,
     expect_exact_initial: bool = True,
+    source_process_lead_seconds: float = 3.0,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
     reset_thread_rng(42)
     state = StateManager()
     state.set_current_time(open_time - timedelta(minutes=5))
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
     ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
     zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
     windows = WindowsEventEmitter(
@@ -245,6 +338,9 @@ def _open_rdp_terminal_harness(
     dispatcher = EventDispatcher(
         state,
         emitters,
+        deployment_registry=(
+            _rdp_test_deployment_registry(source, target) if include_sysmon_during_open else None
+        ),
         output_start_time=output_start_time,
         source_timing_planner=SourceTimingPlanner(
             clock_profile_name=clock_profile_name,
@@ -264,19 +360,6 @@ def _open_rdp_terminal_harness(
         dispatcher=dispatcher,
         generation_window_start=_START - timedelta(days=1),
         generation_window_end=_END,
-    )
-    source = System(
-        hostname="WS-01",
-        ip="10.10.0.25",
-        os="Windows 11",
-        type="workstation",
-    )
-    target = System(
-        hostname="RDS-01",
-        ip="10.20.0.10",
-        os="Windows Server 2022",
-        type="server",
-        services=["rdp"],
     )
     user = User(
         username="analyst",
@@ -328,7 +411,7 @@ def _open_rdp_terminal_harness(
         source_pid = generator.generate_process(
             user,
             source,
-            open_time - timedelta(seconds=3),
+            open_time - timedelta(seconds=source_process_lead_seconds),
             source_logon,
             r"C:\Windows\System32\mstsc.exe",
             f"mstsc.exe /v:{target.hostname}",
