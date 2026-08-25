@@ -1,0 +1,106 @@
+<30>1 2026-08-01T13:01:02.249768Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785589262.2498] dhcp4 (enp0s3): state changed renew -> bound
+<30>1 2026-08-01T13:04:21.028984Z SEC-TEST-01 fwupd 35229 - - metadata is 6 days old, scheduling refresh
+<30>1 2026-08-01T13:04:21.313884Z SEC-TEST-01 dbus-daemon 16556 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.98'
+<30>1 2026-08-01T13:04:39.522582Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785589479.5226] dhcp4 (enp0s3): state changed renew -> bound
+<30>1 2026-08-01T13:04:57.484197Z SEC-TEST-01 polkitd 59901 - - Unregistered Authentication Agent for unix-session:122 (system bus name :1.87, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<78>1 2026-08-01T13:05:00.096000Z SEC-TEST-01 CRON 1651506 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T13:06:12.421889Z SEC-TEST-01 gnome-shell 16982 - - Extension desktop-icons@csoriano already enabled
+<30>1 2026-08-01T13:07:14.029266Z SEC-TEST-01 avahi-daemon 40071 - - Registering new address record for enp0s3.
+<30>1 2026-08-01T13:10:13.966384Z SEC-TEST-01 gnome-shell 16982 - - Extension ubuntu-dock@ubuntu.com already enabled
+<30>1 2026-08-01T13:12:32.005676Z SEC-TEST-01 snapd 16562 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2026-08-01T13:12:32.703130Z SEC-TEST-01 accounts-daemon 56102 - - user 'ubuntu' has logged in
+<30>1 2026-08-01T13:12:52.629468Z SEC-TEST-01 tracker-miner-fs-3 22880 - - Resetting tracker extract task after idle timeout 197403
+<30>1 2026-08-01T13:15:21.591284Z SEC-TEST-01 rsyslogd 16554 - - omfwd: target siem-forwarder using disk-assisted queue fwdRule1, checkpoint 45132
+<30>1 2026-08-01T13:16:19.591143Z SEC-TEST-01 dbus-daemon 16556 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.99'
+<30>1 2026-08-01T13:17:02.940570Z SEC-TEST-01 polkitd 59901 - - Registered Authentication Agent for unix-session:128 (system bus name :1.100 [/usr/libexec/kf5/polkit-kde-authentication-agent-1], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)
+<30>1 2026-08-01T13:21:31.153680Z SEC-TEST-01 snapd 16562 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2026-08-01T13:21:33.087224Z SEC-TEST-01 polkitd 59901 - - Unregistered Authentication Agent for unix-session:128 (system bus name :1.88, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2026-08-01T13:21:49.924191Z SEC-TEST-01 systemd-journald 16552 - - Runtime Journal (/run/log/journal/e4e975605bf850081cd6da2953d09569) is 130.0M, max 512M, 382.0M free.
+<30>1 2026-08-01T13:22:41.996417Z SEC-TEST-01 fwupd 35229 - - metadata is 14 days old, scheduling refresh
+<30>1 2026-08-01T13:29:09.318426Z SEC-TEST-01 anacron 33625 - - Will run job `cron.daily' in 2 min.
+<30>1 2026-08-01T13:29:09Z SEC-TEST-01 anacron 33625 - - Anacron 2.3 started on 2026-08-01
+<30>1 2026-08-01T13:29:49.932530Z SEC-TEST-01 polkitd 59901 - - Operator of unix-process:1653417:77938098 failed to authenticate as unix-user:admin to gain TEMPORARY authorization for action org.freedesktop.login1.reboot for system-bus-name::1.101 [/usr/bin/loginctl] (owned by unix-user:deploy)
+<30>1 2026-08-01T13:31:10.225249Z SEC-TEST-01 anacron 33625 - - Job `cron.daily' started
+<30>1 2026-08-01T13:31:55.188351Z SEC-TEST-01 accounts-daemon 56102 - - user 'admin' has logged in
+<30>1 2026-08-01T13:33:13.717420Z SEC-TEST-01 systemd-resolved 16564 - - Grace period over, resuming full feature set (UDP+EDNS0) for DNS server 10.20.20.10.
+<30>1 2026-08-01T13:33:17.653742Z SEC-TEST-01 snapd 16562 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2026-08-01T13:33:45.311164Z SEC-TEST-01 anacron 33625 - - Job `cron.daily' terminated
+<30>1 2026-08-01T13:33:47.085083Z SEC-TEST-01 anacron 33625 - - Normal exit (1 job run)
+<30>1 2026-08-01T13:34:24.420386Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785591264.4204] device (enp0s3): state change: ip-config -> activated
+<30>1 2026-08-01T13:34:42.572973Z SEC-TEST-01 gnome-shell 16982 - - Monitor 1 configuration unchanged after hotplug event
+<78>1 2026-08-01T13:35:00.044000Z SEC-TEST-01 CRON 1653794 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T13:37:37.431775Z SEC-TEST-01 packagekitd 57394 - - resolve transaction /518874
+<30>1 2026-08-01T13:37:53.599123Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785591473.5991] device (enp0s3): state change: ip-config -> activated
+<30>1 2026-08-01T13:42:11.477780Z SEC-TEST-01 polkitd 59901 - - Unregistered Authentication Agent for unix-session:122 (system bus name :1.92, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2026-08-01T13:42:30.264693Z SEC-TEST-01 rsyslogd 16554 - - omfwd: target logrelay01 using disk-assisted queue action-remote, checkpoint 45490
+<86>1 2026-08-01T13:46:11.796045Z SEC-TEST-01 gdm-password 1654718 - - pam_unix(gdm-password:session): session opened for user ubuntu(uid=1000) by gdm(uid=0)
+<86>1 2026-08-01T13:46:19.236045Z SEC-TEST-01 systemd-logind 16557 - - New session 117209 of user ubuntu.
+<84>1 2026-08-01T13:49:03.766181Z SEC-TEST-01 login 1654909 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<30>1 2026-08-01T13:49:17.351332Z SEC-TEST-01 fwupd 35229 - - Thunderbolt Controller: no updates available
+<30>1 2026-08-01T13:49:18.265878Z SEC-TEST-01 dbus-daemon 16556 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.103'
+<30>1 2026-08-01T13:50:44.373530Z SEC-TEST-01 thermald 14013 - - cooling device 0 intel_powerclamp type: 0x02
+<85>1 2026-08-01T13:50:44.384045Z SEC-TEST-01 sudo 1655014 - - ubuntu : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/lsblk
+<86>1 2026-08-01T13:50:44.543045Z SEC-TEST-01 sudo 1655014 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2026-08-01T13:50:45.773947Z SEC-TEST-01 sudo 1655014 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:55:34.278328Z SEC-TEST-01 gnome-shell 16982 - - Window manager warning: Overwriting existing binding of keysym Super_L with keysym Print
+<30>1 2026-08-01T14:03:38.041615Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785593018.0416] device (enp0s3): state change: disconnected -> prepare
+<30>1 2026-08-01T14:03:38.605344Z SEC-TEST-01 snapd 16562 - - daemon.go:460: gracefully waiting for hook snapd-desktop-integration.configure
+<85>1 2026-08-01T14:03:40.192265Z SEC-TEST-01 sudo 1655961 - - ops : TTY=pts/1 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/sbin/service cron status
+<86>1 2026-08-01T14:03:40.476265Z SEC-TEST-01 sudo 1655961 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=2942)
+<86>1 2026-08-01T14:03:49.345940Z SEC-TEST-01 sudo 1655961 - - pam_unix(sudo:session): session closed for user root
+<78>1 2026-08-01T14:05:00.031000Z SEC-TEST-01 CRON 1656073 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T14:08:11.698192Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785593291.6982] dhcp4 (enp0s3): state changed renew -> bound
+<30>1 2026-08-01T14:08:11.925160Z SEC-TEST-01 tracker-miner-fs-3 22880 - - Indexed 68 file(s) under /home/ubuntu/Documents
+<30>1 2026-08-01T14:08:18.085828Z SEC-TEST-01 systemd 1 - - Starting apt-daily.service - Daily apt download activities.
+<30>1 2026-08-01T14:08:21.266515Z SEC-TEST-01 systemd 1 - - apt-daily.service: Deactivated successfully.
+<30>1 2026-08-01T14:09:06.665734Z SEC-TEST-01 polkitd 59901 - - Unregistered Authentication Agent for unix-session:128 (system bus name :1.100, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)
+<30>1 2026-08-01T14:11:38.812926Z SEC-TEST-01 systemd-resolved 16564 - - Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.20.20.10.
+<30>1 2026-08-01T14:12:01.266776Z SEC-TEST-01 cups-browsed 27067 - - Printer FRONTDESK-MFP was not found by DNS-SD, keeping stale queue for now
+<30>1 2026-08-01T14:14:30.192936Z SEC-TEST-01 systemd-resolved 16564 - - Grace period over, resuming full feature set (UDP+EDNS0) for DNS server 10.20.20.10.
+<84>1 2026-08-01T14:19:12Z SEC-TEST-01 login 1657498 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T14:19:19Z SEC-TEST-01 login 1657513 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T14:19:26Z SEC-TEST-01 login 1657529 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T14:19:32Z SEC-TEST-01 login 1657542 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T14:19:36Z SEC-TEST-01 login 1657551 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T14:19:42Z SEC-TEST-01 login 1657564 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<86>1 2026-08-01T14:19:49.716000Z SEC-TEST-01 gdm-password 1657579 - - pam_unix(gdm-password:session): session opened for user marta.diaz(uid=2847) by gdm(uid=0)
+<86>1 2026-08-01T14:19:54.948000Z SEC-TEST-01 systemd-logind 16557 - - New session 117511 of user marta.diaz.
+<30>1 2026-08-01T14:20:55.909741Z SEC-TEST-01 cups-browsed 27067 - - Created local queue FRONTDESK-MFP (driverless)
+<30>1 2026-08-01T14:27:42.704969Z SEC-TEST-01 systemd-resolved 16564 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.20.20.10.
+<30>1 2026-08-01T14:30:53.112865Z SEC-TEST-01 irqbalance 32439 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<78>1 2026-08-01T14:35:00.012000Z SEC-TEST-01 CRON 1659472 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T14:52:05.963491Z SEC-TEST-01 avahi-daemon 40071 - - Withdrawing address record for enp0s3.
+<30>1 2026-08-01T14:53:09.206191Z SEC-TEST-01 rsyslogd 16554 - - main Q: queue fwdRule1 has 0 messages pending, worker threads 1
+<30>1 2026-08-01T14:58:33.833731Z SEC-TEST-01 thermald 14013 - - Unsupported cpu model, use default config
+<30>1 2026-08-01T14:58:33.868141Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785596313.8681] device (enp0s3): state change: disconnected -> prepare
+<30>1 2026-08-01T15:01:57.300512Z SEC-TEST-01 accounts-daemon 56102 - - user 'ubuntu' has logged in
+<30>1 2026-08-01T15:03:57.076064Z SEC-TEST-01 packagekitd 57394 - - search-names transaction /337104
+<30>1 2026-08-01T15:03:59.239957Z SEC-TEST-01 dbus-daemon 16556 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.106'
+<78>1 2026-08-01T15:05:00.116000Z SEC-TEST-01 CRON 1662118 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T15:05:09.882877Z SEC-TEST-01 thermald 14013 - - cooling device 1 intel_powerclamp type: 0x02
+<30>1 2026-08-01T15:07:55.182656Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785596875.1827] dhcp4 (enp0s3): state changed renew -> bound
+<30>1 2026-08-01T15:07:57.125874Z SEC-TEST-01 rsyslogd 16554 - - main Q: queue action-remote has 448 messages pending, worker threads 1
+<30>1 2026-08-01T15:08:41.481662Z SEC-TEST-01 fwupd 35229 - - Thunderbolt Controller: no updates available
+<30>1 2026-08-01T15:10:52.544584Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785597052.5446] device (enp0s3): state change: disconnected -> prepare
+<30>1 2026-08-01T15:13:03.505618Z SEC-TEST-01 fwupd 35229 - - Thunderbolt Controller: firmware version unchanged after LVFS metadata check
+<30>1 2026-08-01T15:16:22.643294Z SEC-TEST-01 packagekitd 57394 - - get-updates transaction /444775
+<30>1 2026-08-01T15:17:56.509893Z SEC-TEST-01 avahi-daemon 40071 - - Registering new address record for enp0s3.
+<30>1 2026-08-01T15:23:49.575595Z SEC-TEST-01 snapd 16562 - - stateengine.go:150: state ensure starting change 5137
+<30>1 2026-08-01T15:23:49.729895Z SEC-TEST-01 snapd 16562 - - taskrunner.go:271: change 5135 task 6 done for microk8s
+<30>1 2026-08-01T15:23:50.552312Z SEC-TEST-01 dbus-daemon 16556 - - [system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.107'
+<30>1 2026-08-01T15:25:13.523794Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785597913.5238] dhcp4 (enp0s3): state changed renew -> bound
+<30>1 2026-08-01T15:27:12.470333Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785598032.4703] device (enp0s3): state change: ip-config -> activated
+<30>1 2026-08-01T15:31:43.229007Z SEC-TEST-01 packagekitd 57394 - - resolve transaction /740098
+<30>1 2026-08-01T15:33:06.092967Z SEC-TEST-01 gnome-shell 16982 - - Window manager warning: Overwriting existing binding of keysym XF86AudioMute with keysym Print
+<78>1 2026-08-01T15:35:00.061000Z SEC-TEST-01 CRON 1663956 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T15:35:30.457855Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785598530.4579] device (enp0s3): state change: disconnected -> prepare
+<30>1 2026-08-01T15:37:04.298711Z SEC-TEST-01 snapd 16562 - - taskrunner.go:271: change 5136 task 1 done for microk8s
+<30>1 2026-08-01T15:39:08.319946Z SEC-TEST-01 cups-browsed 27067 - - Browse remote printer FRONTDESK-MFP at 831694
+<30>1 2026-08-01T15:41:18.937764Z SEC-TEST-01 dbus-daemon 16556 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.109'
+<30>1 2026-08-01T15:43:54.122510Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785599034.1225] device (enp0s3): state change: disconnected -> prepare
+<30>1 2026-08-01T15:46:36.097547Z SEC-TEST-01 packagekitd 57394 - - search-names transaction /888677
+<30>1 2026-08-01T15:48:00.943169Z SEC-TEST-01 NetworkManager 16555 - - <info>  [1785599280.9432] dhcp4 (enp0s3): state changed renew -> bound
+<84>1 2026-08-01T15:48:33Z SEC-TEST-01 login 1664606 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T15:48:41Z SEC-TEST-01 login 1664612 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T15:48:45Z SEC-TEST-01 login 1664616 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz
+<84>1 2026-08-01T15:48:47Z SEC-TEST-01 login 1664617 - - pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  user=marta.diaz

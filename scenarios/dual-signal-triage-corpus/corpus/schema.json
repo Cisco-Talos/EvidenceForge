@@ -21,6 +21,14 @@
       "type": "boolean",
       "const": true
     },
+    "evidence_scenario": {
+      "type": "string",
+      "description": "Path (relative to this file) to the EvidenceForge scenario YAML that generated the evidence every event points to."
+    },
+    "evidence_seed": {
+      "type": "integer",
+      "description": "The --seed passed to `eforge generate` for evidence_scenario. Adversarial-payload variant selection is seed-dependent, so this pins which SQLi requests fired the signature."
+    },
     "events": {
       "type": "array",
       "minItems": 1,
@@ -38,7 +46,8 @@
         "signal_class",
         "label_disposition",
         "tier_hint",
-        "msg"
+        "msg",
+        "evidence"
       ],
       "additionalProperties": false,
       "properties": {
@@ -123,6 +132,36 @@
         },
         "notes": {
           "type": "string"
+        },
+        "evidence": {
+          "type": "object",
+          "description": "Pointer to the real, generated evidence backing this label -- not an assertion without supporting data.",
+          "required": ["ground_truth_record_id", "sources"],
+          "additionalProperties": false,
+          "properties": {
+            "ground_truth_record_id": {
+              "type": "string",
+              "description": "record_id in ../evidence/GROUND_TRUTH.json for the generating event."
+            },
+            "sources": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["path", "match"],
+                "additionalProperties": false,
+                "properties": {
+                  "path": { "type": "string" },
+                  "match": { "type": "string" },
+                  "min_count": { "type": "integer", "minimum": 1 },
+                  "max_count": { "type": "integer", "minimum": 0 }
+                }
+              }
+            },
+            "note": {
+              "type": "string"
+            }
+          }
         }
       }
     }

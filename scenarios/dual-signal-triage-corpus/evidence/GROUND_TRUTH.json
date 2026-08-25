@@ -1,0 +1,899 @@
+{
+  "schema_version": 2,
+  "scenario_name": "dual-signal-triage-corpus-evidence",
+  "scenario_description": "Real, generated underlying evidence for the dual-signal SnortML + signature +\nSplunk-notable triage corpus (corpus/labeled_events.json). Each corpus event\nis grounded in an actual EvidenceForge-generated request or authentication\nburst, not an assertion without supporting data.\n\nSQLi cases use the built-in `adversarial_payload` (family: sql_injection)\nmechanism: the canonical UNION SELECT form is signature-mapped to a real\nEmerging Threats SID (2009714) and fires when observed in cleartext by an\nIDS sensor; an evasion variant of the same family (comment-split UNION/**/\nSELECT) is a documented detection blind spot and produces real HTTP request\nevidence with no signature match -- exactly the \"ML-only, no signature\ncorroboration\" case this corpus is about. Which variant lands on which event\nis decided by the scenario's generation seed, not hand-picked after the\nfact; GROUND_TRUTH.json is the source of truth once generated.\n\nSplunk-notable cases use `credential_spray` against the domain controller,\ndiffering only in real attempt volume/pattern -- the actual signal a\nrisk-based-alerting rule would score.\n",
+  "generated_at": "2026-08-01T13:00:00Z",
+  "observation_profile": "complete",
+  "collection_window": {
+    "start": "2026-08-01T13:00:00Z",
+    "end": "2026-08-01T16:00:00Z"
+  },
+  "source_evidence_status": {
+    "evt-benign-browse": {
+      "web": {
+        "visible": 1
+      },
+      "windows_security": {
+        "visible": 2
+      },
+      "zeek": {
+        "visible": 7
+      }
+    },
+    "evt-spray-high": {
+      "windows_security": {
+        "visible": 118
+      },
+      "zeek": {
+        "visible": 59
+      }
+    },
+    "evt-spray-low": {
+      "windows_security": {
+        "visible": 4
+      },
+      "zeek": {
+        "visible": 2
+      }
+    },
+    "evt-sqli-a": {
+      "ids": {
+        "visible": 1
+      },
+      "web": {
+        "visible": 1
+      },
+      "windows_security": {
+        "visible": 1
+      },
+      "zeek": {
+        "visible": 5
+      }
+    },
+    "evt-sqli-b": {
+      "web": {
+        "visible": 1
+      },
+      "zeek": {
+        "visible": 3
+      }
+    },
+    "evt-sqli-c": {
+      "ids": {
+        "visible": 1
+      },
+      "web": {
+        "visible": 1
+      },
+      "windows_security": {
+        "visible": 1
+      },
+      "zeek": {
+        "visible": 5
+      }
+    },
+    "evt-sqli-d": {
+      "web": {
+        "visible": 1
+      },
+      "zeek": {
+        "visible": 3
+      }
+    }
+  },
+  "ids_evaluation": {
+    "observation": {
+      "visible": 2
+    },
+    "sensors": {
+      "IDS-EDGE": {
+        "1:2009714": {
+          "gid": 1,
+          "sid": 2009714,
+          "candidate": 2,
+          "emitted": 2,
+          "policy_filtered": 0,
+          "emitted_visible": 2,
+          "emitted_delayed": 0,
+          "origins": {
+            "built_in": 2
+          },
+          "emitted_sha256": "b949ba309e2b7a65d77ebdfd6ddae0ed73d13db790078270b18ef6f6bd43ca1f"
+        }
+      }
+    }
+  },
+  "storyline_steps": [
+    {
+      "storyline_id": "evt-sqli-a",
+      "index": 0,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "SQL injection attempt against the web app (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "adversarial_payload"
+      ]
+    },
+    {
+      "storyline_id": "evt-sqli-b",
+      "index": 1,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Second SQL injection attempt against the web app, different request (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "adversarial_payload"
+      ]
+    },
+    {
+      "storyline_id": "evt-sqli-c",
+      "index": 2,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Third SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "adversarial_payload"
+      ]
+    },
+    {
+      "storyline_id": "evt-sqli-d",
+      "index": 3,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Fourth SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "adversarial_payload"
+      ]
+    },
+    {
+      "storyline_id": "evt-benign-browse",
+      "index": 4,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Ordinary product-catalog request against the web app (corpus case: ml-low-004)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "connection"
+      ]
+    },
+    {
+      "storyline_id": "evt-spray-high",
+      "index": 5,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "High-volume credential spray against a domain account (corpus case: notable-1001, high-risk Splunk notable)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "credential_spray"
+      ]
+    },
+    {
+      "storyline_id": "evt-spray-low",
+      "index": 6,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Low-volume, scattered failed logons (corpus case: notable-1002, low-risk Splunk notable)",
+      "ground_truth_section": "storyline",
+      "event_types": [
+        "credential_spray"
+      ]
+    }
+  ],
+  "red_herring_steps": [],
+  "intent_reconciliation": {
+    "complete": true,
+    "expected_count": 7,
+    "planned_count": 7,
+    "occurred_count": 7,
+    "observed_count": 7,
+    "missing_intent_ids": [],
+    "unexpected_intent_ids": [],
+    "intents": [
+      {
+        "intent_id": "7a6e0bff-7eac-4224-8b57-a81b61f87312",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-sqli-a",
+        "event_type": "adversarial_payload",
+        "semantic_instance_key": "34f4f60b20ea1b81d65f13f9:0",
+        "authored_time": "+20m",
+        "actor": "marta.diaz",
+        "system": "SEC-TEST-01",
+        "activity": "SQL injection attempt against the web app (corpus case: sig-sqli-001 / corr-003 candidate)",
+        "planned": true,
+        "action_ids": [
+          "e61ef43d-b334-4779-847f-5e4acf3701fb",
+          "e851062e-b061-419a-8bb9-b60ff818e3c4"
+        ],
+        "occurrence_ids": [
+          "22d53464-38e3-424a-8a83-5cbb4df07d47",
+          "5e886f98-3ef1-4824-9bed-2456e96ab13f",
+          "f5673a70-32aa-46ec-92a4-68b4562c7bd5"
+        ],
+        "source_status": {
+          "ids": {
+            "visible": 1
+          },
+          "web": {
+            "visible": 1
+          },
+          "windows_security": {
+            "visible": 1
+          },
+          "zeek": {
+            "visible": 5
+          }
+        }
+      },
+      {
+        "intent_id": "71a20b5a-5c10-4256-afc6-8bd29a94d1f2",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-sqli-b",
+        "event_type": "adversarial_payload",
+        "semantic_instance_key": "34f4f60b20ea1b81d65f13f9:0",
+        "authored_time": "+35m",
+        "actor": "marta.diaz",
+        "system": "SEC-TEST-01",
+        "activity": "Second SQL injection attempt against the web app, different request (corpus case: sig-sqli-001 / corr-003 candidate)",
+        "planned": true,
+        "action_ids": [
+          "765abd8e-62a8-4a1c-9824-d2e8a368f6d7"
+        ],
+        "occurrence_ids": [
+          "b2f98e73-01b4-48cf-9a8f-bfc6ca322330"
+        ],
+        "source_status": {
+          "web": {
+            "visible": 1
+          },
+          "zeek": {
+            "visible": 3
+          }
+        }
+      },
+      {
+        "intent_id": "adce82cd-7ea5-4734-ba8d-16b26c6beed4",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-sqli-c",
+        "event_type": "adversarial_payload",
+        "semantic_instance_key": "34f4f60b20ea1b81d65f13f9:0",
+        "authored_time": "+50m",
+        "actor": "marta.diaz",
+        "system": "SEC-TEST-01",
+        "activity": "Third SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+        "planned": true,
+        "action_ids": [
+          "4f098147-3f06-46d4-9f11-7731e80f07b0",
+          "76befbed-6301-41e9-af64-3a93dcd93cd5"
+        ],
+        "occurrence_ids": [
+          "52e96f9f-9e52-4f59-94b9-ab84afbc64d8",
+          "816fde3a-9236-46bd-98a5-4556ebac12ba",
+          "eaa3a5fe-b81b-410a-bf08-2170f414fe3b"
+        ],
+        "source_status": {
+          "ids": {
+            "visible": 1
+          },
+          "web": {
+            "visible": 1
+          },
+          "windows_security": {
+            "visible": 1
+          },
+          "zeek": {
+            "visible": 5
+          }
+        }
+      },
+      {
+        "intent_id": "7ef3f855-8d46-485d-9d64-c4af4aa4c03a",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-sqli-d",
+        "event_type": "adversarial_payload",
+        "semantic_instance_key": "34f4f60b20ea1b81d65f13f9:0",
+        "authored_time": "+1h5m",
+        "actor": "marta.diaz",
+        "system": "SEC-TEST-01",
+        "activity": "Fourth SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+        "planned": true,
+        "action_ids": [
+          "6b5f3610-2f25-4537-8c58-4a2c5752a55a"
+        ],
+        "occurrence_ids": [
+          "fcf6300e-f8ad-4e07-9ba5-259b21a7cc24"
+        ],
+        "source_status": {
+          "web": {
+            "visible": 1
+          },
+          "zeek": {
+            "visible": 3
+          }
+        }
+      },
+      {
+        "intent_id": "d57dff46-3fad-4d02-8088-a7635b44cda3",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-benign-browse",
+        "event_type": "connection",
+        "semantic_instance_key": "66492d8012812c61b2ed03ea:0",
+        "authored_time": "+1h15m",
+        "actor": "marta.diaz",
+        "system": "SEC-TEST-01",
+        "activity": "Ordinary product-catalog request against the web app (corpus case: ml-low-004)",
+        "planned": true,
+        "action_ids": [
+          "1e9626d6-7b89-48d4-a494-2400f344ce7c",
+          "80bb9108-3f34-477a-b333-da6a7b1123c5",
+          "dc29a36a-b5a9-4748-83f1-d6927ba210ca"
+        ],
+        "occurrence_ids": [
+          "8213d2ab-d25a-4ff7-8fed-5421a77c8441",
+          "9e0101dd-f066-4ce9-83be-04c162c8fa6c",
+          "ab413849-c7a8-4585-900f-90b390c07bd0",
+          "bf089ed3-a4b1-4c0e-bbb3-d91bfe329524",
+          "e6d11133-9a83-471f-bf36-0adc40e5cda6"
+        ],
+        "source_status": {
+          "web": {
+            "visible": 1
+          },
+          "windows_security": {
+            "visible": 2
+          },
+          "zeek": {
+            "visible": 7
+          }
+        }
+      },
+      {
+        "intent_id": "405e6daf-2fed-42c6-9adc-5f488260e1ca",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-spray-high",
+        "event_type": "credential_spray",
+        "semantic_instance_key": "16674ff553fa7662c46f1a6d:0",
+        "authored_time": "+1h30m",
+        "actor": "SYSTEM",
+        "system": "DC-01",
+        "activity": "High-volume credential spray against a domain account (corpus case: notable-1001, high-risk Splunk notable)",
+        "planned": true,
+        "action_ids": [
+          "00262b24-6044-4322-a5c0-22001484b0ec",
+          "0435b790-cf1c-40aa-9e37-f93bf5f29664",
+          "048a87c0-f034-4653-b973-6a4add7c7501",
+          "04952bd6-8cd4-4cea-bcca-716fc89e5375",
+          "0b03ad03-7754-4176-9a5e-3d0a010e65e9",
+          "0ba6f43f-e8af-4a71-a1e2-3aeffb0bc384",
+          "0f19a2b6-d195-4b1e-bcbb-7a52e797d685",
+          "0f620a4d-ddd7-4bf9-920d-5a7da853b29f",
+          "0f9ae5d7-a89b-4937-965b-35559903fee3",
+          "1205db5e-7dcc-4186-8880-a267c673085d",
+          "13681a76-a41d-4646-8c60-7523f4707bf6",
+          "13ff5973-c78f-4377-902a-101aa90950e4",
+          "14bad798-95e8-4585-b4b6-3685845498c5",
+          "16b5a3ad-3ca9-4750-8db7-2d9234074858",
+          "188971d9-c7f8-4100-93d8-3daac37e057b",
+          "1975a310-0e08-4b54-b0ec-432fbf2165ba",
+          "1f5da7f7-1de3-402f-bff6-c7569bf7c1a7",
+          "1fc437b3-db12-4383-a8fa-e3f882bce0e5",
+          "22be1add-45a2-489c-9c5b-69c1d454c60a",
+          "22f29df1-d00b-485a-82d6-b537ea990f0e",
+          "23df513f-d190-4c7a-a5bc-f182e932bf43",
+          "2481b2a3-340c-4077-b13d-75928d0b92cd",
+          "2819f98c-f859-4c9e-8b80-59899ca579ef",
+          "286a2692-80f6-4af8-a07a-063d94aa4313",
+          "29d06071-f1b9-4b77-b8a3-49c9fd3a9c7f",
+          "2c86266c-0b83-4776-8127-9c8c4949947a",
+          "2db9a2db-94a4-4ef9-876e-b1d6b8916adc",
+          "363a5b7a-e92f-48ca-9571-e29fa7670fb2",
+          "389a5704-9dfc-47e3-a4ee-0d63b5ee216c",
+          "3cc7786f-8667-4135-b78c-855ba84c2b88",
+          "3cd3b34a-7c3d-4765-95eb-5ce443ca2884",
+          "3ecfb531-74ff-4a23-839a-4b06142ab664",
+          "43a0b0dd-f4d5-445c-8183-6c430e83b3b4",
+          "448f3aad-05bc-47c7-be9f-f66b401da289",
+          "4639d879-793c-4598-993a-01d991a096a5",
+          "47db5e33-e002-4c41-88d6-99befb07f1f9",
+          "499a842b-dbd6-4959-ba29-a778dcf7a37a",
+          "4b59f7a5-1d1c-4bf5-9e8d-5afcd8f6ad20",
+          "4b7a0f0b-faea-4d7b-b852-652d1132c283",
+          "4bdadffc-15b0-4fff-b57b-afbf809e5491",
+          "506fdc7c-5699-4cc2-901c-5765267937fc",
+          "508a0f73-d72e-417c-b1ba-f47d5f80ed4b",
+          "5093196d-a991-49de-b468-8906d4b3f3b0",
+          "510ee8a7-6171-4cc2-aaf9-db26124440b0",
+          "51efef34-85ab-4714-9271-2f6c4d869417",
+          "545e9fb3-b4f6-449d-bd1f-79be6dfca362",
+          "5aa199a8-d43c-40ef-87ef-f361b692fa42",
+          "5bd14fc0-c894-4877-91fc-54ae523184ad",
+          "5f2a602e-0252-4015-ad3e-7915bbed2c47",
+          "65969a96-f8d9-4427-84a9-6603ef266391",
+          "67c1eda2-f351-4f8e-8398-f51fcaf5ab7e",
+          "6b8cc92a-bd10-4d1b-9a30-fd200826a208",
+          "6c9a0322-df0b-4e78-9795-a9c0c2f13b12",
+          "6e9dbfe6-035a-4a01-90a2-7838f602d6e2",
+          "70f7b7b5-8109-4583-9719-a2af7b97593a",
+          "7163d397-3d52-4abd-92b0-10318479dbe9",
+          "74bb9429-50da-4b42-ba0c-357cba9c4e89",
+          "785587d5-aa7c-42a3-b77e-06761017f5fd",
+          "79ecd2d0-2f24-4d21-8e18-d7ddea6acad5",
+          "7cbf0c06-d2d5-42d8-acc5-886157b7b019",
+          "7f24d4be-6b93-446e-a073-16a31c09fa62",
+          "83910b62-0e8a-4c43-91a1-7cd8ce2c8910",
+          "8432af44-5780-4208-bdf9-5712922307f7",
+          "84c49482-44fa-4429-834c-838443e5995d",
+          "8565c4be-01e9-47af-8e45-ff5c129649a8",
+          "8756ba5a-b63b-4360-8256-a9fb8e917a28",
+          "88b53cf7-bc27-4c04-a7a8-f9950ea371c8",
+          "893ef3dc-801f-471a-96df-0b02c11a9ec8",
+          "8aca9f42-c871-4b6b-a1a0-b1d551c7d939",
+          "9137cbac-0cc4-4a2b-a8df-3db1831dcbe4",
+          "92406a06-8226-461a-90ca-cfa74d5ca7a2",
+          "95670fed-44f9-44da-98d6-84118216abba",
+          "9697d61d-3801-4892-a3be-5a309b9174de",
+          "99abb53f-102d-4489-8967-14d8b69e212b",
+          "9cbb8e93-d810-4c93-a8ca-491a256eb718",
+          "9fee4f01-8c3a-4804-88ce-77f27bae1fb1",
+          "a4fc43d3-4d24-4b6e-b427-a7c0567791f5",
+          "a536d6cc-0f6a-4183-ab81-a33afc87ebd8",
+          "a7d57075-ee5c-4a4f-a50d-7fe94f6cc683",
+          "acc90043-34a7-4901-b89a-dda464bab012",
+          "b0640ef2-da88-484a-8c9b-0fe4290b4c92",
+          "b0718104-a9f4-44dc-85d8-1bec8bbe7888",
+          "b12793f6-6323-4743-96d1-6e32748f6f30",
+          "b33b35d9-f228-473b-b679-ee722bd7c6b7",
+          "b508b366-627d-40c2-9960-7dfff4c96d9f",
+          "b5da37b3-44f5-45dd-b2e7-13bbfe6075fb",
+          "b6fe838c-038e-4900-b28a-b1307b7bb5ff",
+          "b71bba2b-33c3-451d-8a86-9b558cca8a65",
+          "b965b832-ff1a-4f09-9c1b-68edd0c19e39",
+          "b9b8e412-cd33-44bf-afbb-5c780ea41f13",
+          "bbfb95a0-fec0-4021-b1d1-963be06c4546",
+          "bddd66e6-367c-4678-9f54-d6b63240609a",
+          "c3c35efc-cf10-44d4-9180-a390826c85a9",
+          "c550fb7c-bc9c-4be0-a798-93f1f2d2eead",
+          "c74c053c-ea63-48fc-93a9-4dc824448f00",
+          "ca37dab6-3750-4ec9-adbb-0a8ac3849ce7",
+          "cff60575-2417-4286-adb9-8d52b38ec2d6",
+          "d0c1599b-5028-4f70-8852-3eba5695b6fc",
+          "d187bc63-0a99-4e84-8112-d40f16bf857a",
+          "d1b593f4-fb05-4ea1-9ee0-addf02f80107",
+          "d2d36077-dcb8-46be-a466-062dc7c7c8f5",
+          "d329d8c8-9680-41bf-82e4-4df67a12b6fd",
+          "da2c58fe-f046-4ec7-82d4-b66ff62537bd",
+          "da4ffdca-a401-4e40-b3e7-af9936b4e0d1",
+          "dcf7436a-6fbb-4a8c-a463-f558a2f2c8f8",
+          "deee9193-143f-471d-86a9-293d63f3be3b",
+          "e11a68ab-346b-45c9-840a-b281de81d3e5",
+          "e147ebaa-bb01-4ce6-964c-d1ab17eb8d17",
+          "e1cb91cc-42b1-45c0-8260-4bc58cec8c97",
+          "e679a523-88fe-4deb-b36d-412815fd9901",
+          "e8e062e0-ca81-48b2-b299-b142e62e8394",
+          "ead83522-6ef2-4ac1-b643-23cda38c1407",
+          "eafe3f99-6ca0-40ae-8acb-1e1268dfa66a",
+          "ee977fe8-64cb-4174-a2bb-edac809587b0",
+          "f08c12a0-31ad-4a74-ae53-baf96bfeb0f9",
+          "f27174b0-5256-4c7f-8460-baf5d8d6f25f",
+          "f68e30b4-c780-4c66-b768-c371e003a80e",
+          "fcc515c3-7f26-4489-aa88-f10f30e5d00b"
+        ],
+        "occurrence_ids": [
+          "004cb4ff-9695-4772-ade1-27f94cd51354",
+          "015a73d3-1376-4b7b-837f-6c9a934e10a1",
+          "0521c1a5-cd46-4b99-9c61-b6e33822b8e6",
+          "0529b2bc-b416-4d99-baf6-f27aadca1f34",
+          "09020f38-1d1d-4958-8c94-a891d5c13845",
+          "09c62523-4eee-4cc1-b2e3-9fda2d82446f",
+          "0c26e085-33db-4a4f-bce4-3556c9140591",
+          "0c4ffb99-2c03-412c-b6be-b54f61690d7d",
+          "0d08f104-aec5-4dd7-89b4-362f07a90c11",
+          "0d2b550b-0b3c-41f7-b4dc-59abd4914290",
+          "0ee824cd-024f-4986-9e6d-7569efc8cef9",
+          "0fd7033d-bfab-4941-aa43-61abe63ad384",
+          "11e707e7-e130-489f-ada2-3430e81b376e",
+          "1761780f-51b3-4142-9b2a-fef4e76c978a",
+          "18c8f622-46f2-4168-aefc-8befa682a294",
+          "196feb82-27f6-4e8d-aa8a-db15f1c2bfdb",
+          "19b572b2-554c-4089-b21e-9f916248ff6f",
+          "1a329db4-d6b9-426e-b2a6-df6eb681e73d",
+          "1ae99b55-660d-4f46-aa1d-d92e81519dc9",
+          "1e049ae9-0727-4858-9dac-47a2b2e8d320",
+          "1fb0e8ad-09d5-4df6-9f29-a349d34755c9",
+          "20e455fc-086e-43e3-9908-901fbe6ed967",
+          "21c99fb9-b2c2-4698-b255-3de771038f7f",
+          "229b003a-624c-4dca-bce6-ec5bf73fd6e3",
+          "22a6b0cb-7507-4565-a466-91ce5ef42e1d",
+          "248b27b2-970d-4f2f-92d5-b5d94e6280b4",
+          "2663187f-35e8-4ef6-a742-0d0fd86674ca",
+          "28010a17-0b68-4fd7-8701-e1a774451d54",
+          "284b617b-4bcc-4191-8de0-8675a5497d86",
+          "2ba28886-a515-4bd5-9c8a-6b71e123e908",
+          "2ea728d7-be00-4360-90dc-1636f47a896f",
+          "31800bc5-a630-407f-9a13-6b0eaad74eb7",
+          "3326128a-ac1c-4cdf-aea9-ef5729e71fe1",
+          "33c0d031-25ce-489e-a489-308817db2f32",
+          "34645021-ea87-4630-8219-36dca1ce38b1",
+          "364f5f84-c0cb-4855-a0e4-4e44cdc4609c",
+          "36bb622a-baa6-43fa-ae52-89507a787455",
+          "382bc904-a34c-4338-aec2-f0d641abf955",
+          "386657ad-1c61-4163-bc21-0141068e6087",
+          "3a32b22c-b57a-4d2e-85f0-62450c1ecbc8",
+          "3a7bc7a7-c666-4022-9297-b4cba04d09f8",
+          "3b36844b-9fdc-483c-aab7-7793d151614a",
+          "3c254957-ba43-4da6-9b87-9bb8b9e7f717",
+          "3ce3cbc6-ad4b-4c26-af47-a980a65faf69",
+          "3cf8cd0b-d985-4102-ac17-0d51ece3a6f1",
+          "3d0dd9ab-70a0-46e2-ab54-7b56dfbba9cd",
+          "3e8bb8a7-61e5-46b3-89f1-f417423ba82c",
+          "3e8dc00b-f9a4-4f80-ac34-3052f2f30afd",
+          "3ea8bf8d-8147-48b0-8dbc-67fdedb1f4d6",
+          "3f41ba19-60f7-4c31-9c36-64838494c9aa",
+          "41b954ad-d410-4543-989d-9078c1d2b92a",
+          "4285cddd-0fa0-4439-b41b-b3ab924b70b8",
+          "42ba366c-879f-4955-9126-c116812b0e9e",
+          "437b8786-e08b-40da-91a6-3bd16591e28a",
+          "4452ae3d-7170-4d84-ae12-76fa226784fe",
+          "447f426f-a446-416b-b04b-df026f0cae0c",
+          "45002ed0-fe52-4bc0-b824-63431807b9bf",
+          "45f890cf-f0bd-45bd-86ea-6d56bde08cbd",
+          "47f2b58d-68dd-47f8-8a9a-fee66116e3be",
+          "4c663258-6089-4c31-bff5-07f6bead6f59",
+          "4c9ee92b-c5da-44b9-8457-42ee9838f92a",
+          "50fa4ade-272b-48f0-8e66-ba663fd5a9d5",
+          "53114997-83a8-467f-bf4a-00ed131dc7c4",
+          "55ec614a-9f29-490b-be3f-4d5dce37cf0a",
+          "57c17d2d-7926-4c01-9c5e-ddc1e10d19d0",
+          "57f5cd79-f1ed-487e-850c-7d1cc222bff2",
+          "5b005b09-7b45-484e-9d81-a3ba5bc26630",
+          "5d3d3d00-370c-40ed-980a-7a9cea1d66aa",
+          "5db4e7cf-0e6a-4e48-b0dd-ea2337067270",
+          "5f40e65d-cf21-4e8f-91c5-78348cd98c1b",
+          "5f52cb50-7aeb-433c-bd8e-6a16ae65da5e",
+          "6279d25a-daba-47a5-8a2f-67bdeddc62f3",
+          "62dc2a77-d57b-4e7c-93cf-b7503dcc5ea4",
+          "6575e0a0-9a52-41a6-97f1-b2a483aa166c",
+          "66299baf-7040-4c0c-9ac2-c41ba74619f3",
+          "68d6daed-9ecb-46ee-bf7e-98c6ac325318",
+          "6b9f4279-23e4-4db4-b7ba-b5f04da7725d",
+          "6c53298d-30f8-450e-b9ce-b45147946442",
+          "6ec46253-c0c3-4076-9683-80f682a51a65",
+          "7097fad4-4151-4185-bebf-9ca830abc94f",
+          "7130e9dc-511b-48d4-b507-88928ef14825",
+          "714b827b-09d7-4b0b-8838-5675ee2f15e9",
+          "72950644-7c21-4777-be40-fa92d12c2cd4",
+          "72c954a1-2a59-4dd7-8ee9-ffd3c9971ffa",
+          "72fb48ff-f197-4dd9-9454-4184c29c766b",
+          "759c3f37-eb33-4eba-a598-df19267ae65d",
+          "75b428ff-8a4f-4f3b-b662-5845e222619b",
+          "77ea7eca-f2a5-492e-9f3c-d6371542191a",
+          "7813a8ae-b611-418e-a72a-226608b70b57",
+          "78438235-846b-4384-a5cd-61621002fe1d",
+          "785ff137-a537-49c9-bcb9-3ce041130565",
+          "787afbbb-e96f-41ce-a746-110339218d84",
+          "78bcd247-dace-4adf-aa37-3166eeff9451",
+          "7b8a2256-3ec9-46ec-8ac4-9f41264e31e1",
+          "7d773cb1-d811-47d4-b849-e2797b8ce88e",
+          "7e21e112-30a4-4485-a912-cdb70cca2268",
+          "7ebe9ed6-7c9f-493c-9eb9-22a33ba0d563",
+          "7f1faa68-2d2d-4ac4-9c56-eb72b19952a8",
+          "8143a805-4132-4674-936c-4a6b8886b243",
+          "841b6fcc-1379-4208-a7ee-b7d145692506",
+          "86febcc0-ca1c-4cad-ba2f-2507a4831c94",
+          "87985d17-cc03-432c-a011-28e4ee0723b9",
+          "8bcb028e-60bc-461d-b4b0-8000a4bde3bb",
+          "8be439d4-981f-4a93-8612-c8a0585030fb",
+          "8c2882b5-1b42-4f5f-9a44-82e4086d2792",
+          "8d74dfe4-91a3-49e1-ab7b-b5238cd2a34e",
+          "91287333-f246-4dc5-a365-d88d0eeb8c08",
+          "93da8e83-7b68-4270-97e3-0b429ae5a7da",
+          "94647393-f222-49cb-845c-a4e745636ad0",
+          "96151f54-4576-4417-bf44-824f05ca6827",
+          "963516c1-8f63-4c89-962b-68327f4110d2",
+          "9702fdc9-5e4b-4f09-ae20-094ed1d33a22",
+          "9aaedc41-e6f2-4641-9e29-1834d640645f",
+          "9b1712de-2a0b-45f0-bdbc-41255b3aebfe",
+          "9b175361-15c4-4779-94bb-c5b9f0335706",
+          "9b67da0d-7f2c-4865-8f6e-16cef2a38983",
+          "9c293a4b-d01c-47c2-a927-5d21f1e32ebd",
+          "9ce264a0-9473-4e79-a0fc-b32f09c02636",
+          "a1695f13-5ca1-40cb-96da-01b463a050be",
+          "a3206895-52bc-4938-b27d-cf81414f62e5",
+          "a33452bc-cfbe-4550-b44b-598bb1d26cdd",
+          "a50e3c84-40c7-4137-b3d7-7cfc52566f72",
+          "a555b143-d720-40af-8148-c14b344791cd",
+          "a74bcfa0-d8ef-454b-8428-d6213ffb3dae",
+          "aa1812bc-8aef-420b-b747-3c90d0feb001",
+          "aabd9a1b-9a04-4b68-b107-01e7a2f39ae7",
+          "adac9b27-59d4-4a9f-ba1b-9222cd6f02f7",
+          "af65ddb7-87e7-4243-a1ed-e78c2a553ba5",
+          "af87f055-1ce7-4e53-8c3f-30a6906b2c9f",
+          "b1078748-5157-457f-b1c7-1488f3f9da65",
+          "b1cd07f1-794e-4aea-90a2-857bd2e7565b",
+          "b1e59906-7824-4a9f-905a-1b1455acd62c",
+          "b3f3822d-c857-4d7b-8946-43ba3b56d3f3",
+          "b6231f7f-ea11-4287-a4c9-324747100704",
+          "b9ef39c6-63c5-41bd-a9ef-cde32171f3a9",
+          "be49aa2a-a0bc-493f-8013-11e246c76eec",
+          "bef0e30c-be6b-4196-b863-11b69ab91152",
+          "bfd869e1-b8e6-432c-9b6c-1e317c4d4f67",
+          "c0b35e0a-f1c9-4d1e-9050-c1ec5ee3972a",
+          "c1981ffc-8c61-44d6-8df2-b20827460647",
+          "c2c07ab9-9189-415b-a2e7-f2b4e9f5d409",
+          "c37ba5f0-a194-4ce1-8376-dfe5e1e940d2",
+          "c388d0dc-160c-46b7-91c8-69df3d307525",
+          "c38f857a-6976-49d0-9aff-1e2e0ee51c89",
+          "c50ec762-5713-4a81-9e72-b69b07be503b",
+          "c7c00cb6-2b4b-42c5-8bf0-e73a506f1cfe",
+          "cbe7fa23-95bb-46de-a4ee-90ff58bdad3e",
+          "cc6a8b07-ef64-4c5c-b7d3-3e04fe8bb33d",
+          "cd2d776b-4f7e-43f1-963c-b459c965f35f",
+          "cf3bb524-3c92-4a04-92c3-368790bad537",
+          "cf524040-57a8-4b9e-ba79-b121eb9fdd57",
+          "d2d63c42-e2cb-40cd-bc93-e9e51d6865d7",
+          "d34545f1-00e0-4a33-b1fe-60f911a57d05",
+          "d48d7243-8a03-45c9-b5ee-44ad7268b8d4",
+          "d8ccdc24-46ae-4b69-9f0f-eddaa7fda710",
+          "d8f132f3-4c0f-4aa7-ac27-f75bb5751435",
+          "dbd0ec46-6bda-48fc-b77f-fad1d528d23c",
+          "dc82f8f7-933e-48e7-85db-db1da5859b17",
+          "e49b6144-00e1-45bd-b848-c03229e408ca",
+          "e4e74583-1f27-4269-85f2-59092ead500a",
+          "e70f42af-aa2f-47f3-b7c0-a71d91ec8680",
+          "e925aca3-f6fa-4669-a01a-d36b6c0ff451",
+          "eae40ae0-0c06-458b-973c-3ab0ac83299d",
+          "eb5195a2-6fb8-462b-8818-2ac27cc6293e",
+          "ed4f5382-b07b-4235-91d6-8620347e28c1",
+          "ef7c8541-1fe6-4f5a-9047-1cb3297b92bf",
+          "f05bab14-7a9c-4d99-8b14-5087bc6f3c5d",
+          "f0cbdad8-884f-4853-9bf0-4ab2b7c5f8cb",
+          "f2bee96a-36a3-446e-9f42-68b1c1a18921",
+          "f81b04b9-5424-446f-b563-0e11038b358c",
+          "f8c5cd59-0982-45ee-bc54-5fbc03c2ce1f",
+          "f90b8cc6-8c23-4f1c-8668-81efeee6f88b",
+          "f9cb3cd1-b5bf-434b-849c-0d11ef0d266a",
+          "f9cfb68e-1a06-4403-88eb-c47bc9f75d04",
+          "fab91260-86b8-468e-ae0d-fb66d57a8b86",
+          "fd782054-4516-4193-a4d1-75c7e89dfca2",
+          "ff52e378-4e86-492e-baa1-d2c7fb13449c"
+        ],
+        "source_status": {
+          "windows_security": {
+            "visible": 118
+          },
+          "zeek": {
+            "visible": 59
+          }
+        }
+      },
+      {
+        "intent_id": "a0b23144-4e87-4717-9e24-6246ca4f739f",
+        "ground_truth_section": "storyline",
+        "storyline_id": "evt-spray-low",
+        "event_type": "credential_spray",
+        "semantic_instance_key": "8faf780266d6a639862aa03e:0",
+        "authored_time": "+1h45m",
+        "actor": "SYSTEM",
+        "system": "DC-01",
+        "activity": "Low-volume, scattered failed logons (corpus case: notable-1002, low-risk Splunk notable)",
+        "planned": true,
+        "action_ids": [
+          "44e1d92f-4e0f-4f43-990b-d0f93367f784",
+          "94efb278-2de3-4d55-b5e3-10ee9ae441f2",
+          "9949e45b-f694-4910-9b16-310bc8e12aa4",
+          "d1677677-fe2f-4113-8a17-f723f07373bf"
+        ],
+        "occurrence_ids": [
+          "1c0b25cf-0dc1-435f-b344-fccfcf1b3afb",
+          "b1128e2a-ad1d-42c9-a61b-73842a2880ad",
+          "c27dc822-b021-4aeb-b4eb-c21c0036c663",
+          "cabee340-362c-4505-978d-71fce8bce3bb",
+          "e2d1e9a3-69f3-434b-b129-89d8e666ed6b",
+          "f3872a1c-097c-430b-972e-006c0892c13e"
+        ],
+        "source_status": {
+          "windows_security": {
+            "visible": 4
+          },
+          "zeek": {
+            "visible": 2
+          }
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "record_id": "evt-benign-browse#0",
+      "kind": "connection",
+      "intent_id": "d57dff46-3fad-4d02-8088-a7635b44cda3",
+      "storyline_id": "evt-benign-browse",
+      "time": "2026-08-01T14:14:45Z",
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Ordinary product-catalog request against the web app (corpus case: ml-low-004)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.20.30.10",
+        "dst_port": 80,
+        "uid": "CicEFG6uBSVyLf7xb1"
+      }
+    },
+    {
+      "record_id": "evt-spray-high#0",
+      "kind": "credential_spray",
+      "intent_id": "405e6daf-2fed-42c6-9adc-5f488260e1ca",
+      "storyline_id": "evt-spray-high",
+      "time": "2026-08-01T14:29:56Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "High-volume credential spray against a domain account (corpus case: notable-1001, high-risk Splunk notable)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "attempt_count": 61,
+        "pattern": "brute_force",
+        "target_accounts": [
+          "svc-legacyapp"
+        ]
+      }
+    },
+    {
+      "record_id": "evt-spray-low#0",
+      "kind": "credential_spray",
+      "intent_id": "a0b23144-4e87-4717-9e24-6246ca4f739f",
+      "storyline_id": "evt-spray-low",
+      "time": "2026-08-01T14:45:28Z",
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Low-volume, scattered failed logons (corpus case: notable-1002, low-risk Splunk notable)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "attempt_count": 2,
+        "pattern": "spray",
+        "target_accounts": [
+          "helen.ortiz",
+          "raj.subramaniam"
+        ]
+      }
+    },
+    {
+      "record_id": "evt-sqli-a#0",
+      "kind": "adversarial_payload",
+      "intent_id": "7a6e0bff-7eac-4224-8b57-a81b61f87312",
+      "storyline_id": "evt-sqli-a",
+      "time": "2026-08-01T13:19:52Z",
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "SQL injection attempt against the web app (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.20.30.10",
+        "dst_port": 80,
+        "encoding": "percent",
+        "expected_sources": [
+          "web_access",
+          "zeek_http"
+        ],
+        "family": "sql_injection",
+        "rendered_value": "EFORGE_TEST%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--%20EFORGE_TEST%20p2lAzH",
+        "rendered_sha256": "360d52d8d6efd59e15d70cdfb0095550519f32b08eadf4f406a9d2c700eef68d",
+        "scheme": "http",
+        "surface": "http_request_url",
+        "target_system": "WEB-01.dualsignal-corpus.local",
+        "value": "EFORGE_TEST' UNION SELECT username,password FROM users-- EFORGE_TEST p2lAzH",
+        "value_sha256": "2177e260939f6e0dffb1a2a24751626faccd9b59a39d21288199bdc2984ae5f3",
+        "weakness_class": "SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM / log store that string-concatenates the field into a query is exploitable, and a WAF/IDS in front of the web tier should match the injection on the wire. Durable class; the canonical UNION/boolean/time-based/error-based forms below let a defender test detection QUALITY across evasion variants. Carries no real target (no host, no schema-qualified table) — an inert detection-test string only.",
+        "expected_defender_signal": "A SQL-backed store must parameterize/bind log fields (never string-concatenate them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked / time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire.",
+        "ids_alert": {
+          "sid": 2009714,
+          "rev": 9,
+          "message": "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT"
+        }
+      }
+    },
+    {
+      "record_id": "evt-sqli-b#0",
+      "kind": "adversarial_payload",
+      "intent_id": "71a20b5a-5c10-4256-afc6-8bd29a94d1f2",
+      "storyline_id": "evt-sqli-b",
+      "time": "2026-08-01T13:34:45Z",
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Second SQL injection attempt against the web app, different request (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.20.30.10",
+        "dst_port": 80,
+        "encoding": "percent",
+        "expected_sources": [
+          "web_access",
+          "zeek_http"
+        ],
+        "family": "sql_injection",
+        "rendered_value": "EFORGE_TEST%27%20AND%20extractvalue%281%2Cconcat%280x7e%2Cuser%28%29%29%29--%20EFORGE_TEST%209YjWbg",
+        "rendered_sha256": "493fb94c86fb131ed236803726ab1a644437b626fb543987898debdc63436a47",
+        "scheme": "http",
+        "surface": "http_request_url",
+        "target_system": "WEB-01.dualsignal-corpus.local",
+        "value": "EFORGE_TEST' AND extractvalue(1,concat(0x7e,user()))-- EFORGE_TEST 9YjWbg",
+        "value_sha256": "445e8c44d129a94925de279059a165a9c4798ef1d84538db686a33747d124499",
+        "weakness_class": "SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM / log store that string-concatenates the field into a query is exploitable, and a WAF/IDS in front of the web tier should match the injection on the wire. Durable class; the canonical UNION/boolean/time-based/error-based forms below let a defender test detection QUALITY across evasion variants. Carries no real target (no host, no schema-qualified table) — an inert detection-test string only.",
+        "expected_defender_signal": "A SQL-backed store must parameterize/bind log fields (never string-concatenate them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked / time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire."
+      }
+    },
+    {
+      "record_id": "evt-sqli-c#0",
+      "kind": "adversarial_payload",
+      "intent_id": "adce82cd-7ea5-4734-ba8d-16b26c6beed4",
+      "storyline_id": "evt-sqli-c",
+      "time": "2026-08-01T13:49:42Z",
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Third SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.20.30.10",
+        "dst_port": 80,
+        "encoding": "percent",
+        "expected_sources": [
+          "web_access",
+          "zeek_http"
+        ],
+        "family": "sql_injection",
+        "rendered_value": "EFORGE_TEST%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users--%20EFORGE_TEST%20HpIRhD",
+        "rendered_sha256": "43fc12adaf3ebfeac8bafe5c92c2ef19f269844fdac21e3b2f7c75405d3eb8f0",
+        "scheme": "http",
+        "surface": "http_request_url",
+        "target_system": "WEB-01.dualsignal-corpus.local",
+        "value": "EFORGE_TEST' UNION SELECT username,password FROM users-- EFORGE_TEST HpIRhD",
+        "value_sha256": "3dcd82ccc0395766b6558f64723774458ee1978147e24a1e22fc0aaf7df16266",
+        "weakness_class": "SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM / log store that string-concatenates the field into a query is exploitable, and a WAF/IDS in front of the web tier should match the injection on the wire. Durable class; the canonical UNION/boolean/time-based/error-based forms below let a defender test detection QUALITY across evasion variants. Carries no real target (no host, no schema-qualified table) — an inert detection-test string only.",
+        "expected_defender_signal": "A SQL-backed store must parameterize/bind log fields (never string-concatenate them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked / time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire.",
+        "ids_alert": {
+          "sid": 2009714,
+          "rev": 9,
+          "message": "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT"
+        }
+      }
+    },
+    {
+      "record_id": "evt-sqli-d#0",
+      "kind": "adversarial_payload",
+      "intent_id": "7ef3f855-8d46-485d-9d64-c4af4aa4c03a",
+      "storyline_id": "evt-sqli-d",
+      "time": "2026-08-01T14:05:30Z",
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Fourth SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "ground_truth_section": "storyline",
+      "emitted": true,
+      "attributes": {
+        "dst_ip": "10.20.30.10",
+        "dst_port": 80,
+        "encoding": "percent",
+        "expected_sources": [
+          "web_access",
+          "zeek_http"
+        ],
+        "family": "sql_injection",
+        "rendered_value": "EFORGE_TEST%27%20AND%20extractvalue%281%2Cconcat%280x7e%2Cuser%28%29%29%29--%20EFORGE_TEST%20PSXVMG",
+        "rendered_sha256": "10ddf5846f41b4fa775641a3ee441a0ce66f93c52562b017c109b1838c723d1b",
+        "scheme": "http",
+        "surface": "http_request_url",
+        "target_system": "WEB-01.dualsignal-corpus.local",
+        "value": "EFORGE_TEST' AND extractvalue(1,concat(0x7e,user()))-- EFORGE_TEST PSXVMG",
+        "value_sha256": "c27a7263068289869549c57008d33245b4a4737bd467f625fe437a036bae3a41",
+        "weakness_class": "SQL injection (CWE-89) carried in an untrusted log field: a SQL-backed SIEM / log store that string-concatenates the field into a query is exploitable, and a WAF/IDS in front of the web tier should match the injection on the wire. Durable class; the canonical UNION/boolean/time-based/error-based forms below let a defender test detection QUALITY across evasion variants. Carries no real target (no host, no schema-qualified table) — an inert detection-test string only.",
+        "expected_defender_signal": "A SQL-backed store must parameterize/bind log fields (never string-concatenate them into a query); a WAF/IDS should match UNION SELECT, OR '1'='1', stacked / time-based (SLEEP/WAITFOR) and error-based (extractvalue) injection on the wire."
+      }
+    }
+  ]
+}

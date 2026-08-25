@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "scenario_name": "dual-signal-triage-corpus-evidence",
+  "observation_profile": "complete",
+  "collection_window": {
+    "start": "2026-08-01T13:00:00Z",
+    "end": "2026-08-01T16:00:00Z"
+  },
+  "source_summary": {
+    "web": {
+      "visible": 5
+    },
+    "windows_security": {
+      "visible": 126
+    },
+    "zeek": {
+      "visible": 84
+    },
+    "ids": {
+      "visible": 2
+    }
+  },
+  "storyline_events": [
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-sqli-a",
+      "index": 0,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "SQL injection attempt against the web app (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "event_types": [
+        "adversarial_payload"
+      ],
+      "source_status": {
+        "ids": {
+          "visible": 1
+        },
+        "web": {
+          "visible": 1
+        },
+        "windows_security": {
+          "visible": 1
+        },
+        "zeek": {
+          "visible": 5
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-sqli-b",
+      "index": 1,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Second SQL injection attempt against the web app, different request (corpus case: sig-sqli-001 / corr-003 candidate)",
+      "event_types": [
+        "adversarial_payload"
+      ],
+      "source_status": {
+        "web": {
+          "visible": 1
+        },
+        "zeek": {
+          "visible": 3
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-sqli-c",
+      "index": 2,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Third SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "event_types": [
+        "adversarial_payload"
+      ],
+      "source_status": {
+        "ids": {
+          "visible": 1
+        },
+        "web": {
+          "visible": 1
+        },
+        "windows_security": {
+          "visible": 1
+        },
+        "zeek": {
+          "visible": 5
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-sqli-d",
+      "index": 3,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Fourth SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)",
+      "event_types": [
+        "adversarial_payload"
+      ],
+      "source_status": {
+        "web": {
+          "visible": 1
+        },
+        "zeek": {
+          "visible": 3
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-benign-browse",
+      "index": 4,
+      "actor": "marta.diaz",
+      "system": "SEC-TEST-01",
+      "activity": "Ordinary product-catalog request against the web app (corpus case: ml-low-004)",
+      "event_types": [
+        "connection"
+      ],
+      "source_status": {
+        "web": {
+          "visible": 1
+        },
+        "windows_security": {
+          "visible": 2
+        },
+        "zeek": {
+          "visible": 7
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-spray-high",
+      "index": 5,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "High-volume credential spray against a domain account (corpus case: notable-1001, high-risk Splunk notable)",
+      "event_types": [
+        "credential_spray"
+      ],
+      "source_status": {
+        "windows_security": {
+          "visible": 118
+        },
+        "zeek": {
+          "visible": 59
+        }
+      }
+    },
+    {
+      "kind": "storyline",
+      "storyline_id": "evt-spray-low",
+      "index": 6,
+      "actor": "SYSTEM",
+      "system": "DC-01",
+      "activity": "Low-volume, scattered failed logons (corpus case: notable-1002, low-risk Splunk notable)",
+      "event_types": [
+        "credential_spray"
+      ],
+      "source_status": {
+        "windows_security": {
+          "visible": 4
+        },
+        "zeek": {
+          "visible": 2
+        }
+      }
+    }
+  ],
+  "red_herring_events": []
+}

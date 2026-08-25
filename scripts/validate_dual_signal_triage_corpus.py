@@ -24,7 +24,15 @@ REQUIRED_EVENT = (
     "label_disposition",
     "tier_hint",
     "msg",
+    "evidence",
 )
+
+# Cases whose signal_class implies a signature must (or must not) have actually
+# fired in the referenced evidence. Cross-checked against ids_alert presence in
+# ../evidence/GROUND_TRUTH.json so a label can't silently drift from what the
+# generator actually produced.
+SIGNATURE_MUST_FIRE = frozenset({"signature_only", "signature_plus_ml"})
+SIGNATURE_MUST_NOT_FIRE = frozenset({"ml_only"})
 
 ALLOWED_CASES = frozenset(
     {
@@ -87,9 +95,129 @@ def _err(errors: list[str], message: str) -> None:
     errors.append(message)
 
 
-def validate_corpus(data: dict[str, Any]) -> list[str]:
+def _load_ground_truth_record_ids_with_alert(scenario_root: Path) -> set[str] | None:
+    """record_ids in evidence/GROUND_TRUTH.json that carry an ids_alert.
+
+    Returns None if the ground truth file isn't present (e.g. running the
+    validator standalone without having generated evidence/ yet) so callers
+    can skip the cross-check rather than fail on a missing optional file.
+    """
+    gt_path = scenario_root / "evidence" / "GROUND_TRUTH.json"
+    if not gt_path.is_file():
+        return None
+    try:
+        gt = json.loads(gt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    fired: set[str] = set()
+    for event in gt.get("events", []):
+        if "ids_alert" in event.get("attributes", {}):
+            fired.add(event["record_id"])
+    return fired
+
+
+def _validate_evidence(
+    errors: list[str],
+    prefix: str,
+    event: dict[str, Any],
+    signal: str | None,
+    scenario_root: Path,
+    fired_record_ids: set[str] | None,
+) -> None:
+    """Verify `evidence` points at real, on-disk, content-matching artifacts.
+
+    This is the check that makes the corpus a labeled-with-support dataset
+    rather than assertions alone: every source path must exist, every `match`
+    string must be a literal substring actually present in that file (with
+    optional min_count/max_count), and for signature-bearing signal classes
+    the ids_alert presence in GROUND_TRUTH.json must agree with signal_class.
+    """
+    evidence = event.get("evidence")
+    if not isinstance(evidence, dict):
+        _err(errors, f"{prefix}: evidence must be an object")
+        return
+
+    record_id = evidence.get("ground_truth_record_id")
+    if not isinstance(record_id, str) or not record_id:
+        _err(errors, f"{prefix}: evidence.ground_truth_record_id must be a non-empty string")
+
+    sources = evidence.get("sources")
+    if not isinstance(sources, list) or not sources:
+        _err(errors, f"{prefix}: evidence.sources must be a non-empty list")
+        return
+
+    for src_idx, source in enumerate(sources):
+        src_prefix = f"{prefix}.evidence.sources[{src_idx}]"
+        if not isinstance(source, dict):
+            _err(errors, f"{src_prefix}: must be an object")
+            continue
+        rel_path = source.get("path")
+        match = source.get("match")
+        if not isinstance(rel_path, str) or not rel_path:
+            _err(errors, f"{src_prefix}: path must be a non-empty string")
+            continue
+        if not isinstance(match, str) or not match:
+            _err(errors, f"{src_prefix}: match must be a non-empty string")
+            continue
+
+        full_path = scenario_root / rel_path
+        if not full_path.is_file():
+            _err(errors, f"{src_prefix}: evidence file does not exist: {full_path}")
+            continue
+
+        try:
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            _err(errors, f"{src_prefix}: could not read {full_path}: {exc}")
+            continue
+
+        count = content.count(match)
+        if count == 0:
+            _err(errors, f"{src_prefix}: match string not found in {rel_path}: {match!r}")
+            continue
+
+        min_count = source.get("min_count")
+        if isinstance(min_count, int) and count < min_count:
+            _err(
+                errors,
+                f"{src_prefix}: match occurs {count} time(s) in {rel_path}, "
+                f"expected at least {min_count}",
+            )
+        max_count = source.get("max_count")
+        if isinstance(max_count, int) and count > max_count:
+            _err(
+                errors,
+                f"{src_prefix}: match occurs {count} time(s) in {rel_path}, "
+                f"expected at most {max_count}",
+            )
+
+    # Cross-check: does GROUND_TRUTH.json agree that a signature fired (or
+    # didn't) for this record, matching what signal_class claims?
+    if fired_record_ids is not None and isinstance(record_id, str) and record_id:
+        actually_fired = record_id in fired_record_ids
+        if signal in SIGNATURE_MUST_FIRE and not actually_fired:
+            _err(
+                errors,
+                f"{prefix}: signal_class {signal!r} requires a fired signature, but "
+                f"GROUND_TRUTH.json record {record_id!r} has no ids_alert "
+                "(the seed may have picked a different adversarial_payload variant -- "
+                "re-check evidence_seed / regenerate)",
+            )
+        if signal in SIGNATURE_MUST_NOT_FIRE and actually_fired:
+            _err(
+                errors,
+                f"{prefix}: signal_class {signal!r} requires no fired signature, but "
+                f"GROUND_TRUTH.json record {record_id!r} has an ids_alert "
+                "(this event would actually be signature-detected, not ML-only)",
+            )
+
+
+def validate_corpus(data: dict[str, Any], scenario_root: Path | None = None) -> list[str]:
     """Return a list of validation error strings (empty means OK)."""
     errors: list[str] = []
+    fired_record_ids = (
+        _load_ground_truth_record_ids_with_alert(scenario_root) if scenario_root else None
+    )
 
     for key in REQUIRED_TOP:
         if key not in data:
@@ -208,6 +336,9 @@ def validate_corpus(data: dict[str, Any]) -> list[str]:
                         f"{expectation['max_ml']}, got {ml_score!r}",
                     )
 
+        if scenario_root is not None and isinstance(event.get("evidence"), dict):
+            _validate_evidence(errors, prefix, event, signal, scenario_root, fired_record_ids)
+
     missing_cases = ALLOWED_CASES - seen_cases
     if missing_cases:
         _err(errors, f"corpus missing required cases: {sorted(missing_cases)}")
@@ -215,14 +346,18 @@ def validate_corpus(data: dict[str, Any]) -> list[str]:
     return errors
 
 
-def load_and_validate(path: Path) -> list[str]:
+def load_and_validate(path: Path, *, check_evidence: bool = True) -> list[str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return [f"failed to load {path}: {exc}"]
     if not isinstance(data, dict):
         return ["corpus root must be a JSON object"]
-    return validate_corpus(data)
+    # corpus/labeled_events.json -> corpus/ -> scenario root (where
+    # evidence-scenario.yaml and evidence/ live). Evidence source paths in
+    # the corpus are relative to that root.
+    scenario_root = path.resolve().parent.parent if check_evidence else None
+    return validate_corpus(data, scenario_root=scenario_root)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -234,8 +369,13 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("scenarios/dual-signal-triage-corpus/corpus/labeled_events.json"),
         help="Path to labeled_events.json",
     )
+    parser.add_argument(
+        "--no-evidence-check",
+        action="store_true",
+        help="Skip verifying evidence.sources against on-disk files (schema/policy checks only)",
+    )
     args = parser.parse_args(argv)
-    errors = load_and_validate(args.corpus)
+    errors = load_and_validate(args.corpus, check_evidence=not args.no_evidence_check)
     if errors:
         print(f"FAIL: {args.corpus} ({len(errors)} error(s))", file=sys.stderr)
         for message in errors:

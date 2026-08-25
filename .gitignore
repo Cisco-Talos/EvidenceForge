@@ -84,6 +84,9 @@ scenarios/dual-signal-triage-corpus/*
 scenarios/dual-signal-triage-corpus/corpus/*
 !scenarios/dual-signal-triage-corpus/corpus/labeled_events.json
 !scenarios/dual-signal-triage-corpus/corpus/schema.json
+!scenarios/dual-signal-triage-corpus/evidence-scenario.yaml
+!scenarios/dual-signal-triage-corpus/evidence/
+!scenarios/dual-signal-triage-corpus/evidence/**
 
 
 # Scan / analysis tool output

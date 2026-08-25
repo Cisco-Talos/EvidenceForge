@@ -1,23 +1,33 @@
 {
   "version": "1.0",
   "name": "dual-signal-triage-corpus",
-  "description": "Labeled dual-signal SnortML (GID 411) + classic signature + Splunk-notable triage events. ML probability is never equivalent to a signature true positive.",
+  "description": "Labeled dual-signal SnortML-style (GID 411), classic signature, and Splunk-notable-shaped triage events. Every event is grounded in real, generated evidence (../evidence/) rather than asserted labels alone. ML probability is never equivalent to a signature true positive.",
   "never_equate_ml_to_signature": true,
+  "evidence_scenario": "../evidence-scenario.yaml",
+  "evidence_seed": 1234,
   "events": [
     {
       "event_id": "sig-sqli-001",
       "case": "signature_only_high",
       "signal_class": "signature_only",
       "gid": 1,
-      "sid": "1:1000001",
+      "sid": "1:2009714",
       "ml_score": null,
       "severity": "high",
-      "src_addr": "203.0.113.10",
-      "dst_addr": "10.0.0.5",
-      "msg": "SQL Injection attempt (signature)",
+      "src_addr": "10.20.10.15",
+      "dst_addr": "10.20.30.10",
+      "msg": "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
       "label_disposition": "fix_now",
       "tier_hint": "T2",
-      "notes": "Classic signature TP: eligible for FIX_NOW policy; containment should still default to simulate/gated in production consumers."
+      "notes": "Classic signature TP: eligible for FIX_NOW policy; containment should still default to simulate/gated in production consumers.",
+      "evidence": {
+        "ground_truth_record_id": "evt-sqli-a#0",
+        "sources": [
+          { "path": "evidence/data/WEB-01.dualsignal-corpus.local/web_access.log", "match": "[01/Aug/2026:13:19:52 +0000] \"GET /api/v1/items?filter=EFORGE_TEST%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users" },
+          { "path": "evidence/data/IDS-EDGE/snort_alert.log", "match": "08/01-13:19:52.618520 [**] [1:2009714:9] ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT" },
+          { "path": "evidence/data/ZEEK-CORE/http.json", "match": "\"uid\":\"CvIVg1XKG8a2QlF2IS\"" }
+        ]
+      }
     },
     {
       "event_id": "ml-sqli-002",
@@ -27,27 +37,43 @@
       "sid": null,
       "ml_score": 0.97,
       "severity": "high",
-      "src_addr": "203.0.113.11",
-      "dst_addr": "10.0.0.5",
-      "msg": "SnortML possible SQLi (ML-only)",
+      "src_addr": "10.20.10.15",
+      "dst_addr": "10.20.30.10",
+      "msg": "SnortML possible SQLi (ML-only, no signature match)",
       "label_disposition": "escalate",
       "tier_hint": "T3",
-      "notes": "High ML score without signature corroboration must escalate/corroborate — never auto-contain or fix_now."
+      "notes": "High ML score without signature corroboration must escalate/corroborate — never auto-contain or fix_now. The request is a real error-based SQLi payload (extractvalue) that the curated ET signature set does not match: a genuine detection blind spot, not a fabricated absence of evidence. ml_score is analyst/ML-asserted metadata describing this specific request, since EvidenceForge generates raw evidence, not ML inference output.",
+      "evidence": {
+        "ground_truth_record_id": "evt-sqli-b#0",
+        "sources": [
+          { "path": "evidence/data/WEB-01.dualsignal-corpus.local/web_access.log", "match": "[01/Aug/2026:13:34:45 +0000] \"GET /api/v1/items?filter=EFORGE_TEST%27%20AND%20extractvalue%281%2Cconcat%280x7e%2Cuser%28%29%29%29" },
+          { "path": "evidence/data/ZEEK-CORE/http.json", "match": "\"uid\":\"CIDgf4FG1AovjFY3AG\"" }
+        ],
+        "note": "No snort_alert.log entry for this request by design -- confirms the signature did not fire."
+      }
     },
     {
       "event_id": "corr-003",
       "case": "signature_plus_ml_corroboration",
       "signal_class": "signature_plus_ml",
       "gid": 1,
-      "sid": "1:1000002",
+      "sid": "1:2009714",
       "ml_score": 0.91,
       "severity": "high",
-      "src_addr": "198.51.100.7",
-      "dst_addr": "10.0.0.8",
-      "msg": "XSS variant (signature + ML corroboration)",
+      "src_addr": "10.20.10.15",
+      "dst_addr": "10.20.30.10",
+      "msg": "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT (signature + ML corroboration)",
       "label_disposition": "fix_now",
       "tier_hint": "T2",
-      "notes": "Signature hit corroborated by high ML score: FIX_NOW candidate under gated remediation."
+      "notes": "Signature hit corroborated by high ML score: FIX_NOW candidate under gated remediation. Independent second UNION SELECT request/session from the first signature hit (different timestamp, connection, Zeek UID). ml_score is analyst/ML-asserted metadata, same basis as ml-sqli-002.",
+      "evidence": {
+        "ground_truth_record_id": "evt-sqli-c#0",
+        "sources": [
+          { "path": "evidence/data/WEB-01.dualsignal-corpus.local/web_access.log", "match": "[01/Aug/2026:13:49:43 +0000] \"GET /api/v1/items?filter=EFORGE_TEST%27%20UNION%20SELECT%20username%2Cpassword%20FROM%20users" },
+          { "path": "evidence/data/IDS-EDGE/snort_alert.log", "match": "08/01-13:49:43.342173 [**] [1:2009714:9] ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT" },
+          { "path": "evidence/data/ZEEK-CORE/http.json", "match": "\"uid\":\"CxWmHyb60U5FCUJO6l\"" }
+        ]
+      }
     },
     {
       "event_id": "ml-low-004",
@@ -57,12 +83,18 @@
       "sid": null,
       "ml_score": 0.42,
       "severity": "low",
-      "src_addr": "192.0.2.4",
-      "dst_addr": "10.0.0.5",
+      "src_addr": "10.20.10.15",
+      "dst_addr": "10.20.30.10",
       "msg": "SnortML low-confidence noise",
       "label_disposition": "accept",
       "tier_hint": "T1",
-      "notes": "Low ML-only score is noise: accept / optional suppress review — do not escalate compute burn."
+      "notes": "Low ML-only score is noise: accept / optional suppress review — do not escalate compute burn. Underlying request is ordinary, unremarkable product-catalog browsing with no injection content of any kind.",
+      "evidence": {
+        "ground_truth_record_id": "evt-benign-browse#0",
+        "sources": [
+          { "path": "evidence/data/WEB-01.dualsignal-corpus.local/web_access.log", "match": "[01/Aug/2026:14:14:46 +0000] \"GET /products?category=laptops HTTP/1.1\" 200" }
+        ]
+      }
     },
     {
       "event_id": "notable-1001",
@@ -75,12 +107,22 @@
       "risk_score": 80,
       "search_name": "Risk - Notable - Brute Force Detected",
       "rule_id": "risk_brute_force",
-      "src_addr": "10.1.2.3",
-      "dst_addr": "10.1.2.50",
+      "src_addr": "198.51.100.23",
+      "dst_addr": "10.20.20.10",
       "msg": "Splunk notable: brute force high risk",
       "label_disposition": "triage_t2",
       "tier_hint": "T2",
-      "notes": "High-urgency Splunk notable routes to T2 triage, not silent auto-contain."
+      "notes": "High-urgency Splunk notable routes to T2 triage, not silent auto-contain. Grounded in 61 real Windows 4625 failed-logon events against one account in a 3-minute window -- the actual volume a risk-based-alerting brute-force rule scores high.",
+      "evidence": {
+        "ground_truth_record_id": "evt-spray-high#0",
+        "sources": [
+          {
+            "path": "evidence/data/DC-01.dualsignal-corpus.local/windows_event_security.xml",
+            "match": "<Data Name=\"TargetUserName\">svc-legacyapp</Data>",
+            "min_count": 30
+          }
+        ]
+      }
     },
     {
       "event_id": "notable-1002",
@@ -93,12 +135,27 @@
       "risk_score": 15,
       "search_name": "Threat - Low Risk Anomaly",
       "rule_id": "risk_anomaly_low",
-      "src_addr": "10.1.2.9",
-      "dst_addr": "10.1.2.50",
+      "src_addr": "198.51.100.44",
+      "dst_addr": "10.20.20.10",
       "msg": "Splunk notable: low risk anomaly",
       "label_disposition": "triage_t1",
       "tier_hint": "T1",
-      "notes": "Low-urgency notable stays at T1 / accept-class handling."
+      "notes": "Low-urgency notable stays at T1 / accept-class handling. Grounded in 2 real failed-logon attempts across two accounts over a 10-minute window -- well below any real brute-force threshold, which is why the risk score is low rather than absent.",
+      "evidence": {
+        "ground_truth_record_id": "evt-spray-low#0",
+        "sources": [
+          {
+            "path": "evidence/data/DC-01.dualsignal-corpus.local/windows_event_security.xml",
+            "match": "<Data Name=\"TargetUserName\">helen.ortiz</Data>",
+            "max_count": 5
+          },
+          {
+            "path": "evidence/data/DC-01.dualsignal-corpus.local/windows_event_security.xml",
+            "match": "<Data Name=\"TargetUserName\">raj.subramaniam</Data>",
+            "max_count": 5
+          }
+        ]
+      }
     }
   ]
 }

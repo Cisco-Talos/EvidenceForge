@@ -1,0 +1,2 @@
+08/01-13:19:52.618520 [**] [1:2009714:9] ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT [**] [Classification: web-application-attack] [Priority: 1] {TCP} 10.20.10.15:46216 -> 10.20.30.10:80
+08/01-13:49:43.342173 [**] [1:2009714:9] ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT [**] [Classification: web-application-attack] [Priority: 1] {TCP} 10.20.10.15:41841 -> 10.20.30.10:80

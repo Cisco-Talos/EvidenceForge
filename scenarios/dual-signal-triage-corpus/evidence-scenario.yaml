@@ -1,0 +1,225 @@
+version: "1.0"
+name: dual-signal-triage-corpus-evidence
+description: |
+  Real, generated underlying evidence for the dual-signal SnortML + signature +
+  Splunk-notable triage corpus (corpus/labeled_events.json). Each corpus event
+  is grounded in an actual EvidenceForge-generated request or authentication
+  burst, not an assertion without supporting data.
+
+  SQLi cases use the built-in `adversarial_payload` (family: sql_injection)
+  mechanism: the canonical UNION SELECT form is signature-mapped to a real
+  Emerging Threats SID (2009714) and fires when observed in cleartext by an
+  IDS sensor; an evasion variant of the same family (comment-split UNION/**/
+  SELECT) is a documented detection blind spot and produces real HTTP request
+  evidence with no signature match -- exactly the "ML-only, no signature
+  corroboration" case this corpus is about. Which variant lands on which event
+  is decided by the scenario's generation seed, not hand-picked after the
+  fact; GROUND_TRUTH.json is the source of truth once generated.
+
+  Splunk-notable cases use `credential_spray` against the domain controller,
+  differing only in real attempt volume/pattern -- the actual signal a
+  risk-based-alerting rule would score.
+
+environment:
+  description: "Small corp network: one internal client, one DMZ web app, one domain controller"
+  domain: "dualsignal-corpus.local"
+
+  timezone:
+    default: "America/New_York"
+
+  users:
+    - username: marta.diaz
+      full_name: "Marta Diaz"
+      email: "marta.diaz@dualsignal-corpus.com"
+      persona: security_analyst
+      primary_system: SEC-TEST-01
+      groups: ["security"]
+      enabled: true
+
+  systems:
+    - hostname: SEC-TEST-01
+      ip: "10.20.10.15"
+      os: "Ubuntu 22.04 LTS"
+      type: workstation
+      assigned_user: marta.diaz
+      services: ["dns-client"]
+
+    - hostname: DC-01
+      ip: "10.20.20.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["kerberos", "ldap", "dns"]
+      roles: ["domain_controller", "dns_server"]
+
+    - hostname: WEB-01
+      ip: "10.20.30.10"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["http"]
+      roles: ["web_server"]
+      public_hostnames: ["app.dualsignal-corpus.net"]
+
+  network:
+    segments:
+      - name: workstations
+        cidr: "10.20.10.0/24"
+        description: "Internal client segment"
+        exposure: internal
+        systems: [SEC-TEST-01]
+
+      - name: servers
+        cidr: "10.20.20.0/24"
+        description: "Internal server segment"
+        exposure: internal
+        systems: [DC-01]
+
+      - name: dmz
+        cidr: "10.20.30.0/24"
+        description: "Public-facing DMZ for the web app"
+        exposure: both
+        external_ratio: 0.8
+        systems: [WEB-01]
+
+    sensors:
+      - type: network
+        name: core-span
+        hostname: ZEEK-CORE
+        monitoring_segments: [workstations, servers, dmz]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+        description: "Core span covering all segments"
+
+      - type: ids
+        name: perimeter-ids
+        hostname: IDS-EDGE
+        monitoring_segments: [dmz]
+        direction: inbound
+        placement: tap
+        log_formats: [snort_alert]
+        description: "Perimeter IDS on inbound DMZ traffic"
+
+time_window:
+  start: "2026-08-01T13:00:00Z"
+  duration: "3h"
+  warmup: "1h"
+
+baseline_activity:
+  description: "Light background traffic; the storyline events are the evidentiary content"
+  intensity: low
+  variation: low
+  suspicious_noise: low
+
+observation_profile: complete
+
+storyline:
+  - id: evt-sqli-a
+    time: "+20m"
+    actor: marta.diaz
+    system: SEC-TEST-01
+    activity: "SQL injection attempt against the web app (corpus case: sig-sqli-001 / corr-003 candidate)"
+    events:
+      - type: adversarial_payload
+        surface: http_request_url
+        family: sql_injection
+        scheme: http
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "SQLi payload in request URL/query string; signature fires if the canonical UNION SELECT form is selected for this event"
+
+  - id: evt-sqli-b
+    time: "+35m"
+    actor: marta.diaz
+    system: SEC-TEST-01
+    activity: "Second SQL injection attempt against the web app, different request (corpus case: sig-sqli-001 / corr-003 candidate)"
+    events:
+      - type: adversarial_payload
+        surface: http_request_url
+        family: sql_injection
+        scheme: http
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Second, independent SQLi payload instance"
+
+  - id: evt-sqli-c
+    time: "+50m"
+    actor: marta.diaz
+    system: SEC-TEST-01
+    activity: "Third SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)"
+    events:
+      - type: adversarial_payload
+        surface: http_request_url
+        family: sql_injection
+        scheme: http
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Third, independent SQLi payload instance"
+
+  - id: evt-sqli-d
+    time: "+1h5m"
+    actor: marta.diaz
+    system: SEC-TEST-01
+    activity: "Fourth SQL injection attempt against the web app, different request (corpus case: ml-sqli-002 candidate)"
+    events:
+      - type: adversarial_payload
+        surface: http_request_url
+        family: sql_injection
+        scheme: http
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Fourth, independent SQLi payload instance"
+
+  - id: evt-benign-browse
+    time: "+1h15m"
+    actor: marta.diaz
+    system: SEC-TEST-01
+    activity: "Ordinary product-catalog request against the web app (corpus case: ml-low-004)"
+    events:
+      - type: connection
+        dst_ip: "10.20.30.10"
+        dst_port: 80
+        service: http
+        method: GET
+        uri: "/products?category=laptops"
+        hostname: "app.dualsignal-corpus.net"
+        status_code: 200
+        description: "Ordinary benign request; the low-confidence-noise case has real, unremarkable evidence behind it"
+
+  - id: evt-spray-high
+    time: "+1h30m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "High-volume credential spray against a domain account (corpus case: notable-1001, high-risk Splunk notable)"
+    events:
+      - type: credential_spray
+        source_ip: "198.51.100.23"
+        pattern: brute_force
+        target_accounts: ["svc-legacyapp"]
+        logon_type: 3
+        interval: "3s"
+        duration: "3m"
+        technique: "T1110.003 - Brute Force: Password Spraying"
+        description: "~60 failed attempts against one account in 3 minutes -- the real volume a risk-based-alerting brute-force rule scores high"
+
+  - id: evt-spray-low
+    time: "+1h45m"
+    actor: SYSTEM
+    system: DC-01
+    activity: "Low-volume, scattered failed logons (corpus case: notable-1002, low-risk Splunk notable)"
+    events:
+      - type: credential_spray
+        source_ip: "198.51.100.44"
+        pattern: spray
+        target_accounts: ["helen.ortiz", "raj.subramaniam"]
+        logon_type: 3
+        interval: "6m"
+        duration: "10m"
+        technique: "T1110.003 - Brute Force: Password Spraying"
+        description: "A couple of scattered failed attempts, well below any real brute-force threshold -- the real volume a risk rule scores low"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: snort_alert
+    - format: web_access
+    - format: syslog
+    - format: bash_history
+  destination: scenarios/dual-signal-triage-corpus/evidence
+  compression: false

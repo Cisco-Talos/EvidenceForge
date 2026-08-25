@@ -1,0 +1,229 @@
+<30>1 2026-08-01T13:00:08.648151Z WEB-01 dbus-daemon 23406 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.183'
+<30>1 2026-08-01T13:00:14.150722Z WEB-01 systemd-resolved 23454 - - Grace period over, resuming full feature set (UDP+EDNS0) for DNS server 10.20.20.10.
+<30>1 2026-08-01T13:00:16.097951Z WEB-01 rsyslogd 23391 - - omfwd: target logrelay01 using disk-assisted queue main, checkpoint 101816
+<30>1 2026-08-01T13:00:16.864732Z WEB-01 rsyslogd 23391 - - omfwd: target 10.10.2.30 using disk-assisted queue action-remote, checkpoint 102371
+<85>1 2026-08-01T13:00:51.998597Z WEB-01 sudo 1247577 - - svc_app : TTY=pts/17 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/sbin/iptables -L -n -v
+<86>1 2026-08-01T13:00:52.054597Z WEB-01 sudo 1247577 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=3418)
+<30>1 2026-08-01T13:00:52.367383Z WEB-01 dbus-daemon 23406 - - [system] Successfully activated service 'org.freedesktop.resolve1' for ':1.184'
+<85>1 2026-08-01T13:00:52.883100Z WEB-01 sudo 1247579 - - apache : command not allowed ; TTY=pts/2 ; USER=root ; COMMAND=/usr/bin/id
+<30>1 2026-08-01T13:00:52.933180Z WEB-01 dbus-daemon 23406 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.185'
+<30>1 2026-08-01T13:00:53.330920Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7864
+<30>1 2026-08-01T13:00:53.539872Z WEB-01 rsyslogd 23391 - - omfwd: target siem-forwarder using disk-assisted queue main, checkpoint 102968
+<86>1 2026-08-01T13:00:57.838593Z WEB-01 sudo 1247577 - - pam_unix(sudo:session): session closed for user root
+<85>1 2026-08-01T13:01:24.228430Z WEB-01 sudo 1247618 - - deploy : TTY=pts/9 ; PWD=/home/deploy ; USER=root ; COMMAND=/usr/bin/find /etc/systemd/system -maxdepth 2 -type l
+<86>1 2026-08-01T13:01:24.340430Z WEB-01 sudo 1247618 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<30>1 2026-08-01T13:01:26.478470Z WEB-01 rsyslogd 23391 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 103683
+<86>1 2026-08-01T13:01:32.974680Z WEB-01 sudo 1247618 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:02:01.866890Z WEB-01 dbus-daemon 23406 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.186'
+<86>1 2026-08-01T13:02:22.295745Z WEB-01 login 1247699 - - pam_unix(login:session): session opened for user ops(uid=2942) by LOGIN(uid=0)
+<86>1 2026-08-01T13:02:27.547745Z WEB-01 systemd-logind 23411 - - New session 389057 of user ops.
+<30>1 2026-08-01T13:02:28.675906Z WEB-01 rsyslogd 23391 - - omfwd: target 10.10.2.30 using disk-assisted queue local-spool, checkpoint 104019
+<86>1 2026-08-01T13:02:29.956642Z WEB-01 sshd 1247701 - - Connection from 10.20.10.15 port 54967 on 10.20.30.10 port 22
+<86>1 2026-08-01T13:02:32.749814Z WEB-01 sshd 1247701 - - Accepted password for marta.diaz from 10.20.10.15 port 54967 ssh2
+<86>1 2026-08-01T13:02:32.849984Z WEB-01 sshd 1247701 - - pam_unix(sshd:session): session opened for user marta.diaz(uid=2847) by (uid=0)
+<86>1 2026-08-01T13:02:33.279174Z WEB-01 systemd-logind 23411 - - New session 389058 of user marta.diaz.
+<30>1 2026-08-01T13:02:41.089068Z WEB-01 dbus-daemon 23406 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.187'
+<30>1 2026-08-01T13:03:05.631795Z WEB-01 dbus-daemon 23406 - - [system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.188'
+<30>1 2026-08-01T13:03:05.818717Z WEB-01 systemd-resolved 23454 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.20.20.10.
+<30>1 2026-08-01T13:03:10.211471Z WEB-01 dbus-daemon 23406 - - [system] Successfully activated service 'org.freedesktop.locale1' for ':1.189'
+<30>1 2026-08-01T13:03:19.628298Z WEB-01 polkitd 18092 - - Operator of unix-process:1247759:259219805 successfully authenticated as unix-user:root to gain TEMPORARY authorization for action org.freedesktop.packagekit.system-update for system-bus-name::1.191 [/usr/lib/packagekit/packagekitd] (owned by unix-user:root)
+<30>1 2026-08-01T13:03:21.833950Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T13:04:23.778823Z WEB-01 polkitd 18092 - - Subject unix-process:1247844:259226170 is authorized for action org.freedesktop.systemd1.manage-units
+<30>1 2026-08-01T13:04:23.823670Z WEB-01 dbus-daemon 23406 - - [system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.195'
+<85>1 2026-08-01T13:04:28.937642Z WEB-01 sudo 1247849 - - admin : TTY=pts/2 ; PWD=/home/admin ; USER=root ; COMMAND=/usr/bin/lsblk
+<86>1 2026-08-01T13:04:29.081642Z WEB-01 sudo 1247849 - - pam_unix(sudo:session): session opened for user root(uid=0) by admin(uid=1001)
+<86>1 2026-08-01T13:04:30.999854Z WEB-01 sudo 1247849 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:05:16.301778Z WEB-01 polkitd 18092 - - Subject unix-process:1247919:259231432 is authorized for action org.freedesktop.systemd1.manage-units
+<86>1 2026-08-01T13:05:33.920661Z WEB-01 login 1247949 - - pam_unix(login:session): session opened for user deploy(uid=1002) by LOGIN(uid=0)
+<86>1 2026-08-01T13:05:40.339661Z WEB-01 systemd-logind 23411 - - New session 389086 of user deploy.
+<78>1 2026-08-01T13:06:00.083000Z WEB-01 CRON 1247972 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<85>1 2026-08-01T13:06:16.609745Z WEB-01 sudo 1247994 - - ops : TTY=pts/19 ; PWD=/home/ops ; USER=root ; COMMAND=/bin/systemctl is-active http
+<86>1 2026-08-01T13:06:16.853745Z WEB-01 sudo 1247994 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=2942)
+<86>1 2026-08-01T13:06:19.315244Z WEB-01 sudo 1247994 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:07:16.762217Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<85>1 2026-08-01T13:07:22.420661Z WEB-01 sudo 1248083 - - deploy : TTY=pts/20 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/apt list --upgradable
+<86>1 2026-08-01T13:07:22.487661Z WEB-01 sudo 1248083 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<30>1 2026-08-01T13:07:22.725084Z WEB-01 rsyslogd 23391 - - main Q: queue fwdRule1 has 2144 messages pending, worker threads 2
+<30>1 2026-08-01T13:07:23.286123Z WEB-01 systemd-resolved 23454 - - Grace period over, resuming full feature set (UDP+EDNS0) for DNS server 10.20.20.10.
+<86>1 2026-08-01T13:07:27.008091Z WEB-01 sudo 1248083 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:07:28.175832Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for core22: no updates found
+<30>1 2026-08-01T13:07:35.599996Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2026-08-01T13:07:45.856394Z WEB-01 systemd-resolved 23454 - - Using degraded feature set TCP instead of UDP+EDNS0 for DNS server 10.20.20.10.
+<86>1 2026-08-01T13:07:46.440509Z WEB-01 login 1248124 - - pam_unix(login:session): session opened for user deploy(uid=1002) by LOGIN(uid=0)
+<86>1 2026-08-01T13:07:52.371509Z WEB-01 systemd-logind 23411 - - New session 389105 of user deploy.
+<30>1 2026-08-01T13:09:14.445869Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<85>1 2026-08-01T13:09:21.276242Z WEB-01 sudo 1248219 - - ubuntu : TTY=pts/14 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/tail -n 40 /var/log/syslog
+<86>1 2026-08-01T13:09:21.520242Z WEB-01 sudo 1248219 - - pam_unix(sudo:session): session opened for user root(uid=0) by ubuntu(uid=1000)
+<86>1 2026-08-01T13:09:23.964481Z WEB-01 sudo 1248219 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:09:25.371068Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7864 task 2 done for core22
+<30>1 2026-08-01T13:09:53.996146Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2026-08-01T13:10:14.662799Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T13:10:30.673593Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for microk8s
+<85>1 2026-08-01T13:10:38.499435Z WEB-01 sudo 1248309 - - svc_app : TTY=pts/8 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/find /var/log -type f -mtime -1
+<86>1 2026-08-01T13:10:38.529435Z WEB-01 sudo 1248309 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=3418)
+<30>1 2026-08-01T13:10:39.000455Z WEB-01 irqbalance 19459 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<86>1 2026-08-01T13:10:44.283499Z WEB-01 sudo 1248309 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:11:35Z WEB-01 anacron 17067 - - Anacron 2.3 started on 2026-08-01
+<30>1 2026-08-01T13:11:36.316208Z WEB-01 anacron 17067 - - Will run job `logrotate' in 2 min.
+<30>1 2026-08-01T13:11:44.852626Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2026-08-01T13:12:58.895521Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T13:13:42.570468Z WEB-01 anacron 17067 - - Job `logrotate' started
+<30>1 2026-08-01T13:14:31.214022Z WEB-01 anacron 17067 - - Job `logrotate' terminated
+<30>1 2026-08-01T13:14:32.521286Z WEB-01 anacron 17067 - - Normal exit (1 job run)
+<30>1 2026-08-01T13:15:13.729347Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2026-08-01T13:16:10.565479Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7865
+<85>1 2026-08-01T13:16:13.275791Z WEB-01 sudo 1248719 - - ops : TTY=pts/16 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/du -sh /srv/app
+<86>1 2026-08-01T13:16:13.307791Z WEB-01 sudo 1248719 - - pam_unix(sudo:session): session opened for user root(uid=0) by ops(uid=2942)
+<85>1 2026-08-01T13:16:14.456509Z WEB-01 sudo 1248721 - - deploy : TTY=pts/21 ; PWD=/var/log ; USER=root ; COMMAND=/usr/bin/free -m
+<86>1 2026-08-01T13:16:14.747509Z WEB-01 sudo 1248721 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2026-08-01T13:16:15.792275Z WEB-01 sudo 1248719 - - pam_unix(sudo:session): session closed for user root
+<86>1 2026-08-01T13:16:17.765463Z WEB-01 sudo 1248721 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:16:25.385441Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7866
+<85>1 2026-08-01T13:17:21.458289Z WEB-01 sudo 1248787 - - svc_app : TTY=pts/5 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/journalctl -u http -n 80
+<86>1 2026-08-01T13:17:21.557289Z WEB-01 sudo 1248787 - - pam_unix(sudo:session): session opened for user root(uid=0) by svc_app(uid=3418)
+<86>1 2026-08-01T13:17:31.455434Z WEB-01 sudo 1248787 - - pam_unix(sudo:session): session closed for user root
+<85>1 2026-08-01T13:17:38.363888Z WEB-01 sudo 1248810 - - deploy : TTY=pts/21 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/systemctl list-timers --all --no-pager
+<86>1 2026-08-01T13:17:38.520888Z WEB-01 sudo 1248810 - - pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)
+<86>1 2026-08-01T13:17:41.035280Z WEB-01 sudo 1248810 - - pam_unix(sudo:session): session closed for user root
+<30>1 2026-08-01T13:18:18.771735Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7865 task 4 done for lxd
+<30>1 2026-08-01T13:18:58.939255Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7867
+<30>1 2026-08-01T13:19:03.924204Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7866 task 1 done for core20
+<30>1 2026-08-01T13:21:03.176608Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7867 task 2 done for core20
+<30>1 2026-08-01T13:21:13.053107Z WEB-01 irqbalance 19459 - - IRQ 181 classified for CPU 0 balancing on mlx5_comp2
+<30>1 2026-08-01T13:21:37.157161Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7868
+<30>1 2026-08-01T13:25:33.471863Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T13:25:42.490971Z WEB-01 irqbalance 19459 - - IRQ 45 affinity hint keeps vector on CPU 0 (virtio0-input)
+<30>1 2026-08-01T13:26:05.582642Z WEB-01 irqbalance 19459 - - IRQ 137 affinity hint keeps vector on CPU 3 (ens192)
+<30>1 2026-08-01T13:26:07.585302Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7868 task 2 done for microk8s
+<30>1 2026-08-01T13:26:23.621347Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T13:26:28.756004Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T13:27:28.055652Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2026-08-01T13:27:57.018589Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7869
+<30>1 2026-08-01T13:28:02.309526Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2026-08-01T13:28:15.638879Z WEB-01 irqbalance 19459 - - IRQ 122 classified for CPU 1 balancing on nvme0q2
+<30>1 2026-08-01T13:28:37.547820Z WEB-01 irqbalance 19459 - - Skipping IRQ 181: banned by affinity mask 00000002 (mlx5_comp2)
+<30>1 2026-08-01T13:28:58.758971Z WEB-01 irqbalance 19459 - - Skipping IRQ 86: banned by affinity mask 00000002 (mlx5_comp1)
+<30>1 2026-08-01T13:29:29.258735Z WEB-01 irqbalance 19459 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2026-08-01T13:29:50.021131Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T13:33:27.219776Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7869 task 1 done for core20
+<30>1 2026-08-01T13:33:30.239644Z WEB-01 irqbalance 19459 - - IRQ 64 affinity hint keeps vector on CPU 3 (mlx5_comp0)
+<30>1 2026-08-01T13:34:52.038371Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2026-08-01T13:34:52.774702Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7870
+<30>1 2026-08-01T13:35:33.457916Z WEB-01 irqbalance 19459 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<78>1 2026-08-01T13:36:00.056000Z WEB-01 CRON 1250943 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T13:37:20.845685Z WEB-01 systemd-journald 23382 - - Vacuuming done, freed 209.0M of archived journals.
+<30>1 2026-08-01T13:39:19.901665Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7871
+<30>1 2026-08-01T13:39:34.521475Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T13:39:40.940102Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7870 task 8 done for lxd
+<30>1 2026-08-01T13:42:05.331290Z WEB-01 irqbalance 19459 - - IRQ 64 classified for CPU 3 balancing on mlx5_comp0
+<30>1 2026-08-01T13:42:54.831117Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T13:43:09.370925Z WEB-01 irqbalance 19459 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2026-08-01T13:45:11.856487Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T13:45:19.624901Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T13:45:44.709750Z WEB-01 irqbalance 19459 - - Skipping IRQ 154: banned by affinity mask 00000002 (virtio1-input)
+<30>1 2026-08-01T13:45:46.221631Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T13:45:50.956194Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7871 task 2 done for snapd-desktop-integration
+<30>1 2026-08-01T13:46:06.891397Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7872
+<30>1 2026-08-01T13:46:11.826856Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for snapd-desktop-integration
+<30>1 2026-08-01T13:46:36.395467Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T13:47:35.497047Z WEB-01 irqbalance 19459 - - Skipping IRQ 16: banned by affinity mask 00000008 (ahci)
+<30>1 2026-08-01T13:49:06.360705Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7872 task 5 done for core22
+<30>1 2026-08-01T13:51:04.430114Z WEB-01 irqbalance 19459 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2026-08-01T13:51:04.958038Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7873
+<30>1 2026-08-01T13:51:33.565548Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T13:52:47.472293Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2026-08-01T14:00:15.139157Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2026-08-01T14:00:25.190702Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T14:00:27.085595Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<86>1 2026-08-01T14:00:49.619785Z WEB-01 sshd 1247701 - - pam_unix(sshd:session): session closed for user marta.diaz
+<86>1 2026-08-01T14:00:50.242587Z WEB-01 systemd-logind 23411 - - Removed session 389058.
+<30>1 2026-08-01T14:03:53.102875Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7874
+<30>1 2026-08-01T14:05:31.546026Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7873 task 2 done for core20
+<30>1 2026-08-01T14:05:45.192184Z WEB-01 irqbalance 19459 - - IRQ 137 classified for CPU 3 balancing on ens192
+<78>1 2026-08-01T14:06:00.037000Z WEB-01 CRON 1252986 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T14:06:01.519133Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2026-08-01T14:06:13.654812Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T14:08:03.543565Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2026-08-01T14:09:30.248281Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7875
+<30>1 2026-08-01T14:09:40.913131Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for microk8s
+<30>1 2026-08-01T14:10:04.169672Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7876
+<30>1 2026-08-01T14:10:59.925577Z WEB-01 irqbalance 19459 - - NUMA node 1: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T14:11:35.505173Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7877
+<30>1 2026-08-01T14:12:02.518177Z WEB-01 irqbalance 19459 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2026-08-01T14:12:26.593469Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2026-08-01T14:12:53.450613Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2026-08-01T14:14:49.249611Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2026-08-01T14:15:32.088061Z WEB-01 irqbalance 19459 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2026-08-01T14:17:42.605753Z WEB-01 irqbalance 19459 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<30>1 2026-08-01T14:18:19.832655Z WEB-01 irqbalance 19459 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2026-08-01T14:18:22.201072Z WEB-01 irqbalance 19459 - - Skipping IRQ 64: banned by affinity mask 00000004 (mlx5_comp0)
+<30>1 2026-08-01T14:18:31.228281Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T14:22:39.092698Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7878
+<30>1 2026-08-01T14:24:16.238884Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 0 IRQs moved
+<30>1 2026-08-01T14:25:05.025064Z WEB-01 irqbalance 19459 - - Skipping IRQ 24: banned by affinity mask 00000001 (ens160)
+<30>1 2026-08-01T14:25:13.904419Z WEB-01 irqbalance 19459 - - Skipping IRQ 137: banned by affinity mask 00000002 (ens192)
+<30>1 2026-08-01T14:25:49.142051Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2026-08-01T14:26:47.254504Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7879
+<30>1 2026-08-01T14:27:37.236812Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7880
+<30>1 2026-08-01T14:27:41.913839Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2026-08-01T14:27:48.286699Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core22.configure
+<30>1 2026-08-01T14:28:09.051919Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for microk8s: no updates found
+<30>1 2026-08-01T14:29:16.732359Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2026-08-01T14:30:55.780201Z WEB-01 irqbalance 19459 - - IRQ 16 affinity hint keeps vector on CPU 0 (ahci)
+<30>1 2026-08-01T14:33:20.754680Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2026-08-01T14:34:48.901964Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for core20
+<30>1 2026-08-01T14:35:57.047846Z WEB-01 irqbalance 19459 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<78>1 2026-08-01T14:36:00.062000Z WEB-01 CRON 1254562 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T14:39:16.485134Z WEB-01 irqbalance 19459 - - Skipping IRQ 86: banned by affinity mask 00000001 (mlx5_comp1)
+<30>1 2026-08-01T14:40:08.899104Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7874 task 6 done for core22
+<30>1 2026-08-01T14:40:10.919748Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook lxd.configure
+<30>1 2026-08-01T14:42:38.230208Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2026-08-01T14:43:38.232090Z WEB-01 irqbalance 19459 - - IRQ 32 affinity hint keeps vector on CPU 2 (nvme0q1)
+<30>1 2026-08-01T14:43:54.768526Z WEB-01 irqbalance 19459 - - IRQ 181 affinity hint keeps vector on CPU 0 (mlx5_comp2)
+<30>1 2026-08-01T14:46:06.684837Z WEB-01 irqbalance 19459 - - Skipping IRQ 86: banned by affinity mask 00000001 (mlx5_comp1)
+<30>1 2026-08-01T14:47:09.036571Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7875 task 6 done for core20
+<30>1 2026-08-01T14:47:36.096356Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T14:48:04.793636Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7876 task 1 done for core20
+<30>1 2026-08-01T14:48:19.131024Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 1 IRQs moved
+<30>1 2026-08-01T14:48:56.618146Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7877 task 7 done for lxd
+<30>1 2026-08-01T14:50:11.355175Z WEB-01 irqbalance 19459 - - IRQ 24 affinity hint keeps vector on CPU 1 (ens160)
+<30>1 2026-08-01T14:50:25.710110Z WEB-01 irqbalance 19459 - - IRQ 32 classified for CPU 2 balancing on nvme0q1
+<30>1 2026-08-01T14:51:41.917832Z WEB-01 irqbalance 19459 - - Skipping IRQ 154: banned by affinity mask 00000001 (virtio1-input)
+<30>1 2026-08-01T14:52:12.867378Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook core20.configure
+<30>1 2026-08-01T15:04:36.538290Z WEB-01 systemd-journald 23382 - - Runtime Journal (/run/log/journal/b47b236804dee356c900eca3bff75e9d) is 790.8M, max 4096M, 3305.2M free.
+<78>1 2026-08-01T15:06:00.019000Z WEB-01 CRON 1257568 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T15:08:48.994053Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2026-08-01T15:09:34.522199Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7881
+<30>1 2026-08-01T15:10:33.893377Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7878 task 4 done for microk8s
+<30>1 2026-08-01T15:11:55.972490Z WEB-01 snapd 23441 - - snapmgr.go:523: refresh candidates checked for core22
+<30>1 2026-08-01T15:14:20.961082Z WEB-01 irqbalance 19459 - - NUMA node 0: balancing pass complete, 2 IRQs moved
+<30>1 2026-08-01T15:14:29.220756Z WEB-01 irqbalance 19459 - - Skipping IRQ 154: banned by affinity mask 00000008 (virtio1-input)
+<30>1 2026-08-01T15:14:53.860119Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2026-08-01T15:15:18.743312Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7879 task 9 done for microk8s
+<30>1 2026-08-01T15:16:29.893159Z WEB-01 irqbalance 19459 - - IRQ 86 classified for CPU 2 balancing on mlx5_comp1
+<30>1 2026-08-01T15:16:41.835506Z WEB-01 irqbalance 19459 - - Skipping IRQ 64: banned by affinity mask 00000008 (mlx5_comp0)
+<30>1 2026-08-01T15:17:25.549367Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7880 task 1 done for core22
+<30>1 2026-08-01T15:20:13.598264Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7881 task 6 done for snapd-desktop-integration
+<30>1 2026-08-01T15:21:03.111379Z WEB-01 irqbalance 19459 - - Skipping IRQ 32: banned by affinity mask 00000004 (nvme0q1)
+<30>1 2026-08-01T15:22:13.400118Z WEB-01 irqbalance 19459 - - IRQ 24 classified for CPU 1 balancing on ens160
+<30>1 2026-08-01T15:23:03.244283Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7882
+<30>1 2026-08-01T15:23:54.970539Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for core20: no updates found
+<30>1 2026-08-01T15:23:58.251279Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for snapd-desktop-integration: no updates found
+<30>1 2026-08-01T15:27:23.667255Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7883
+<30>1 2026-08-01T15:27:36.891250Z WEB-01 snapd 23441 - - taskrunner.go:271: change 7882 task 8 done for snapd-desktop-integration
+<30>1 2026-08-01T15:27:47.896842Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7884
+<30>1 2026-08-01T15:30:15.387285Z WEB-01 irqbalance 19459 - - IRQ 154 affinity hint keeps vector on CPU 2 (virtio1-input)
+<30>1 2026-08-01T15:30:42.265894Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook microk8s.configure
+<30>1 2026-08-01T15:33:31.346926Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for lxd: no updates found
+<30>1 2026-08-01T15:33:47.244811Z WEB-01 irqbalance 19459 - - IRQ 32 classified for CPU 2 balancing on nvme0q1
+<78>1 2026-08-01T15:36:00.090000Z WEB-01 CRON 1264924 - - (sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)
+<30>1 2026-08-01T15:36:42.449004Z WEB-01 irqbalance 19459 - - IRQ 16 classified for CPU 0 balancing on ahci
+<30>1 2026-08-01T15:41:55.325223Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7885
+<30>1 2026-08-01T15:46:34.154245Z WEB-01 snapd 23441 - - daemon.go:460: gracefully waiting for hook snapd-desktop-integration.configure
+<30>1 2026-08-01T15:47:25.160870Z WEB-01 irqbalance 19459 - - IRQ 122 affinity hint keeps vector on CPU 1 (nvme0q2)
+<86>1 2026-08-01T15:47:34.668653Z WEB-01 sshd 1268241 - - Connection from 10.20.10.15 port 54655 on 10.20.30.10 port 22
+<85>1 2026-08-01T15:47:34.804653Z WEB-01 sshd 1268241 - - Invalid user unknown from 10.20.10.15 port 54655
+<84>1 2026-08-01T15:47:35.405653Z WEB-01 sshd 1268241 - - Failed password for invalid user unknown from 10.20.10.15 port 54655 ssh2
+<86>1 2026-08-01T15:47:48.830653Z WEB-01 sshd 1268241 - - Connection closed by invalid user unknown 10.20.10.15 port 54655 [preauth]
+<30>1 2026-08-01T15:50:17.612698Z WEB-01 snapd 23441 - - stateengine.go:150: state ensure starting change 7886
+<30>1 2026-08-01T15:53:36.695348Z WEB-01 snapd 23441 - - autorefresh.go:540: auto-refresh for lxd: no updates found
