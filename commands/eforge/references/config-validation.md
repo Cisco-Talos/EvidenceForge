@@ -9,7 +9,7 @@ For inspection-only requests, run once and report without modifying files. After
 mutation, start a fresh process so cached configuration cannot hide the change:
 
 ```bash
-eforge validate-config --project-root <root> --json
+eforge validate-config --json
 ```
 
 Interpret the result as follows:
@@ -76,14 +76,14 @@ network mappings. Generic fallbacks and intentionally sparse configuration are v
 
 ## Recovery order
 
-1. Confirm the absolute project root and `eforge info overlay.path --project-root <root>`.
+1. Confirm the working directory and `eforge info overlay.path`.
 2. Fix overlay YAML/shape errors first; merged validation stops when an overlay cannot be loaded
    safely.
 3. Read the packaged default and existing overlay for the reported family.
 4. Confirm that the family's merge mode did not replace a complete section unexpectedly.
 5. Repair only current-change errors, rerun in a fresh process, and preserve unrelated existing
    diagnostics for the report.
-6. If a supplied scenario depends on the overlay, validate it with the same project root after
+6. If a supplied scenario depends on the overlay, validate it from the same working directory after
    config validation passes.
 
 Never weaken engine-owned safety, evaluation, resource, runtime, or OOB policy to silence an error.

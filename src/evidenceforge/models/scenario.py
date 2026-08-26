@@ -50,6 +50,7 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 
@@ -1035,12 +1036,19 @@ class SmbShareLocation(BaseModel):
     """A location inside a modeled SMB disk share."""
 
     type: Literal["share"] = "share"
-    share: str
+    share: str = Field(
+        ...,
+        description=(
+            "Exact case-insensitive compiled <system>.<share-id> reference; bare share IDs "
+            "and display names are not valid."
+        ),
+    )
     file_ref: str | None = None
     path: str | None = None
+    directory: str | None = None
     selector: SmbFileSelector | None = None
 
-    @field_validator("path")
+    @field_validator("path", "directory")
     @classmethod
     def normalize_path(cls, value: str | None) -> str | None:
         if value is None:
@@ -1050,11 +1058,13 @@ class SmbShareLocation(BaseModel):
     @model_validator(mode="after")
     def validate_locator(self) -> "SmbShareLocation":
         locator_count = sum(
-            value is not None for value in (self.file_ref, self.path, self.selector)
+            value is not None for value in (self.file_ref, self.path, self.directory, self.selector)
         )
         if locator_count > 1:
-            raise ValueError("share location accepts at most one of file_ref, path, or selector")
-        if self.file_ref == "auto" or self.path == "auto":
+            raise ValueError(
+                "share location accepts at most one of file_ref, path, directory, or selector"
+            )
+        if self.file_ref == "auto" or self.path == "auto" or self.directory == "auto":
             raise ValueError("omit the SMB locator to request automatic selection")
         return self
 
@@ -1066,13 +1076,33 @@ class SmbClientLocation(BaseModel):
 
     type: Literal["client"] = "client"
     path: str | None = None
+    directory: str | None = None
+    file_set: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+        description="Exact case-insensitive environment.storage.file_sets ID.",
+    )
+    file_ref: str | None = None
+    selector: SmbFileSelector | None = None
 
-    @field_validator("path")
+    @field_validator("path", "directory")
     @classmethod
     def validate_path(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _validate_platform_absolute_path(value, "SMB client path")
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> "SmbClientLocation":
+        if self.path is not None and self.directory is not None:
+            raise ValueError("client location accepts only one of path or directory")
+        if self.file_ref is not None and self.selector is not None:
+            raise ValueError("client file-set location accepts only one of file_ref or selector")
+        if (self.file_ref is not None or self.selector is not None) and self.file_set is None:
+            raise ValueError("client file_ref and selector require file_set")
+        if self.file_set is not None and self.path is not None:
+            raise ValueError("client file_set cannot be combined with one standalone path")
+        return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -1109,7 +1139,7 @@ class SmbExternalClient(BaseModel):
 class SmbBatchSpec(BaseModel):
     """Bounded selection controls for one SMB activity burst."""
 
-    count: int | None = Field(default=None, gt=0)
+    count: int | None = Field(default=None, gt=0, le=64)
     fraction: float | None = Field(default=None, gt=0.0, le=1.0)
     all: bool | None = None
     duration: str | None = None
@@ -1190,14 +1220,34 @@ class SmbActivityEventSpec(_IdsAttachableEventSpec):
                 self.destination.file_ref is not None or self.destination.selector is not None
             ):
                 raise ValueError("SMB destinations cannot use file_ref or selector")
+            if isinstance(self.destination, SmbClientLocation) and (
+                self.destination.file_ref is not None or self.destination.selector is not None
+            ):
+                raise ValueError("SMB destinations cannot use file_ref or selector")
             if (
                 self.batch is not None
-                and isinstance(self.destination, SmbShareLocation)
+                and isinstance(self.destination, (SmbShareLocation, SmbClientLocation))
                 and self.destination.path is not None
             ):
                 raise ValueError("batched SMB destinations cannot use one explicit file path")
+            if self.batch is not None and isinstance(self.source, SmbClientLocation):
+                if self.source.file_set is None:
+                    raise ValueError(
+                        "batched SMB client sources require environment.storage.file_sets"
+                    )
+            if isinstance(self.source, (SmbShareLocation, SmbClientLocation)) and (
+                self.source.directory is not None
+            ):
+                raise ValueError("SMB sources cannot use destination directory")
+            if isinstance(self.destination, SmbClientLocation) and (
+                self.destination.file_set is not None
+            ):
+                raise ValueError("SMB client destinations cannot select a source file_set")
         elif self.target is None or self.source is not None or self.destination is not None:
             raise ValueError(f"SMB {self.operation} requires target and forbids source/destination")
+
+        if self.target is not None and self.target.directory is not None:
+            raise ValueError("SMB operation targets cannot use destination directory")
 
         if self.operation == "create" and self.target is not None:
             if self.target.file_ref is not None or self.target.selector is not None:
@@ -2574,6 +2624,20 @@ class ProxyAuthPolicyConfig(BaseModel):
     machine_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
     service_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def warn_legacy_mode(cls, value: Any) -> Any:
+        """Keep legacy proxy attribution exact while directing authors to current policy."""
+
+        if isinstance(value, dict) and value.get("mode") == "legacy":
+            warn_legacy_config(
+                "environment.proxy.auth_policy.mode=legacy",
+                "auth_policy.mode: realistic (and explicit non_human_principals probabilities "
+                "when required)",
+                stacklevel=4,
+            )
+        return value
+
     @field_validator("allowlisted_domain_classes")
     @classmethod
     def validate_allowlisted_classes(cls, v: list[str]) -> list[str]:
@@ -2762,6 +2826,34 @@ class StorageSeedFileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class StorageFileSetConfig(BaseModel):
+    """Bounded persistent file population rooted on one modeled host."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    system: str
+    root: str
+    preset: str = Field(default="homes", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:_-]*$")
+    population: Literal["auto", "small", "medium", "large"] = "auto"
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("root")
+    @classmethod
+    def validate_root(cls, value: str) -> str:
+        return _validate_platform_absolute_path(value, "storage file-set root")
+
+    @model_validator(mode="after")
+    def validate_seed_files(self) -> "StorageFileSetConfig":
+        refs = [seed.ref.casefold() for seed in self.seed_files]
+        paths = [seed.path.casefold() for seed in self.seed_files]
+        if len(refs) != len(set(refs)):
+            raise ValueError("storage file-set seed refs must be unique")
+        if len(paths) != len(set(paths)):
+            raise ValueError("storage file-set seed paths must be case-insensitively unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class StorageShareConfig(BaseModel):
     """Explicit SMB disk share rooted on one configured volume."""
 
@@ -2770,6 +2862,10 @@ class StorageShareConfig(BaseModel):
     volume: str
     root: str = ""
     preset: str = Field(default="collaboration", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:_-]*$")
+    backing_file_set: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+    )
     population: Literal["auto", "small", "medium", "large"] | None = None
     activity: Literal["low", "normal", "high"] | None = None
     encryption: Literal["not_required", "required"] = "not_required"
@@ -2807,6 +2903,18 @@ class StorageShareConfig(BaseModel):
             raise ValueError("storage seed file refs must be unique within a share")
         if len(paths) != len(set(paths)):
             raise ValueError("storage seed file paths must be case-insensitively unique")
+        if self.backing_file_set is not None:
+            conflicting = sorted(
+                field
+                for field in ("preset", "population", "seed_files")
+                if field in self.model_fields_set
+                and (field != "seed_files" or bool(self.seed_files))
+            )
+            if conflicting:
+                raise ValueError(
+                    "storage share backing_file_set owns its catalog; omit "
+                    + ", ".join(conflicting)
+                )
         return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -2953,13 +3061,17 @@ class StorageConfig(BaseModel):
 
     population: Literal["auto", "small", "medium", "large"] = "auto"
     activity: Literal["low", "normal", "high"] = "normal"
+    file_sets: list[StorageFileSetConfig] = Field(default_factory=list)
     servers: list[StorageServerConfig] = Field(default_factory=list)
     mappings: list[StorageMappingConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_unique_ids(self) -> "StorageConfig":
+        file_sets = [file_set.id.casefold() for file_set in self.file_sets]
         systems = [server.system.casefold() for server in self.servers]
         mappings = [mapping.id.casefold() for mapping in self.mappings]
+        if len(file_sets) != len(set(file_sets)):
+            raise ValueError("environment.storage file-set IDs must be unique")
         if len(systems) != len(set(systems)):
             raise ValueError("environment.storage server systems must be unique")
         if len(mappings) != len(set(mappings)):

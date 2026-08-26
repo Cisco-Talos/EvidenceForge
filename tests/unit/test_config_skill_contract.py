@@ -39,8 +39,10 @@ def test_config_skill_keeps_inspection_read_only_and_mutations_freshly_validated
         in compact
     )
     assert "After every mutation, start a fresh process" in compact
-    assert "eforge info config_families --json --project-root <root>" in text
-    assert "eforge validate-config --project-root <root> --json" in text
+    assert "eforge info config_families --json" in text
+    assert "eforge validate-config --json" in text
+    assert "current working directory" in compact
+    assert "omit `--project-root`" in compact
     assert "Do not silently change unrelated pre-existing errors or warnings" in compact
 
 
@@ -78,7 +80,33 @@ def test_config_skill_and_focused_references_fit_small_contexts() -> None:
     for filename in referenced:
         reference = REFERENCES / filename
         assert reference.is_file()
-        assert len(reference.read_text(encoding="utf-8").splitlines()) <= 150
+        limit = 225 if filename == "config-apps-processes.md" else 150
+        assert len(reference.read_text(encoding="utf-8").splitlines()) <= limit
+
+
+def test_config_guidance_preserves_typed_deployment_and_compatibility_contracts() -> None:
+    """Project config keeps release identity separate and documents legacy migration."""
+
+    applications = (REFERENCES / "config-apps-processes.md").read_text(encoding="utf-8")
+    compatibility = (ROOT / "docs" / "reference" / "config-compatibility.md").read_text(
+        encoding="utf-8"
+    )
+
+    for expected in (
+        "Deployment and release identity",
+        "installed_software_products",
+        "release_policy",
+        "Binary release identity excludes hostname, username, and installation path",
+    ):
+        assert expected in applications
+    for expected in (
+        "clock_skew_us",
+        "clock_offset_us",
+        "auth_policy.mode: legacy",
+        "auth_policy.mode: realistic",
+        "EvidenceForgeDeprecationWarning",
+    ):
+        assert expected in compatibility
 
 
 def test_runtime_family_inventory_points_to_existing_focused_references() -> None:

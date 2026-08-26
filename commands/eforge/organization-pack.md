@@ -16,18 +16,23 @@ self-contained environment and baseline that a small Scenario 2.0 wrapper can co
 
 ## Establish context
 
-1. Resolve one concrete absolute project root and pass it through every CLI call.
+1. Read `/eforge:references:project-context`. Use the current working directory and omit
+   `--project-root` unless the user explicitly selects another root.
 2. Use `eforge` directly; in a source checkout where it is unavailable, retry with
    `uv run eforge`.
 3. Read `/eforge:references:pack-reference` completely for pack fields and lifecycle rules.
-4. Read `/eforge:references:scenario-reference` for the exact `environment` and
-   `baseline_activity` fields needed by this organization.
+4. Read `/eforge:references:scenario-environment`,
+   `/eforge:references:scenario-environment-identities`,
+   `/eforge:references:scenario-environment-network`, and
+   `/eforge:references:scenario-baseline-output` for the exact environment and baseline fields
+   needed by this organization. Add `/eforge:references:scenario-smb`,
+   `/eforge:references:scenario-email`, or `/eforge:references:scenario-http` only when the model
+   contains those structures.
 5. Discover candidate dependencies and bases:
 
 ```bash
-eforge pack list --project-root <absolute-project-root> --json
-eforge pack show <exact-industry-or-organization-ref> \
-  --project-root <absolute-project-root> --json
+eforge pack list --json
+eforge pack show <exact-industry-or-organization-ref> --json
 eforge info pack_builtin_application_ids
 eforge info pack_builtin_dns_tags
 ```
@@ -44,7 +49,8 @@ Determine:
 4. Whether the pack must stand alone or intentionally depends on a named consumer scenario.
 5. Which reusable users, systems, groups, services, network segments, sensors, email topology,
    storage topology, SMB client/server platforms and services, mapping/credential modes, Samba
-   audit depth, and baseline activity belong to the organization.
+   audit depth, stable exact-host deployment, stable exact-source collection policy, and baseline
+   activity belong to the organization.
 6. Which organization-specific personas, processes, applications, destinations, traffic, or
    storage vocabulary cannot be reused from an industry dependency.
 
@@ -59,11 +65,9 @@ referenced, or complete pack: patch for compatible corrections, minor for compat
 major for incompatible changes.
 
 ```bash
-eforge pack init organization <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack init organization <name> --version <version> --json
 
-eforge pack copy <exact-organization-ref-or-path> --name <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack copy <exact-organization-ref-or-path> --name <name> --version <version> --json
 ```
 
 Never edit a packaged pack or overwrite an existing project version. After a renamed copy, confirm
@@ -95,13 +99,24 @@ order:
 5. Reconcile users, personas, systems, groups, roles, services, segments, sensors, email routes,
    storage shares/mappings, and catalog references across the effective composed model.
 
-For SMB, use OS-native volume and client paths, keep backing filesystem separate from the
+Pack custom applications use the public pack process shape: exact native path and commands plus
+complete Windows PE/module metadata where applicable. Compilation adapts that shape into the typed
+deployment runtime; do not add project-config-only deployment/release-policy fields to pack YAML.
+In the organization environment, add `os_build` and `architecture` when exact binary identity
+matters. Stable `deployment_overrides` may target only systems owned by the organization; stable
+`observation_overrides` may target only exact compiled source instances owned by its hosts or
+sensors. Omitted patch fields inherit, while explicit empty replacements intentionally remove the
+lower-layer value.
+
+For SMB, use bounded host file sets for persistent client-side files without declaring an SMB
+server. Use OS-native volume and client paths, keep backing filesystem separate from the
 SMB-advertised label, and keep local actor, SMB principal, and server effective identity distinct.
 Linux servers need a Samba service marker or explicit storage topology; a generic `file_server`
 role is insufficient. Linux clients need explicit `cifs-utils`, `cifs-client`, or `smbclient`
 markers for baseline file activity. GVFS is background
 transport/process texture only and does not prove canonical file semantics. Organization packs may
-own canonical storage/mapping/audit/client-mode fields, but must not embed project-internal
+own canonical file-set/share bindings and storage/mapping/audit/client-mode fields, but must not
+embed project-internal
 `smb_profiles.yaml` overrides.
 
 Apply the same generation-effective catalog chain as an industry pack: applications own persona
@@ -116,8 +131,12 @@ Default to self-contained content. If the user explicitly requests a partial org
 - Resolve and validate that exact consumer before claiming the pack is usable.
 - Report the pack as partial, not standalone.
 
-Do not add storyline events, red herrings, time windows, output targets, collection settings,
-credentials, safety, OOB authorization, resource policy, evaluation rules, or runtime policy.
+Do not add storyline events, red herrings, time windows, output targets, exercise-specific
+collection windows/missingness, credentials, safety, OOB authorization, resource policy,
+evaluation rules, or runtime policy. A reusable organization collector default is distinct from an
+exercise-specific source override; the consumer scenario owns the latter and takes precedence.
+Never author internal lifecycle/effect plans, registry handles, channel IDs, content IDs, or
+projection envelopes.
 Do not place `ENVIRONMENT.md` in a pack. A temporary harness does not need one. If a consumer
 scenario will be retained, hand it to the scenario skill after resolution; that skill must use its
 `ENVIRONMENT.md` template to create the attack-free analyst briefing from the effective resolved
@@ -135,8 +154,7 @@ executable hooks or arbitrary assets.
 After each coherent edit:
 
 ```bash
-eforge pack validate <project:organization:name@version> \
-  --project-root <absolute-project-root> --json
+eforge pack validate <project:organization:name@version> --json
 ```
 
 Treat structural validation as necessary but not sufficient: partial model fragments can be valid
@@ -146,8 +164,7 @@ runtime-semantic error before continuing.
 At handoff, inspect identity, dependencies, and exports:
 
 ```bash
-eforge pack show <project:organization:name@version> \
-  --project-root <absolute-project-root> --json
+eforge pack show <project:organization:name@version> --json
 ```
 
 ## Prove the effective organization
@@ -166,16 +183,16 @@ Run:
 
 ```bash
 eforge resolve <consumer-scenario.yaml> --output <temporary-resolved.yaml> \
-  --project-root <absolute-project-root> --explain-composition --json
-eforge validate <consumer-scenario.yaml> --project-root <absolute-project-root> --show-storage
+  --explain-composition --json
+eforge validate <consumer-scenario.yaml> --show-storage
 eforge generate <consumer-scenario.yaml> --output <absolute-temporary-output> \
-  --project-root <absolute-project-root> --seed 42 --force
+  --seed 42 --force
 ```
 
 Inspect the composition explanation for exact dependencies, origins, replacements, and qualified
 references. Inspect generated records for representative users, systems, applications,
 destinations, cadence, email behavior, and SMB behavior that the pack claims to provide.
-For SMB, also inspect `STORAGE_MANIFEST.json` schema v2 for platform, backing/advertised
+For SMB, also inspect `STORAGE_MANIFEST.json` schema v3 for host file sets, share bindings, platform, backing/advertised
 filesystem, drive/mount, credential mode, and resolved path views. Confirm Windows audit appears
 only for Windows servers, Samba syslog only for Linux servers, and any requested Zeek evidence has
 an observing sensor.

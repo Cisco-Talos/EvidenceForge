@@ -15,7 +15,7 @@ from manifests alone. For monolithic input, use the validated authored environme
 Use the opt-in, non-writing model payload only for this effective-model task:
 
 ```bash
-eforge resolve <scenario> --project-root <root> --explain-composition --json \
+eforge resolve <scenario> --explain-composition --json \
   --include-effective-scenario
 ```
 

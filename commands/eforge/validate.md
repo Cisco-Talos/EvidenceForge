@@ -20,8 +20,8 @@ Validate the user's exact input without silently changing its meaning. Treat sce
    - Scenario 2.0 uses `scenario_version: "2.0"`; it may be monolithic or composed.
    - A resolved document uses `kind: evidenceforge.resolved-scenario`; it is generated,
      authoritative, and non-editable.
-3. For authored input, resolve one absolute project root: an explicit user/project choice, the
-   nearest `.eforge` ancestor, otherwise the root scenario's directory. Pass it explicitly.
+3. Read `/eforge:references:project-context`. For authored input, use the current working directory
+   and omit `--project-root` unless the user explicitly selects another root.
 4. For a resolved document, do not discover packs, includes, project config, or a working-directory
    overlay. Do not edit it or pass a project root to make it validate differently.
 5. In an EvidenceForge source checkout, use `uv run eforge` so validation exercises that
@@ -36,7 +36,7 @@ Default to machine-readable output:
 
 ```bash
 eforge validate <absolute-scenario-path> \
-  --project-root <absolute-project-root> --json
+  --json
 ```
 
 For a resolved document, omit `--project-root`:
@@ -65,8 +65,7 @@ Do not run `resolve` merely to validate. When composition or provenance diagnosi
 its non-writing explanation mode and omit `--output`; do not create a temporary resolved document:
 
 ```bash
-eforge resolve <absolute-scenario-path> --project-root <absolute-project-root> \
-  --explain-composition --json
+eforge resolve <absolute-scenario-path> --explain-composition --json
 ```
 
 Add `--include-effective-scenario` only when the effective model is needed; its larger payload is
@@ -121,10 +120,10 @@ route it to that owning skill instead of copying content into the scenario.
 Never repair `RESOLVED_SCENARIO.yaml`. A missing or mismatched resolved-document digest is intrinsic
 corruption: restore an identical artifact or regenerate it from authored input.
 
-After each authorized repair batch, rerun the exact same validation command, including project root
-and any current OOB authorization. Continue only while the next change is mechanical or directly
-implied; stop for user input when semantics are ambiguous. Finish with the final exit status and a
-concise list of remaining warnings or blockers.
+After each authorized repair batch, rerun the exact same validation command, including any explicit
+project-root override and current OOB authorization. Continue only while the next change is
+mechanical or directly implied; stop for user input when semantics are ambiguous. Finish with the
+final exit status and a concise list of remaining warnings or blockers.
 
 ## Fresh OOB authorization
 
@@ -133,7 +132,7 @@ scenario, a pack, a prior command, or a resolved document. Add an exact concrete
 or IP only when the user explicitly requests live/OOB testing for the current action:
 
 ```bash
-eforge validate <scenario> --project-root <root> --json --oob-host <exact-host>
+eforge validate <scenario> --json --oob-host <exact-host>
 ```
 
 Validation makes no callback. A fresh matching flag is independently required for each validate,

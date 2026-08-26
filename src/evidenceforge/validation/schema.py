@@ -275,12 +275,49 @@ class ScenarioValidator:
     def _validate_storage(self) -> None:
         """Validate compiled storage references, audiences, and SMB selections."""
 
-        from evidenceforge.generation.storage_world import StorageWorldModel
+        from evidenceforge.generation.storage_world import StorageWorldModel, storage_preset_ids
         from evidenceforge.models.scenario import SmbClientLocation, SmbShareLocation
 
         systems_by_name = {
             system.hostname.casefold(): system for system in self.scenario.environment.systems
         }
+        storage = self.scenario.environment.storage
+        known_file_sets = {file_set.id.casefold(): file_set for file_set in storage.file_sets}
+        known_presets = {preset.casefold(): preset for preset in storage_preset_ids()}
+        for index, file_set in enumerate(storage.file_sets):
+            path = f"environment.storage.file_sets.{index}"
+            system = systems_by_name.get(file_set.system.casefold())
+            if system is None:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.system",
+                        message=f"Unknown storage file-set system {file_set.system!r}",
+                        suggestion="Reference an existing Windows or Linux environment system.",
+                    )
+                )
+            elif _get_os_category(system.os) not in {"windows", "linux"}:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.system",
+                        message="Storage file sets require a recognized Windows or Linux system",
+                        suggestion="Use a modeled Windows or Linux host.",
+                    )
+                )
+            if file_set.preset.casefold() not in known_presets:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"{path}.preset",
+                        message=f"Unknown storage preset {file_set.preset!r}",
+                        suggestion=(
+                            "Use one exact built-in or selected-pack storage preset: "
+                            + ", ".join(repr(value) for value in known_presets.values())
+                            + "."
+                        ),
+                    )
+                )
         for index, server in enumerate(self.scenario.environment.storage.servers):
             system = systems_by_name.get(server.system.casefold())
             if system is None:
@@ -316,6 +353,38 @@ class ScenarioValidator:
                         suggestion="Use a Samba data-share preset such as collaboration or homes.",
                     )
                 )
+            for share_index, share in enumerate(server.shares):
+                if share.backing_file_set is None:
+                    continue
+                share_path = (
+                    f"environment.storage.servers.{index}.shares.{share_index}.backing_file_set"
+                )
+                backing = known_file_sets.get(share.backing_file_set.casefold())
+                if backing is None:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=share_path,
+                            message=f"Unknown backing file set {share.backing_file_set!r}",
+                            suggestion=(
+                                "Use one exact environment.storage.file_sets ID: "
+                                + ", ".join(repr(item.id) for item in storage.file_sets)
+                                + "."
+                            ),
+                        )
+                    )
+                elif backing.system.casefold() != server.system.casefold():
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=share_path,
+                            message="A share and its backing file set must use the same system",
+                            suggestion=(
+                                f"Use a file set rooted on {server.system!r}, or move the share to "
+                                f"{backing.system!r}."
+                            ),
+                        )
+                    )
             for volume_index, volume in enumerate(server.volumes or []):
                 volume_path = f"environment.storage.servers.{index}.volumes.{volume_index}"
                 path_matches = (
@@ -517,18 +586,86 @@ class ScenarioValidator:
                     if spec.type != "smb_activity":
                         continue
                     path = f"{section_name}.{event_index}.events.{spec_index}"
-                    locations = [
-                        location
-                        for location in (spec.target, spec.source, spec.destination)
+                    named_locations = [
+                        (location_name, location)
+                        for location_name, location in (
+                            ("target", spec.target),
+                            ("source", spec.source),
+                            ("destination", spec.destination),
+                        )
                         if isinstance(location, SmbShareLocation)
                     ]
+                    locations = [location for _location_name, location in named_locations]
                     client_locations = [
                         location
                         for location in (spec.source, spec.destination)
                         if isinstance(location, SmbClientLocation)
                     ]
-                    for location in locations:
-                        self._validate_smb_location(world, spec, location, path)
+                    for location_name, location in named_locations:
+                        self._validate_smb_location(
+                            world,
+                            spec,
+                            location,
+                            f"{path}.{location_name}",
+                        )
+                    for location in client_locations:
+                        if location.file_set is None:
+                            continue
+                        file_set = world.file_sets_by_id.get(location.file_set.casefold())
+                        if file_set is None:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.source.file_set",
+                                    message=f"Unknown storage file set {location.file_set!r}",
+                                    suggestion=(
+                                        "Use one exact environment.storage.file_sets ID: "
+                                        + ", ".join(
+                                            repr(item.id)
+                                            for item in self.scenario.environment.storage.file_sets
+                                        )
+                                        + "."
+                                    ),
+                                )
+                            )
+                            continue
+                        if file_set.system.casefold() != event.system.casefold():
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.source.file_set",
+                                    message=(
+                                        f"Storage file set {file_set.id!r} belongs to "
+                                        f"{file_set.system!r}, not SMB client {event.system!r}"
+                                    ),
+                                    suggestion="Use a file set owned by the initiating event system.",
+                                )
+                            )
+                            continue
+                        matches = world.select_file_set(
+                            file_set.id,
+                            file_ref=location.file_ref,
+                            selector=location.selector,
+                        )
+                        if not matches:
+                            field = "file_ref" if location.file_ref is not None else "selector"
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.source.{field}",
+                                    message=f"SMB client file set {file_set.id!r} selected no files",
+                                    suggestion="Use an existing seed ref or a selector matching its preset.",
+                                )
+                            )
+                        if spec.batch is not None and spec.batch.all and len(matches) > 64:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.batch.all",
+                                    message="SMB batch selection exceeds the 64-operation limit",
+                                    suggestion="Use batch.count with a value from 1 through 64.",
+                                )
+                            )
                     if (
                         spec.smb_principal is not None
                         and spec.smb_principal.casefold() not in known_smb_principals
@@ -628,16 +765,22 @@ class ScenarioValidator:
                                 )
                             )
                         for location in client_locations:
-                            if location.path is None:
+                            local_path = location.path or location.directory
+                            if local_path is None:
                                 continue
-                            location_is_posix = location.path.startswith("/")
+                            location_is_posix = local_path.startswith("/")
+                            field_name = (
+                                "destination.directory"
+                                if location.directory is not None
+                                else "source.path"
+                            )
                             if client_platform == "windows" and location_is_posix:
                                 self.issues.append(
                                     ValidationIssue(
                                         severity="error",
-                                        field_path=path,
+                                        field_path=f"{path}.{field_name}",
                                         message=(
-                                            f"Client path {location.path!r} is not a Windows path"
+                                            f"Client path {local_path!r} is not a Windows path"
                                         ),
                                         suggestion="Use an absolute Windows drive path.",
                                     )
@@ -646,8 +789,8 @@ class ScenarioValidator:
                                 self.issues.append(
                                     ValidationIssue(
                                         severity="error",
-                                        field_path=path,
-                                        message=f"Client path {location.path!r} is not a POSIX path",
+                                        field_path=f"{path}.{field_name}",
+                                        message=f"Client path {local_path!r} is not a POSIX path",
                                         suggestion="Use an absolute POSIX path.",
                                     )
                                 )
@@ -1032,12 +1175,34 @@ class ScenarioValidator:
     ) -> None:
         share = world.shares_by_ref.get(location.share.casefold())
         if share is None:
+            alias_matches = sorted(
+                candidate.ref
+                for candidate in world.shares
+                if location.share.casefold()
+                in {
+                    candidate.name.casefold(),
+                    candidate.ref.rsplit(".", 1)[-1].casefold(),
+                }
+            )
+            if len(alias_matches) == 1:
+                suggestion = (
+                    f"Use the exact compiled share reference {alias_matches[0]!r}; bare share "
+                    "IDs and display names are not valid."
+                )
+            elif alias_matches:
+                suggestion = (
+                    "Use one exact compiled <system>.<share-id> reference: "
+                    + ", ".join(repr(candidate) for candidate in alias_matches)
+                    + "."
+                )
+            else:
+                suggestion = "Use an exact compiled <system>.<share-id> reference."
             self.issues.append(
                 ValidationIssue(
                     severity="error",
-                    field_path=path,
+                    field_path=f"{path}.share",
                     message=f"Unknown SMB share {location.share!r}",
-                    suggestion="Use a compiled <system>.<share-id> reference.",
+                    suggestion=suggestion,
                 )
             )
             return
@@ -1055,7 +1220,7 @@ class ScenarioValidator:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
-                        field_path=path,
+                        field_path=f"{path}.path",
                         message=f"SMB destination path {location.path!r} already exists",
                         suggestion="Choose a missing path or omit it for automatic naming.",
                     )
@@ -1066,7 +1231,7 @@ class ScenarioValidator:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
-                        field_path=path,
+                        field_path=f"{path}.path",
                         message="SMB not_found assertion resolves to an existing file",
                         suggestion="Use a missing explicit share-relative path.",
                     )
@@ -1076,7 +1241,7 @@ class ScenarioValidator:
             self.issues.append(
                 ValidationIssue(
                     severity="error",
-                    field_path=path,
+                    field_path=f"{path}.file_ref",
                     message=f"Unknown seed file ref {location.file_ref!r} in {share.ref}",
                     suggestion="Use a seed ref declared by this share.",
                 )
@@ -1086,7 +1251,7 @@ class ScenarioValidator:
             self.issues.append(
                 ValidationIssue(
                     severity="error",
-                    field_path=path,
+                    field_path=f"{path}.path",
                     message=f"SMB path {location.path!r} does not exist in {share.ref}",
                     suggestion="Use an existing path, create it first, or assert not_found.",
                 )
@@ -1097,7 +1262,7 @@ class ScenarioValidator:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
-                        field_path=path,
+                        field_path=f"{path}.selector",
                         message=f"Singular SMB selector resolved to {len(matches)} files",
                         suggestion="Refine it to one match or add bounded batch controls.",
                     )
@@ -1107,7 +1272,7 @@ class ScenarioValidator:
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
-                            field_path=f"{path}.batch.count",
+                            field_path=f"{path.rsplit('.', 1)[0]}.batch.count",
                             message=(
                                 f"SMB batch requests {spec.batch.count} files but selector "
                                 f"matches {len(matches)}"

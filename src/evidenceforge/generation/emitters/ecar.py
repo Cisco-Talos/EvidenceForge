@@ -566,14 +566,17 @@ class EcarEmitter(HostMultiplexEmitter):
             "pid": local_process.pid if local_process is not None else -1,
             "principal": local_principal,
             "file_path": file_path,
-            "file_object_id": stable_uuid(
-                "smb-client-file",
-                host.hostname,
-                file_path,
-                smb.file_id,
-                smb.content_version,
+            "file_object_id": (
+                smb.local_file_id
+                or stable_uuid(
+                    "smb-client-file",
+                    host.hostname,
+                    file_path,
+                    smb.file_id,
+                    smb.content_version,
+                )
             ),
-            "content_version": smb.content_version,
+            "content_version": smb.local_content_version or smb.content_version,
             "_host_fqdn": self._host_fqdn(host),
         }
         if action == "RENAME" and smb.previous_client_path:

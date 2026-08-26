@@ -130,7 +130,7 @@ storyline:
         operation: copy
         purpose: collection
         source: {type: share, share: FS-01.team}
-        destination: {type: client, path: 'C:\ProgramData\cache\'}
+        destination: {type: client, directory: 'C:\ProgramData\cache\'}
         batch: {count: 50, duration: 8m}
         outcome: success
   - id: batch-delete

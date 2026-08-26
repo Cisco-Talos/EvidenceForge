@@ -29,7 +29,7 @@ output/
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
   COLLECTION_PROFILE.json                 # Blind-safe collection/export semantics
-  STORAGE_MANIFEST.json                    # Compiled cross-platform SMB storage model, schema v2
+  STORAGE_MANIFEST.json                    # Compiled host-file/SMB storage model, schema v3
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
   RESOLVED_SCENARIO.yaml                   # Authoritative self-contained generation input
   GENERATION_MANIFEST.json                 # Run identity and hashes; written last
@@ -81,14 +81,23 @@ sidecar. It records the primary collection window, selected observation profile,
 source-family tail policies, and export ordering semantics without storyline
 identifiers, exercise labels, ground-truth events, or scenario narrative details.
 
-`STORAGE_MANIFEST.json` is emitted when storage is configured. Schema version 2 separates each
+`STORAGE_MANIFEST.json` is emitted when storage is configured. Schema version 3 records bounded
+host file sets once, optional share bindings, and each
 volume's server platform and backing filesystem from each share's `provider`, `platform`,
 `network_root`, `server_native_root`, `backing_filesystem`, `advertised_filesystem`,
 `case_policy`, and `audit_profile`. Mappings retain `drive` and `mount` fields and add explicit
 platform/type/root `presentations`, credential mode, and non-secret principal identity. The file
-also carries deterministic catalog summaries and resolved storyline targets. Canonical
+also carries deterministic catalog summaries and resolved storyline targets. A share backed by a
+file set is an alias and is not counted as a second population. Canonical
 share-relative paths remain SMB paths; server-local and client-presented paths are OS-native. The
 manifest contains metadata only—never credentials or file payloads.
+
+For client-file-set uploads, endpoint evidence identifies each exact local source object and a
+distinct server destination object while their content identity and deterministic hashes remain
+equal. The existing authenticated SMB lifecycle owns one bounded batch: client reads, per-file SMB
+writes and Zeek SMB/files observations, server writes, and one terminal session/tree/transport
+sequence. Moves publish the destination before retiring the local source. Retried or recovered
+publication cannot duplicate operations or terminal evidence.
 
 Current target-specific behavior:
 
@@ -561,7 +570,8 @@ browser/SaaS traffic to the assigned human user, while allowlisted
 infrastructure classes such as software updates, telemetry, CRL, and OCSP can
 render unauthenticated (`-`) rows. Machine/service-account proxy usernames are
 opt-in through `environment.proxy.auth_policy`; `mode: legacy` preserves the
-older machine-context User-Agent behavior. Default combined text output
+older machine-context User-Agent behavior while emitting a migration warning.
+Default combined text output
 preserves the full username value when one is present. The SOF-ELK target
 strips the domain prefix from identities such as `DOMAIN\user` and the trailing
 `$` from machine accounts such as `DOMAIN\HOST$` so SOF-ELK's HTTPD parser can

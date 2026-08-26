@@ -21,6 +21,7 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationTransportPlan,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     FileContext,
@@ -167,6 +168,8 @@ class SmbActivityActionBundle:
             source=request.activity_source,
         )
         self.rng = random.Random(_stable_seed(f"smb-activity:{self.anchor.stable_id}"))
+        self._client_source_by_destination: dict[str, CompiledStorageFile] = {}
+        self._client_source_by_destination_path: dict[str, CompiledStorageFile] = {}
 
     def _timing_planner(self) -> BaselineTimingPlanner:
         """Return the shared engine timing planner for this SMB action."""
@@ -226,6 +229,7 @@ class SmbActivityActionBundle:
                     file.path,
                     file.size_bytes,
                     file.mime_type,
+                    self._client_source_by_destination.get(file.file_id, file).file_id,
                 )
                 for file in selected
             ),
@@ -256,13 +260,35 @@ class SmbActivityActionBundle:
             server,
             self.smb_principal,
         )
-        selected = self._select(primary_location)
         creates_remote_copy = (
             spec.operation in {"copy", "move"}
             and not isinstance(spec.source, SmbShareLocation)
             and isinstance(spec.destination, SmbShareLocation)
         )
-        if (spec.operation == "create" or creates_remote_copy) and not self.request.files_override:
+        if (
+            creates_remote_copy
+            and isinstance(spec.source, SmbClientLocation)
+            and spec.source.file_set is not None
+            and not self.request.files_override
+        ):
+            source_files = self._select_client_file_set(spec.source)
+            selected = tuple(
+                self._client_upload_destination_file(file, spec.destination)
+                for file in source_files
+            )
+            self._client_source_by_destination = dict(
+                zip((file.file_id for file in selected), source_files, strict=True)
+            )
+            self._client_source_by_destination_path = dict(
+                zip((file.path.casefold() for file in selected), source_files, strict=True)
+            )
+        else:
+            selected = self._select(primary_location)
+        if (
+            (spec.operation == "create" or creates_remote_copy)
+            and not self.request.files_override
+            and not self._client_source_by_destination
+        ):
             selected = (self._create_placeholder(primary_location, share),)
         if not selected and spec.outcome == "not_found" and primary_location.path is not None:
             selected = (self._missing_placeholder(primary_location, share),)
@@ -1213,11 +1239,12 @@ class SmbActivityActionBundle:
             rendered.image,
             rendered.command_line,
         )
+        running_candidates = self.executor.state_manager.get_processes_on_system(
+            client_system.hostname
+        )
         candidates = [
             candidate
-            for candidate in self.executor.state_manager.get_processes_on_system(
-                client_system.hostname
-            )
+            for candidate in running_candidates
             if candidate.username.casefold() == rendered.username.casefold()
             and candidate.logon_id == session.logon_id
             and candidate.image.casefold() == image_lower
@@ -1230,6 +1257,24 @@ class SmbActivityActionBundle:
         ]
         preferred_pid = self.request.process_pid
         if preferred_pid > 0:
+            preferred = next(
+                (candidate for candidate in running_candidates if candidate.pid == preferred_pid),
+                None,
+            )
+            requested_image = self.request.process_image.casefold()
+            if (
+                preferred is not None
+                and preferred.username.casefold() == self.request.actor.username.casefold()
+                and preferred.logon_id == session.logon_id
+                and preferred.start_time is not None
+                and ensure_utc(preferred.start_time) <= ensure_utc(self.request.time)
+                and (not requested_image or preferred.image.casefold() == requested_image)
+                and not self.executor._connection_owner_requires_unique_transport_process(
+                    preferred.image
+                )
+                and all(candidate.pid != preferred.pid for candidate in candidates)
+            ):
+                candidates.append(preferred)
             candidates.sort(key=lambda candidate: candidate.pid != preferred_pid)
         if candidates:
             running = max(
@@ -1273,7 +1318,11 @@ class SmbActivityActionBundle:
                 transport_attribution=(
                     "process" if profile.transport_attribution == "process" else "kernel"
                 ),
-                lifecycle=rendered.lifecycle,
+                lifecycle=(
+                    "operation"
+                    if running.pid == preferred_pid and bool(self.request.process_image)
+                    else rendered.lifecycle
+                ),
             )
 
         seed = _stable_seed(
@@ -1429,6 +1478,17 @@ class SmbActivityActionBundle:
                             journal=journal,
                         )
                         handle_access = "write"
+                        if result == "success" and action == "move" and creates_remote_copy:
+                            source_file = self._client_source_by_destination.get(file.file_id)
+                            if source_file is not None:
+                                source_state = self.executor.state_manager.touch_smb_file(
+                                    source_file,
+                                    journal=journal,
+                                )
+                                self.executor.state_manager.delete_smb_file(
+                                    source_state.file_id,
+                                    journal=journal,
+                                )
                     else:
                         state = self.executor.state_manager.touch_smb_file(file, journal=journal)
                         handle_access = "read" if action in {"browse", "read", "copy"} else "write"
@@ -1795,6 +1855,8 @@ class SmbActivityActionBundle:
                 share_local_path=self.world.server_local_path(share, ""),
                 file_id=state.file_id,
                 content_version=state.version,
+                local_file_id=self._local_file_identity(state).file_id,
+                local_content_version=self._local_file_identity(state).version,
                 handle_id=handle.handle_id if handle is not None else "",
                 size_bytes=state.size_bytes,
                 **smb_fields,
@@ -1803,6 +1865,7 @@ class SmbActivityActionBundle:
             )
             file_transfer = None
             if result == "success" and phase in {"read", "write"}:
+                content = self._file_content_identity(state)
                 file_transfer = FileTransferContext(
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
@@ -1814,6 +1877,10 @@ class SmbActivityActionBundle:
                     is_orig=phase == "write",
                     seen_bytes=state.size_bytes,
                     total_bytes=state.size_bytes,
+                    content_identity=content.content_id,
+                    md5=content.digests.md5,
+                    sha1=content.digests.sha1,
+                    sha256=content.digests.sha256,
                 )
             operation_effect_plan = OwnedEffectOccurrencePlan(
                 owner=EffectOccurrenceOwner.SMB_PROTOCOL_FILE_PHASE,
@@ -3625,7 +3692,10 @@ class SmbActivityActionBundle:
                 operation="create",
                 purpose=spec.purpose,
                 target=destination.model_copy(
-                    update={"path": destination.path if len(selected) == 1 else None}
+                    update={
+                        "path": destination.path if len(selected) == 1 else None,
+                        "directory": None,
+                    }
                 ),
                 outcome=self._leg_outcome(destination, operation="create"),
                 path_style=spec.path_style,
@@ -3727,7 +3797,86 @@ class SmbActivityActionBundle:
     def _destination_path(self, destination: SmbShareLocation, source_path: str) -> str:
         if destination.path is not None:
             return destination.path
+        if destination.directory is not None:
+            return f"{destination.directory}\\{source_path}".strip("\\")
         return f"Incoming\\{ntpath.basename(source_path)}"
+
+    def _select_client_file_set(
+        self,
+        location: SmbClientLocation,
+    ) -> tuple[CompiledStorageFile, ...]:
+        if location.file_set is None:
+            return ()
+        candidates = self.world.select_file_set(
+            location.file_set,
+            file_ref=location.file_ref,
+            selector=location.selector,
+        )
+        candidates = tuple(
+            file for file in candidates if self.executor.state_manager.smb_file_is_available(file)
+        )
+        return self._apply_batch(candidates)
+
+    def _apply_batch(
+        self,
+        candidates: tuple[CompiledStorageFile, ...],
+    ) -> tuple[CompiledStorageFile, ...]:
+        batch = self.request.spec.batch
+        if batch is None:
+            return candidates[:1]
+        if batch.count is not None:
+            count = batch.count
+        elif batch.fraction is not None:
+            count = max(1, round(len(candidates) * batch.fraction))
+        else:
+            count = len(candidates)
+        if count > _MAX_PERSISTENT_SMB_OPERATIONS:
+            raise ValueError("Persistent SMB production requires 1..64 file operations")
+        return tuple(candidates[:count])
+
+    def _client_upload_destination_file(
+        self,
+        source: CompiledStorageFile,
+        destination: SmbShareLocation,
+    ) -> CompiledStorageFile:
+        path = self._destination_path(destination, source.path)
+        return source.model_copy(
+            update={
+                "file_id": stable_uuid(
+                    "smb-client-copy-destination",
+                    self.anchor.stable_id,
+                    destination.share,
+                    path,
+                ),
+                "share": destination.share,
+                "path": path,
+                "seed_ref": source.seed_ref or source.file_id,
+            }
+        )
+
+    def _local_file_identity(self, remote_file: Any) -> Any:
+        return self._client_source_by_destination.get(
+            remote_file.file_id,
+            self._client_source_by_destination_path.get(remote_file.path.casefold(), remote_file),
+        )
+
+    def _file_content_identity(self, remote_file: Any) -> FileContentIdentity:
+        """Return path-independent content identity, preserving client-copy lineage."""
+
+        source = self._local_file_identity(remote_file)
+        compiled = self.world.files_by_id.get(source.file_id)
+        seed_ref = (
+            compiled.seed_ref
+            if compiled is not None and compiled.seed_ref is not None
+            else source.file_id
+        )
+        return FileContentIdentity(
+            file_object_id=source.file_id,
+            version=source.version,
+            size_bytes=source.size_bytes,
+            mime_type=source.mime_type,
+            seed_ref=seed_ref,
+        )
 
     def _mapping_for_share(self, share_ref: str) -> str | None:
         mapping = self.world.mappings_by_id.get((self.request.spec.mapping or "").casefold())
@@ -3776,22 +3925,22 @@ class SmbActivityActionBundle:
             if location.file_ref is not None or location.path is not None:
                 return candidates
             return candidates[:1]
-        if batch.count is not None:
-            count = batch.count
-        elif batch.fraction is not None:
-            count = max(1, round(len(candidates) * batch.fraction))
-        else:
-            count = len(candidates)
-        return tuple(candidates[:count])
+        return self._apply_batch(candidates)
 
     def _create_placeholder(
         self,
         location: SmbShareLocation,
         share: CompiledStorageShare,
     ) -> CompiledStorageFile:
-        path = location.path or (
-            f"Incoming\\{self.request.actor.username}-{self.request.time:%Y%m%d-%H%M%S}.dat"
-        )
+        source = self.request.spec.source
+        if location.path is not None:
+            path = location.path
+        elif (
+            location.directory is not None and isinstance(source, SmbClientLocation) and source.path
+        ):
+            path = self._destination_path(location, ntpath.basename(source.path.rstrip("\\/")))
+        else:
+            path = f"Incoming\\{self.request.actor.username}-{self.request.time:%Y%m%d-%H%M%S}.dat"
         return CompiledStorageFile(
             file_id=stable_uuid("smb-create-placeholder", share.ref, path, self.anchor.stable_id),
             share=share.ref,
@@ -3872,6 +4021,17 @@ class SmbActivityActionBundle:
                     tags=file.tags,
                     journal=journal,
                 )
+                if result == "success" and action == "move" and creates_remote_copy:
+                    source_file = self._client_source_by_destination.get(file.file_id)
+                    if source_file is not None:
+                        source_state = self.executor.state_manager.touch_smb_file(
+                            source_file,
+                            journal=journal,
+                        )
+                        self.executor.state_manager.delete_smb_file(
+                            source_state.file_id,
+                            journal=journal,
+                        )
                 handle = self.executor._smb_channel_manager.open_handle(
                     lease,
                     file_id=state.file_id,
@@ -3907,6 +4067,8 @@ class SmbActivityActionBundle:
                 share_local_path=self.world.server_local_path(share, ""),
                 file_id=state.file_id,
                 content_version=state.version,
+                local_file_id=self._local_file_identity(state).file_id,
+                local_content_version=self._local_file_identity(state).version,
                 handle_id=handle.handle_id if handle is not None else "",
                 size_bytes=state.size_bytes,
                 **self._smb_platform_fields(share, server),
@@ -4004,6 +4166,7 @@ class SmbActivityActionBundle:
             )
             file_transfer = None
             if phase in {"read", "write"}:
+                content = self._file_content_identity(state)
                 file_transfer = FileTransferContext(
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
@@ -4015,6 +4178,10 @@ class SmbActivityActionBundle:
                     is_orig=phase == "write",
                     seen_bytes=state.size_bytes,
                     total_bytes=state.size_bytes,
+                    content_identity=content.content_id,
+                    md5=content.digests.md5,
+                    sha1=content.digests.sha1,
+                    sha256=content.digests.sha256,
                 )
             action_time = timestamp + timedelta(
                 seconds=timing.setup_seconds + timing.jitter_seconds
@@ -4681,6 +4848,18 @@ class SmbActivityActionBundle:
         location = source if isinstance(source, SmbClientLocation) else destination
         if not isinstance(location, SmbClientLocation):
             return ""
+        if isinstance(source, SmbClientLocation) and source.file_set is not None:
+            file_set = self.world.file_set(source.file_set)
+            relative_path = remote_path
+            if isinstance(destination, SmbShareLocation) and destination.directory:
+                prefix = destination.directory.rstrip("\\") + "\\"
+                if relative_path.casefold().startswith(prefix.casefold()):
+                    relative_path = relative_path[len(prefix) :]
+            if file_set.root.startswith("/"):
+                return posixpath.join(file_set.root, relative_path.replace("\\", "/"))
+            root = file_set.root.rstrip("\\")
+            native_relative = relative_path.replace("/", "\\")
+            return f"{root}\\{native_relative}"
         client_is_linux = (
             self.client_system is not None and self._server_platform(self.client_system) == "linux"
         )
@@ -4693,6 +4872,10 @@ class SmbActivityActionBundle:
             if location.path.endswith(("\\", "/")):
                 return f"{location.path}{basename}"
             return location.path
+        if location.directory:
+            separator = "/" if client_is_linux else "\\"
+            local_directory = location.directory.rstrip("/\\")
+            return f"{local_directory}{separator}{basename}"
         if client_is_linux:
             directory = getattr(self.executor, "identity_directory", None)
             account = (

@@ -1380,7 +1380,7 @@ def test_organization_pack_storage_catalog_composes_with_samba_server(tmp_path: 
     manifest = json.loads((output / "STORAGE_MANIFEST.json").read_text(encoding="utf-8"))
     volume = next(item for item in manifest["volumes"] if item["system"] == "TINY-SAMBA-01")
     share = next(item for item in manifest["shares"] if item["ref"] == "TINY-SAMBA-01.records")
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert volume["platform"] == "linux"
     assert volume["mount"] == "/srv/samba/data"
     assert volume["filesystem"] == "xfs"

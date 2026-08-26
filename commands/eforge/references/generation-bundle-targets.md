@@ -7,6 +7,7 @@ description: "Generated bundle, sidecar, and output-target reference"
 ## Contents
 
 - [Bundle Layout](#bundle-layout)
+- [Compiled Collection Identity](#compiled-collection-identity)
 - [Output Targets](#output-targets)
 - [Replacement And Verification](#replacement-and-verification)
 
@@ -72,6 +73,22 @@ target, seed, formats, runtime/build identity, selected pack identities and dige
 hash, and output hashes. An absent manifest means the current transactional bundle did not finish
 successfully. A copied bundle must keep every hashed file with this manifest.
 
+## Compiled Collection Identity
+
+Before rendering, generation compiles the requested formats into immutable exact source instances
+and fixed capability sets. Canonical projection targets are then filtered by source deployment,
+topology visibility, coherent missingness, source timing/batching, and only then rendered.
+
+`OBSERVATION_MANIFEST.json` records aggregate source-observation outcomes. When exact source
+overrides are part of the effective scenario, `source_deployment_digest` binds those diagnostics to
+the immutable compiled deployment. `COLLECTION_PROFILE.json` records the primary collection window,
+observation profile, family tail policy, and export ordering. Projection envelopes themselves are
+ephemeral; the bundle does not retain one decision object per candidate record.
+
+When diagnosing absence, distinguish an undeployed source, missing capability, invisible topology,
+coherent drop/filter, and an out-of-window record. Do not change scenario collection policy to hide
+a lifecycle, effect, content, channel, or timing defect.
+
 ## Output Targets
 
 `eforge generate --target default|sof-elk|splunk` selects one rendering for the run. It changes
@@ -89,10 +106,10 @@ paths or record shapes under `data/`; it does not create a target-named bundle r
 | Zeek, IDS, eCAR, bash | Source-native files | Unchanged | Unchanged |
 
 `OUTPUT_TARGET.txt` contains the chosen target. A missing marker identifies legacy/default output
-to evaluation. `COLLECTION_PROFILE.json` describes the primary collection window, observation
-profile, family tail policies, and export ordering without disclosing storyline labels or truth.
+to evaluation. `COLLECTION_PROFILE.json` does not disclose storyline labels or truth.
 
-When storage is configured, `STORAGE_MANIFEST.json` uses schema version 2. Volumes identify server
+When storage is configured, `STORAGE_MANIFEST.json` uses schema version 3. Host file sets are unique
+canonical populations, share bindings are aliases rather than duplicate storage, and volumes identify server
 platform, native root, and backing filesystem. Shares keep provider/platform, network and
 server-native roots, backing and wire-advertised filesystems, case policy, and audit profile.
 Mappings retain compatibility `drive`/`mount` fields plus resolved platform/type/root

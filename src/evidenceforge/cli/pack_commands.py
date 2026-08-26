@@ -77,7 +77,11 @@ def _fail(
 @pack_app.command("list")
 def list_packs(
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
 ) -> None:
     """List packaged and project-local packs."""
 
@@ -118,7 +122,11 @@ def _resolve_cli_pack(value: str, project_root: Path | None):
 def show_pack(
     reference: str = typer.Argument(..., help="source:type:name@version or pack path"),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
 ) -> None:
     """Show a pack's manifest, dependencies, exports, and digest."""
 
@@ -147,7 +155,11 @@ def show_pack(
 def validate_pack(
     reference: str = typer.Argument(..., help="source:type:name@version or pack path"),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
 ) -> None:
     """Validate pack schema, containment, identity, dependencies, and digest."""
 
@@ -185,7 +197,11 @@ def init_pack(
     name: str = typer.Argument(...),
     version: str = typer.Option(..., "--version"),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
 ) -> None:
     """Create a complete project-local pack skeleton."""
 
@@ -210,7 +226,11 @@ def copy_pack(
     name: str = typer.Option(..., "--name"),
     version: str = typer.Option(..., "--version"),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
 ) -> None:
     """Copy a validated pack into the project repository with a new identity."""
 

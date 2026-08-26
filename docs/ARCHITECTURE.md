@@ -345,6 +345,49 @@ typed storyline or red-herring specification, including rows that failed to plan
 event dictionary. Ground-truth schema v2 exposes semantic occurrence IDs and no longer exposes a
 dispatch-sequence identifier.
 
+### V2 Foundation Ownership and Scale
+
+Scenario 2.0 separates authored controls from engine-owned runtime truth. The current migration is
+incremental: a path becomes strict only after its callers use the canonical owner, while shadow
+diagnostics continue to expose parity defects on compatibility paths.
+
+| Runtime truth | Current owner | Boundary |
+|---|---|---|
+| Required/optional/external action consequences | `ExecutionEffectPlan` on migrated bundles | Allocation-free preflight, exact occurrence/sibling reconciliation, compact intent outcome |
+| Process/session holds, leases, transitions, and close barriers | `LifecycleRegistry` on migrated paths | Append-only logical lifecycle and exact indexed queries; emitters receive frozen identity |
+| Materialized live compatibility state and established ID allocation | `StateManager` | Compatibility projection for unmigrated paths, not an emitter repair source or second logical registry |
+| Host application/service/task/module placement and release/content identity | `HostDeployment` and `DeploymentContentRegistry` | Immutable host compilation, path-independent release identity, exact path binding, no payload bytes |
+| Source deployment and capability policy | `CompiledCollectionDeployment` | Immutable exact source instances and capability bitsets; ephemeral projection envelopes |
+| Persistent application transports and operations | `ApplicationChannelRegistry` plus protocol managers | Exact affinity/owner/binding indexes, immutable budgets, paged expiry |
+| Source clocks and migrated duration/latency sampling | `TimingRuntime` | Canonical timestamps remain immutable; finalized source timing is frozen before rendering |
+
+`ExecutionEffectPlan` is internal. Scenario authors continue to declare typed events; they never
+author effect nodes, lifecycle handles, leases, closure tickets, channel IDs, or content IDs. For a
+migrated bundle, preflight runs before PID, port, lifecycle, or StateManager allocation. Required
+nodes must become exact canonical occurrences, link to an explicit sibling/lifecycle identity, or
+fail with an actionable reason. Compact intent outcomes are retained instead of a duration-wide
+execution DAG.
+
+Binary release identity is independent of host, principal, and install path. A software
+installation places a release on a host/principal; module release, installed-software inventory,
+local artifact version, canonical file content, and source-native FUID remain separate identities.
+The dispatcher attaches resolved release/hash metadata to canonical process context before sealing,
+and Sysmon renders that frozen identity without a registry lookup.
+
+Collection projection runs in a fixed order: determine canonical targets, require an exact deployed
+source and capability bits, apply topology visibility, apply coherent missingness, finalize source
+timing/batching, then render. Projection envelopes are occurrence-local. The observation manifest
+retains aggregate diagnostics and, when applicable, the compiled source-deployment digest rather
+than every projection decision.
+
+The foundation indexes build on `CompactIndexedStore`, `SegmentedTemporalIndex`, and
+`ReferenceLeaseIndex`. Exact identity is amortized O(1), equality lookup is O(1 + returned rows),
+temporal lookup is O(log n + returned rows), and expiry/compaction is paged. Hot operations may not
+scan `values()`, sort an entire registry, rebuild a reverse index, or materialize an unbounded
+result. Lazy indexes keep small scenarios cheap; explicit retention horizons and leases make
+long-running retained counts plateau. Stable partition ownership and canonical commit ordering keep
+results independent of worker scheduling and hash seed.
+
 ### Action Bundles
 
 Action bundles sit between world/storyline/baseline intent and canonical
@@ -545,11 +588,26 @@ mappings resolve a principal through the identity directory; fixed mappings and 
 Samba authentication may additionally resolve an effective UID/GID without inventing a Windows
 LUID or a Linux PAM login.
 
+The storage world compiles ordinary host file sets and share catalogs through one bounded catalog
+compiler. A host file set owns persistent local file/content identities without implying an SMB
+listener or server role. A share may bind the exact same-system, same-root file set as an exported
+alias; local and share mutations then address the same canonical objects and manifests/forecasts do
+not count the alias twice. Client/server roles are connection-relative rather than permanent host
+classifications.
+
 Storage owns one canonical SMB-relative object path, then derives independent presentations: UNC,
 Windows drive mapping, Linux mount path, and server-local Windows or POSIX path. The server's
 backing filesystem is also independent from its advertised SMB filesystem; this is required for
-Samba on ext4/XFS that advertises NTFS. `STORAGE_MANIFEST.json` schema v2 exposes those distinctions
-alongside platform-aware mappings and resolved storyline targets.
+Samba on ext4/XFS that advertises NTFS. `STORAGE_MANIFEST.json` schema v3 exposes those distinctions,
+bounded host file sets and share bindings alongside platform-aware mappings and resolved storyline
+targets.
+
+For a client-file-set upload, the SMB action bundle reuses the owning authored process, opens one
+authenticated transport/session/tree lifecycle, emits one operation per selected file, and commits
+the destination objects through the existing idempotent SMB mutation journal. Relative source
+paths are preserved beneath the authored destination directory. Destination file objects are
+distinct from their sources but retain the same content lineage and hashes. A move commits its
+destination before retiring its source; publication recovery remains the only retry owner.
 
 Client and server lifecycle morphology is data-driven by `config/activity/smb_profiles.yaml`.
 Windows native access keeps its system-owned transport. Linux mounted CIFS keeps application-owned

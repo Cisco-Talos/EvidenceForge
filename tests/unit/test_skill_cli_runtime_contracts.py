@@ -237,7 +237,7 @@ def test_eval_rejects_unknown_output_format(tmp_path: Path) -> None:
     assert "Unsupported report format" in result.stdout
 
 
-def test_info_json_honors_project_root_and_derives_event_schemas(tmp_path: Path) -> None:
+def test_info_json_honors_project_root_without_advertising_authored_schema(tmp_path: Path) -> None:
     overlay = tmp_path / ".eforge" / "config"
     overlay.mkdir(parents=True)
 
@@ -246,17 +246,14 @@ def test_info_json_honors_project_root_and_derives_event_schemas(tmp_path: Path)
         ["info", "overlay.path", "--project-root", str(tmp_path), "--json"],
     )
     version_result = runner.invoke(app, ["info", "version", "--json"])
-    types_result = runner.invoke(app, ["info", "storyline_event_types", "--json"])
-    schema_result = runner.invoke(app, ["info", "storyline_event_schemas.process", "--json"])
+    fields_result = runner.invoke(app, ["info", "--fields"])
 
     assert overlay_result.exit_code == 0
     assert json.loads(overlay_result.stdout) == str(overlay)
     assert isinstance(json.loads(version_result.stdout), str)
-    assert "process_access" in json.loads(types_result.stdout)
-    schema = json.loads(schema_result.stdout)
-    assert schema["properties"]["type"]["const"] == "process"
-    assert schema["required"] == ["process_name"]
-    assert {"process_ref", "parent_ref"} <= set(schema["properties"])
+    assert fields_result.exit_code == 0
+    assert "storyline_event_types" not in fields_result.stdout
+    assert "storyline_event_schemas" not in fields_result.stdout
 
 
 def test_info_config_family_inventory_is_authoring_grade() -> None:
@@ -275,11 +272,7 @@ def test_info_advertised_fields_round_trip() -> None:
     data = gather_info()
 
     for field, _description in list_fields(data):
-        if field.startswith("storyline_event_schemas."):
-            field_data = gather_info(field=field)
-            assert resolve_field(field_data, field) is not None, field
-        else:
-            assert resolve_field(data, field) is not None, field
+        assert resolve_field(data, field) is not None, field
 
 
 def test_info_inventory_isolated_between_project_roots(tmp_path: Path) -> None:

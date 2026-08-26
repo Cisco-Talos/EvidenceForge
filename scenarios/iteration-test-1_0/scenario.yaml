@@ -1584,7 +1584,7 @@ storyline:
             tags_any: [finance]
         destination:
           type: client
-          path: 'C:\ProgramData\Microsoft\VaultCache\Finance\'
+          directory: 'C:\ProgramData\Microsoft\VaultCache\Finance\'
         batch:
           count: 5
           duration: "2s"

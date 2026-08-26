@@ -6,14 +6,19 @@ before editing; several files that look alike have different merge behavior.
 ## Contents
 
 - [Applications](#applications)
+- [Deployment and release identity](#deployment-and-release-identity)
 - [Process relationships](#process-relationships)
 - [System and endpoint telemetry](#system-and-endpoint-telemetry)
+- [Installed software identity](#installed-software-identity)
 - [RSAT](#rsat)
 
 ## Applications
 
 `application_catalog.yaml` contains an `applications` list keyed by `id`. Matching IDs deep-merge;
 lists append unless the entry uses `_replace: true`. New IDs append.
+
+The effective catalog uses schema version 2. Every new platform entry must carry an explicit typed
+`deployment`; do not rely on boundary normalization to invent release identity.
 
 ```yaml
 applications:
@@ -22,12 +27,36 @@ applications:
     platforms:
       windows:
         image_path: 'C:\Program Files\Example\EHR\ehr.exe'
+        deployment:
+          kind: managed
+          product_id: example-ehr-client
+          version: "4.2.0.0"
+          build: "4.2.117"
+          architectures: [x64]
+          scope: machine
+          variant: stable
+          fleet_prevalence: 0.65
+        pe_metadata:
+          file_version: "4.2.0.0"
+          description: "Example EHR Client"
+          product: "Example EHR Suite"
+          company: "Example Clinical Software"
+          original_filename: "ehr.exe"
         command_templates:
           - '"C:\Program Files\Example\EHR\ehr.exe" --open {internal_url}'
         command_parameter_pools:
           internal_url: [https://ehr.example.test/]
         children: []
-        loaded_modules: []
+        loaded_modules:
+          - path: 'C:\Program Files\Example\EHR\ehrcore.dll'
+            release_policy: owner_release
+            signature: "Example Clinical Software"
+            pe_metadata:
+              file_version: "4.2.0.0"
+              description: "Example EHR Core"
+              product: "Example EHR Suite"
+              company: "Example Clinical Software"
+              original_filename: "ehrcore.dll"
     categories: [user_app]
     personas: [nurse]
     system_types: [workstation]
@@ -40,14 +69,41 @@ Application entry fields:
 - Required: `id`, `display_name`, `platforms`, `categories`, `personas`.
 - Optional selection fields: `system_types`, positive `selection_weight`, `compatibility_group`,
   `compatibility_option`, and `singleton_per_session`.
-- Each platform requires `image_path` and may define `pe_metadata`, `command_templates`, scoped
-  `command_parameter_pools`, `children`, and `loaded_modules`.
-- A loaded module may define signer/PE identity, `load_phase` (`startup` or `runtime`), and
-  `startup_probability` from 0 to 1. Known third-party modules require native signer and complete PE
-  metadata.
+- Each new platform requires `image_path` plus a typed `deployment`, and may define `pe_metadata`,
+  `command_templates`, scoped `command_parameter_pools`, `children`, and `loaded_modules`.
+- A loaded module declares a `release_policy` and may define signer/PE identity, `load_phase`
+  (`startup` or `runtime`), and `startup_probability` from 0 to 1. Known third-party modules require
+  native signer and complete PE metadata.
 
 `personas` controls eligibility; a persona's `application_usage` list is descriptive only. Ask for
 exact persona access rather than deriving it from title or risk.
+
+## Deployment and release identity
+
+Choose the deployment discriminator from the identity actually known at the catalog boundary:
+
+- `kind: managed` owns an exact `product_id`, `version`, `build`, architecture set, install `scope`,
+  optional `variant`, and `fleet_prevalence`. On Windows, `pe_metadata.file_version` must equal the
+  managed version.
+- `kind: catalog` derives a current catalog release through `release_policy: pe_metadata` or binds
+  an OS-owned image through `release_policy: host_build`. A Windows `host_build` descriptor requires
+  the owning OS `product_id`.
+
+Architectures are exact eligibility, not display text. A deployment or module that is incompatible
+with the scenario host's `architecture` is not compiled onto that host. Machine-scoped paths cannot
+contain `{username}`; user-scoped placement is compiled separately for each eligible principal.
+
+Module release policy is independent from load timing:
+
+- `owner_release` shares the owning application or service release.
+- `pe_metadata` owns a distinct versioned module product and requires `product_id` plus complete PE
+  metadata.
+- `host_build` binds an OS module to the exact scenario host build.
+
+Binary release identity excludes hostname, username, and installation path. Installation identity,
+application profile, local artifact version, file content, and source observation identity remain
+separate. Fix cross-source hash or version mismatches at deployment/content compilation; do not
+rewrite an emitter-facing catalog pool to hide them.
 
 ## Process relationships
 
@@ -112,6 +168,27 @@ Keep Windows paths in Windows sections and Linux paths in Linux sections. Proces
 belong in `file_side_effect_profiles`; do not put package-manager state, `/proc/<pid>`, protected
 event logs, or another owner's artifacts into generic churn pools.
 
+## Installed software identity
+
+`installed_software_products` is source-native inventory metadata, not an executable release or an
+application placement rule. Every new row uses the complete typed identity:
+
+```yaml
+installed_software_products:
+  - product_id: example-ehr-client
+    name: "Example EHR Client"
+    publisher: "Example Clinical Software"
+    version: "4.2.0"
+    build: "4.2.117"
+    architectures: [x64]
+    scope: machine
+```
+
+Keep `product_id` stable across display-name changes. `version` and `build` are distinct release
+dimensions, `architectures` is non-empty and unique, and `scope` is `machine` or `user`. Do not use
+an installed-software row to imply that an application executable, service, task, or module was
+deployed; those facts come from their typed deployment owners.
+
 ## RSAT
 
 `rsat_tools.yaml` contains `tools` keyed by `id`. Matching tools merge; new IDs append. Each complete
@@ -131,4 +208,4 @@ Use `_replace: true` when a matching tool's list must replace rather than extend
 Check referenced personas, executables, parent/child relationships, modules, services, and unique
 keys. Apply only exact dependencies selected by the user; application access, parentage, traffic,
 and module visibility are semantic choices. Run
-`eforge validate-config --project-root <root> --json` in a fresh process after every mutation.
+`eforge validate-config --json` in a fresh process after every mutation.

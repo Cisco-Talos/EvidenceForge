@@ -17,6 +17,7 @@ AGENT_GUIDANCE = REPOSITORY_ROOT / "AGENTS.md"
 PUBLIC_SCENARIO_REFERENCE = REPOSITORY_ROOT / "docs" / "reference" / "scenario-reference.md"
 REFERENCE_ROOT = REPOSITORY_ROOT / "commands" / "eforge" / "references"
 FOCUSED_REFERENCES = {
+    "project-context": REFERENCE_ROOT / "project-context.md",
     "generation-bundle-targets": REFERENCE_ROOT / "generation-bundle-targets.md",
     "evidence-windows": REFERENCE_ROOT / "evidence-windows.md",
     "evidence-network-ids": REFERENCE_ROOT / "evidence-network-ids.md",
@@ -98,9 +99,10 @@ def test_generate_skill_covers_current_runtime_and_authorization_contracts() -> 
     assert "repeat each approved host on every relevant action" in normalized
     assert "A pack, resolved document, or prior manifest never grants permission" in normalized
     assert "`canary.eforge.invalid`" in text
-    assert "`eforge info personas --json [--project-root <absolute-root>]`" in text
-    assert "`eforge info format_groups --json [--project-root <absolute-root>]`" in text
-    assert "repeat the chosen explicit root" in normalized
+    assert "`eforge info personas --json`" in text
+    assert "`eforge info format_groups --json`" in text
+    assert "repeat an explicitly selected root" in normalized
+    assert "overrides the current working directory" in normalized
     assert "Use normal output for the first run" in normalized
     assert "Retry with `--verbose`" in normalized
     assert "use `--debug` last" in normalized
@@ -142,9 +144,9 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     references = {name: _read(path) for name, path in FOCUSED_REFERENCES.items()}
 
     assert not (REFERENCE_ROOT / "evidence-formats.md").exists()
-    for content in references.values():
+    for name, content in references.items():
         assert len(content.split()) < 1_000
-        assert len(content.splitlines()) < 125
+        assert len(content.splitlines()) < (135 if name == "generation-bundle-targets" else 125)
 
     targets = references["generation-bundle-targets"]
     network = references["evidence-network-ids"]
@@ -153,6 +155,8 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
 
     assert "Apache TA-compatible JSON" in targets
     assert "CIM tagging" in targets
+    assert "Compiled Collection Identity" in targets
+    assert "source_deployment_digest" in targets
     assert "HTTP is not limited to\nport 80" in network
     assert "optional nonnegative\ntop-level `pid`/`tid`/`ppid`" in endpoint
     assert "Program/message coverage is curated and role/distro-aware" in endpoint

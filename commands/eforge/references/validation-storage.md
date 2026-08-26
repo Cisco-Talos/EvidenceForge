@@ -9,11 +9,11 @@ user-requested storage preview.
 
 ## Preview the compiled model
 
-Use the same absolute input and project root as the primary validation run:
+Use the same absolute input and current working directory as the primary validation run:
 
 ```bash
 eforge validate <absolute-scenario-path> \
-  --project-root <absolute-project-root> --show-storage --json
+  --show-storage --json
 ```
 
 For a resolved document, omit the project root. Preview is read-only and does not generate logs or
@@ -31,13 +31,15 @@ storage solely to silence their presence.
 Use structured storage diagnostics to inspect the implicated:
 
 - volume platform, Windows/POSIX mount, backing filesystem, label, and hosted-share count;
+- host file-set ID, system/root, exact preset, population, bounded samples, and optional share
+  binding;
 - share reference, provider/platform, network/server-native root, backing/advertised filesystem,
   preset, population, activity, audit, and encryption;
 - effective read/modify/admin/deny access;
 - bounded catalog samples, path, size, MIME, and tags;
 - mapping drive/mount presentations, credential mode/principal, lifecycle, and audience; or
-- authored `smb_activity` share, mapping, selector, batch, OS-native client path, access mode,
-  authentication, SMB principal, and asserted outcome.
+- authored `smb_activity` share, file set, exact-file `path`, destination `directory`, selector,
+  batch, OS-native client location, access mode, authentication, SMB principal, and outcome.
 
 Generated file and directory IDs are internal. Do not load or reproduce the entire catalog when a
 single path or reference failed.
@@ -54,7 +56,11 @@ single path or reference failed.
 
 Reject Windows/POSIX mount or client-path mismatches, incompatible mapping presentations,
 case-insensitive mapping collisions, fixed/per-user credential contradictions, and copy/move legs
-without a presentation for each modeled client. `source_path` and `destination_path` are
+without a presentation for each modeled client. Batched client sources require a declared host file
+set; batched destinations use `directory` rather than an exact-file `path`; and one action cannot
+select more than 64 operations. A share `backing_file_set` must use the same system and exact
+server-local root, and cannot redeclare preset/population/seed files. `source_path` and
+`destination_path` are
 transfer-mode profile operands: `operand_mode: transfer` requires both; ordinary operations do not.
 
 ## Interpret resource output

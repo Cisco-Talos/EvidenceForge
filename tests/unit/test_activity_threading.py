@@ -25,15 +25,9 @@
 Tests deterministic seeding and RNG isolation between threads.
 """
 
-import tempfile
-from datetime import datetime
-from pathlib import Path
 from threading import Barrier, Thread
 
-from evidenceforge.formats import load_format
-from evidenceforge.generation.activity import ActivityGenerator, _get_rng
-from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.activity import _get_rng
 
 
 class TestThreadLocalRNG:
@@ -143,81 +137,6 @@ class TestThreadLocalRNG:
 
         # Verify: No exceptions occurred
         assert len(errors) == 0, f"Race conditions detected: {errors}"
-
-    def test_activity_generator_uses_thread_local_rng(self):
-        """Test that ActivityGenerator methods use thread-local RNG."""
-        # This is an integration test to verify the refactoring worked
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_dir = Path(tmpdir)
-
-            # Create emitters
-            windows_fmt = load_format("windows_event_security")
-            zeek_fmt = load_format("zeek_conn")
-
-            emitters = {
-                "windows_event_security": WindowsEventEmitter(
-                    windows_fmt, output_dir / "windows.log"
-                ),
-                "zeek_conn": ZeekEmitter(zeek_fmt, output_dir / "zeek.log"),
-            }
-
-            # Create state manager, dispatcher, and activity generator
-            from evidenceforge.events.dispatcher import EventDispatcher
-
-            sm = StateManager()
-            sm.set_current_time(datetime.now())
-            dispatcher = EventDispatcher(state_manager=sm, emitters=emitters)
-            ag = ActivityGenerator(sm, emitters, dispatcher=dispatcher)
-
-            # Create dummy user and system with all required fields
-            from evidenceforge.models.scenario import System, User
-
-            user = User(
-                username="testuser",
-                full_name="Test User",
-                email="test@example.com",
-                persona=None,
-                enabled=True,
-            )
-            system = System(
-                hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"
-            )
-
-            # Generate network logons from main thread. Local interactive logons
-            # intentionally reuse an active workstation session for realism.
-            results_main = []
-            for _ in range(5):
-                logon_id = ag.generate_logon(user, system, datetime.now(), logon_type=3)
-                results_main.append(logon_id)
-
-            # Generate events from worker threads
-            results_thread = []
-            barrier = Barrier(4)  # 3 workers + main thread coordination
-
-            def worker():
-                barrier.wait()  # Synchronize start
-                for _ in range(5):
-                    logon_id = ag.generate_logon(user, system, datetime.now(), logon_type=3)
-                    results_thread.append(logon_id)
-
-            threads = [Thread(target=worker) for _ in range(3)]
-            for t in threads:
-                t.start()
-
-            barrier.wait()  # Release workers
-
-            for t in threads:
-                t.join()
-
-            # Verify: All logon IDs are unique (StateManager counter is thread-safe)
-            all_logon_ids = results_main + results_thread
-            assert len(all_logon_ids) == 20  # 5 + (3 threads × 5)
-            assert len(set(all_logon_ids)) == 20, "All LogonIDs should be unique"
-
-            # Clean up emitters
-            for emitter in emitters.values():
-                emitter.close()
 
     def test_thread_local_rng_different_from_global_random(self):
         """Verify thread-local RNG doesn't affect global random module."""

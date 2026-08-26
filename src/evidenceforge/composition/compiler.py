@@ -69,6 +69,7 @@ _KEYED_LIST_FIELDS: dict[tuple[str, ...], str] = {
     ("environment", "groups"): "name",
     ("environment", "storage", "servers"): "system",
     ("environment", "storage", "mappings"): "id",
+    ("environment", "deployment_overrides"): "system",
     ("environment", "observation_overrides"): "source_instance",
     ("personas",): "name",
 }
@@ -102,11 +103,7 @@ def resolve_project_root(scenario_path: Path, explicit: Path | None = None) -> P
 
     if explicit is not None:
         return explicit.resolve()
-    resolved = scenario_path.resolve()
-    for parent in (resolved.parent, *resolved.parents):
-        if (parent / ".eforge").is_dir():
-            return parent
-    return resolved.parent
+    return Path.cwd().resolve()
 
 
 def resolve_management_project_root(explicit: Path | None = None) -> Path:
@@ -114,11 +111,7 @@ def resolve_management_project_root(explicit: Path | None = None) -> Path:
 
     if explicit is not None:
         return explicit.resolve()
-    current = Path.cwd().resolve()
-    for parent in (current, *current.parents):
-        if (parent / ".eforge").is_dir():
-            return parent
-    return current
+    return Path.cwd().resolve()
 
 
 def _canonical_hash(value: Any) -> str:

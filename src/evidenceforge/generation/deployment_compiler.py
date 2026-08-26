@@ -911,9 +911,8 @@ def compile_deployment_registry(
                 mime_type=file.mime_type,
                 seed_ref=file.seed_ref or file.file_id,
             )
-            for share in sorted(storage_world.shares, key=lambda item: item.ref.casefold())
             for file in sorted(
-                share.files,
+                storage_world.files_by_id.values(),
                 key=lambda item: (item.file_id, item.version),
             )
         )

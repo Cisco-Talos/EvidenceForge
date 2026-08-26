@@ -12,10 +12,24 @@ Use `spillage` for provably synthetic secret material in a semantic surface. Cho
 `family` or `value`. Values must retain the required poison marker or be vendor-published fakes;
 embedded hosts must be reserved. Spillage intentionally favors obvious safety over realism.
 
+## `spillage`
+
+Fields: `type`, required `surface`, exactly one of `family` or `value`, optional `scheme`,
+`technique`, and `description`. Surfaces are `shell_history`, `process_command_line`,
+`syslog_message`, `http_request_url`, and `http_referrer`. `scheme: http|https` is valid only on
+the two HTTP surfaces.
+
 Use `adversarial_payload` for parser, terminal, CSV, structured-log, web, DNS, authentication, or
 prompt-injection weakness content. Choose exactly one of `family` or `value`. Every physical line
 must retain its poison marker. Use the inert `canary.eforge.invalid` or another permitted reserved
 identity unless the operator explicitly authorizes a live callback.
+
+## `adversarial_payload`
+
+Fields: `type`, required `surface`, exactly one of `family` or `value`, optional `scheme`,
+`technique`, and `description`. Surfaces are `http_user_agent`, `http_request_url`,
+`http_referrer`, `syslog_message`, `process_command_line`, `dns_qname`, and `auth_user`. Literal
+`value` is capped at 65,536 characters. `scheme: http|https` is valid only on HTTP surfaces.
 
 Live callbacks require a fresh matching CLI `--oob-host` on each `resolve`, `validate`, and
 `generate` invocation. They are never authorized by scenario YAML, a pack, project config, or a

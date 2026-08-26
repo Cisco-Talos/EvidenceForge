@@ -146,4 +146,4 @@ reserved-host allowlists extend. They cannot authorize live credentials/hosts, p
 ## Verification
 
 Treat cadence, rate, role, missingness, or safety changes as semantic. Run `eforge validate-config
---project-root <root> --json` fresh after every edit; validate affected scenarios with that root.
+--json` fresh after every edit; validate affected scenarios from the same working directory.

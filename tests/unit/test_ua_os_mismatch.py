@@ -7,6 +7,7 @@ import random
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 
@@ -667,6 +668,7 @@ class TestProxyUriOsFiltering:
 
     def test_legacy_proxy_auth_policy_preserves_machine_context_username(self):
         """Legacy mode keeps prior machine-context User-Agent proxy attribution."""
+        from evidenceforge.config.compatibility import EvidenceForgeDeprecationWarning
         from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.generator import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
@@ -689,7 +691,8 @@ class TestProxyUriOsFiltering:
         generator = ActivityGenerator(StateManager(), {})
         generator._ad_domain = "meridianhcs.local"
         generator._netbios_domain = "MERIDIAN"
-        generator._proxy_auth_policy = ProxyAuthPolicyConfig(mode="legacy")
+        with pytest.warns(EvidenceForgeDeprecationWarning, match="auth_policy.mode: realistic"):
+            generator._proxy_auth_policy = ProxyAuthPolicyConfig(mode="legacy")
         generator._users_by_username = {
             "alex.morgan": User(
                 username="alex.morgan",

@@ -16,17 +16,22 @@ contain all six fixed catalogs and no concrete environment or baseline model.
 
 ## Establish context
 
-1. Resolve one concrete absolute project root and pass it through every CLI call.
+1. Read `/eforge:references:project-context`. Use the current working directory and omit
+   `--project-root` unless the user explicitly selects another root.
 2. Use `eforge` directly; in a source checkout where it is unavailable, retry with
    `uv run eforge`.
 3. Read `/eforge:references:pack-reference` completely before editing a catalog. It is the
    authoritative field, reference, validation, and harness contract.
-4. Read `/eforge:references:scenario-reference` before building a consumer harness that needs
-   exact environment, topology, sensor, output, or storage fields.
+4. Before building a consumer harness, read `/eforge:references:scenario-core`,
+   `/eforge:references:scenario-environment`,
+   `/eforge:references:scenario-environment-identities`, and
+   `/eforge:references:scenario-baseline-output`. Add
+   `/eforge:references:scenario-environment-network` or `/eforge:references:scenario-smb` only
+   when the harness needs network visibility or storage behavior.
 5. Discover existing packs and built-in process profiles before proposing names:
 
 ```bash
-eforge pack list --project-root <absolute-project-root> --json
+eforge pack list --json
 eforge info pack_builtin_application_ids
 eforge info pack_builtin_dns_tags
 ```
@@ -58,11 +63,9 @@ complete pack to a new SemVer: patch for compatible corrections, minor for compa
 major for incompatible changes.
 
 ```bash
-eforge pack init industry <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack init industry <name> --version <version> --json
 
-eforge pack copy <exact-industry-ref-or-path> --name <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack copy <exact-industry-ref-or-path> --name <name> --version <version> --json
 ```
 
 Never edit a packaged pack or overwrite an existing project version.
@@ -79,9 +82,11 @@ Keep every fixed file and root key, even when empty. Work in dependency order:
    outbound traffic only for activity without an application process.
 5. Define structured weighted, periodic, or burst cadence where the default weekday behavior is
    insufficient.
-6. Add bounded storage vocabulary only when the industry commonly produces shared-file activity.
+6. Add bounded storage vocabulary only when the industry commonly produces host-local or
+   shared-file activity.
 
-Industry storage entries must remain portable across Windows and Samba: use bounded relative
+Industry storage entries must remain portable across host file sets, Windows shares, and Samba:
+use bounded relative
 directory/subject/file-type vocabulary only. Do not put drive letters, POSIX mounts, backing or
 advertised filesystem labels, audit policy, credentials, or internal `smb_profiles.yaml` data in an
 industry catalog.
@@ -93,7 +98,9 @@ declare dependencies on other industry packs.
 Make process/application/traffic content a closed, generation-effective chain:
 
 - Every custom process must be eligible on a modeled platform and have realistic executable paths
-  and command templates.
+  and command templates. Windows custom processes and modules carry complete source-native PE and
+  signer metadata where applicable. The pack adapter compiles these into the typed deployment
+  runtime; project-config-only deployment/release-policy fields are invalid in pack YAML.
 - Every application audience must resolve to a persona.
 - Every application process reference must resolve to a built-in or local process profile.
 - Every application connection must resolve to an exact destination and typed service.
@@ -104,6 +111,10 @@ Do not add concrete users, systems, groups, topology, services, storage servers/
 email topology, storyline events, red herrings, time windows, output targets, credentials, safety,
 OOB authorization, resource policy, evaluation rules, runtime policy, or model files.
 
+Do not put installed-software inventory pools, lifecycle/effect plans, registry handles, channel
+IDs, content IDs, or source-instance overrides in an industry pack. Portable process/application
+descriptors belong in its catalogs; concrete placement and collection belong downstream.
+
 Use fictional names, `.example` or `.invalid` domains, RFC-reserved public addresses, and private
 addresses where appropriate. A pack is untrusted inert YAML: add no hooks or arbitrary assets.
 
@@ -112,8 +123,7 @@ addresses where appropriate. A pack is untrusted inert YAML: add no hooks or arb
 After each coherent edit:
 
 ```bash
-eforge pack validate <project:industry:name@version> \
-  --project-root <absolute-project-root> --json
+eforge pack validate <project:industry:name@version> --json
 ```
 
 Repair every schema, reference, compatibility, collision, containment, or runtime-semantic error
@@ -123,8 +133,7 @@ catalog chain.
 At handoff, inspect identity and exports:
 
 ```bash
-eforge pack show <project:industry:name@version> \
-  --project-root <absolute-project-root> --json
+eforge pack show <project:industry:name@version> --json
 ```
 
 ## Prove composition and runtime behavior
@@ -141,10 +150,10 @@ Then run:
 
 ```bash
 eforge resolve <temporary-scenario.yaml> --output <temporary-resolved.yaml> \
-  --project-root <absolute-project-root> --explain-composition --json
-eforge validate <temporary-scenario.yaml> --project-root <absolute-project-root>
+  --explain-composition --json
+eforge validate <temporary-scenario.yaml>
 eforge generate <temporary-scenario.yaml> --output <absolute-temporary-output> \
-  --project-root <absolute-project-root> --seed 42 --force
+  --seed 42 --force
 ```
 
 Use a fresh temporary resolved filename for each attempt; an existing authoritative resolved

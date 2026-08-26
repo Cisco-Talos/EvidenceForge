@@ -6,6 +6,11 @@ description: "Scenario Schema Reference"
 
 This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
 
+This is the consolidated human manual. Installed authoring skills use smaller topic references
+under `commands/eforge/references/` so they can load the complete schema and semantics relevant to
+one change without loading this entire document. `eforge info` reports installation- and
+project-dependent inventories; it is not the scenario-schema interface.
+
 ## Contents
 
 - [Overview](#overview), [top-level structure](#top-level-structure), and [includes](#includes)
@@ -111,6 +116,17 @@ Scenario composition is bounded to 32 levels, 256 files, 16 MiB of source YAML, 
 expanded nodes. These parsing and path-safety limits are always enforced independently of the
 generation resource forecast.
 
+Resource-forecast model v5 adds a `registry_report` to JSON validation output. It reports
+lifecycle, application-channel, local-artifact, collection-deployment, and deployment/content
+state separately: scenario drivers, created/live/retained/leased/stale/high-water counts,
+bounded-state plateau horizon, measured memory and operation costs, lookup-candidate bounds,
+amplification, and compaction work budget. Registry memory excludes interpreter, emitter,
+rendered-payload, attachment, sort, and storage-catalog working state; those bytes are named
+explicitly in the report. Peak memory combines the established whole-generator calibration and
+the measured registry floor with a maximum, never by adding the two overlapping estimates. Older
+callers that supply a pre-v5 calibration continue to receive the established forecast with
+`registry_report: null`.
+
 For larger exercise families, keep reusable organization context separate from
 scenario-specific narrative files:
 
@@ -198,6 +214,8 @@ environment:
       reason: "CRM system decommissioned"
   groups: [...]               # Optional
   identity: ...               # Optional: logical-user to platform-account overrides
+  deployment_overrides: [...] # Scenario 2.0: exact-host deployment patches
+  observation_overrides: [...] # Scenario 2.0: exact-source-instance collection patches
 ```
 
 Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
@@ -289,6 +307,8 @@ systems:
   - hostname: WS-01            # Required: RFC 1123 compliant
     ip: "10.0.1.10"            # Required: IPv4 or IPv6
     os: "Windows 10"           # Required
+    os_build: "10.0.19045.4651" # Optional exact OS build identity
+    architecture: x64          # Optional: x86 | x64 | arm64
     type: workstation          # Required: workstation|server|domain_controller
     assigned_user: jsmith      # Optional: reference to username
     services: ["IIS"]          # Optional
@@ -296,6 +316,85 @@ systems:
 ```
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
+
+`os_build` and `architecture` are optional identity facts. When supplied, deployment and content
+compilation can distinguish releases and OS-native metadata without parsing a free-form `os`
+label. Omitting both preserves the existing deterministic OS inference. `architecture` describes
+the host and therefore does not accept the content-only `neutral` architecture.
+
+### Exact Deployment and Observation Overrides (Scenario 2.0)
+
+Scenario 2.0 can apply partial patches to one exact host deployment or one exact collection source.
+These fields are lists so each entry names its target explicitly; patterns, prefixes, role-wide
+selectors, and output-order identities are not accepted.
+
+```yaml
+scenario_version: "2.0"
+environment:
+  # users and systems omitted from this excerpt
+  deployment_overrides:
+    - system: WS-01
+      applications: [chrome, outlook]
+      services: []                    # Explicitly replace inherited services with none
+      tasks: [Office Automatic Updates 2.0]
+      modules: ["C:\\Windows\\System32\\kernel32.dll"]
+      cohorts: [finance-workstations]
+      user_applications:
+        - user: jsmith
+          applications: [chrome, outlook]
+
+  observation_overrides:
+    - source_instance: sysmon:ws-01
+      system: WS-01                   # Optional identity guard, not a selector
+      family: sysmon                  # Optional identity guard, not a family-wide selector
+      enabled: true
+      capabilities: [process, file, registry, coherent_actor]
+      missingness: 0.005
+      format_missingness:
+        windows_event_sysmon: 0.01
+      optional_fields: [CommandLine, Hashes]
+      windows:                        # UTC-aware, half-open [start, end) intervals
+        - start: "2026-08-16T12:00:00Z"
+          end: "2026-08-16T20:00:00Z"
+      batching:
+        enabled: true
+        interval_us: 5000000
+        max_records: 500
+```
+
+Override precedence, from lowest to highest, is built-in defaults, the selected named profile,
+project or organization-pack configuration, then the scenario entry. Composition merges entries by
+case-insensitive exact `system` or `source_instance`. Omitted patch fields inherit the lower layer.
+An explicit empty list is a replacement: for example, `services: []` removes inherited services,
+`capabilities: []` exposes no collection capabilities, and `windows: []` gives the source no active
+collection interval. Do not use `null` when an inherited value is intended; omit the field.
+
+Deployment patches change compiled population facts, not activity intensity. `applications`,
+`services`, `tasks`, and `cohorts` are exact configured identities. `user_applications` replaces
+eligibility for exact scenario users; effective access remains the intersection of installed
+applications and user/persona eligibility. Binary and module identities continue to derive from
+the selected application release and cannot be repaired independently in an override.
+
+Observation patches only control whether and how an already-canonical occurrence can be projected.
+They cannot create activity or change users, PIDs, ports, hashes, UIDs, content, or session
+relationships. `source_instance` is globally exact and case-insensitive. Stable compiler-created
+IDs use `<family>:<system-id>` for one source per host/family and append a stable local name when a
+host has multiple instances. The optional `system` and `family` fields are validation guards for
+that exact instance. Unknown source instances are rejected when the immutable source deployment is
+compiled.
+
+When exact source overrides are active, `OBSERVATION_MANIFEST.json` may include a
+`source_deployment_digest` that binds collection diagnostics to the immutable compiled source
+deployment. The bundle retains aggregate outcomes rather than every ephemeral projection envelope.
+
+Capability names cover event families (`process`, `authentication`, `session`, `network`, `dns`,
+`tls`, `http`, `file`, `registry`, `service`, `task`, `account`, `smb`, `ssh`, `rdp`, `ids`),
+endpoint direction (`source_endpoint`, `destination_endpoint`), actor enrichment
+(`coherent_actor`), analyzers (`dns_analyzer`, `tls_analyzer`, `http_analyzer`, `file_analyzer`,
+`smb_analyzer`), and structural features (`optional_fields`, `collection_windows`, `batching`).
+Enabled batching requires a positive `interval_us`; `max_records: 0` retains the unbounded batch
+count policy while the time interval remains authoritative. Collection windows are normalized to
+UTC, sorted, and must not overlap.
 
 ### Network Identities
 
@@ -335,6 +434,14 @@ are background process/transport texture only and do not own typed file semantic
 storage:
   population: auto
   activity: normal
+  file_sets:
+    - id: analyst-documents
+      system: WS-01
+      root: 'C:\Users\analyst'
+      preset: homes
+      population: small
+      seed_files:
+        - {ref: quarterly-plan, path: 'Documents\Quarterly Plan.docx', size_bytes: 284672}
   servers:
     - system: FS-01
       presets: [collaboration, homes]
@@ -386,6 +493,12 @@ storage:
       lifecycle: persistent
 ```
 
+File sets require a unique `id`, modeled Windows or Linux `system`, platform-native absolute
+`root`, one exact built-in or pack-qualified storage preset, optional population, and optional
+seed files. They compile persistent bounded local file/content identities without granting an SMB
+listener, server role, or network exposure. Presets provide a realistic population; seed files add
+exact story-relevant paths and references.
+
 Shares use stable `<system>.<share-id>` references; seed references are scoped to a share.
 Windows volumes use drive-root or absolute folder mounts with `ntfs` or `refs`; Linux volumes use
 absolute POSIX mounts with `ext4` or `xfs`. Supplied volumes are authoritative, explicit shares are
@@ -420,8 +533,14 @@ volumes), server platform, backing and advertised filesystems, share roots and s
 access, OS-native mappings, credential metadata, and up to three metadata-only catalog samples per
 share.
 
-Generated `STORAGE_MANIFEST.json` uses `schema_version: 2`. It records volume platform and backing
-filesystem. Each share records `provider`, `platform`, `network_root`, `server_native_root`,
+An explicit share may set `backing_file_set` when that file set belongs to the same system and its
+root exactly equals the compiled server-local share root. The file set then owns the preset,
+population, and seed files; the share cannot redeclare them. Local and share views alias the same
+canonical objects, and the manifest/forecast count them once. A file set alone never exposes SMB.
+
+Generated `STORAGE_MANIFEST.json` uses `schema_version: 3`. It records unique host file sets,
+optional share bindings, volume platform, and backing filesystem. Each share records `provider`,
+`platform`, `network_root`, `server_native_root`,
 `backing_filesystem`, `advertised_filesystem`, `case_policy: case_insensitive`, and `audit_profile`.
 Each mapping retains `drive`/`mount` compatibility fields and adds an explicit `presentations` list
 of platform, type, and root, plus credential mode and non-secret principal identity. Resolved
@@ -453,7 +572,10 @@ Machine/service-account proxy usernames are not emitted routinely; set
 `non_human_principals: true` with low `machine_account_probability` or
 `service_account_probability` only for environments that intentionally
 authenticate non-human proxy clients. `mode: legacy` preserves the older
-machine-context User-Agent behavior for compatibility datasets.
+machine-context User-Agent behavior for compatibility datasets and emits an actionable deprecation
+warning because it will be removed in a future release. Migrate to `mode: realistic`; when the
+environment intentionally authenticates non-human clients, opt in and author those probabilities
+explicitly rather than relying on legacy behavior.
 
 ### Email Topology
 
@@ -942,6 +1064,12 @@ Observation decisions are coherent inside source-local lifecycle groups, so a si
 not drop or delay process create/dependent/terminate rows, logon/logoff rows, or same-UID network
 companions independently in a way that would orphan its own evidence.
 
+Scenario 2.0 may refine the named profile for one concrete source through
+`environment.observation_overrides`; see
+[Exact Deployment and Observation Overrides](#exact-deployment-and-observation-overrides-scenario-20).
+The exact-source patch has higher precedence than the named profile and never applies to sibling
+sources implicitly.
+
 The same profile name also selects endpoint host-clock defaults from
 `config/activity/timing_profiles.yaml`. `complete` keeps endpoint clocks aligned
 for training-friendly output. `enterprise_standard` and `messy_collection`
@@ -1038,7 +1166,7 @@ transport-only and never infers authentication or file activity from byte counts
     type: share
     share: FS-LNX-01.engineering
     selector: {path_glob: 'Projects/**/*.tar.gz'}
-  destination: {type: client, path: /var/tmp/cache/}
+  destination: {type: client, directory: /var/tmp/cache}
   batch: {count: 25, duration: 4m}
   outcome: auto
   path_style: mounted
@@ -1049,11 +1177,37 @@ transport-only and never infers authentication or file activity from byte counts
 ```
 
 Operations are `browse`, `read`, `create`, `update`, `copy`, `move`, and
-`delete`. Share locations accept at most one of `file_ref`, relative `path`, or
+`delete`. Every share location uses the exact case-insensitive compiled
+`<system>.<share-id>` reference; bare share IDs and display names are not valid references. Share
+locations accept at most one of `file_ref`, relative `path`, relative destination `directory`, or
 `selector`; omission requests deterministic selection. Selectors must resolve once unless a
 batch supplies exactly one of `count`, `fraction`, or `all: true`. A `type: client` source or
-destination accepts an OS-native absolute local path: drive-absolute on Windows or POSIX-absolute
-on Linux. Share-relative paths remain SMB-canonical and use `\` separators.
+destination accepts one standalone OS-native absolute `path`, an absolute destination `directory`,
+or a `file_set` narrowed by one `file_ref` or `selector`. A file set alone selects its catalog.
+`path` always names one exact file; `directory` names only a copy/move destination container.
+Batched client sources require a file set, batched destinations require `directory`, and one action
+is capped at 64 operations. Share-relative paths remain SMB-canonical and use `\` separators.
+
+```yaml
+- type: smb_activity
+  operation: copy
+  purpose: collection
+  source:
+    type: client
+    file_set: analyst-documents
+    selector: {extensions: [.docx, .pdf]}
+  destination:
+    type: share
+    share: FS-01.staging
+    directory: WS-01
+  batch: {count: 12, duration: 30s}
+```
+
+The client-file-set upload reuses an immediately preceding authored transfer process such as
+`robocopy.exe`, preserves each selected relative path beneath the destination directory, and uses
+one authenticated SMB lifecycle for the bounded batch. Each destination is a distinct file object
+with the source content identity and hashes. A move commits each destination before retiring its
+source; idempotent SMB mutation/recovery prevents duplicated state or terminal evidence.
 
 `client_access` is `auto`, `windows_native`, `cifs_mount`, or `smbclient`. `auto` resolves Windows
 native access or, on Linux, a persistent kernel CIFS mount only when an applicable mapping has a

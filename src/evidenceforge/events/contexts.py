@@ -862,6 +862,8 @@ class SmbContext:
     share_local_path: str = ""
     file_id: str = ""
     content_version: int = 0
+    local_file_id: str = ""
+    local_content_version: int = 0
     handle_id: str = ""
     size_bytes: int = 0
     previous_path: str = ""  # SMB wire/share-relative rename source

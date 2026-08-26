@@ -35,11 +35,44 @@ email:
 `MAIL-01` must be a modeled system with `roles: [mail_server]`, and user email domains must agree
 with the accepted domains.
 
+The `email` object supports exactly required nonempty `accepted_domains`, required nonempty
+`mail_servers`, required nonempty `default_mailbox_servers`, plus `mailbox_overrides`,
+`outbound_routes`, `inbound_route`, `isp_relays`, `distribution_groups`, `artifacts`,
+`background_messages_per_user_per_day` (0–200, default 0), and optional scenario-relative `corpus`.
+
+Mail-server fields are required `name`, `hostname`, and `system`, plus
+`platform: generic_smtp|exchange` (default generic), `allow_inbound_starttls` (default false), and
+`attempt_outbound_starttls` (default false). A mailbox override has exactly `group` and `server`.
+An outbound route has `name` (default `default`), `sender_groups` (default `[]`), required nonempty
+`servers`, and `isp_relays` (default `[]`). A distribution group has required `address` and
+nonempty `members`; nesting is not supported. `artifacts` has `mode:
+none|storyline|selected|all` (default storyline) and `selected_ids` (default `[]`).
+
 Use `email_message` for an authored message and `email_read` for an opaque TLS mailbox-access
 session. Resolve sender, recipients, mailbox servers, attachment sources, and any actor/system
-references against the effective environment. Inspect
-`eforge info storyline_event_schemas.email_message --json --project-root <root>` or the
-corresponding `email_read` field before writing that event.
+references against the effective environment.
+
+## `email_message`
+
+Fields: `type`, `sender`, `to`, `cc`, `bcc`, `subject`, `body`, `corpus_id`, `artifact_id`,
+`user_agent`, `verdict`, `mail_action`, `outcome`, `attachments`, `technique`, and `description`.
+At least one `to`, `cc`, or `bcc` recipient is required. Sender defaults to the actor's email.
+`body` and `attachments` cannot be combined with `corpus_id`.
+
+`verdict` is `clean` (default), `spam`, `phishing`, `malware`, or `suspicious`; `mail_action` is
+`deliver` (default), `reject`, `quarantine`, or `strip_attachment`; `outcome` is `delivered`
+(default), `rejected`, `deferred`, or `bounced`. Attachment fields are required `filename`, plus
+`content_type` (default `application/octet-stream`), nonnegative `size` (default 0), and optional
+literal `content`. Artifact metadata is recorded in `ARTIFACTS_MANIFEST.json`; selected full
+messages are materialized under `artifacts/email/`.
+
+## `email_read`
+
+Fields: `type`, `mailbox`, `server`, `protocol`, `message_ids`, `count`, `duration`, `user_agent`,
+`technique`, and `description`. Mailbox defaults to the actor's email; `server` names an
+`environment.email.mail_servers` entry; protocol is `imaps` or `owa` and otherwise derives from
+the server platform. `message_ids` defaults to `[]`, `count` defaults to 1 and is bounded 1–500,
+and optional `duration` must be positive.
 
 Client submission normally uses port 587 with STARTTLS. Server relay uses port 25 with its
 configured STARTTLS policy. IMAPS uses 993; OWA-style access uses 443. Network email evidence still

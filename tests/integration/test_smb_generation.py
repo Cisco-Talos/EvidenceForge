@@ -11,12 +11,14 @@ import pytest
 
 from evidenceforge.composition import compile_scenario
 from evidenceforge.composition.packs import PackRepository
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.resource_forecast import (
     ForecastRange,
     ResourceForecast,
     ResourceSnapshot,
 )
+from evidenceforge.generation.storage_world import StorageWorldModel
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml, write_yaml
 
@@ -110,6 +112,186 @@ def _forecast(output: Path) -> ResourceForecast:
             disk_path=str(output),
         ),
     )
+
+
+@pytest.mark.slow
+def test_batched_client_file_set_upload_preserves_identity_paths_and_direction(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    data = _base_scenario(scenarios_dir)
+    clients = (
+        ("test_user", "TEST-01", "10.0.0.1", "collection-test"),
+        ("analyst_two", "WS-02", "10.0.0.2", "collection-two"),
+        ("analyst_three", "WS-03", "10.0.0.3", "collection-three"),
+    )
+    for username, hostname, ip, _file_set in clients[1:]:
+        data["environment"]["users"].append(
+            {
+                "username": username,
+                "full_name": username.replace("_", " ").title(),
+                "email": f"{username}@example.com",
+                "primary_system": hostname,
+                "enabled": True,
+            }
+        )
+        data["environment"]["systems"].append(
+            {"hostname": hostname, "ip": ip, "os": "Windows 10", "type": "workstation"}
+        )
+        data["environment"]["network"]["segments"][0]["systems"].append(hostname)
+    data["environment"]["storage"]["file_sets"] = [
+        {
+            "id": file_set,
+            "system": hostname,
+            "root": f"C:\\Users\\{username}",
+            "preset": "homes",
+            "population": "small",
+            "seed_files": [
+                {
+                    "ref": f"{username}-roadmap",
+                    "path": rf"Documents\{hostname} Quarterly Roadmap.docx",
+                    "size_bytes": 284672,
+                    "tags": ["planning", "roadmap"],
+                },
+                {
+                    "ref": f"{username}-diagram",
+                    "path": rf"Pictures\{hostname} Architecture.png",
+                    "size_bytes": 491520,
+                    "tags": ["engineering", "image"],
+                },
+            ],
+        }
+        for username, hostname, _ip, file_set in clients
+    ]
+    data["environment"]["storage"]["servers"][0]["shares"][0]["access"] = {
+        "modify": [username for username, _hostname, _ip, _file_set in clients]
+    }
+    data["storyline"] = [
+        {
+            "id": f"stage-{hostname.lower()}",
+            "time": f"+{5 + index * 2}m",
+            "actor": username,
+            "system": hostname,
+            "activity": f"Robocopy stages selected files from {hostname}",
+            "events": [
+                {
+                    "type": "process",
+                    "process_name": r"C:\Windows\System32\robocopy.exe",
+                    "command_line": (
+                        f'robocopy "C:\\Users\\{username}" '
+                        f'"\\\\FS-01\\Finance\\{hostname}" *.docx *.png /S'
+                    ),
+                },
+                {
+                    "type": "smb_activity",
+                    "operation": "copy",
+                    "purpose": "collection",
+                    "source": {
+                        "type": "client",
+                        "file_set": file_set,
+                        "selector": {"extensions": [".docx", ".png"]},
+                    },
+                    "destination": {
+                        "type": "share",
+                        "share": "FS-01.finance",
+                        "directory": hostname,
+                    },
+                    "batch": {"count": 4, "duration": "30s"},
+                    "outcome": "success",
+                },
+            ],
+        }
+        for index, (username, hostname, _ip, file_set) in enumerate(clients)
+    ]
+
+    scenario = Scenario(**data)
+    world = StorageWorldModel.compile(scenario)
+    source_files = tuple(
+        file
+        for index, (_username, _hostname, _ip, file_set) in enumerate(clients)
+        for file in world.select_file_set(
+            file_set,
+            selector=scenario.storyline[index].events[1].source.selector,
+        )[:4]
+    )
+    GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path)).generate()
+
+    actions = [
+        record
+        for record in _json_records(tmp_path, "smb_files.json")
+        if record.get("action") == "SMB::FILE_WRITE"
+        and any(
+            str(record.get("name", "")).startswith(f"{hostname}\\")
+            for _username, hostname, _ip, _file_set in clients
+        )
+    ]
+    zeek_files = [
+        record
+        for record in _json_records(tmp_path, "files.json")
+        if record.get("source") == "SMB"
+        and any(
+            str(record.get("filename", "")).startswith(f"{hostname}\\")
+            for _username, hostname, _ip, _file_set in clients
+        )
+    ]
+    ecar = _json_records(tmp_path, "ecar.json")
+    client_reads = [
+        record
+        for record in ecar
+        if record.get("hostname") in {hostname for _user, hostname, _ip, _file_set in clients}
+        and record.get("object") == "FILE"
+        and record.get("action") == "READ"
+        and str(record.get("properties", {}).get("file_path", "")).startswith("C:\\Users\\")
+    ]
+    server_writes = [
+        record
+        for record in ecar
+        if record.get("hostname") == "FS-01"
+        and record.get("object") == "FILE"
+        and record.get("action") == "WRITE"
+        and any(
+            hostname in str(record.get("properties", {}).get("file_path", ""))
+            for _username, hostname, _ip, _file_set in clients
+        )
+    ]
+    connections = _json_records(tmp_path, "conn.json")
+    transports = [
+        record for record in connections if record.get("uid") in {a["uid"] for a in actions}
+    ]
+    manifest = json.loads((tmp_path / "STORAGE_MANIFEST.json").read_text(encoding="utf-8"))
+
+    assert len(actions) == len(zeek_files) == len(client_reads) == len(server_writes) == 12
+    assert len({record["uid"] for record in actions}) == len(transports) == 3
+    assert {record["id.orig_h"] for record in transports} == {ip for _u, _h, ip, _f in clients}
+    assert {record["id.resp_h"] for record in transports} == {"10.0.0.20"}
+    assert all(record["is_orig"] is True for record in zeek_files)
+    assert all(record["orig_bytes"] > record["resp_bytes"] for record in transports)
+    assert {record["objectID"] for record in client_reads} == {
+        file.file_id for file in source_files
+    }
+    assert {record["objectID"] for record in client_reads}.isdisjoint(
+        record["objectID"] for record in server_writes
+    )
+    expected_content = {
+        FileContentIdentity(
+            file_object_id=file.file_id,
+            version=file.version,
+            size_bytes=file.size_bytes,
+            mime_type=file.mime_type,
+            seed_ref=file.seed_ref or file.file_id,
+        ).digests.sha256
+        for file in source_files
+    }
+    assert {record["sha256"] for record in zeek_files} == expected_content
+    assert all(record["md5"] and record["sha1"] for record in zeek_files)
+    assert all(
+        "robocopy.exe" in record.get("properties", {}).get("image_path", "").lower()
+        for record in client_reads
+    ), [record.get("properties", {}) for record in client_reads]
+    assert manifest["schema_version"] == 3
+    assert {item["id"] for item in manifest["file_sets"]} == {
+        file_set for _username, _hostname, _ip, file_set in clients
+    }
 
 
 @pytest.mark.slow

@@ -556,7 +556,7 @@ class TestDocsSync:
             "docs/design/email-evidence-design.md",
             "commands/eforge/generate.md",
             "commands/eforge/references/evidence-web-email.md",
-            "commands/eforge/references/scenario-reference.md",
+            "commands/eforge/references/scenario-email.md",
         ]
         for rel in artifact_contract_docs:
             text = self._read(rel)

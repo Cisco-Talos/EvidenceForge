@@ -137,7 +137,7 @@ storyline:
         operation: copy
         purpose: collection
         source: {type: share, share: SAMBA-01.team}
-        destination: {type: client, path: /var/tmp/eforge-smb-cache/}
+        destination: {type: client, directory: /var/tmp/eforge-smb-cache/}
         batch: {count: 50, duration: 8m}
         outcome: success
         client_access: smbclient

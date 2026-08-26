@@ -72,7 +72,7 @@ example. Inline personas require `name` and `description`; inspect configured pe
   members, storyline actors, and system references must also resolve.
 - External attackers normally use a compromised legitimate user, or `SYSTEM`/`root` after service
   exploitation. Do not invent a victim account named `attacker`, `hacker`, or `threat_actor`.
-- Inspect configured personas with `eforge info personas --json --project-root <root>`; do not
+- Inspect configured personas with `eforge info personas --json`; do not
   preserve a hard-coded persona list in chat context. Inline personas are exercise-local.
 - Give servers meaningful `roles` and `services`. Roles drive baseline patterns; services help the
   world model choose valid application, database, SSH, RDP, SMB, and administrative behavior.
@@ -92,7 +92,7 @@ without a compatible firewall produces a validation warning.
 
 Choose only sources the exercise needs. Common canonical formats include Windows, Zeek, eCAR,
 syslog, bash history, Snort alerts, Cisco ASA, web access, and proxy access. Discover current names
-with `eforge info formats --json --project-root <absolute-project-root>`. Read only the compact
+with `eforge info formats --json`. Read only the compact
 evidence-family reference that matches the expected source.
 
 Scenario `output.logs` selects canonical formats. Parser target is a generation-time CLI choice:

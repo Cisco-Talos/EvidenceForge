@@ -96,7 +96,12 @@ coverage score may exclude expected dropped, filtered, or out-of-window evidence
 `raw_score`. Do not call this a lowered correctness threshold: visible contradictions, parse errors,
 field disagreements, and evidence expected to remain visible still count.
 
-For SMB findings, inspect `STORAGE_MANIFEST.json` schema v2 with the implicated rows. Zeek must use
+When the observation manifest carries a `source_deployment_digest`, verify that evaluation accepted
+its binding to the effective exact-source deployment before explaining coverage. Treat undeployed,
+missing-capability, topologically invisible, coherently dropped, filtered, and out-of-window as
+different causes. Do not recommend a source override to hide a cross-source ownership defect.
+
+For SMB findings, inspect `STORAGE_MANIFEST.json` schema v3 with the implicated rows. Zeek must use
 the SMB-advertised filesystem rather than ext4/XFS backing storage; Windows audit is eligible only
 on Windows servers; Samba `smbd`/`smbd_audit` syslog is destination-local to Linux servers; and
 eCAR paths must use the endpoint's Windows or POSIX presentation without cross-host PIDs. Confirm
@@ -133,6 +138,13 @@ root cause, and distinguish:
   public reusable content to the appropriate pack skill.
 - **Cross-source truth, lifecycle, rendering, parser, or evaluator defects:** identify the owning
   engine layer; do not disguise them with scenario tuning.
+
+For recurring findings, explicitly test the family hypothesis: missing/duplicate consequences map
+to bundle effect planning; orphan/post-close rows to lifecycle authority; wrong release/module/hash
+or installed-software identity to deployment/content compilation; duplicate handshakes or reuse
+drift to application-channel ownership; unexpected absence to collection deployment; and timestamp
+inversions to canonical constraints or source timing. Keep source-native formatting defects at the
+emitter layer.
 
 Finish with the verdict, available score, failed gates, strongest evidence, and smallest useful next
 action. Keep recommendations read-only unless the user asks to act.

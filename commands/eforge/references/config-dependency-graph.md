@@ -61,6 +61,6 @@ the organization pack, project overlay, then scenario-local fields. Project over
 filenames and must not be referenced as portable pack exports. Peer pack collisions fail rather than
 being resolved by overlay order.
 
-After a cross-family mutation, run `eforge validate-config --project-root <root> --json` in a fresh
+After a cross-family mutation, run `eforge validate-config --json` in a fresh
 process. If a scenario is supplied, validate it with the same root and inspect composition provenance
 when the project overlay touches a pack-exported identity.

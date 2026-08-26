@@ -8,14 +8,43 @@ Use this reference to select an existing pack. Pack discovery and lifecycle oper
 `/eforge pack`; catalog or model authoring belongs to `/eforge industry-pack` or
 `/eforge organization-pack`. Do not load the pack-authoring contract merely to consume a pack.
 
-Packs are optional. A Scenario 1.0 document or monolithic Scenario 2.0 document needs no
-`composition`, pack scan, missing-pack warning, or migration.
+Packs are optional. Scenario 1.0 and monolithic Scenario 2.0 need no composition or pack scan.
 
 ## Contents
 
-- [Exact selection](#exact-selection)
-- [What still belongs in the scenario](#what-still-belongs-in-the-scenario)
-- [Inspect before authoring against exports](#inspect-before-authoring-against-exports)
+- [Context decision](#pre-authoring-context-decision) · [Selection](#exact-selection)
+- [Ownership](#what-still-belongs-in-the-scenario) · [Inspection](#inspect-before-authoring-against-exports)
+
+## Pre-authoring context decision
+
+Every new scenario needs explicit industry and organization decisions. Packs are optional;
+silently assuming generic or inventing an organization is not. Do not repeat decisions already
+supplied by the prompt or a referenced file.
+
+Industry context is a named industry, an installed industry pack, or generic/industry-neutral. A
+named organization pack supplies its pinned industry. Otherwise list packs from the current working
+directory and, when industry is missing, ask one question offering available industries, another
+industry, or generic.
+
+Organization context must use one of these paths:
+
+- a compatible organization pack;
+- a guided scenario-local organization;
+- reusable organization-pack authoring; or
+- sufficient details already provided in the prompt or an explicitly referenced file.
+
+“Sufficient details already provided” requires an organization identity or archetype, scale,
+naming/domain posture, and the major users, systems, services, and topology needed by the narrative.
+Explicit delegation such as “you decide” also permits reasonable inference. A bare adjective such
+as “large enterprise” or an industry selection alone is not sufficient.
+
+After an industry choice, offer only organization packs whose pinned dependency matches it. If none
+exists or the user declines them, ask whether to guide a scenario-local organization or author a
+reusable organization pack unless sufficient details were already provided. For guided work, ask
+one material question at a time, then present a concise organization summary for confirmation.
+
+Do not write scenario artifacts until both decisions and any required confirmation are complete.
+Do not repeat these checkpoints for an established existing scenario.
 
 ## Exact selection
 
@@ -72,6 +101,10 @@ not mean that an organization pack lacks users, systems, domain, topology, stora
 content. Never infer that those fields belong in the scenario until effective composition proves
 they are absent.
 
+Stable organization `deployment_overrides` and `observation_overrides` remain reusable exact-target
+defaults. Scenario-local patches for the same case-insensitive `system` or `source_instance` merge
+field by field; omitted fields inherit and explicit empty lists replace lower-layer values.
+
 Project `.eforge/config` remains a separate project-wide configuration layer. It is not a pack and
 must not be copied into scenario YAML. Effective precedence is packaged defaults, direct industry
 packs, organization pack, project config, then scenario-local fields.
@@ -81,20 +114,19 @@ packs, organization pack, project config, then scenario-local fields.
 Use an exact CLI reference such as `package:industry:healthcare@1.0.0`:
 
 ```bash
-eforge pack list --project-root <absolute-project-root> --json
-eforge pack show <exact-ref> --project-root <absolute-project-root> --json
-eforge resolve <scenario> --project-root <absolute-project-root> \
-  --explain-composition --json
+eforge pack list --json
+eforge pack show <exact-ref> --json
+eforge resolve <scenario> --explain-composition --json
 ```
 
 Inspect identities, compatibility, dependencies, digest, exports, merges, and field origins. Do
 not guess qualified IDs. Use non-writing explanation mode during iteration; write an authoritative
 resolved document only when the user requests the artifact.
 
-An empty working directory is a valid project root. It does not need a `.eforge` directory to use
-installed `package` packs; the project pack and config layers are simply absent. Treat a package
-pack's reported filesystem `location` as diagnostic metadata and do not traverse it during
-scenario authoring.
+The selected root does not need a `.eforge` directory to use installed `package` packs; project
+pack and config layers are simply absent. Treat a package pack's reported filesystem `location` as
+diagnostic metadata and do not traverse it during scenario authoring. Follow
+`/eforge:references:project-context` rather than searching for another root.
 
 Ordinary explanation JSON stays compact. Only when the task needs pack-contributed concrete model
 fields, add `--include-effective-scenario` and inspect its stable `effective_scenario` object. This

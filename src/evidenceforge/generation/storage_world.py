@@ -9,7 +9,7 @@ import fnmatch
 import random
 from collections.abc import Iterable
 from functools import lru_cache
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,6 +57,15 @@ _register_trusted_derived_cache(
 )
 
 
+def storage_preset_ids() -> tuple[str, ...]:
+    """Return exact effective storage-catalog profile identities."""
+
+    profiles = _load_catalog_config().get("profiles", {})
+    if not isinstance(profiles, dict):
+        raise ValueError("storage_catalog.yaml profiles must contain a mapping")
+    return tuple(sorted((str(key) for key in profiles), key=lambda value: value.casefold()))
+
+
 class CompiledStorageVolume(BaseModel):
     """Resolved OS-native volume metadata."""
 
@@ -100,6 +109,22 @@ class CompiledStorageFile(BaseModel):
         return PureWindowsPath(self.path).suffix.lower()
 
 
+class CompiledStorageFileSet(BaseModel):
+    """Persistent bounded file population rooted on one modeled host."""
+
+    id: str
+    system: str
+    root: str
+    preset: str
+    population: str
+    files: tuple[CompiledStorageFile, ...]
+    backing_share: str | None = None
+    requested_file_count: int | None = Field(default=None, ge=0)
+    realizable_file_count: int | None = Field(default=None, ge=0)
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class CompiledStorageShare(BaseModel):
     """Resolved share plus its bounded deterministic catalog."""
 
@@ -116,6 +141,7 @@ class CompiledStorageShare(BaseModel):
     audit: str
     access: CompiledStorageAccess
     files: tuple[CompiledStorageFile, ...]
+    backing_file_set: str | None = None
     requested_file_count: int | None = Field(default=None, ge=0)
     realizable_file_count: int | None = Field(default=None, ge=0)
 
@@ -147,20 +173,35 @@ class StorageWorldModel:
         volumes: Iterable[CompiledStorageVolume],
         shares: Iterable[CompiledStorageShare],
         mappings: Iterable[CompiledStorageMapping],
+        file_sets: Iterable[CompiledStorageFileSet] = (),
     ) -> None:
         self.volumes = tuple(volumes)
         self.shares = tuple(shares)
         self.mappings = tuple(mappings)
+        self.file_sets = tuple(file_sets)
         self.volumes_by_ref = {
             f"{volume.system}.{volume.id}".casefold(): volume for volume in self.volumes
         }
         self.shares_by_ref = {share.ref.casefold(): share for share in self.shares}
         self.mappings_by_id = {mapping.id.casefold(): mapping for mapping in self.mappings}
-        self.files_by_id = {file.file_id: file for share in self.shares for file in share.files}
+        self.file_sets_by_id = {file_set.id.casefold(): file_set for file_set in self.file_sets}
+        self.files_by_id = {
+            file.file_id: file
+            for file in (
+                *(file for file_set in self.file_sets for file in file_set.files),
+                *(file for share in self.shares for file in share.files),
+            )
+        }
         self.seed_files_by_ref = {
             (share.ref.casefold(), file.seed_ref.casefold()): file
             for share in self.shares
             for file in share.files
+            if file.seed_ref is not None
+        }
+        self.file_set_seed_files_by_ref = {
+            (file_set.id.casefold(), file.seed_ref.casefold()): file
+            for file_set in self.file_sets
+            for file in file_set.files
             if file.seed_ref is not None
         }
 
@@ -171,6 +212,7 @@ class StorageWorldModel:
             volumes=compiler.volumes,
             shares=compiler.shares,
             mappings=compiler.mappings,
+            file_sets=compiler.file_sets,
         )
 
     def share(self, ref: str) -> CompiledStorageShare:
@@ -178,6 +220,29 @@ class StorageWorldModel:
             return self.shares_by_ref[ref.casefold()]
         except KeyError as exc:
             raise KeyError(f"unknown storage share {ref!r}") from exc
+
+    def file_set(self, ref: str) -> CompiledStorageFileSet:
+        """Return one exact compiled host file set."""
+
+        try:
+            return self.file_sets_by_id[ref.casefold()]
+        except KeyError as exc:
+            raise KeyError(f"unknown storage file set {ref!r}") from exc
+
+    def select_file_set(
+        self,
+        ref: str,
+        *,
+        file_ref: str | None = None,
+        selector: SmbFileSelector | None = None,
+    ) -> tuple[CompiledStorageFile, ...]:
+        """Select persistent host files with the same semantics as share catalogs."""
+
+        file_set = self.file_set(ref)
+        if file_ref is not None:
+            file = self.file_set_seed_files_by_ref.get((ref.casefold(), file_ref.casefold()))
+            return (file,) if file is not None else ()
+        return self._select_candidates(file_set.files, selector=selector)
 
     def select(
         self,
@@ -195,6 +260,16 @@ class StorageWorldModel:
         if path is not None:
             folded = path.casefold()
             return tuple(file for file in candidates if file.path.casefold() == folded)
+        if selector is None:
+            return candidates
+        return self._select_candidates(candidates, selector=selector)
+
+    @staticmethod
+    def _select_candidates(
+        candidates: tuple[CompiledStorageFile, ...],
+        *,
+        selector: SmbFileSelector | None,
+    ) -> tuple[CompiledStorageFile, ...]:
         if selector is None:
             return candidates
         result: list[CompiledStorageFile] = []
@@ -246,6 +321,28 @@ class StorageWorldModel:
         sample_size: int = 5,
         resolved_targets: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        file_sets: list[dict[str, Any]] = []
+        for file_set in self.file_sets:
+            document: dict[str, Any] = {
+                "id": file_set.id,
+                "system": file_set.system,
+                "root": file_set.root,
+                "preset": file_set.preset,
+                "population": file_set.population,
+                "file_count": len(file_set.files),
+                "sample_paths": [file.path for file in file_set.files[:sample_size]],
+                "seed_refs": [file.seed_ref for file in file_set.files if file.seed_ref],
+                "backing_share": file_set.backing_share,
+            }
+            if file_set.requested_file_count is not None:
+                document["population_resolution"] = {
+                    "requested_file_count": file_set.requested_file_count,
+                    "effective_file_count": len(file_set.files),
+                    "realizable_file_count": file_set.realizable_file_count,
+                    "capped": True,
+                }
+            file_sets.append(document)
+
         shares: list[dict[str, Any]] = []
         for share in self.shares:
             volume = self.volumes_by_ref[f"{share.system}.{share.volume}".casefold()]
@@ -271,6 +368,7 @@ class StorageWorldModel:
                 "smb_native_filesystem": share.smb_native_filesystem,
                 "audit": share.audit,
                 "file_count": len(share.files),
+                "backing_file_set": share.backing_file_set,
                 "sample_paths": [file.path for file in share.files[:sample_size]],
                 "seed_refs": [file.seed_ref for file in share.files if file.seed_ref],
             }
@@ -306,8 +404,9 @@ class StorageWorldModel:
             mappings.append(mapping_document)
 
         manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "volumes": [volume.model_dump(mode="json") for volume in self.volumes],
+            "file_sets": file_sets,
             "shares": shares,
             "mappings": mappings,
         }
@@ -327,8 +426,11 @@ class _StorageWorldCompiler:
             group.name.casefold(): set(group.members) for group in scenario.environment.groups or []
         }
         self.volumes: list[CompiledStorageVolume] = []
+        self.file_sets: list[CompiledStorageFileSet] = []
         self.shares: list[CompiledStorageShare] = []
         self.mappings: list[CompiledStorageMapping] = []
+        self._file_sets_by_id: dict[str, CompiledStorageFileSet] = {}
+        self._bound_file_sets: set[str] = set()
         self._compile()
 
     @staticmethod
@@ -365,6 +467,7 @@ class _StorageWorldCompiler:
         return bool(services & {"smb_server", "samba", "smbd"})
 
     def _compile(self) -> None:
+        self._compile_file_sets()
         explicit = {server.system.casefold(): server for server in self.config.servers}
         unknown = sorted(set(explicit) - set(self.systems))
         if unknown:
@@ -395,6 +498,47 @@ class _StorageWorldCompiler:
             index = file_server_index.get(system.hostname.casefold(), 0)
             self._compile_server(system, server, index=index, file_server_count=len(file_servers))
         self._compile_mappings()
+
+    def _compile_file_sets(self) -> None:
+        """Compile ordinary host-local files without granting SMB server capability."""
+
+        for configured in self.config.file_sets:
+            system = self.systems.get(configured.system.casefold())
+            if system is None:
+                raise ValueError(
+                    f"unknown storage file-set system {configured.system!r} for {configured.id!r}"
+                )
+            platform = self._platform(system)
+            if platform == "unknown":
+                raise ValueError(
+                    f"storage file set {configured.id!r} requires a Windows or Linux system"
+                )
+            root_platform = "linux" if configured.root.startswith("/") else "windows"
+            if root_platform != platform:
+                raise ValueError(
+                    f"storage file-set root {configured.root!r} does not match {platform} "
+                    f"system {system.hostname!r}"
+                )
+            files, requested_count, realizable_count = self._compile_catalog(
+                f"file-set:{configured.id}",
+                configured.preset,
+                configured.population,
+                configured.seed_files,
+            )
+            requested_file_count = requested_count if requested_count > realizable_count else None
+            realizable_file_count = realizable_count if requested_count > realizable_count else None
+            compiled = CompiledStorageFileSet(
+                id=configured.id,
+                system=system.hostname,
+                root=configured.root,
+                preset=configured.preset,
+                population=configured.population,
+                files=files,
+                requested_file_count=requested_file_count,
+                realizable_file_count=realizable_file_count,
+            )
+            self.file_sets.append(compiled)
+            self._file_sets_by_id[configured.id.casefold()] = compiled
 
     def _automatic_presets(
         self,
@@ -687,7 +831,51 @@ class _StorageWorldCompiler:
         activity = share.activity or self.config.activity
         requested_file_count: int | None = None
         realizable_file_count: int | None = None
-        if self._is_windows(system) and share.name.casefold() in {"c$", "admin$"}:
+        backing_file_set: CompiledStorageFileSet | None = None
+        if share.backing_file_set is not None:
+            backing_key = share.backing_file_set.casefold()
+            backing_file_set = self._file_sets_by_id.get(backing_key)
+            if backing_file_set is None:
+                raise ValueError(
+                    f"storage share {ref} references unknown backing file set "
+                    f"{share.backing_file_set!r}"
+                )
+            if backing_file_set.system.casefold() != system.hostname.casefold():
+                raise ValueError(
+                    f"storage share {ref} and backing file set {backing_file_set.id!r} "
+                    "must use the same system"
+                )
+            if backing_key in self._bound_file_sets:
+                raise ValueError(
+                    f"storage file set {backing_file_set.id!r} can back only one SMB share"
+                )
+            volume = next(
+                volume
+                for volume in self.volumes
+                if volume.system.casefold() == system.hostname.casefold()
+                and volume.id.casefold() == share.volume.casefold()
+            )
+            server_root = self._server_root(volume, share.root)
+            if self._native_path_key(server_root, volume.platform) != self._native_path_key(
+                backing_file_set.root,
+                volume.platform,
+            ):
+                raise ValueError(
+                    f"storage share {ref} root {server_root!r} must exactly match backing "
+                    f"file-set root {backing_file_set.root!r}"
+                )
+            files = tuple(file.model_copy(update={"share": ref}) for file in backing_file_set.files)
+            population = backing_file_set.population
+            requested_file_count = backing_file_set.requested_file_count
+            realizable_file_count = backing_file_set.realizable_file_count
+            self._bound_file_sets.add(backing_key)
+            replacement = backing_file_set.model_copy(update={"files": files, "backing_share": ref})
+            self._file_sets_by_id[backing_key] = replacement
+            self.file_sets = [
+                replacement if item.id.casefold() == backing_key else item
+                for item in self.file_sets
+            ]
+        elif self._is_windows(system) and share.name.casefold() in {"c$", "admin$"}:
             files = ()
         else:
             files, requested_count, realizable_count = self._compile_catalog(
@@ -718,7 +906,7 @@ class _StorageWorldCompiler:
             name=share.name,
             volume=share.volume,
             root=share.root,
-            preset=share.preset,
+            preset=(backing_file_set.preset if backing_file_set is not None else share.preset),
             population=population,
             activity=activity,
             encryption=share.encryption,
@@ -726,9 +914,32 @@ class _StorageWorldCompiler:
             audit=audit,
             access=self._effective_access(share.access),
             files=files,
+            backing_file_set=(backing_file_set.id if backing_file_set is not None else None),
             requested_file_count=requested_file_count,
             realizable_file_count=realizable_file_count,
         )
+
+    @staticmethod
+    def _server_root(volume: CompiledStorageVolume, relative_root: str) -> str:
+        """Resolve one configured share root to its native host path."""
+
+        if volume.platform == "linux":
+            mount = volume.mount.rstrip("/") or "/"
+            suffix = relative_root.replace("\\", "/").strip("/")
+            if not suffix:
+                return mount
+            return f"/{suffix}" if mount == "/" else f"{mount}/{suffix}"
+        components = [volume.mount.rstrip("\\"), relative_root.strip("\\")]
+        return "\\".join(component for component in components if component)
+
+    @staticmethod
+    def _native_path_key(path: str, platform: str) -> str:
+        """Return an exact-root comparison key under native filesystem semantics."""
+
+        if platform == "windows":
+            return str(PureWindowsPath(path)).rstrip("\\").casefold()
+        normalized = str(PurePosixPath(path))
+        return normalized.rstrip("/") or "/"
 
     @classmethod
     def _validate_server_provider(cls, system: System, platform: str) -> None:

@@ -17,9 +17,8 @@ reference only for the section being changed.
   to migrate; never place both version keys in one document.
 - A generated document starts with `kind: evidenceforge.resolved-scenario`. It is authoritative
   generation input, not an editable authoring format. Find the authored source instead.
-- Unknown fields and duplicate mapping keys fail. For each event being changed, use
-  `eforge info storyline_event_schemas.<type> --json --project-root <root>` rather than inventing
-  fields.
+- Unknown fields and duplicate mapping keys fail. Read the focused environment, run, or event
+  reference for the exact structure being changed.
 
 Scenario 2.0 changes only the authored envelope. Its ordinary scenario fields remain at the root:
 
@@ -87,7 +86,7 @@ storyline, and red herrings, but preserve an existing layout unless restructurin
 
 ## Safe mutation
 
-1. Resolve one absolute scenario root and project root.
+1. Resolve one absolute scenario root and use the current working directory as project context.
 2. Read before writing; preserve comments, ordering, style, schema version, and unrelated content.
 3. Validate references before inventing replacements: actors are modeled users, service accounts,
    or appropriate built-in identities such as `SYSTEM` and `root`; systems are modeled hostnames.
@@ -101,7 +100,7 @@ overwrite generated output unless the user explicitly requests the owning genera
 
 ## Runtime discovery
 
-Run `eforge info <field> --json --project-root <absolute-project-root>` before choosing configured
+Run `eforge info <field> --json` before choosing configured
 names.
 Useful fields include `personas`, `formats`, `system_roles`, `dns_tags`, `application_ids`, and
 `identity_pools`. Project `.eforge/config` can change these inventories, so installed defaults are

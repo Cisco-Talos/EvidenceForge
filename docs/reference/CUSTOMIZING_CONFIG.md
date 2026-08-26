@@ -37,10 +37,11 @@ your-project/
     └── hospital-breach.yaml
 ```
 
-Scenario validation, resolution, and generation choose a root deterministically: explicit
-`--project-root`, otherwise the nearest ancestor of the root scenario containing `.eforge`, otherwise
-the scenario's directory. Standalone config inspection and validation also accept `--project-root`.
-Use an absolute root in automation and AI-chat workflows.
+Scenario validation, resolution, generation, pack management, and config inspection use the
+current working directory as their implicit project root. Run from the intended project directory.
+Use `--project-root <absolute-root>` only as an explicit override; EvidenceForge never searches
+scenario ancestors, working-directory ancestors, home directories, installed packages, or source
+trees for `.eforge`. A scenario stored elsewhere does not select a neighboring project overlay.
 
 Never edit installed package YAML for a project customization. Package upgrades may replace it, and
 compiled Scenario 2.0 runs snapshot the selected project's overlay into immutable effective config.
@@ -66,23 +67,26 @@ one project root; reads only the relevant family reference; preserves unrelated 
 fresh machine-readable validation after authorized mutations. It does not invent site paths,
 application access, process parentage, traffic rates, or policy merely to silence advisory messages.
 
+See [Configuration Compatibility and Migration](config-compatibility.md) for supported legacy
+shapes, current replacements, and warning behavior.
+
 Use `eforge-industry-pack`, `eforge-organization-pack`, or `eforge-pack` when the request concerns
 portable pack content or lifecycle.
 
 ## Inspect current configuration
 
 ```bash
-# Query one inventory using the selected project
-eforge info personas --project-root /work/hospital-lab
-eforge info dns_tags --project-root /work/hospital-lab
-eforge info application_ids --project-root /work/hospital-lab
-eforge info identity_pools --project-root /work/hospital-lab
-eforge info overlay.files --project-root /work/hospital-lab
+# Run from the intended project directory and query only the needed inventory
+eforge info personas
+eforge info dns_tags
+eforge info application_ids
+eforge info identity_pools
+eforge info overlay.files
 
 # Discover fields, retrieve several as JSON, or inspect the overlay-family contract
 eforge info --fields
-eforge info --json --project-root /work/hospital-lab
-eforge info config_families --json --project-root /work/hospital-lab
+eforge info --json
+eforge info config_families --json
 ```
 
 `config_families` reports each supported overlay path's ownership, merge mode, validation command,
@@ -92,8 +96,8 @@ for routine changes.
 For portable pack authoring, use the packaged-only inventories rather than overlay-dependent IDs:
 
 ```bash
-eforge info pack_builtin_application_ids --project-root /work/hospital-lab
-eforge info pack_builtin_dns_tags --project-root /work/hospital-lab
+eforge info pack_builtin_application_ids
+eforge info pack_builtin_dns_tags
 ```
 
 ## Merge behavior is family-specific
@@ -145,7 +149,7 @@ domains:
     tags: [web, internal]
 ```
 
-Query `eforge info dns_tags --project-root <root>` for the live tags. Add a custom tag under
+Query `eforge info dns_tags` for the live tags. Add a custom tag under
 `valid_tags` before using it. A domain needed by one scenario belongs in
 `environment.network_identities` instead.
 
@@ -243,13 +247,14 @@ prefer current package data and CLI inventories over copied lists in prose.
 Run full merged validation after every change in a fresh process:
 
 ```bash
-eforge validate-config --project-root /work/hospital-lab --json
+eforge validate-config --json
 ```
 
 Errors block use; warnings require review; informational messages are suggestions. Validation is not
 file-scoped, so do not silently rewrite unrelated pre-existing diagnostics. Fix YAML/overlay-shape
 errors first, confirm the family's merge mode, repair errors attributable to the current change, and
-rerun. If a scenario uses the overlay, validate that scenario with the same project root afterward.
+rerun. If a scenario uses the overlay, validate that scenario from the same working directory
+afterward. Repeat an explicit project-root override only when one was deliberately selected.
 
 ## Engine-owned configuration
 

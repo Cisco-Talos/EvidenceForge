@@ -52,7 +52,7 @@ Current browsing-session ranges are:
 
 ## Dependencies and repair policy
 
-- Query `eforge info personas --project-root <root>` before choosing a name.
+- Query `eforge info personas` before choosing a name.
 - If the user names exact applications, adding the persona to those existing applications is a
   directly implied repair: apply it and report it.
 - Do not infer application access from `application_usage`, risk, title, or typical activities. Ask
@@ -61,4 +61,4 @@ Current browsing-session ranges are:
   command roles such as `dba`, `webadmin`, and `security`, and maps personas to them at runtime.
 - Add `persona_traffic` only when the user requests reusable persona-specific network behavior.
 
-After any mutation, run `eforge validate-config --project-root <root> --json` in a fresh process.
+After any mutation, run `eforge validate-config --json` in a fresh process.

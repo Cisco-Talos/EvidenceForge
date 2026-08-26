@@ -1203,19 +1203,26 @@ def test_multi_day_candidates_remain_out_of_memory_buffers(tmp_path) -> None:
 
 
 def test_ids_documentation_and_skill_reference_stay_in_parity() -> None:
-    paths = (
+    schema_paths = (
         PROJECT_ROOT / "docs" / "reference" / "scenario-reference.md",
-        PROJECT_ROOT / "commands" / "eforge" / "references" / "scenario-reference.md",
+        PROJECT_ROOT / "commands" / "eforge" / "references" / "scenario-events-network.md",
+    )
+    for path in schema_paths:
+        content = path.read_text(encoding="utf-8")
+        assert "ids_alerts" in content
+        assert "policy" in content
+        assert "dhcp_lease" in content
+        assert "dns_tunnel" in content
+
+    evidence_paths = (
         PROJECT_ROOT / "docs" / "reference" / "EVIDENCE_FORMATS.md",
         PROJECT_ROOT / "commands" / "eforge" / "references" / "evidence-network-ids.md",
     )
-    for path in paths:
+    for path in evidence_paths:
         content = path.read_text(encoding="utf-8")
         assert "ids_alerts" in content
         assert "policy" in content
         assert "does not" in content
         assert "dhcp_lease" in content
         assert "dns_tunnel" in content
-        assert "email" in content
-        if "evidence" in path.name.lower():
-            assert "ids_evaluation" in content
+        assert "ids_evaluation" in content

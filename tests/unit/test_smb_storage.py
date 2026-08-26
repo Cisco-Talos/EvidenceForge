@@ -10,7 +10,9 @@ import pytest
 from pydantic import ValidationError
 
 import evidenceforge.generation.storage_world as storage_world_module
+from evidenceforge.cli.commands import _exception_issue_payloads
 from evidenceforge.generation.activity.smb_profiles import reset_smb_profiles_cache
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.storage_world import CompiledStorageMapping, StorageWorldModel
 from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec, StorageMappingConfig
 from evidenceforge.utils import load_yaml
@@ -172,6 +174,308 @@ def test_omitted_storage_compiles_duration_independent_diverse_defaults(
     assert "DC-01.backup" not in refs
 
 
+def test_host_file_set_compiles_without_exposing_an_smb_server(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "population": "small",
+        "file_sets": [
+            {
+                "id": "user-documents",
+                "system": "TEST-01",
+                "root": r"C:\Users\test_user",
+                "preset": "homes",
+                "population": "small",
+                "seed_files": [
+                    {
+                        "ref": "roadmap",
+                        "path": r"Documents\Q3 Platform Roadmap.docx",
+                        "size_bytes": 284672,
+                        "tags": ["engineering", "roadmap"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    first = StorageWorldModel.compile(Scenario(**data))
+    second = StorageWorldModel.compile(Scenario(**deepcopy(data)))
+    file_set = first.file_set("USER-DOCUMENTS")
+
+    assert file_set == second.file_set("user-documents")
+    assert file_set.system == "TEST-01"
+    assert file_set.backing_share is None
+    assert len(file_set.files) == 24
+    assert first.select_file_set("user-documents", file_ref="ROADMAP")[0].path == (
+        r"Documents\Q3 Platform Roadmap.docx"
+    )
+    assert not any(share.system == "TEST-01" for share in first.shares)
+    assert first.manifest()["schema_version"] == 3
+    assert first.manifest()["file_sets"][0]["backing_share"] is None
+
+
+def test_share_can_export_the_exact_same_host_file_set(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "published-documents",
+                "system": "TEST-01",
+                "root": r"C:\Shared",
+                "preset": "homes",
+                "population": "small",
+            }
+        ],
+        "servers": [
+            {
+                "system": "TEST-01",
+                "presets": [],
+                "volumes": [{"id": "system", "mount": "C:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "published",
+                        "name": "Published",
+                        "volume": "system",
+                        "root": "Shared",
+                        "backing_file_set": "published-documents",
+                    }
+                ],
+            }
+        ],
+    }
+
+    world = StorageWorldModel.compile(Scenario(**data))
+    file_set = world.file_set("published-documents")
+    share = world.share("TEST-01.published")
+
+    assert file_set.backing_share == share.ref
+    assert share.backing_file_set == file_set.id
+    assert all(shared is local for shared, local in zip(share.files, file_set.files, strict=True))
+    assert [file.file_id for file in share.files] == [file.file_id for file in file_set.files]
+    assert len({file.file_id for file in (*file_set.files, *share.files)}) == len(file_set.files)
+    manifest_share = next(
+        item for item in world.manifest()["shares"] if item["ref"] == "TEST-01.published"
+    )
+    assert manifest_share["backing_file_set"] == "published-documents"
+
+
+def test_bound_share_and_host_file_set_share_mutation_visibility(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "published-documents",
+                "system": "TEST-01",
+                "root": r"C:\Shared",
+                "preset": "homes",
+                "population": "small",
+            }
+        ],
+        "servers": [
+            {
+                "system": "TEST-01",
+                "presets": [],
+                "volumes": [{"id": "system", "mount": "C:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "published",
+                        "name": "Published",
+                        "volume": "system",
+                        "root": "Shared",
+                        "backing_file_set": "published-documents",
+                    }
+                ],
+            }
+        ],
+    }
+    world = StorageWorldModel.compile(Scenario(**data))
+    local = world.file_set("published-documents").files[0]
+    exported = world.share("TEST-01.published").files[0]
+    state = StateManager()
+
+    touched = state.touch_smb_file(local)
+    updated = state.update_smb_file(touched.file_id, size_bytes=touched.size_bytes + 37)
+
+    assert state.smb_file_size(exported) == updated.size_bytes
+    state.delete_smb_file(updated.file_id)
+    assert not state.smb_file_is_available(local)
+    assert not state.smb_file_is_available(exported)
+
+
+def test_share_backing_file_set_requires_exact_same_host_root(scenarios_dir: Path) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "published-documents",
+                "system": "TEST-01",
+                "root": r"C:\Different",
+                "preset": "homes",
+                "population": "small",
+            }
+        ],
+        "servers": [
+            {
+                "system": "TEST-01",
+                "presets": [],
+                "volumes": [{"id": "system", "mount": "C:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "published",
+                        "name": "Published",
+                        "volume": "system",
+                        "root": "Shared",
+                        "backing_file_set": "published-documents",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="must exactly match backing file-set root"):
+        StorageWorldModel.compile(Scenario(**data))
+
+
+def test_batched_client_upload_requires_file_set_and_directory_destination() -> None:
+    with pytest.raises(ValidationError, match="batched SMB client sources require"):
+        SmbActivityEventSpec.model_validate(
+            {
+                "operation": "copy",
+                "source": {"type": "client", "path": r"C:\Users\test_user"},
+                "destination": {"type": "share", "share": "FS-01.staging"},
+                "batch": {"all": True},
+            }
+        )
+
+    valid = SmbActivityEventSpec.model_validate(
+        {
+            "operation": "copy",
+            "source": {
+                "type": "client",
+                "file_set": "user-documents",
+                "selector": {"extensions": ["docx", "pdf"]},
+            },
+            "destination": {
+                "type": "share",
+                "share": "FS-01.staging",
+                "directory": "WS-01",
+            },
+            "batch": {"all": True},
+        }
+    )
+
+    assert valid.destination.directory == "WS-01"
+    assert valid.source.file_set == "user-documents"
+
+
+def test_batched_smb_schema_errors_name_the_repairable_subfield() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        SmbActivityEventSpec.model_validate(
+            {
+                "operation": "copy",
+                "source": {"type": "client", "file_set": "user-documents"},
+                "destination": {
+                    "type": "share",
+                    "share": "FS-01.staging",
+                    "path": "WS-01",
+                },
+                "batch": {"all": True},
+            }
+        )
+
+    issue = _exception_issue_payloads(exc_info.value, Path("scenario.yaml"))[0]
+
+    assert issue["field_path"] == "$.destination.path"
+    assert "destination.directory" in issue["suggestion"]
+
+
+def test_file_set_validator_reports_exact_unknown_references_and_operation_limit(
+    scenarios_dir: Path,
+) -> None:
+    data = _storage_scenario_data(scenarios_dir)
+    data["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "user-documents",
+                "system": "TEST-01",
+                "root": r"C:\Users\test_user",
+                "preset": "homes",
+                "population": "medium",
+            }
+        ],
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": [],
+                "volumes": [{"id": "data", "mount": "D:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "finance",
+                        "name": "Finance",
+                        "volume": "data",
+                        "root": "Finance",
+                        "preset": "department",
+                        "access": {"modify": ["test_user"]},
+                    }
+                ],
+            }
+        ],
+    }
+    data["storyline"] = [
+        {
+            "id": "unknown-client-files",
+            "time": "+10m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Use an unknown client file set",
+            "events": [
+                {
+                    "type": "smb_activity",
+                    "operation": "copy",
+                    "source": {"type": "client", "file_set": "missing-files"},
+                    "destination": {
+                        "type": "share",
+                        "share": "FS-01.finance",
+                        "directory": "Incoming",
+                    },
+                    "batch": {"all": True},
+                }
+            ],
+        },
+        {
+            "id": "oversized-client-files",
+            "time": "+12m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Select too many client files",
+            "events": [
+                {
+                    "type": "smb_activity",
+                    "operation": "copy",
+                    "source": {"type": "client", "file_set": "user-documents"},
+                    "destination": {
+                        "type": "share",
+                        "share": "FS-01.finance",
+                        "directory": "Incoming",
+                    },
+                    "batch": {"all": True},
+                }
+            ],
+        },
+    ]
+
+    errors = [
+        issue
+        for issue in ScenarioValidator(Scenario(**data)).validate()
+        if issue.severity == "error"
+    ]
+
+    unknown = next(issue for issue in errors if "Unknown storage file set" in issue.message)
+    oversized = next(issue for issue in errors if "64-operation limit" in issue.message)
+    assert unknown.field_path == "storyline.0.events.0.source.file_set"
+    assert "'user-documents'" in (unknown.suggestion or "")
+    assert oversized.field_path == "storyline.1.events.0.batch.all"
+
+
 def test_explicit_storage_resolves_mount_access_seed_and_mapping(scenarios_dir: Path) -> None:
     data = _storage_scenario_data(scenarios_dir)
     data["environment"]["storage"] = {
@@ -274,7 +578,7 @@ def test_explicit_storage_resolves_mount_access_seed_and_mapping(scenarios_dir: 
     ]
 
 
-def test_linux_storage_compiles_posix_paths_mounts_and_manifest_v2(
+def test_linux_storage_compiles_posix_paths_mounts_and_manifest_v3(
     scenarios_dir: Path,
 ) -> None:
     world = StorageWorldModel.compile(Scenario(**_linux_storage_scenario_data(scenarios_dir)))
@@ -298,7 +602,7 @@ def test_linux_storage_compiles_posix_paths_mounts_and_manifest_v2(
     assert mapping.drive is None
     assert mapping.mount == "/mnt/team-mount"
     assert (mapping.credential_mode, mapping.principal) == ("fixed", "test_user")
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["volumes"][0]["platform"] == "linux"
     assert {
         key: share_manifest[key]
@@ -505,7 +809,7 @@ def test_windows_storage_rejects_ipc_named_pipe_as_disk_share(scenarios_dir: Pat
     assert "IPC$" in errors[0].message
 
 
-def test_manifest_v2_mapping_presentations_are_explicit_for_mixed_audience(
+def test_manifest_v3_mapping_presentations_are_explicit_for_mixed_audience(
     scenarios_dir: Path,
 ) -> None:
     data = _linux_storage_scenario_data(scenarios_dir)

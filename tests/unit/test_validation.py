@@ -52,6 +52,154 @@ from evidenceforge.validation import ScenarioValidator
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 
+def _scenario_with_smb_reference(
+    scenarios_dir: Path,
+    share_ref: str,
+    *,
+    location_name: str = "target",
+    duplicate_share_id: bool = False,
+) -> Scenario:
+    """Return a valid base scenario with one intentionally unresolved SMB reference."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    systems = scenario_data["environment"]["systems"]
+    systems.extend(
+        [
+            {
+                "hostname": "FS-01",
+                "ip": "10.0.0.20",
+                "os": "Windows Server 2022",
+                "type": "server",
+                "roles": ["file_server"],
+                "services": ["smb"],
+            }
+        ]
+    )
+    servers = [
+        {
+            "system": "FS-01",
+            "default_volume": "data",
+            "volumes": [{"id": "data", "mount": "D:\\", "filesystem": "ntfs"}],
+            "shares": [
+                {
+                    "id": "staging",
+                    "name": "Staging",
+                    "volume": "data",
+                    "root": "Departments\\Staging",
+                }
+            ],
+        }
+    ]
+    if duplicate_share_id:
+        systems.append(
+            {
+                "hostname": "FS-02",
+                "ip": "10.0.0.21",
+                "os": "Windows Server 2022",
+                "type": "server",
+                "roles": ["file_server"],
+                "services": ["smb"],
+            }
+        )
+        servers.append(
+            {
+                "system": "FS-02",
+                "default_volume": "data",
+                "volumes": [{"id": "data", "mount": "E:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "staging",
+                        "name": "Staging",
+                        "volume": "data",
+                        "root": "Departments\\Staging",
+                    }
+                ],
+            }
+        )
+    scenario_data["environment"]["storage"] = {
+        "population": "auto",
+        "activity": "normal",
+        "servers": servers,
+    }
+
+    share_location = {"type": "share", "share": share_ref, "path": "test.txt"}
+    if location_name == "target":
+        smb_event = {"type": "smb_activity", "operation": "read", "target": share_location}
+    elif location_name == "source":
+        smb_event = {
+            "type": "smb_activity",
+            "operation": "copy",
+            "source": share_location,
+            "destination": {"type": "client", "path": "C:\\Temp\\test.txt"},
+        }
+    else:
+        smb_event = {
+            "type": "smb_activity",
+            "operation": "copy",
+            "source": {"type": "client", "path": "C:\\Temp\\test.txt"},
+            "destination": share_location,
+        }
+    scenario_data["storyline"] = [
+        {
+            "id": "smb-reference",
+            "time": "+20m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Exercise SMB reference validation",
+            "events": [smb_event],
+        }
+    ]
+    return Scenario.model_validate(scenario_data)
+
+
+def _unknown_smb_share_issue(scenario: Scenario) -> object:
+    """Return the one unknown-share issue from a scenario validation result."""
+
+    return next(
+        issue
+        for issue in ScenarioValidator(scenario).validate()
+        if issue.message.startswith("Unknown SMB share")
+    )
+
+
+@pytest.mark.parametrize("location_name", ["target", "source", "destination"])
+def test_smb_share_alias_suggests_exact_compiled_reference_at_location_field(
+    scenarios_dir: Path,
+    location_name: str,
+) -> None:
+    """A unique bare alias points to the exact ref at the exact declaring location."""
+
+    issue = _unknown_smb_share_issue(
+        _scenario_with_smb_reference(scenarios_dir, "staging", location_name=location_name)
+    )
+
+    assert issue.field_path == f"storyline.0.events.0.{location_name}.share"
+    assert issue.message == "Unknown SMB share 'staging'"
+    assert "exact compiled share reference 'FS-01.staging'" in issue.suggestion
+    assert "bare share IDs and display names are not valid" in issue.suggestion
+
+
+def test_smb_ambiguous_alias_suggests_every_exact_candidate(scenarios_dir: Path) -> None:
+    """An ambiguous local share ID reports exact qualified alternatives."""
+
+    issue = _unknown_smb_share_issue(
+        _scenario_with_smb_reference(scenarios_dir, "staging", duplicate_share_id=True)
+    )
+
+    assert "one exact compiled <system>.<share-id> reference" in issue.suggestion
+    assert "'FS-01.staging'" in issue.suggestion
+    assert "'FS-02.staging'" in issue.suggestion
+
+
+def test_smb_unknown_reference_requires_exact_compiled_shape(scenarios_dir: Path) -> None:
+    """A reference with no alias match still explains the qualified shape."""
+
+    issue = _unknown_smb_share_issue(_scenario_with_smb_reference(scenarios_dir, "not-a-share"))
+
+    assert issue.field_path == "storyline.0.events.0.target.share"
+    assert issue.suggestion == "Use an exact compiled <system>.<share-id> reference."
+
+
 def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir: Path) -> None:
     """Every shipped scenario fixture must remain a valid public example."""
 
@@ -1725,16 +1873,14 @@ class TestNetworkSensorDocumentation:
 
     def test_docs_and_skills_document_optional_sensors_and_proxy_logs(self):
         scenario_ref = self._read("docs/reference/scenario-reference.md")
-        skill_ref = self._read("commands/eforge/references/scenario-reference.md")
         scenario_environment = self._read("commands/eforge/references/scenario-environment.md")
         validate_skill = self._read("commands/eforge/validate.md")
 
-        for text in (scenario_ref, skill_ref):
-            assert "environment.network.sensors` is optional" in text
-            assert "Proxy-only labs do not need placeholder Zeek sensors" in text
-            assert "`proxy_access` is produced" in text
-            assert "not by network sensors" in text
-            assert "Requesting `cisco_asa` without a firewall" in text
+        assert "environment.network.sensors` is optional" in scenario_ref
+        assert "Proxy-only labs do not need placeholder Zeek sensors" in scenario_ref
+        assert "`proxy_access` is produced" in scenario_ref
+        assert "not by network sensors" in scenario_ref
+        assert "Requesting `cisco_asa` without a firewall" in scenario_ref
 
         assert "`environment.network.sensors` is optional" in scenario_environment
         assert "Proxy-only labs do not need placeholder Zeek sensors" in scenario_environment

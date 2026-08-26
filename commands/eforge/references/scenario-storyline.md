@@ -22,9 +22,15 @@ storyline:
 ```
 
 `activity` and event descriptions never generate evidence. Read the exact event-type schema and
-author the required structured fields. Query only the type in scope with
-`eforge info storyline_event_schemas.<type> --json --project-root <root>`; list current types
-through `storyline_event_types`.
+author the required structured fields from the focused event-family reference. Endpoint,
+authentication, account, and raw events are in `scenario-events-endpoint`; network, remote-session,
+DNS, scan, beacon, and IDS-owning events are in `scenario-events-network`; email, HTTP, SMB, and
+payload families have their own focused references.
+
+`event_spacing` is optional and supports `mode: human|automated|interval|explicit_offsets`,
+optional positive `min_delay`, `max_delay`, and `interval`, `jitter` from 0–1, and `offsets`
+(default `[]`). Automated spacing defaults to 50 ms–2 s and requires min <= max; interval mode
+requires `interval`; explicit-offset mode requires one nonnegative offset per intended child.
 
 ## Narrative design
 

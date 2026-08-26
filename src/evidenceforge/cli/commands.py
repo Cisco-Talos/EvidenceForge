@@ -153,8 +153,30 @@ def _storage_table(*columns: tuple[str, str]) -> Table:
 def _print_compiled_storage(storage_world: "StorageWorldModel") -> None:
     """Render author-facing diagnostics for a compiled storage world."""
     console.print("\n[bold]Compiled storage topology[/bold]")
+    if not storage_world.volumes and not storage_world.file_sets:
+        console.print("[dim]No host file sets, storage volumes, or SMB shares were compiled.[/dim]")
+        return
+
+    if storage_world.file_sets:
+        console.print("\n[bold]Host file sets[/bold]")
+        file_sets_table = _storage_table(
+            ("File set", "left"),
+            ("System / root", "left"),
+            ("Preset / population", "left"),
+            ("Files", "right"),
+            ("Export", "left"),
+        )
+        for file_set in storage_world.file_sets:
+            file_sets_table.add_row(
+                Text(file_set.id),
+                Text(f"{file_set.system} / {file_set.root}"),
+                Text(f"{file_set.preset} / {file_set.population}"),
+                str(len(file_set.files)),
+                Text(file_set.backing_share or "local only"),
+            )
+        console.print(file_sets_table)
+
     if not storage_world.volumes:
-        console.print("[dim]No Windows or Linux storage volumes or SMB shares were compiled.[/dim]")
         return
 
     console.print("\n[bold]Volumes[/bold]")
@@ -637,6 +659,31 @@ def _validation_issue_payload(
     }
 
 
+def _schema_error_guidance(field_path: str, message: str) -> tuple[str, str]:
+    """Return a precise authored path and repair for known cross-field schema invariants."""
+
+    normalized = message.casefold()
+    if "batched smb destinations cannot use one explicit file path" in normalized:
+        return (
+            f"{field_path}.destination.path",
+            "Move the directory prefix to destination.directory, or remove batch for one exact "
+            "destination file.",
+        )
+    if "batched smb client sources require environment.storage.file_sets" in normalized:
+        return (
+            f"{field_path}.source.path",
+            "Declare the bounded files under environment.storage.file_sets and reference its ID "
+            "with source.file_set, or remove batch for one exact client path.",
+        )
+    if "storage share backing_file_set owns its catalog" in normalized:
+        return (
+            f"{field_path}.backing_file_set",
+            "Let the backing file set own preset, population, and seed_files; omit those fields "
+            "from the share.",
+        )
+    return field_path, "Edit this field in its declaring source to match the scenario schema."
+
+
 def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[str, Any]]:
     """Convert a compilation failure and any chained Pydantic details into issues."""
 
@@ -664,6 +711,10 @@ def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[
             for error in cause.errors():
                 error_path = ".".join(str(part) for part in error["loc"])
                 field_path = ".".join(part for part in (path_prefix, error_path) if part) or "$"
+                field_path, authored_suggestion = _schema_error_guidance(
+                    field_path,
+                    error["msg"],
+                )
                 origin = _closest_diagnostic_origin(diagnostic_origins, field_path)
                 source: dict[str, str]
                 provenance: dict[str, Any]
@@ -684,9 +735,7 @@ def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[
                         "field_path": field_path,
                         "message": error["msg"],
                         "suggestion": (
-                            "Edit this field in its declaring source to match the scenario schema."
-                            if diagnostic_editable
-                            else resolved_guidance
+                            authored_suggestion if diagnostic_editable else resolved_guidance
                         ),
                         "source": source,
                         "provenance": provenance,
@@ -845,7 +894,7 @@ def generate(
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
-        help="Explicit project root for .eforge/config and project pack resolution.",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
     ),
     allow_large_workload: bool = typer.Option(
         False,
@@ -1286,7 +1335,11 @@ def resolve_cmd(
         "--include-effective-scenario",
         help="Include the compiled effective scenario in JSON composition explanations.",
     ),
-    project_root: Path | None = typer.Option(None, "--project-root"),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
     oob_host: list[str] = typer.Option(
         [],
         "--oob-host",
@@ -1410,7 +1463,7 @@ def validate(
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
-        help="Explicit project root for .eforge/config and project pack resolution.",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1431,7 +1484,7 @@ def validate(
     from evidenceforge.composition.compiler import resolve_project_root
 
     fallback_project_root = (
-        project_root.resolve() if project_root is not None else scenario_file.resolve().parent
+        project_root.resolve() if project_root is not None else Path.cwd().resolve()
     )
     if not scenario_file.is_file():
         exc = FileNotFoundError(f"scenario file not found: {scenario_file}")
@@ -2068,7 +2121,7 @@ def info(
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
-        help="Explicit project root for .eforge/config and project pack discovery.",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
     ),
 ) -> None:
     """Show EvidenceForge installation info: version, config paths, available data.
@@ -2173,7 +2226,7 @@ def validate_config_cmd(
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
-        help="Explicit project root for .eforge/config discovery.",
+        help="Override the current working directory for optional .eforge/config.",
     ),
 ) -> None:
     """Validate config files for integrity and cross-reference consistency.

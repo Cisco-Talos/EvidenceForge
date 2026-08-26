@@ -6,7 +6,7 @@ Package defaults live in `activity/ids_signatures.yaml`. Project changes belong
 in `.eforge/config/activity/ids_signatures.yaml`. Entries merge by `sid`, so an
 overlay can add a signature or replace selected fields, including its default
 alert policy. Start a new CLI process after edits, then run
-`eforge validate-config --project-root <root> --json`.
+`eforge validate-config --json`.
 
 ```yaml
 signatures:

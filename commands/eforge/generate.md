@@ -9,10 +9,8 @@ description: >
 
 # EvidenceForge Log Generation
 
-Run the deterministic `eforge` CLI against an authored Scenario 1.0/2.0 file or authoritative
-`RESOLVED_SCENARIO.yaml`; generation never calls an LLM.
-In an EvidenceForge source checkout, use `uv run eforge` so generation exercises that checkout's
-code. Outside a source checkout, use the installed `eforge` command.
+Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM.
+In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
 
 ## Boundaries
 
@@ -32,17 +30,16 @@ Authored input may use includes, packs, and project config; resolved input bypas
 
 Confirm the file exists and whether it is authored YAML or `kind: evidenceforge.resolved-scenario`.
 
-For authored input, project discovery uses the nearest `.eforge` ancestor. Supply the same explicit
-`--project-root <absolute-root>` to validation and generation when needed; do not change directories.
-
-If the user does not have an input file, route to `/eforge scenario` instead of improvising one in this workflow.
+Read `/eforge:references:project-context`. For authored input, use the current working directory
+without searching elsewhere. If the user explicitly selected another root, supply that same
+override to validation and generation. For resolved input, omit it.
 
 ### 2. Validate and review the forecast
 
 Run validation before a potentially long generation:
 
 ```bash
-eforge validate <input.yaml> --json [--project-root <absolute-root>] [--show-storage]
+eforge validate <input.yaml> --json [--show-storage]
 ```
 
 Use `--show-storage` when SMB is authored or implied by Windows file-server/DC roles, Linux Samba
@@ -50,8 +47,8 @@ services/roles, or explicit storage. Review platform/native roots, backing/adver
 mappings, credentials, client mode, and audit eligibility. Review both forecast values: final output is durable size; peak working disk includes temporary sort files. Summarize compiled counts, time,
 formats, and disk; do not infer a composed environment from the root YAML alone.
 
-If validation reports an undefined persona, use `eforge info personas --json [--project-root <absolute-root>]`.
-Repeat the chosen explicit root and do not assume persona YAML files are installed beside the skill.
+If validation reports an undefined persona, use `eforge info personas --json`. Repeat an explicitly
+selected root and do not assume persona YAML files are installed beside the skill.
 
 ### 3. Preserve fresh OOB authorization
 
@@ -66,7 +63,8 @@ eforge validate <input.yaml> --json --oob-host <host>
 eforge generate <input.yaml> --output <bundle-root> --oob-host <host>
 ```
 
-A pack, resolved document, or prior manifest never grants permission; preserve `--project-root` on both commands.
+A pack, resolved document, or prior manifest never grants permission. Preserve an explicitly
+selected project-root override on both commands.
 
 ### 4. Choose runtime options and a safe output root
 
@@ -77,9 +75,10 @@ overwrite the authoritative input.
 - `--target default|sof-elk|splunk` selects rendering. It does not create a target-named bundle
   root, but it can change paths and record shapes beneath `data/`.
 - `--formats <comma-list>` intersects with `output.logs`; groups such as `zeek` and `windows` are supported.
-  Inspect `eforge info format_groups --json [--project-root <absolute-root>]` when needed; repeat the chosen explicit root.
+  Inspect `eforge info format_groups --json` when needed; repeat an explicitly selected root.
 - `--seed <0..2^64-1>` overrides the authored generation seed for this run.
-- `--project-root <absolute-root>` selects project packs and config for authored input.
+- `--project-root <absolute-root>` overrides the current working directory for project packs and
+  config. Omit it ordinarily.
 - `--verbose` enables INFO logging; `--debug` enables DEBUG logging and tracebacks.
 - `--force` replaces existing engine-owned output without prompting.
 
@@ -95,7 +94,7 @@ Construct only the approved options:
 
 ```bash
 eforge generate <input.yaml> --output <bundle-root> [--target <target>] [--formats <list>] \
-  [--seed <seed>] [--project-root <absolute-root>] [--oob-host <host>] [--force]
+  [--seed <seed>] [--oob-host <host>] [--force]
 ```
 
 Use normal output for the first run; it already shows compilation, validation, resource forecasts,
@@ -119,7 +118,7 @@ Successful current CLI generation writes these core paths under the bundle root:
 `STORAGE_MANIFEST.json`, `ARTIFACTS_MANIFEST.json`, and `artifacts/` are emitted when applicable.
 `ENVIRONMENT.md` is optional authored collateral, not generated output.
 
-For SMB, inspect `STORAGE_MANIFEST.json` v2 with platform-eligible evidence: Windows audit only on Windows servers; destination-local Samba syslog only on Linux servers; eCAR on selected endpoints;
+For SMB, inspect `STORAGE_MANIFEST.json` v3 with unique host file sets/share bindings and platform-eligible evidence: Windows audit only on Windows servers; destination-local Samba syslog only on Linux servers; eCAR on selected endpoints;
 Zeek only with sensor visibility. Mounted CIFS may lack a transport PID, direct `smbclient` is operation-scoped, and Linux servers never emit Windows Security.
 
 Require exit code `0`, then inspect `GENERATION_MANIFEST.json` for the effective seed, target,
@@ -139,7 +138,8 @@ so otherwise reproducible replays need not have byte-identical manifest files.
 - Exit `21`: preserve the error, traceback, and staged bundle, then retry with `--verbose` or `--debug`.
   Lifecycle/channel/continuation invariant failures are generator defects; do not rewrite scenario timing to mask them or destroy a prior good bundle.
 - Implausible output with a successful run: inspect `primary_system`, roles, services, topology,
-  observation policy, and selected formats before treating it as an engine defect.
+  host deployment, exact source deployment/capabilities, observation policy, and selected formats
+  before treating it as an engine defect.
 
 Read only the smallest relevant reference when exact paths, fields, joins, or limitations matter:
 

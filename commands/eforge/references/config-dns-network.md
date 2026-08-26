@@ -28,7 +28,7 @@ domains:
     tags: [web, healthcare]
 ```
 
-Query `eforge info dns_tags --project-root <root>` rather than copying a hardcoded tag list. Domain
+Query `eforge info dns_tags` rather than copying a hardcoded tag list. Domain
 entries merge by `domain`; lists append unless that keyed entry uses `_replace: true`. Other roots
 include `long_tail`, `cdn_ranges`, `ipv6_map`, and `ipv6_prefixes`; preserve their packaged shapes.
 
@@ -119,7 +119,7 @@ subtree, change only the intended leaf, and validate.
 
 ## Generated identity pools
 
-`eforge info identity_pools --project-root <root>` reports these realism-sensitive fallbacks:
+`eforge info identity_pools` reports these realism-sensitive fallbacks:
 
 | File | Purpose and key |
 |---|---|
@@ -141,4 +141,4 @@ precedence over these fallbacks.
   implied; apply and report.
 - A validation `INFO` about missing optional web/proxy richness is advisory, not permission to invent
   content.
-- Validate all changes with `eforge validate-config --project-root <root> --json` in a fresh process.
+- Validate all changes with `eforge validate-config --json` in a fresh process.

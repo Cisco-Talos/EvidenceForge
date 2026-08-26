@@ -210,36 +210,6 @@ def _collect_config_families() -> dict[str, dict[str, str]]:
     return config_family_inventory()
 
 
-def _storyline_event_models() -> dict[str, Any]:
-    """Return event-spec models derived from the authoritative runtime union."""
-
-    from typing import get_args
-
-    from evidenceforge.models.scenario import EventSpec
-
-    union = get_args(EventSpec)[0]
-    models: dict[str, Any] = {}
-    for model in get_args(union):
-        event_type = model.model_fields["type"].default
-        models[str(event_type)] = model
-    return dict(sorted(models.items()))
-
-
-def _collect_storyline_event_types() -> list[str]:
-    """Collect authored storyline event type names from the runtime union."""
-
-    return list(_storyline_event_models())
-
-
-def _collect_storyline_event_schema(event_type: str) -> dict[str, Any] | None:
-    """Return one event model's validation JSON Schema, including nested definitions."""
-
-    model = _storyline_event_models().get(event_type)
-    if model is None:
-        return None
-    return model.model_json_schema(mode="validation")
-
-
 def _collect_identity_pools() -> dict[str, Any]:
     """Collect counts and overlay paths for data-driven generated identity pools."""
     from evidenceforge.generation.activity.command_parameter_pools import (
@@ -375,22 +345,6 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
     resolved_project_root = resolve_management_project_root(project_root)
     data = _gather_lightweight(resolved_project_root)
 
-    if field and field.startswith("storyline_event_schemas"):
-        parts = field.split(".")
-        schemas: dict[str, Any] = {}
-        if len(parts) == 1:
-            schemas = {
-                event_type: schema
-                for event_type in _collect_storyline_event_types()
-                if (schema := _collect_storyline_event_schema(event_type)) is not None
-            }
-        elif len(parts) == 2:
-            schema = _collect_storyline_event_schema(parts[1])
-            if schema is not None:
-                schemas[parts[1]] = schema
-        data["storyline_event_schemas"] = schemas
-        return data
-
     # If requesting a lightweight field, return early — no loaders needed
     if field:
         top_level = field.split(".")[0]
@@ -414,7 +368,6 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
         "identity_pools": _collect_identity_pools,
         "packs": lambda: _collect_packs(resolved_project_root),
         "config_families": _collect_config_families,
-        "storyline_event_types": _collect_storyline_event_types,
     }
     effective_config = build_management_effective_config(resolved_project_root)
     expected_errors = (
@@ -543,14 +496,6 @@ def format_human_readable(data: dict[str, Any]) -> str:
     else:
         lines.append(f"Available packs: {packs}")
 
-    event_types = data["storyline_event_types"]
-    lines.append("")
-    if isinstance(event_types, list):
-        lines.append(f"Storyline event types ({len(event_types)}):")
-        lines.append(_format_list(event_types))
-    else:
-        lines.append(f"Storyline event types: {event_types}")
-
     return "\n".join(lines)
 
 
@@ -580,8 +525,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "paths.formats": "Format definitions directory",
     "paths.personas": "Persona definitions directory",
     "personas": "Built-in persona names (package + overlay)",
-    "project_root": "Resolved project root used for overlays and project packs",
-    "storyline_event_types": "Runtime-derived typed storyline event names",
+    "project_root": "Current working directory or explicit root for project-local inputs",
     "system_roles": "Author-facing system role names from role-aware config",
     "version": "EvidenceForge version",
     "web_scan_presets": "Available web scan preset names (nikto, dirb, etc.)",
@@ -604,16 +548,6 @@ def list_fields(data: dict[str, Any], prefix: str = "") -> list[tuple[str, str]]
         else:
             desc = _FIELD_DESCRIPTIONS.get(full_key, "")
             fields.append((full_key, desc))
-    if not prefix:
-        event_types = data.get("storyline_event_types", [])
-        if isinstance(event_types, list):
-            fields.extend(
-                (
-                    f"storyline_event_schemas.{event_type}",
-                    f"Runtime-derived JSON Schema for the {event_type} event",
-                )
-                for event_type in event_types
-            )
     return sorted(fields)
 
 

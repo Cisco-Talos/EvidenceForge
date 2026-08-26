@@ -2866,3 +2866,60 @@ final partition is exact: 8,122 routine, 1,823 slow, and 229 soak cases, totalin
 collected tests with zero overlap. The new slow selection's complete node-ID set is identical to the
 previously executed 1,823-test release report. The exact new routine command passes 8,117 tests,
 skips five platform/external cases, and deselects 2,052 opt-in cases in 180.47 seconds (3:00).
+
+### 2026-08-26 project-context and authoring-contract reconciliation
+
+The final parent/worktree comparison identified a separate class of missed changes that did not
+compete with the integrated lifecycle architecture. They were reimplemented against the current
+focused-reference design rather than recovered wholesale:
+
+- authored compilation and all management commands now use the current working directory as the
+  sole implicit project root; only an explicit `--project-root` overrides it, and no ancestor,
+  scenario-neighbor, home, installed-package, or source-tree discovery remains;
+- case-insensitive `environment.deployment_overrides` entries now compose by exact `system`, so
+  same-host partial patches merge, explicit empty replacements remain meaningful, and different
+  hosts are retained;
+- scenario authoring again requires explicit industry and organization decisions, with compatible
+  organization-pack inspection and confirmation of a delegated inferred model before writes;
+- exact SMB `<system>.<share-id>` identity is restored across the model schema, authoring reference,
+  field-specific validator paths, and unique/ambiguous/unknown suggestions; and
+- `environment.proxy.auth_policy.mode: legacy` keeps its old behavior while emitting the standard
+  actionable compatibility warning.
+
+The architecture manual again records the V2 foundation owner table, while focused references own
+typed deployment/release/module/software identity, exact source deployment and collection
+diagnosis, pack boundaries, and terminal lifecycle ownership. The public scenario/config/pack
+manuals document the same semantics without displacing the current numeric-sleep, SSH/RDP,
+`model_contributions`, package-location, or focused schema-reference work. No rejected alternate
+authority, RDP/SSH/source-timing, OCSP, or convenience-export implementation was restored.
+
+Focused regression coverage and a fresh temporary eight-skill validation are green. Final routine
+verification passed Ruff lint and formatting, the complete routine gate (8,139 passed, 5 skipped,
+and 2,052 deselected in 193.58 seconds), and the complete extended release gate (1,823 passed and
+8,373 deselected in 735.23 seconds). The initial slow run found two fixtures that still relied on
+scenario-parent project discovery; making their temporary project root explicit brought the tests
+into line with the restored current-working-directory contract. Soak remains out of scope because
+this reconciliation changes neither scale nor retention behavior.
+
+### 2026-08-26 reusable host-file and SMB staging foundation
+
+The focused schema design now treats persistent host files as storage-world content rather than
+requiring an SMB-server-shaped workaround. `environment.storage.file_sets` compiles bounded local
+catalogs through the same preset/seed compiler as shares. An optional same-system, exact-root
+`backing_file_set` makes a share an alias over those canonical files, so local and network views
+share mutation visibility without double-counting manifest or forecast state.
+
+Typed SMB copy/move locations now distinguish one exact `path` from a destination `directory`.
+Batched client sources must use a file set, remain capped at 64 operations, preserve relative
+paths, and retain source content identity while creating distinct destination objects. This is a
+current-native extension of the existing persistent SMB lifecycle and recovery authorities; no
+parallel transport, session, mutation, or terminal renderer was introduced. Typed RAR lineage and
+FTP control/data-channel transfers remain explicit TODO work.
+
+Focused schema/runtime/docs/skill coverage passed 284 tests, and all eight temporary clean skill
+installations validated. The bounded three-workstation integration fixture and multi-file
+move/lost-return recovery tests passed. Repository-wide Ruff checks are green; the final routine
+gate passed 8,147 tests with five skips in 179.86 seconds, and the final extended release gate
+passed all 1,827 selected tests in 840.43 seconds. The first slow pass exposed one archived
+batch-copy fixture that still used exact-file `path` for a directory; migrating both equivalent
+scenario variants to `directory` restored the intended authoring contract and the full rerun.

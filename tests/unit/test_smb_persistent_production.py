@@ -245,6 +245,59 @@ def _windows_read_scenario(
     return Scenario(**data)
 
 
+def _windows_client_file_set_scenario(
+    scenarios_dir: Path,
+    *,
+    operation: Literal["copy", "move"] = "copy",
+) -> Scenario:
+    """Return one bounded two-file upload through the production SMB owner."""
+
+    data = _windows_read_scenario(scenarios_dir, file_count=2).model_dump(mode="python")
+    data["environment"]["storage"]["file_sets"] = [
+        {
+            "id": "client-staging",
+            "system": "SMBCLIENT-09",
+            "root": r"C:\Users\test_user",
+            "preset": "homes",
+            "population": "small",
+            "seed_files": [
+                {
+                    "ref": "client-doc",
+                    "path": r"Documents\Client Plan.docx",
+                    "size_bytes": 8192,
+                    "tags": ["staging"],
+                },
+                {
+                    "ref": "client-image",
+                    "path": r"Pictures\Client Diagram.png",
+                    "size_bytes": 16384,
+                    "tags": ["staging"],
+                },
+            ],
+        }
+    ]
+    data["storyline"][0]["activity"] = "Upload a bounded local staging set"
+    data["storyline"][0]["events"] = [
+        {
+            "type": "smb_activity",
+            "operation": operation,
+            "source": {
+                "type": "client",
+                "file_set": "client-staging",
+                "selector": {"tags_any": ["staging"]},
+            },
+            "destination": {
+                "type": "share",
+                "share": "FS-01.finance",
+                "directory": "Incoming",
+            },
+            "batch": {"count": 2, "duration": "20s"},
+            "outcome": "success",
+        }
+    ]
+    return Scenario.model_validate(data)
+
+
 def _json_records(output: Path, filename: str) -> list[dict[str, object]]:
     return [
         json.loads(line)
@@ -499,6 +552,77 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
         "core-zeek/smb_files.json",
         "core-zeek/smb_mapping.json",
     )
+
+
+@pytest.mark.slow
+def test_client_file_set_move_commits_destinations_before_retiring_sources(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """A bounded client move leaves two live destinations and no live source objects."""
+
+    scenario = _windows_client_file_set_scenario(scenarios_dir, operation="move")
+    source_files = scenario.environment.storage.file_sets[0]
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        world = engine.activity_generator._storage_world
+        selected = world.select_file_set(
+            source_files.id, selector=scenario.storyline[0].events[0].source.selector
+        )
+        result = _invoke_windows_read(engine, scenario)
+
+        assert len(result.operations) == 2
+        assert all(
+            not engine.activity_generator.state_manager.smb_file_is_available(file)
+            for file in selected
+        )
+        destinations = [
+            state
+            for state in engine.activity_generator.state_manager._smb_file_overlay.values()
+            if state.share.casefold() == "fs-01.finance"
+            and state.path.casefold().startswith("incoming\\")
+            and not state.deleted
+        ]
+        assert len(destinations) == 2
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+
+
+@pytest.mark.slow
+def test_multi_file_client_upload_lost_commit_return_does_not_duplicate_evidence(
+    scenarios_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One lost mutation acknowledgement recovers a two-file upload exactly once."""
+
+    scenario = _windows_client_file_set_scenario(scenarios_dir)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        state = engine.activity_generator.state_manager
+        fault = _OneShotPublicFault(state.acknowledge_smb_file_mutation_commit, "lost_return")
+        monkeypatch.setattr(state, "acknowledge_smb_file_mutation_commit", fault)
+
+        result = _invoke_windows_read(engine, scenario)
+
+        assert len(result.operations) == 2
+        assert fault.calls == 1
+        assert len(fault.results) == 1
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+
+    writes = [
+        row
+        for row in _json_records(tmp_path, "smb_files.json")
+        if row.get("action") == "SMB::FILE_WRITE"
+        and str(row.get("name", "")).startswith("Incoming\\")
+    ]
+    assert len(writes) == 2
+    assert len({row["uid"] for row in writes}) == 1
 
 
 @pytest.mark.slow

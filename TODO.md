@@ -144,6 +144,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Add output-target ingest guides covering which generated sources
   are parsed and normalized, parsed-only, unsupported, and how to ingest each
   target-specific dataset.
+- [ ] **P3** Evaluate a dedicated machine-readable `eforge schema` export only if editors or
+  external integrations need installed-version schema introspection. Keep agent authoring schema
+  in focused skill references and do not broaden `eforge info` back into a schema interface.
 
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,
@@ -223,14 +226,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P3** Optionally materialize SMB file artifacts and richer physical/semantic
   lineage from canonical metadata/version state without requiring artifacts for
   standard datasets; evaluate durable recursive directory mutation separately.
+- [ ] **P2** Add typed RAR archive creation with explicit source-file membership, archive content
+  identity, source-to-archive lineage, and process-owned endpoint evidence so later SMB/HTTP/FTP
+  transfers preserve the exact staged archive rather than inferring it from a command line.
 - [ ] **P3** Extend canonical SMB beyond the completed Windows/Linux SMB2/3 disk-share slice as
   scenario demand warrants: SMB1, DFS, IPC$/named-pipe/print, clustering,
   leases/oplocks/durable handles, byte-range locks, multichannel/RDMA/QUIC, KSMBD, SMB POSIX
   extensions, typed GVFS activity, optional Linux Audit/kernel-CIFS diagnostics, and advanced
   dialect/signing/authentication or server-wide encryption controls.
-- [ ] **P3** Add FTP control and data-channel protocol support with
-  authentication, `RETR`/`STOR`, paths and results, `ftp.log`, and directional
-  file analysis.
+- [ ] **P3** Add typed FTP upload/retrieval with authentication, `RETR`/`STOR`, exact local and
+  remote paths/results, archive/content identity propagation, correlated control and negotiated
+  data channels, `ftp.log`, and file analysis whose byte direction follows the actual transfer.
 - [ ] **P3** Add TLS client-certificate/mTLS profiles with client chains,
   `client_cert_chain_fuids`, X.509/file projection, and TLS-version-specific
   visibility semantics.

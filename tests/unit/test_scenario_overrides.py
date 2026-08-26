@@ -336,3 +336,55 @@ def test_composition_merges_exact_observation_override_fields() -> None:
             "missingness": 0.02,
         }
     ]
+
+
+def test_composition_merges_same_target_deployment_fields_and_empty_replacements() -> None:
+    """A higher layer refines one exact host patch instead of replacing it wholesale."""
+
+    lower = {
+        "environment": {
+            "deployment_overrides": [
+                {
+                    "system": "WS-01",
+                    "applications": ["chrome"],
+                    "services": ["Spooler"],
+                }
+            ]
+        }
+    }
+    higher = {
+        "environment": {
+            "deployment_overrides": [
+                {"system": "ws-01", "services": [], "tasks": ["Daily inventory"]}
+            ]
+        }
+    }
+
+    merged = _merge_registered(lower, higher)
+
+    assert merged["environment"]["deployment_overrides"] == [
+        {
+            "system": "ws-01",
+            "applications": ["chrome"],
+            "services": [],
+            "tasks": ["Daily inventory"],
+        }
+    ]
+
+
+def test_composition_retains_distinct_deployment_targets() -> None:
+    """A scenario-local host patch does not discard a different organization host patch."""
+
+    lower = {
+        "environment": {"deployment_overrides": [{"system": "WS-01", "applications": ["chrome"]}]}
+    }
+    higher = {
+        "environment": {"deployment_overrides": [{"system": "WS-02", "applications": ["firefox"]}]}
+    }
+
+    merged = _merge_registered(lower, higher)
+
+    assert [entry["system"] for entry in merged["environment"]["deployment_overrides"]] == [
+        "WS-01",
+        "WS-02",
+    ]

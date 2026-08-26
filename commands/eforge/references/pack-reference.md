@@ -64,20 +64,15 @@ path     an explicit directory named by the scenario or CLI
 `package` is installed and read-only. `project` is the editable project repository. `path` is for
 an explicitly named external directory. There is no implicit user-global pack registry.
 
-For scenario compilation, project-root selection is:
+Scenario compilation and pack-management commands use the current working directory as their
+implicit project root. `--project-root` overrides it only when explicitly supplied. EvidenceForge
+does not search scenario ancestors, working-directory ancestors, home directories, installed
+packages, or source trees for `.eforge`.
 
-1. Explicit `--project-root`.
-2. Nearest ancestor of the root scenario containing `.eforge`.
-3. The root scenario's directory.
-
-For pack-management commands without a scenario, selection is:
-
-1. Explicit `--project-root`.
-2. Nearest `.eforge` ancestor of the working directory.
-3. The working directory.
-
-Skills must resolve one concrete absolute project root and pass it explicitly. A project-root
-choice must not change because a later command runs from another directory.
+Run related authored-scenario and pack commands from the intended working directory. If the user
+explicitly selected another root, repeat that override. A scenario located elsewhere does not
+select a neighboring project repository. Authoritative resolved scenarios are self-contained and
+do not use a project root.
 
 The project root does not need to contain `.eforge`. An empty working directory is a valid root:
 installed `package` packs remain available, while the project pack and config repositories are
@@ -87,7 +82,7 @@ Inspect repositories with:
 
 ```bash
 eforge info pack_roots
-eforge pack list --project-root <absolute-project-root> --json
+eforge pack list --json
 ```
 
 ## Exact references
@@ -353,6 +348,12 @@ process_catalog:
                   signed: true
                   signature: "Example Clinical Software"
                   signature_status: Valid
+                  pe_metadata:
+                    file_version: "4.2.0.0"
+                    description: "Example Clinical Core"
+                    product: "Example Clinical Suite"
+                    company: "Example Clinical Software"
+                    original_filename: "ClinicalCore.dll"
                   load_phase: startup
                   startup_probability: 1.0
           categories: [user_app, office]
@@ -413,6 +414,13 @@ schedulable.
 - `startup_probability`: number from 0 through 1, default 1.
 
 Known third-party module families require matching native signer and complete PE identity.
+
+Public pack custom processes own portable native paths, commands, complete Windows PE metadata,
+and module signer/PE metadata. Compilation adapts those values into the effective application
+catalog before immutable host deployment is built; do not add project-config `deployment` or
+module `release_policy` fields to pack YAML. Exact managed/catalog release policy and project-only
+`edr_pools.installed_software_products` belong to the current project-config schema. Cross-source
+identity defects belong to deployment/content compilation, not portable pack fields.
 
 ### Scoped document terms
 
@@ -695,9 +703,10 @@ Fields:
 - `mime`: valid MIME label matching the extension.
 - `weight`: positive selection weight.
 
-An industry storage entry is vocabulary, not a concrete server or share. A scenario or
-organization environment selects it as a qualified storage `preset` while owning server, volume,
-share, access, mapping, population, and activity settings. Keep storage vocabulary
+An industry storage entry is vocabulary, not a concrete host file set, server, or share. A scenario
+or organization environment selects it as a qualified storage `preset` while owning host/root,
+server, volume, share, access, mapping, population, and activity settings. The same preset can
+populate a host file set or share catalog. Keep storage vocabulary
 provider-neutral: directory and subject values are bounded SMB-relative components, not Windows
 drives, Linux mountpoints, backing filesystems, Samba audit policy, or internal client/server
 profiles.
@@ -713,8 +722,31 @@ environment:
   timezone:
     default: America/Chicago
   domain: northstarhealth.example
-  users: []
-  systems: []
+  users:
+    - username: case.worker
+      full_name: "Case Worker"
+      email: case.worker@northstarhealth.example
+      persona: healthcare:clinical-coordinator
+      primary_system: CLINIC-WS-01
+      enabled: true
+  systems:
+    - hostname: CLINIC-WS-01
+      ip: 10.30.10.21
+      os: "Windows 11"
+      os_build: "10.0.22631.3880"
+      architecture: x64
+      type: workstation
+      assigned_user: case.worker
+      roles: [workstation]
+      services: []
+  deployment_overrides:
+    - system: CLINIC-WS-01
+      applications: [chrome]
+  observation_overrides:
+    - source_instance: sysmon:clinic-ws-01
+      system: CLINIC-WS-01
+      family: sysmon
+      capabilities: [process, file, registry, service, task, coherent_actor]
 ```
 
 ```yaml
@@ -729,13 +761,23 @@ baseline_activity:
 These are typed partial canonical `environment` and `baseline_activity` fragments. Use the exact
 scenario schema reference loaded by the organization-pack authoring workflow for nested fields.
 
+An organization model may own stable exact-host deployment defaults and exact-source collection
+policy for systems and collectors it defines. `deployment_overrides.system` and
+`observation_overrides.source_instance` are exact, case-insensitive composition keys; optional
+source `system` and `family` are guards, not selectors. Same-target partial patches merge while
+omitted fields inherit and an explicit empty replacement list means none. Exercise-specific
+deployment or observation changes stay in the consumer scenario and take precedence. Collection
+then applies exact source deployment and capabilities, topology visibility, coherent missingness,
+source timing/batching, and rendering in that order.
+
 A self-contained organization should normally provide the users, systems, groups, services,
 topology, sensors, email topology, storage topology, and baseline settings necessary for its stated
 behavior. A Scenario 2.0 wrapper then supplies scenario identity, seed, time, output, and optional
 exercise-specific behavior.
 
-For cross-platform SMB, the organization environment owns concrete Windows or Linux storage
-servers, OS-native volume mounts and backing filesystems, optional SMB-advertised filesystem labels,
+For cross-platform SMB, the organization environment may own bounded host file sets plus concrete
+Windows or Linux storage servers, OS-native volume mounts and backing filesystems, optional
+SMB-advertised filesystem labels,
 share audit/access policy, Windows drive and/or Linux mount mappings, and Linux client/server service
 markers. Do not place internal `smb_profiles.yaml` data in a pack or rely on a project overlay for a
 portable capability claim. Use canonical scenario modes (`auto`, `windows_native`, `cifs_mount`, or
@@ -749,7 +791,7 @@ Never put these fields in an organization pack:
 
 - `storyline` or `red_herrings`
 - `time_window` or generation seed
-- `output`, target, or collection overrides
+- `output`, target, or exercise-specific collection windows/missingness
 - literal credentials or OOB authorization
 - safety, evaluation, resource, or runtime policy
 
@@ -798,6 +840,12 @@ Effective generation data applies in this order:
 4. Project `.eforge/config` overlays under their established internal merge rules.
 5. Scenario-local model fields and authored overrides.
 
+For exact host deployment and source observation policy specifically, the effective result is built
+from built-in defaults, then any applicable selected named profile, then organization/project
+contributions, then the scenario's exact-host or exact-source patch. This specialized policy order
+does not turn packs into arbitrary overlays; registered field merge and provenance rules still
+apply at each layer.
+
 Packs are not arbitrary recursive overlays. Each public catalog has an explicit adapter and merge
 contract. Export collisions and incompatible definitions fail with provenance rather than relying
 on ordering.
@@ -811,7 +859,7 @@ Inspect them with:
 
 ```bash
 eforge resolve <scenario.yaml> --output <resolved.yaml> \
-  --project-root <absolute-project-root> --explain-composition --json
+  --explain-composition --json
 ```
 
 The generated authoritative resolved document no longer depends on original packs, includes,
@@ -847,7 +895,7 @@ Use JSON for agent-driven decisions. Parse fields; do not scrape Rich text.
 ### List
 
 ```bash
-eforge pack list --project-root <root> --json
+eforge pack list --json
 ```
 
 Success:
@@ -865,7 +913,7 @@ Failure, exit 1:
 ### Show
 
 ```bash
-eforge pack show <ref-or-path> --project-root <root> --json
+eforge pack show <ref-or-path> --json
 ```
 
 Success is the raw pack metadata payload with `source`, `type`, `name`, `version`, `description`,
@@ -884,7 +932,7 @@ Failure, exit 1:
 ### Validate
 
 ```bash
-eforge pack validate <ref-or-path> --project-root <root> --json
+eforge pack validate <ref-or-path> --json
 ```
 
 Success:
@@ -902,8 +950,7 @@ Failure, exit 2:
 ### Initialize
 
 ```bash
-eforge pack init <industry|organization> <name> --version <version> \
-  --project-root <root> --json
+eforge pack init <industry|organization> <name> --version <version> --json
 ```
 
 Success:
@@ -921,8 +968,7 @@ Failure, exit 1:
 ### Copy
 
 ```bash
-eforge pack copy <ref-or-path> --name <new-name> --version <new-version> \
-  --project-root <root> --json
+eforge pack copy <ref-or-path> --name <new-name> --version <new-version> --json
 ```
 
 Success:
@@ -1031,7 +1077,7 @@ output:
   compression: false
 ```
 
-Resolve with explicit project root and composition explanation. Confirm the selected pack digest,
+Resolve from the intended working directory with composition explanation. Confirm the selected pack digest,
 qualified persona origin, application/process graph, destination/service, and cadence. Generate and
 inspect process and flow records rather than treating presence in `RESOLVED_SCENARIO.yaml` as proof
 of runtime behavior. Set the scenario's local date and hour so they overlap each authored cadence
@@ -1044,7 +1090,7 @@ Use a fixed command boundary for the runtime proof:
 
 ```bash
 eforge generate <temporary-scenario.yaml> --output <absolute-temporary-output> \
-  --project-root <absolute-project-root> --seed 42 --force
+  --seed 42 --force
 ```
 
 The standard harness requests host and eCAR records and therefore needs no network sensor. If the
@@ -1091,16 +1137,18 @@ trying to overwrite a differing authoritative artifact.
 Resolve, validate with `--show-storage` when applicable, and generate. Inspect representative user,
 system, application, network, email, and SMB records claimed by the pack.
 
-For SMB consumers, inspect `STORAGE_MANIFEST.json` schema v2 as well as logs. Confirm server
-platform, backing versus SMB-advertised filesystem, drive/mount presentation, credential mode, and
-resolved target paths. Windows Security and Samba syslog are platform-selective; requesting both
-formats does not mean both should render for one server operation.
+For SMB consumers, inspect `STORAGE_MANIFEST.json` schema v3 as well as logs. Confirm unique host
+file sets, share bindings, server platform, backing versus SMB-advertised filesystem, drive/mount
+presentation, credential mode, and resolved target paths. A reusable storage preset may populate
+both a pack-qualified host file set and an exported share binding; the binding aliases rather than
+duplicates the canonical population. Windows Security and Samba syslog are platform-selective;
+requesting both formats does not mean both should render for one server operation.
 
 Generate with an explicit absolute output root and fixed seed:
 
 ```bash
 eforge generate <consumer-scenario.yaml> --output <absolute-temporary-output> \
-  --project-root <absolute-project-root> --seed 42 --force
+  --seed 42 --force
 ```
 
 Before claiming Zeek, IDS, or firewall evidence, verify that the effective organization contains a
@@ -1136,7 +1184,7 @@ a manually repaired resolved document as a substitute for a valid authored consu
 
 ### Pack not found
 
-- Confirm project root.
+- Confirm the current working directory or explicit project-root override.
 - Confirm source/type/name/version.
 - Run `pack list --json`.
 - For `source: path`, resolve the path from the declaring YAML, not the shell directory.

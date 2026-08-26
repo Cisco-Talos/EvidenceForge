@@ -50,6 +50,16 @@ Windows, and eCAR evidence.
 - 2026-08-13: Updated architecture, scenario, evidence-format, generation, and
   validation documentation together with the canonical `commands/eforge` skill
   sources and their installed-skill reference inventory.
+- 2026-08-26: Extended the storage world with bounded persistent host file sets. Ordinary Windows
+  and Linux hosts can now own files without becoming SMB servers; optional same-host/same-root
+  share bindings alias the exact canonical file objects rather than compiling or forecasting a
+  second population. The storage manifest advances to schema v3 for file sets and share bindings.
+- 2026-08-26: Client-file-set uploads now preserve relative paths beneath an explicit destination
+  directory, reuse an immediately preceding authored transfer process, and flow through the
+  existing authenticated SMB transport/session/tree/mutation/recovery owner. Copies use distinct
+  destination objects with shared content lineage; moves commit destinations before retiring
+  sources. Schema diagnostics distinguish exact files from directories and reject unbounded or
+  incompatible batch forms before generation.
 - 2026-08-13: Expanded `validate --show-storage` from a compact share/mapping
   summary into explicit volume, share-root, resolved scale/policy, effective-access,
   bounded catalog-sample, and mapping-audience diagnostics, including unused volumes.
@@ -140,3 +150,21 @@ Windows, and eCAR evidence.
 
 Package version files intentionally remain unchanged on this feature branch. The
 first release containing the transport-only cutover must be 2.0.0.
+
+### 2026-08-26 reusable host-file verification
+
+- Focused SMB, storage, validator, forecast, documentation, and installer coverage:
+  284 passed.
+- The bounded three-workstation upload fixture passed in 56.68 seconds and verified
+  `robocopy.exe` attribution, relative-path preservation, source/destination content
+  correlation, originator-heavy TCP/445 accounting, Zeek SMB/files rows, endpoint
+  reads/writes, durable fileserver state, and drained lifecycle owners.
+- Multi-file move ordering and lost-return mutation recovery passed without duplicate
+  objects, operations, transports, or terminal evidence.
+- All eight freshly installed canonical skills passed the skill validator.
+- `uv run ruff check .` and `uv run ruff format --check .` passed repository-wide.
+- `uv run pytest`: 8,147 passed, 5 skipped, and 2,056 deselected in 179.86 seconds.
+- `uv run pytest -m slow --no-cov`: 1,827 passed and 8,381 deselected in 840.43
+  seconds. The first slow run identified one archived batch destination still using
+  exact-file `path`; both sides of that migration fixture now use `directory`, and
+  the complete slow rerun is green.

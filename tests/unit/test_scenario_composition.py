@@ -303,6 +303,40 @@ def test_industry_storage_presets_compile_unchanged_on_samba(
     assert world.server_local_path(share, share.files[0].path).startswith("/srv/samba/")
 
 
+def test_industry_storage_preset_compiles_for_an_ordinary_host_file_set(
+    tmp_path: Path,
+) -> None:
+    """Pack-qualified catalog vocabulary does not require an SMB server declaration."""
+
+    raw = load_yaml(_MINIMAL)
+    raw.pop("version", None)
+    raw["scenario_version"] = "2.0"
+    raw["composition"] = {
+        "industries": [{"source": "package", "name": "finance", "version": "1.0.0"}]
+    }
+    raw["environment"]["storage"] = {
+        "file_sets": [
+            {
+                "id": "analyst-finance-files",
+                "system": "TEST-01",
+                "root": r"C:\Users\test_user",
+                "preset": "finance:finance-department",
+                "population": "small",
+            }
+        ]
+    }
+    path = _write_yaml(tmp_path / "finance-host-files.yaml", raw)
+
+    compiled = compile_scenario(path)
+    with effective_config_scope(compiled.effective_config):
+        world = StorageWorldModel.compile(compiled.scenario)
+
+    file_set = world.file_set("analyst-finance-files")
+    assert file_set.preset == "finance:finance-department"
+    assert file_set.files
+    assert not any(share.system == "TEST-01" for share in world.shares)
+
+
 def test_all_packaged_samples_have_the_fixed_catalog_contract() -> None:
     """Every shipped pack exposes every canonical catalog, including empty ones."""
 
@@ -373,7 +407,7 @@ def test_peer_industry_namespace_collision_is_not_order_resolved(tmp_path: Path)
     path = _write_yaml(tmp_path / "scenario.yaml", raw)
 
     with pytest.raises(PackError, match="share namespace 'healthcare'.*different exact identities"):
-        compile_scenario(path)
+        compile_scenario(path, project_root=tmp_path)
 
 
 def test_project_overlay_precedes_pack_adapter(tmp_path: Path) -> None:
@@ -397,7 +431,7 @@ def test_project_overlay_precedes_pack_adapter(tmp_path: Path) -> None:
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(_NORTHSTAR.read_text(encoding="utf-8"), encoding="utf-8")
 
-    compiled = compile_scenario(scenario)
+    compiled = compile_scenario(scenario, project_root=tmp_path)
     with effective_config_scope(compiled.effective_config):
         traffic = load_traffic_profiles()["pack_persona_traffic"]
         application_connection = next(

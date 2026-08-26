@@ -17,12 +17,10 @@ specialized industry- or organization-pack skill.
 
 ## Establish the execution boundary
 
-1. Resolve one concrete absolute project root from the user's project or scenario location.
-2. Pass `--project-root <absolute-project-root>` to every pack, resolve, validate, and generate
-   command that accepts it. Do not let changing working directories change repository selection.
-   An existing `.eforge` directory is not required: an empty working directory is a valid project
-   root, package packs remain available, and its project pack repository is simply empty until a
-   project pack is created.
+1. Read `/eforge:references:project-context`. Use the current working directory and omit
+   `--project-root` unless the user explicitly selects another root.
+2. Repeat an explicit override on related pack and authored-scenario commands. An empty working
+   directory without `.eforge` is valid; package packs remain available.
 3. Use `eforge` directly. If it is unavailable in an EvidenceForge source checkout, retry with
    `uv run eforge`.
 4. Read `/eforge:references:pack-reference` before creating, copying, versioning, repairing, or
@@ -37,9 +35,10 @@ validated root.
 - Use this skill for inventory, inspection, comparison, exact references, lifecycle operations,
   validation, and composition provenance.
 - Use `/eforge industry-pack` for reusable sector vocabulary: personas, processes, applications,
-  destinations, traffic, and storage profiles.
+  destinations, traffic, and storage profiles. Pack custom-process values are adapted into the
+  typed deployment runtime; do not copy project-config-only deployment fields into pack YAML.
 - Use `/eforge organization-pack` for an exact industry dependency, organization-specific catalogs,
-  reusable concrete environment, or baseline activity.
+  reusable concrete environment, stable exact-host/source defaults, or baseline activity.
 - Use `/eforge scenario` for a concrete exercise, time window, storyline, red herrings, output,
   collection, or scenario-local environment.
 - Use `/eforge config` for internal project overlays under `.eforge/config`; packs are not config
@@ -52,8 +51,8 @@ If the correct boundary is ambiguous, ask one focused question before writing an
 Start with machine-readable commands:
 
 ```bash
-eforge pack list --project-root <absolute-project-root> --json
-eforge pack show <source:type:name@version> --project-root <absolute-project-root> --json
+eforge pack list --json
+eforge pack show <source:type:name@version> --json
 ```
 
 Use exact references such as `package:industry:healthcare@1.0.0` and
@@ -97,26 +96,21 @@ For example:
 ```bash
 # New complete tailored identity.
 eforge pack copy package:industry:finance@1.0.0 \
-  --name regional-finance --version 1.0.0 \
-  --project-root <absolute-project-root> --json
+  --name regional-finance --version 1.0.0 --json
 
 # Compatible addition to that shared identity.
 eforge pack copy project:industry:regional-finance@1.0.0 \
-  --name regional-finance --version 1.1.0 \
-  --project-root <absolute-project-root> --json
+  --name regional-finance --version 1.1.0 --json
 ```
 
 Run lifecycle commands in JSON mode:
 
 ```bash
-eforge pack init industry <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack init industry <name> --version <version> --json
 
-eforge pack init organization <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack init organization <name> --version <version> --json
 
-eforge pack copy <exact-ref-or-path> --name <name> --version <version> \
-  --project-root <absolute-project-root> --json
+eforge pack copy <exact-ref-or-path> --name <name> --version <version> --json
 ```
 
 Do not overwrite an existing destination, hand-copy a package pack, or construct a pack path from
@@ -131,8 +125,8 @@ catalogs here.
 Validate after every coherent edit and once more at handoff:
 
 ```bash
-eforge pack validate <exact-ref-or-path> --project-root <absolute-project-root> --json
-eforge pack show <exact-ref-or-path> --project-root <absolute-project-root> --json
+eforge pack validate <exact-ref-or-path> --json
+eforge pack show <exact-ref-or-path> --json
 ```
 
 On failure:
@@ -148,8 +142,8 @@ For a scenario composition problem, keep pack validation separate from scenario 
 
 ```bash
 eforge resolve <scenario.yaml> --output <temporary-resolved.yaml> \
-  --project-root <absolute-project-root> --explain-composition --json
-eforge validate <scenario.yaml> --project-root <absolute-project-root>
+  --explain-composition --json
+eforge validate <scenario.yaml>
 ```
 
 Inspect `selected_packs`, pack digests, `catalog_field_origins`, `organization_model_origins`,
@@ -159,6 +153,9 @@ order to choose a winner.
 ## Guardrails
 
 - Keep packs YAML-only and deterministic. Do not add executable hooks or arbitrary assets.
+- Keep internal execution-effect plans, lifecycle handles/leases, application-channel IDs, content
+  IDs, and source projection envelopes out of pack YAML. Packs author portable process/application
+  descriptors and exact organization environment defaults; the engine owns typed runtime state.
 - Keep safety, OOB authorization, credentials, output, resource policy, evaluation rules, runtime
   policy, and storylines outside packs.
 - Use only fictional entities, reserved domains, and reserved address ranges in reusable content.
@@ -173,7 +170,7 @@ order to choose a winner.
 
 Return:
 
-1. The concrete project root.
+1. The current working directory or explicitly overridden project root.
 2. Every exact pack reference involved.
 3. The operation performed and destination, if any.
 4. Validation and composition status.

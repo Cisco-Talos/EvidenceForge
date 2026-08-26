@@ -507,16 +507,14 @@ def estimate_workload(
     corpus_groups = _email_corpus_attachment_groups(scenario, scenario_root)
     try:
         from evidenceforge.generation.storage_world import StorageWorldModel
-        from evidenceforge.models.scenario import SmbShareLocation
+        from evidenceforge.models.scenario import SmbClientLocation, SmbShareLocation
 
         storage_world = StorageWorldModel.compile(scenario)
     except (KeyError, TypeError, ValueError):
         storage_world = None
     smb_selector_candidates = 0
     smb_activity_events = 0
-    smb_catalog_files = (
-        sum(len(share.files) for share in storage_world.shares) if storage_world is not None else 0
-    )
+    smb_catalog_files = len(storage_world.files_by_id) if storage_world is not None else 0
     smb_batch_operations = 0
     smb_retained_mutations = 0
     for authored in [*(scenario.storyline or []), *scenario.red_herrings]:
@@ -557,12 +555,32 @@ def estimate_workload(
                     elif spec.batch.count is not None:
                         occurrences = spec.batch.count
                     elif spec.batch.fraction is not None:
-                        occurrences = max(1, math.ceil(len(candidates) * spec.batch.fraction))
+                        occurrences = max(1, round(len(candidates) * spec.batch.fraction))
                     else:
                         occurrences = len(candidates)
                     smb_batch_operations += occurrences
                     if spec.operation in {"create", "update", "copy", "move", "delete"}:
                         smb_retained_mutations += occurrences
+                elif isinstance(location, SmbClientLocation) and location.file_set is not None:
+                    candidates = storage_world.select_file_set(
+                        location.file_set,
+                        file_ref=location.file_ref,
+                        selector=location.selector,
+                    )
+                    smb_selector_candidates += len(candidates)
+                    if spec.batch is None:
+                        occurrences = 1
+                    elif spec.batch.count is not None:
+                        occurrences = min(spec.batch.count, len(candidates))
+                    elif spec.batch.fraction is not None:
+                        occurrences = max(1, round(len(candidates) * spec.batch.fraction))
+                    else:
+                        occurrences = len(candidates)
+                    smb_batch_operations += occurrences
+                    if spec.operation in {"copy", "move"}:
+                        smb_retained_mutations += occurrences * (
+                            2 if spec.operation == "move" else 1
+                        )
                 else:
                     occurrences = 1
             else:

@@ -598,6 +598,17 @@ source-native MIME/body metadata should attach the HTTP file-transfer bundle
 deterministically, even when the `HttpContext` was supplied by a browser-session,
 proxy, process-command, or storyline path.
 
+For SMB staging from modeled clients, define persistent bounded host files in
+`environment.storage.file_sets`; do not turn a workstation into a file server merely to give it
+source files. File sets and share catalogs use the same compiler and canonical content identities,
+but a file set alone creates no SMB exposure. A share may bind a same-system file set only when its
+compiled server-local root is identical; that binding is an alias, not a second file population.
+The SMB action bundle remains the sole owner of authenticated transport/session/tree/file lifecycle,
+destination mutation, move ordering, and retry recovery. Client/server roles are relative to each
+connection. Preserve source paths under `destination.directory`, keep copied destination objects
+distinct while retaining content lineage, and reuse an immediately preceding authored transfer
+process when one exists.
+
 For Linux shell command execution, route bash-history emission and correlated
 foreground process telemetry through the Linux shell-command action bundle. The
 bundle owns the command execution sequence: resolve activity keys to concrete
@@ -791,7 +802,18 @@ the `eforge` CLI process. Keep detailed reusable schemas under `commands/eforge/
 bundle only the references each ChatGPT/Codex skill needs through
 `src/evidenceforge/cli/install_skills.py`.
 
-**Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/reference/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
+**Important:** When modifying the authored scenario schema, update the Pydantic model, the matching
+focused schema reference under `commands/eforge/references/scenario-*.md`, and the consolidated
+human manual at `docs/reference/scenario-reference.md`. Keep `commands/eforge/scenario.md` as a
+compact dispatcher to those focused references; update `validate.md` when validation behavior or
+error-handling guidance changes. `eforge info` is for project- and installation-dependent
+inventories, not authored-schema discovery.
+
+EvidenceForge commands use the current working directory as the implicit project root.
+`--project-root` is an explicit override only; never search scenario ancestors, working-directory
+ancestors, home directories, installed packages, or source trees for `.eforge`. Canonical skills
+must read `project-context.md`, omit the flag in normal examples, and use focused references—not
+invalid probe scenarios or `eforge info`—to discover authored schema.
 
 ### Adding a New Skill
 

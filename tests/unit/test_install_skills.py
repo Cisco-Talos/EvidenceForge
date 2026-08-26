@@ -65,8 +65,10 @@ EVIDENCE_REFERENCES = {
     "references/evidence-windows.md",
     "references/generation-bundle-targets.md",
 }
+PROJECT_CONTEXT_REFERENCE = {"references/project-context.md"}
 EXPECTED_CHATGPT_REFERENCES = {
-    "config": {
+    "config": PROJECT_CONTEXT_REFERENCE
+    | {
         "references/config-apps-processes.md",
         "references/config-dependency-graph.md",
         "references/config-dns-network.md",
@@ -76,29 +78,50 @@ EXPECTED_CHATGPT_REFERENCES = {
         "references/config-validation.md",
     },
     "evaluate": EVIDENCE_REFERENCES,
-    "generate": EVIDENCE_REFERENCES,
-    "industry-pack": {
+    "generate": EVIDENCE_REFERENCES | PROJECT_CONTEXT_REFERENCE,
+    "industry-pack": PROJECT_CONTEXT_REFERENCE
+    | {
         "references/pack-reference.md",
-        "references/scenario-reference.md",
+        "references/scenario-baseline-output.md",
+        "references/scenario-core.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment.md",
+        "references/scenario-smb.md",
     },
-    "organization-pack": {
+    "organization-pack": PROJECT_CONTEXT_REFERENCE
+    | {
         "references/pack-reference.md",
-        "references/scenario-reference.md",
+        "references/scenario-baseline-output.md",
+        "references/scenario-email.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment.md",
+        "references/scenario-http.md",
+        "references/scenario-smb.md",
     },
-    "pack": {"references/pack-reference.md"},
+    "pack": PROJECT_CONTEXT_REFERENCE | {"references/pack-reference.md"},
     "scenario": EVIDENCE_REFERENCES
+    | PROJECT_CONTEXT_REFERENCE
     | {
         "references/scenario-briefing.md",
+        "references/scenario-baseline-output.md",
         "references/scenario-core.md",
         "references/scenario-email.md",
         "references/scenario-environment.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment-overrides.md",
+        "references/scenario-events-endpoint.md",
+        "references/scenario-events-network.md",
         "references/scenario-http.md",
         "references/scenario-pack-consumption.md",
         "references/scenario-payloads.md",
         "references/scenario-smb.md",
         "references/scenario-storyline.md",
     },
-    "validate": {
+    "validate": PROJECT_CONTEXT_REFERENCE
+    | {
         "references/validation-safety.md",
         "references/validation-storage.md",
     },
@@ -139,6 +162,24 @@ class TestInstallSkills:
         all_refs = list(refs_dir.glob("*.md"))
         assert {f"references/{path.name}" for path in all_refs} == EXPECTED_REFERENCE_FILES
 
+    def test_project_context_is_installed_for_every_project_aware_skill(self, tmp_path):
+        """Fresh Claude and ChatGPT installs share the cwd-only project contract."""
+
+        claude_root = tmp_path / "claude"
+        chatgpt_root = tmp_path / "chatgpt"
+        install_skills(claude_root)
+        install_chatgpt_skills(chatgpt_root)
+
+        project_contexts = [
+            claude_root / "eforge" / "references" / "project-context.md",
+            *chatgpt_root.glob("eforge-*/references/project-context.md"),
+        ]
+        assert project_contexts
+        for project_context in project_contexts:
+            text = project_context.read_text(encoding="utf-8")
+            assert "Run from the intended working directory and omit `--project-root`" in text
+            assert "Never search parents, siblings, the home directory" in text
+
     def test_long_reference_docs_have_navigation(self):
         """References over 100 lines expose their scope before detailed content."""
 
@@ -147,17 +188,11 @@ class TestInstallSkills:
             if len(text.splitlines()) > 100:
                 assert "contents" in text[:2_500].lower(), reference.name
 
-    def test_bundled_contract_references_match_user_documentation(self):
-        """Canonical skill references cannot silently drift from public contracts."""
-        reference_pairs = (
-            (
-                REPOSITORY_ROOT / "docs" / "reference" / "scenario-reference.md",
-                CANONICAL_COMMAND_ROOT / "references" / "scenario-reference.md",
-            ),
-        )
+    def test_exhaustive_public_scenario_reference_is_not_a_skill_resource(self):
+        """The human manual does not compete with focused installed skill references."""
 
-        for public_reference, skill_reference in reference_pairs:
-            assert skill_reference.read_bytes() == public_reference.read_bytes()
+        assert (REPOSITORY_ROOT / "docs" / "reference" / "scenario-reference.md").is_file()
+        assert not (CANONICAL_COMMAND_ROOT / "references" / "scenario-reference.md").exists()
 
     def test_focused_evidence_references_track_bundle_and_smtp_contracts(self):
         """Focused references retain the generated bundle and SMTP contracts."""
@@ -179,7 +214,7 @@ class TestInstallSkills:
         assert "No SMTP log" not in email_reference
 
     def test_installed_skills_include_cross_platform_smb_contract(self, tmp_path):
-        """Installed guidance retains Linux client, Samba, and manifest-v2 semantics."""
+        """Installed guidance retains cross-platform SMB and host-file-set semantics."""
 
         install_skills(tmp_path)
         root = tmp_path / "eforge"
@@ -194,7 +229,11 @@ class TestInstallSkills:
         assert "client_access" in scenario_reference
         assert "smb_principal" in scenario_reference
         assert "/mnt/<mapping-id>" in scenario_reference
-        assert "schema version 2" in bundle_reference
+        assert "schema version 3" in bundle_reference
+        assert "file_sets" in scenario_reference
+        assert "backing_file_set" in scenario_reference
+        assert "`directory` always means" in scenario_reference
+        assert "Only a declared share exposes files over SMB" in scenario_reference
         assert "mounted CIFS" in endpoint_reference
         assert "Samba" in endpoint_reference
         assert "wire-advertised" in network_reference
@@ -408,8 +447,11 @@ class TestInstallChatGPTSkills:
         )
 
         assert set(_CHATGPT_REFERENCES_BY_SKILL["evaluate"]) == EVIDENCE_REFERENCES
-        assert set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == EVIDENCE_REFERENCES
+        assert set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == (
+            EVIDENCE_REFERENCES | PROJECT_CONTEXT_REFERENCE
+        )
         assert set(_CHATGPT_REFERENCES_BY_SKILL["validate"]) == {
+            "references/project-context.md",
             "references/validation-safety.md",
             "references/validation-storage.md",
         }
