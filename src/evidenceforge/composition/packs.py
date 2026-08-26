@@ -35,6 +35,7 @@ from .models import (
     BaselineActivityFragment,
     DestinationCatalogDocument,
     EnvironmentFragment,
+    PackLock,
     PackManifest,
     PackReference,
     PackSource,
@@ -57,6 +58,7 @@ from .semantic_validation import (
 
 PACK_CAPABILITY_VERSION = "2.0.0"
 PACK_MANIFEST_FILENAME = "pack.yaml"
+PACK_LOCK_FILENAME = "pack.lock.yaml"
 PACKAGED_INDEX_FILENAME = "index.json"
 ALLOWED_NONSEMANTIC_FILES = {"README.md", "LICENSE", "LICENSE.md", "COPY_PROVENANCE.md"}
 
@@ -103,6 +105,7 @@ class LoadedPack:
     """One validated whole pack."""
 
     manifest: PackManifest
+    lock: PackLock
     source: PackSource
     root: Path
     digest: str
@@ -1027,9 +1030,28 @@ class PackRepository:
                 raise PackError(f"pack directory identity does not match manifest: {root}")
         _check_requires_evidenceforge(manifest.requires_evidenceforge)
 
+        lock = PackLock()
+        lock_files: set[Path] = set()
+        lock_path = root / PACK_LOCK_FILENAME
+        if lock_path.is_file():
+            try:
+                lock_document, lock_graph = _load_pack_document(
+                    root,
+                    PACK_LOCK_FILENAME,
+                    PackLock,
+                    include_budget_state=include_budget_state,
+                )
+                lock = PackLock.model_validate(lock_document)
+                _capture_graph_source_bytes(semantic_bytes_by_path, lock_graph, root=root)
+                lock_files = {source.path for source in lock_graph.sources}
+            except (ConfigurationError, ValidationError, OSError, yaml.YAMLError) as exc:
+                raise PackError(f"invalid pack lock {lock_path}: {exc}") from exc
+        elif manifest.pack_schema_version == "2.0":
+            raise PackError(f"pack schema 2.0 requires {PACK_LOCK_FILENAME}: {root}")
+
         catalogs: dict[str, dict[str, Any]] = {}
         catalog_field_origins: dict[str, str] = {}
-        semantic_files: set[Path] = {source.path for source in manifest_graph.sources}
+        semantic_files: set[Path] = {source.path for source in manifest_graph.sources} | lock_files
         payload_files: set[Path] = set()
         for catalog_name, relative_path, model in CATALOG_FILES:
             document, document_graph = _load_pack_document(
@@ -1172,6 +1194,7 @@ class PackRepository:
         }
         return LoadedPack(
             manifest=manifest,
+            lock=lock,
             source=source,
             root=root,
             digest=digest,
@@ -1233,6 +1256,10 @@ class PackRepository:
                 yaml.safe_dump(
                     manifest.model_dump(mode="json", exclude_none=True), sort_keys=False
                 ).encode("utf-8"),
+            )
+            _write_new_file_no_follow(
+                staging / PACK_LOCK_FILENAME,
+                yaml.safe_dump(PackLock().model_dump(mode="json"), sort_keys=False).encode("utf-8"),
             )
             for catalog_name, relative_path, _model in CATALOG_FILES:
                 _write_new_file_no_follow(
@@ -1326,8 +1353,10 @@ class PackRepository:
             target = staging / relative
             if relative_text in {PACK_MANIFEST_FILENAME, "COPY_PROVENANCE.md"}:
                 continue
-            if relative.suffix in {".yaml", ".yml"} and relative_text not in (
-                source_pack.payload_files
+            if (
+                relative.suffix in {".yaml", ".yml"}
+                and relative_text not in source_pack.payload_files
+                and relative_text != PACK_LOCK_FILENAME
             ):
                 # The destination writes one canonical flattened manifest. YAML
                 # used only by the source manifest include graph would otherwise

@@ -1,0 +1,7 @@
+lock_schema_version: "1.0"
+dependencies:
+  - publisher: evidenceforge
+    type: industry
+    name: healthcare
+    version: "1.0.0"
+    digest: "91f369c55113c940a9a907282b53fcc5629c54d3b91b79a869814cbcb7b82220"

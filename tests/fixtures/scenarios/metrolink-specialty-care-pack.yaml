@@ -1,0 +1,48 @@
+scenario_version: "2.0"
+composition:
+  organization:
+    source: package
+    name: metrolink-specialty-care
+    version: "1.0.0"
+generation_seed: 4242
+name: metrolink-specialty-care-consumer
+description: "Fixed-seed consumer proof for the MetroLink Specialty Care organization pack."
+time_window:
+  start: "2026-08-18T13:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+storyline:
+  - id: care-team-message
+    time: "+20m"
+    actor: ana.ross
+    system: MLSC-CARD-01
+    activity: "Send a routine care-coordination message to billing."
+    events:
+      - type: email_message
+        to: [marco.lee@metrolinkcare.lab]
+        subject: "Cardiology referral follow-up"
+        body: "Please confirm that the referral documentation is available for the scheduled visit."
+        outcome: delivered
+  - id: care-operations-review
+    time: "+35m"
+    actor: ana.ross
+    system: MLSC-CARD-01
+    activity: "Review a care-operations document from the central file service."
+    events:
+      - type: smb_activity
+        operation: read
+        target:
+          type: share
+          share: MLSC-FILE-01.care_operations
+          file_ref: referral-status
+        outcome: success
+        path_style: mapped
+        mapping: care_operations_drive
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+  destination: ./metrolink-specialty-care-output
+  compression: false

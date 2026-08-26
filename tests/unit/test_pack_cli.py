@@ -39,6 +39,7 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
         "healthcare",
         "technology",
         "northstar-health",
+        "metrolink-specialty-care",
     }
     shown_payload = json.loads(shown.stdout)
     assert shown.exit_code == 0
@@ -51,6 +52,49 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
     assert validated.exit_code == 0
     assert validation_payload["valid"] is True
     assert validation_payload["dependencies"][0]["name"] == "healthcare"
+
+
+def test_pack_release_build_inspect_and_import_have_stable_json(tmp_path: Path) -> None:
+    """Release CLI commands expose a validated immutable closure without project resolution."""
+
+    archive = tmp_path / "metrolink.efpack"
+    built = runner.invoke(
+        app,
+        [
+            "pack",
+            "build",
+            "package:organization:metrolink-specialty-care@1.0.0",
+            "--output",
+            str(archive),
+            "--json",
+        ],
+    )
+    inspected = runner.invoke(app, ["pack", "inspect", str(archive), "--json"])
+    imported = runner.invoke(
+        app,
+        [
+            "pack",
+            "import",
+            str(archive),
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+            "--json",
+        ],
+    )
+
+    assert built.exit_code == 0, built.stdout
+    built_payload = json.loads(built.stdout)
+    assert built_payload["built"] is True
+    assert built_payload["root"]["name"] == "metrolink-specialty-care"
+    assert len(built_payload["members"]) == 2
+    assert inspected.exit_code == 0, inspected.stdout
+    assert json.loads(inspected.stdout)["valid"] is True
+    assert imported.exit_code == 0, imported.stdout
+    imported_payload = json.loads(imported.stdout)
+    assert imported_payload["imported"] is True
+    assert imported_payload["scope"] == "project"
 
 
 def test_organization_show_distinguishes_model_fields_from_catalog_exports() -> None:
@@ -116,11 +160,11 @@ def test_northstar_linux_pack_has_exact_dependency_and_indexed_digest() -> None:
     assert payload["valid"] is True
     assert payload["pack"]["version"] == "1.1.0"
     assert payload["pack"]["digest"] == (
-        "f4be4d55481b9e09e304ef79dabde85e80cc9374f8ba65f29611d6702dbfe52f"
+        "479c5780ff995fd1b4c857832697a2627006b7620c324c6bc701158f6ad414cd"
     )
     assert payload["dependencies"] == [
         {
-            "digest": "79a78d1248e203c638c48cf2ff00c5eac4990efa227fc0bbf817dcef7e36d943",
+            "digest": "91f369c55113c940a9a907282b53fcc5629c54d3b91b79a869814cbcb7b82220",
             "location": "package:industry:healthcare@1.0.0",
             "name": "healthcare",
             "source": "package",

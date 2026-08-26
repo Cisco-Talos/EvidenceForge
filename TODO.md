@@ -54,6 +54,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Complete the Pack Schema 2.0 release workflow: publisher-qualified identities,
+  locked dependency closures, `.efpack` build/inspect/import/hydration, user-library discovery,
+  release-operation skill coverage, and official small/medium healthcare organization consumers.
+
 - [x] **P1** Build dedicated pack-management, industry-pack, and organization-pack authoring
   skills and integrate pack discovery/consumption with the scenario, config, and validation
   workflows. The implementation adds runtime-effective public catalogs, stable JSON validation and

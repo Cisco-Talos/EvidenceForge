@@ -15,6 +15,8 @@ description: >
 Manage the safe lifecycle of data-only Scenario 2.0 packs. Keep catalog and model authoring in the
 specialized industry- or organization-pack skill.
 
+Route immutable release build, inspection, import, and hydration to `/eforge pack-release`.
+
 ## Establish the execution boundary
 
 1. Read `/eforge:references:project-context`. Use the current working directory and omit

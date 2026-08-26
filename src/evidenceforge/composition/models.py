@@ -24,12 +24,13 @@ from evidenceforge.models.scenario import BaselineActivity, Environment, Persona
 PackSource = Literal["package", "project", "path"]
 PackType = Literal["industry", "organization"]
 
-PACK_SCHEMA_VERSION = "1.0"
+PACK_SCHEMA_VERSION = "2.0"
 RESOLVED_SCENARIO_KIND = "evidenceforge.resolved-scenario"
 RESOLVED_SCENARIO_SCHEMA_VERSION = "1.0"
 
 CATALOG_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
-CATALOG_REFERENCE_PATTERN = r"^(?:[a-z0-9][a-z0-9-]*:)?[a-z0-9][a-z0-9_-]*$"
+PUBLISHER_ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
+CATALOG_REFERENCE_PATTERN = r"^(?:(?:[a-z0-9][a-z0-9-]*/)?[a-z0-9][a-z0-9-]*:)?[a-z0-9][a-z0-9_-]*$"
 SEMVER_PATTERN = r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
 
 CatalogId = Annotated[str, Field(pattern=CATALOG_ID_PATTERN)]
@@ -267,6 +268,7 @@ class PackReference(BaseModel):
     """An exact, persisted reference to one whole pack."""
 
     source: PackSource
+    publisher: str = Field(default="evidenceforge", pattern=PUBLISHER_ID_PATTERN)
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     version: str = Field(pattern=SEMVER_PATTERN)
     path: str | None = None
@@ -288,6 +290,41 @@ class IndustryDependency(PackReference):
     """An organization pack's exact industry dependency."""
 
     type: Literal["industry"] = "industry"
+    version_constraint: str | None = Field(
+        default=None,
+        pattern=r"^(?:[<>=]{1,2}\d+\.\d+\.\d+)(?:\s*,\s*[<>=]{1,2}\d+\.\d+\.\d+)*$",
+    )
+
+
+class LockedPack(BaseModel):
+    """An immutable release selected by a pack lock."""
+
+    publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
+    type: PackType
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version: str = Field(pattern=SEMVER_PATTERN)
+    digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class PackLock(BaseModel):
+    """Deterministic resolved dependencies for one pack release."""
+
+    lock_schema_version: Literal["1.0"] = "1.0"
+    dependencies: list[LockedPack] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_dependencies(self) -> PackLock:
+        identities = [
+            (dependency.publisher, dependency.type, dependency.name, dependency.version)
+            for dependency in self.dependencies
+        ]
+        if len(identities) != len(set(identities)):
+            raise ValueError("dependencies contains duplicate locked releases")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class CompositionSpec(BaseModel):
@@ -313,13 +350,16 @@ class CompositionSpec(BaseModel):
 class PackManifest(BaseModel):
     """Stable manifest shared by industry and organization packs."""
 
-    pack_schema_version: Literal["1.0"]
+    pack_schema_version: Literal["1.0", "2.0"]
     type: PackType
+    publisher: str = Field(default="evidenceforge", pattern=PUBLISHER_ID_PATTERN)
+    publisher_display_name: str | None = Field(default=None, min_length=1, max_length=120)
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     version: str = Field(pattern=SEMVER_PATTERN)
     requires_evidenceforge: str = Field(default=">=2.0.0,<3.0.0")
     description: str
     industry_dependencies: list[IndustryDependency] = Field(default_factory=list)
+    provenance: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_dependency_ownership(self) -> PackManifest:
@@ -328,7 +368,11 @@ class PackManifest(BaseModel):
         if self.type == "industry" and self.industry_dependencies:
             raise ValueError("industry packs cannot declare industry_dependencies")
         identities = [
-            (dependency.source, dependency.name, dependency.version, dependency.path)
+            (
+                dependency.publisher,
+                dependency.name,
+                dependency.version_constraint or dependency.version,
+            )
             for dependency in self.industry_dependencies
         ]
         if len(identities) != len(set(identities)):

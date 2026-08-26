@@ -20,52 +20,46 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Representative release and opt-in soak generation workloads."""
+"""MetroLink release and opt-in soak generation workloads."""
 
 import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from evidenceforge.composition import compile_scenario
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
 
 
 @pytest.fixture(scope="module")
-def medium_scenario() -> Scenario:
-    """Load a representative 16-user, six-system, one-hour release scenario.
+def metrolink_consumer():
+    """Resolve the fixed-seed MetroLink consumer and retain exact release provenance."""
 
-    The checked-in 100-user, eight-hour fixture remains the soak workload. The
-    release gate needs a multi-host/persona integration run, not 800 user-hours
-    of repeated baseline evidence. Four users from each persona family keep
-    behavior diversity while only four workstations, one Linux server, and one
-    domain controller participate.
-    """
-    scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "medium-dataset.yaml"
-    data = load_yaml(scenario_path)
-    data["name"] = "release-medium-dataset"
-    data["description"] = "Release integration scenario (16 users, 6 systems, 1 hour)"
-    all_users = data["environment"]["users"]
-    data["environment"]["users"] = (
-        all_users[0:4] + all_users[10:14] + all_users[30:34] + all_users[60:64]
+    scenario_path = (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "scenarios"
+        / "metrolink-specialty-care-pack.yaml"
     )
-    keep_systems = {"WS-01", "WS-02", "WS-03", "WS-04", "SRV-LIN-01", "DC-01"}
-    data["environment"]["systems"] = [
-        system for system in data["environment"]["systems"] if system["hostname"] in keep_systems
-    ]
-    data["time_window"]["duration"] = "1h"
-    return Scenario(**data)
+    return compile_scenario(scenario_path)
 
 
 @pytest.fixture(scope="module")
-def generated_output(medium_scenario):
-    """Generate medium dataset once, share across all tests in this module."""
+def generated_output(metrolink_consumer):
+    """Generate MetroLink once, sharing the bounded release workload across assertions."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_dir = Path(tmpdir).resolve()
-        engine = GenerationEngine(medium_scenario, output_dir)
+        engine = GenerationEngine(
+            metrolink_consumer.scenario,
+            output_dir,
+            compiled_scenario=metrolink_consumer,
+            scenario_root=Path(__file__).parent.parent,
+        )
 
         start = datetime.now()
         engine.generate()
@@ -90,7 +84,8 @@ def generated_output(medium_scenario):
             "dir": output_dir,
             "files": files,
             "duration": duration,
-            "scenario": medium_scenario,
+            "compiled": metrolink_consumer,
+            "scenario": metrolink_consumer.scenario,
         }
 
 
@@ -103,12 +98,23 @@ def _generated_file(generated_output: dict, *names: str) -> dict | None:
     return None
 
 
+def _json_records(output: Path, filename: str) -> list[dict[str, Any]]:
+    """Return all NDJSON records with one source-native filename from a generated bundle."""
+
+    records: list[dict[str, Any]] = []
+    for path in output.rglob(filename):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                records.append(json.loads(line))
+    return records
+
+
 @pytest.mark.slow
 class TestMediumDatasetGeneration:
-    """Tests over one shared representative release generation."""
+    """Tests over one shared MetroLink release generation."""
 
     def test_generates_without_errors(self, generated_output):
-        """The representative multi-user scenario completes without exceptions."""
+        """The representative multi-office consumer completes without exceptions."""
         assert generated_output["duration"] > 0
         assert len(generated_output["files"]) > 0
 
@@ -119,6 +125,67 @@ class TestMediumDatasetGeneration:
         assert "conn.json" in filenames
         assert "ecar.json" in filenames
         assert "syslog.log" in filenames
+
+    def test_resolves_exact_locked_healthcare_release(self, generated_output):
+        """The consumer preserves its tested organization and industry release bytes."""
+
+        selected = {
+            (pack.type, pack.name, pack.version): pack.digest
+            for pack in generated_output["compiled"].selected_packs
+        }
+        assert selected == {
+            (
+                "industry",
+                "healthcare",
+                "1.0.0",
+            ): "91f369c55113c940a9a907282b53fcc5629c54d3b91b79a869814cbcb7b82220",
+            (
+                "organization",
+                "metrolink-specialty-care",
+                "1.0.0",
+            ): "78064394ad268bc8b5210b8e06b52fbdf1575652d170f7242a4560766555eecd",
+        }
+
+    def test_proves_email_storage_endpoint_and_network_evidence(self, generated_output):
+        """MetroLink's owned services render the representative evidence its release claims."""
+
+        output = generated_output["dir"]
+        storage = json.loads((output / "STORAGE_MANIFEST.json").read_text(encoding="utf-8"))
+        share = next(
+            item for item in storage["shares"] if item["ref"] == "MLSC-FILE-01.care_operations"
+        )
+        assert share["preset"] == "healthcare:clinical-department"
+        assert share["file_count"] > 0
+
+        syslog = "\n".join(path.read_text(encoding="utf-8") for path in output.rglob("syslog.log"))
+        assert "from=<ana.ross@metrolinkcare.lab>" in syslog
+
+        endpoint_records = _json_records(output, "ecar.json")
+        assert any(
+            record.get("hostname") == "MLSC-CARD-01"
+            and record.get("object") == "FLOW"
+            and record.get("principal") == "ana.ross"
+            and record.get("properties", {}).get("dst_port") == "587"
+            for record in endpoint_records
+        )
+        assert any(
+            record.get("hostname") == "MLSC-FILE-01"
+            and record.get("object") == "FILE"
+            and record.get("action") == "READ"
+            and str(record.get("properties", {}).get("file_path", "")).endswith(
+                "Care Coordination\\Referral Status.pdf"
+            )
+            for record in endpoint_records
+        )
+
+        smb_records = _json_records(output, "smb_files.json")
+        assert any(
+            record.get("action") == "SMB::FILE_READ"
+            and record.get("id.orig_h") == "10.61.10.21"
+            and record.get("id.resp_h") == "10.61.60.20"
+            and record.get("name") == "Care Coordination\\Referral Status.pdf"
+            for record in smb_records
+        )
 
     def test_windows_events_substantial(self, generated_output):
         """Should produce non-trivial Windows Event output."""

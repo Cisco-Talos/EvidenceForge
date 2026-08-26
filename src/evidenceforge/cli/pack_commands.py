@@ -16,6 +16,12 @@ from rich.table import Table
 from evidenceforge.composition.compiler import resolve_management_project_root
 from evidenceforge.composition.models import PackReference, PackType
 from evidenceforge.composition.packs import LoadedPack, PackRepository, parse_pack_cli_reference
+from evidenceforge.composition.releases import (
+    build_efpack,
+    hydrate_release,
+    import_efpack,
+    validate_efpack,
+)
 from evidenceforge.models.exceptions import PackError
 
 pack_app = typer.Typer(help="Create, inspect, copy, and validate scenario packs.")
@@ -33,6 +39,8 @@ def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
 
     return {
         "source": pack.source,
+        "publisher": pack.manifest.publisher,
+        "publisher_display_name": pack.manifest.publisher_display_name,
         "type": pack.manifest.type,
         "name": pack.manifest.name,
         "version": pack.manifest.version,
@@ -42,6 +50,9 @@ def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
         "location": str(pack.root),
         "industry_dependencies": [
             dependency.model_dump(mode="json") for dependency in pack.manifest.industry_dependencies
+        ],
+        "locked_dependencies": [
+            dependency.model_dump(mode="json") for dependency in pack.lock.dependencies
         ],
         "exports": {catalog: sorted(entries) for catalog, entries in pack.catalogs.items()},
         "model_contributions": {
@@ -254,3 +265,92 @@ def copy_pack(
         )
         return
     console.print(f"[green]✓[/green] Copied pack to {destination}")
+
+
+@pack_app.command("build")
+def build_pack(
+    reference: str = typer.Argument(..., help="source:type:name@version or pack path"),
+    output: Path = typer.Option(..., "--output", help="Destination .efpack file."),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
+    project_root: Path | None = typer.Option(None, "--project-root"),
+) -> None:
+    """Build a validated root-pack and dependency-closure .efpack archive."""
+
+    try:
+        repository = _repository(project_root)
+        payload = build_efpack(repository, _resolve_cli_pack(reference, project_root), output)
+    except (PackError, ValueError) as exc:
+        _fail(exc, json_output=json_output, json_payload={"built": False})
+    if json_output:
+        _emit_json({"built": True, **payload})
+    else:
+        console.print(f"[green]✓[/green] Built {payload['path']}")
+
+
+@pack_app.command("inspect")
+def inspect_pack_release(
+    archive: Path = typer.Argument(..., help=".efpack archive"),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
+) -> None:
+    """Validate an .efpack without modifying a library."""
+
+    try:
+        payload = validate_efpack(archive)
+    except PackError as exc:
+        _fail(exc, json_output=json_output, json_payload={"valid": False}, exit_code=2)
+    result = {"valid": True, "root": payload.root, "members": list(payload.members)}
+    if json_output:
+        _emit_json(result)
+    else:
+        console.print(
+            f"[green]✓[/green] Valid .efpack for {payload.root['publisher']}/{payload.root['name']}"
+        )
+
+
+@pack_app.command("import")
+def import_pack_release(
+    archive: Path = typer.Argument(..., help=".efpack archive"),
+    scope: str = typer.Option("project", "--scope", help="project or user immutable library"),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
+    project_root: Path | None = typer.Option(None, "--project-root"),
+) -> None:
+    """Validate then import an immutable .efpack closure."""
+
+    if scope not in {"project", "user"}:
+        _fail(
+            PackError("scope must be project or user"),
+            json_output=json_output,
+            json_payload={"imported": False},
+        )
+    try:
+        payload = import_efpack(
+            archive,
+            scope=scope,  # type: ignore[arg-type]
+            project_root=resolve_management_project_root(project_root),
+        )
+    except (PackError, ValueError) as exc:
+        _fail(exc, json_output=json_output, json_payload={"imported": False})
+    if json_output:
+        _emit_json({"imported": True, **payload})
+    else:
+        console.print(
+            f"[green]✓[/green] Imported {len(payload['members'])} release(s) into {scope}"
+        )
+
+
+@pack_app.command("hydrate")
+def hydrate_pack_release(
+    release: str = typer.Argument(..., help="publisher:type:name@version from the user library"),
+    json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
+    project_root: Path | None = typer.Option(None, "--project-root"),
+) -> None:
+    """Explicitly materialize a user-library release for one project."""
+
+    try:
+        payload = hydrate_release(release, resolve_management_project_root(project_root))
+    except PackError as exc:
+        _fail(exc, json_output=json_output, json_payload={"hydrated": False})
+    if json_output:
+        _emit_json(payload)
+    else:
+        console.print(f"[green]✓[/green] Hydrated {release}")

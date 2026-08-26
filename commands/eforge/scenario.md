@@ -40,16 +40,17 @@ either; do not ask again.
    organization model and confirm it before writing. Do not repeat already answered questions.
 5. Read `/eforge:references:scenario-pack-consumption` to judge whether supplied detail suffices.
 
-Keep one-exercise identity, environment, time, storyline, red herrings, output, and collection in
-the scenario. Use `includes` only to split disjoint fields owned with that exercise; includes
-compose and do not override duplicate fields. Use existing packs for portable, explicitly selected,
-versioned industry or organization data. Route reusable sectors to `/eforge industry-pack`, reusable
-concrete organizations to `/eforge organization-pack`, pack lifecycle to `/eforge pack`, and
-project-local generation defaults to `/eforge config`.
+Keep each exercise's identity, environment, timing, storyline, output, and collection together.
+Use `includes` only for disjoint fields; they compose and never override duplicates. Use explicitly
+selected, versioned packs for portable content. Route reusable sectors to `/eforge industry-pack`,
+concrete organizations to `/eforge organization-pack`, lifecycle to `/eforge pack`, and project
+defaults to `/eforge config`.
 
-Do not scan for packs when preserving Scenario 1.0 or after the user chooses no-pack authoring.
-No-pack scenarios are valid and remain pack-silent, but their industry and organization decisions
-must still be explicit.
+When discovery identifies a user-library-only pack, present it as dehydrated and offer a confirmed
+handoff to `/eforge pack-release` for hydration. Never resolve it implicitly.
+
+Do not scan after choosing Scenario 1.0 preservation or no-pack authoring. No-pack scenarios remain
+valid and pack-silent, but their industry and organization decisions must still be explicit.
 
 ## Load only what the task needs
 
@@ -110,12 +111,10 @@ available; otherwise omit the optional technique field and disclose the uncertai
 4. Never edit generated `RESOLVED_SCENARIO.yaml`, `GENERATION_MANIFEST.json`, ground truth,
    collection/storage/observation/artifact manifests, output markers, or `data/`. After an authored
    change, treat an adjacent generated bundle as stale until regeneration replaces it.
-5. Inspect runtime inventories instead of guessing project-dependent persona, role, format,
-   application, DNS-tag, or pack-export names. Use the documented field-specific `eforge info
-   <field>` inventory: use its line-oriented output for simple lists, or consume `--json` directly
-   when structured results are needed. Do not pipe JSON through another command solely to reformat
-   a list. Use exact pack JSON; authored schema comes from the focused references. Never submit an
-   intentionally invalid scenario to discover fields or accepted shapes.
+5. Inspect runtime inventories rather than guessing project-dependent names. Use field-specific
+   `eforge info <field>`: use line output for lists or consume `--json` directly for structures.
+   Use exact pack JSON; authored schema comes from the focused references. Never submit invalid
+   YAML to discover accepted fields or shapes.
 6. Author the smallest coherent change. Use precise OS-native commands, paths, identities, ports,
    timing, roles, services, and typed events. `activity` documents intent; it does not generate logs.
 7. Let action bundles and causal expansion own ordinary DNS, transport, authentication, audit,

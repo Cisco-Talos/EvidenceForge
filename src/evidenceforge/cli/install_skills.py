@@ -39,6 +39,7 @@ CHATGPT_SKILL_NAMES = (
     "pack",
     "industry-pack",
     "organization-pack",
+    "pack-release",
 )
 
 _CHATGPT_REFERENCES_BY_SKILL = {
@@ -89,6 +90,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-smb.md",
     ),
     "pack": ("references/project-context.md", "references/pack-reference.md"),
+    "pack-release": ("references/project-context.md", "references/pack-reference.md"),
     "scenario": (
         "references/project-context.md",
         "references/evidence-endpoint-linux.md",
@@ -127,6 +129,7 @@ _CHATGPT_COMMAND_REWRITES = {
     "/eforge industry-pack": "the `eforge-industry-pack` skill",
     "/eforge organization-pack": "the `eforge-organization-pack` skill",
     "/eforge pack": "the `eforge-pack` skill",
+    "/eforge pack-release": "the `eforge-pack-release` skill",
     "/eforge scenario": "the `eforge-scenario` skill",
     "/eforge generate": "the `eforge-generate` skill",
     "/eforge validate": "the `eforge-validate` skill",

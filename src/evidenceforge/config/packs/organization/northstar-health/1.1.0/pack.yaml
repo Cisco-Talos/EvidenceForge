@@ -1,5 +1,7 @@
-pack_schema_version: "1.0"
+pack_schema_version: "2.0"
 type: organization
+publisher: evidenceforge
+publisher_display_name: "EvidenceForge Official"
 name: northstar-health
 version: "1.1.0"
 requires_evidenceforge: ">=2.0.0,<3.0.0"

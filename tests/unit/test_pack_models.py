@@ -575,7 +575,7 @@ def test_pack_manifest_requires_canonical_semver() -> None:
         )
 
 
-@pytest.mark.parametrize("raw_version", [None, "2.0"])
+@pytest.mark.parametrize("raw_version", [None, "3.0"])
 def test_pack_manifest_requires_supported_schema_version(raw_version: str | None) -> None:
     """Manifest schema dispatch cannot silently default or accept an unknown version."""
 

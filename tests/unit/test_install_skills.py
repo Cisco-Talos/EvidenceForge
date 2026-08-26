@@ -623,6 +623,7 @@ class TestInstallChatGPTSkills:
             "eforge-industry-pack",
             "eforge-organization-pack",
             "eforge-pack",
+            "eforge-pack-release",
             "eforge-scenario",
             "eforge-validate",
         }
