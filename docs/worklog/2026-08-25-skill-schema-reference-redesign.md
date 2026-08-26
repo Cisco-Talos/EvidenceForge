@@ -66,3 +66,25 @@ two stale composition fixtures that still inferred a temporary project from the 
 parent. Those fixtures now pass their intended temporary root explicitly, and the complete slow
 gate is clean. Soak was not run because the reconciliation changes neither scale nor retention
 behavior.
+
+## 2026-08-26 scenario-authoring validation-loop remediation
+
+Repeated first-draft failures demonstrated a concrete need for the previously deferred focused
+schema interface. `eforge schema <selector> --json` now exposes installed-version field types,
+requirements, defaults, enums, constraints, units where the model declares them, full JSON Schema,
+and one model-validated minimal example for focused environment paths and every typed event.
+Legacy network identities remain compatible with either hosts or IPs, while new guidance and the
+minimal example consistently show the exact plural `hosts` and `ips` fields.
+
+Authoring guidance now validates broad scenarios in coherent stages and clears blockers before
+warning review. References add targeted examples only at demonstrated ambiguity points: scalar
+service accounts, network identity shape, numeric-second email reads, RDP receiver capability,
+sensor/output compatibility, and generated-storage overrides. Validation collapses sibling
+missing/unsupported-field failures into one object-shape issue, links it to the focused selector,
+and never promotes a warning over an available error in the JSON headline.
+
+Focused schema, validation, scenario/validation skill, storage, installer, and slow installed-CLI
+contract suites passed. Temporary installed scenario and validation skills passed the
+skill-creator validator. The complete routine gate passed with 8,163 tests, 5 skips, and 2,058
+deselections; Ruff lint/format plus `git diff --check` were clean. Clean-room agent acceptance
+measurement remains deliberately deferred as a P1 roadmap item in `TODO.md`.

@@ -99,6 +99,7 @@ For scripted or non-interactive use:
 | `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |
 | `eforge eval <output_dir> [-s <scenario.yaml>] [--allow-large-evaluation]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
+| `eforge schema <selector> [--json]` | Show one focused installed-version authored-scenario contract, such as `environment.network_identities` or `event.email_read`. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
 | `eforge version` | Show version |

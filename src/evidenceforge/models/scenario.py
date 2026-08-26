@@ -2124,7 +2124,13 @@ class EmailReadEventSpec(_EventSpecBase):
         description="Optional message/artifact IDs documented for storyline correlation only.",
     )
     count: int = Field(default=1, ge=1, le=500)
-    duration: float | None = Field(default=None, gt=0.0)
+    duration: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Positive mailbox access duration in numeric seconds; duration strings are not valid."
+        ),
+    )
     user_agent: str | None = None
 
     @field_validator("mailbox")

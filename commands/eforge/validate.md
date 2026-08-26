@@ -78,8 +78,8 @@ Read structured severity, field path, message, suggestion, and declaring source 
 Inspect only the implicated authored fragment rather than loading every include or reference.
 
 - Errors block generation. Report the root cause and smallest safe next action.
-- Warnings do not block generation. Group repeated warnings by cause and identify intentional
-  exceptions; do not silently rewrite them.
+- Repair and revalidate errors before warnings. Warnings do not block generation; after errors
+  reach zero, group warnings by cause and identify intentional exceptions.
 - Info notes are observations, not warnings. Mention them only when useful.
 - On a clean pass, state that the scenario is valid; summarize counts or topology only if useful or
   requested.
@@ -120,10 +120,10 @@ route it to that owning skill instead of copying content into the scenario.
 Never repair `RESOLVED_SCENARIO.yaml`. A missing or mismatched resolved-document digest is intrinsic
 corruption: restore an identical artifact or regenerate it from authored input.
 
-After each authorized repair batch, rerun the exact same validation command, including any explicit
-project-root override and current OOB authorization. Continue only while the next change is
-mechanical or directly implied; stop for user input when semantics are ambiguous. Finish with the
-final exit status and a concise list of remaining warnings or blockers.
+After each authorized repair batch, rerun the exact command, including project root and OOB flags.
+Continue only for mechanical or directly implied changes; stop when semantics are ambiguous. When
+an issue names a selector, use `eforge schema <selector> --json` for exact installed fields, types,
+defaults, constraints, units, and example. Finish with status and remaining warnings or blockers.
 
 ## Fresh OOB authorization
 

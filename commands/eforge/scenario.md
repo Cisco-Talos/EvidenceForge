@@ -9,8 +9,8 @@ description: >
 
 # EvidenceForge Scenario Author
 
-Create or change authored scenario inputs for the deterministic `eforge generate` engine. Default
-new work to Scenario 2.0, including monolithic no-pack scenarios. Preserve Scenario 1.0 when
+Create or change scenario inputs for deterministic `eforge generate`. Default new work to Scenario
+2.0, including monolithic no-pack scenarios. Preserve Scenario 1.0 when
 editing an existing V1 document unless the user requests migration.
 
 In an EvidenceForge source checkout, use `uv run eforge` so authoring exercises that checkout's
@@ -40,17 +40,16 @@ either; do not ask again.
    organization model and confirm it before writing. Do not repeat already answered questions.
 5. Read `/eforge:references:scenario-pack-consumption` to judge whether supplied detail suffices.
 
-Keep each exercise's identity, environment, timing, storyline, output, and collection together.
-Use `includes` only for disjoint fields; they compose and never override duplicates. Use explicitly
-selected, versioned packs for portable content. Route reusable sectors to `/eforge industry-pack`,
-concrete organizations to `/eforge organization-pack`, lifecycle to `/eforge pack`, and project
-defaults to `/eforge config`.
+Keep exercise-specific fields together. Includes split disjoint fields and never override
+duplicates. Use selected versioned packs for portable content. Route reusable sectors to
+`/eforge industry-pack`, organizations to `/eforge organization-pack`, lifecycle to `/eforge pack`,
+and project defaults to `/eforge config`.
 
 When discovery identifies a user-library-only pack, present it as dehydrated and offer a confirmed
 handoff to `/eforge pack-release` for hydration. Never resolve it implicitly.
 
-Do not scan after choosing Scenario 1.0 preservation or no-pack authoring. No-pack scenarios remain
-valid and pack-silent, but their industry and organization decisions must still be explicit.
+Do not scan after choosing Scenario 1.0 or no-pack authoring. No-pack industry and organization
+decisions must remain explicit.
 
 ## Load only what the task needs
 
@@ -111,10 +110,9 @@ available; otherwise omit the optional technique field and disclose the uncertai
 4. Never edit generated `RESOLVED_SCENARIO.yaml`, `GENERATION_MANIFEST.json`, ground truth,
    collection/storage/observation/artifact manifests, output markers, or `data/`. After an authored
    change, treat an adjacent generated bundle as stale until regeneration replaces it.
-5. Inspect runtime inventories rather than guessing project-dependent names. Use field-specific
-   `eforge info <field>`: use line output for lists or consume `--json` directly for structures.
-   Use exact pack JSON; authored schema comes from the focused references. Never submit invalid
-   YAML to discover accepted fields or shapes.
+5. Inspect runtime inventories with `eforge info <field>` instead of guessing project-dependent
+   names; authored schema comes from the focused references. Query its exact installed shape with
+   `eforge schema <selector> --json`. Use exact pack JSON. Never probe with invalid YAML.
 6. Author the smallest coherent change. Use precise OS-native commands, paths, identities, ports,
    timing, roles, services, and typed events. `activity` documents intent; it does not generate logs.
 7. Let action bundles and causal expansion own ordinary DNS, transport, authentication, audit,
@@ -122,14 +120,17 @@ available; otherwise omit the optional technique field and disclose the uncertai
    when it is independently part of the narrative or exact authored fields are required. Never
    author internal effect nodes, registry handles, leases, closure tickets, channel IDs, or content
    IDs.
-8. Validate the authored root with `eforge validate <scenario> --json`. Fix
-   errors and actionable warnings; report each warning kept intentionally. Never weaken safety,
-   containment, or resource checks to make validation pass.
-9. For pack-backed input, run non-writing
+8. For broad new scenarios, retain a valid minimal envelope and validate after each stage: core
+   environment/run controls; topology/collection; facilities; storyline families; final outputs.
+   Do not leave an intentionally incomplete document between stages.
+9. Validate the authored root with `eforge validate <scenario> --json`. Clear every error before
+   considering warnings. Then fix actionable warnings and report each warning kept intentionally.
+   Never weaken safety, containment, or resource checks to make validation pass.
+10. For pack-backed input, run non-writing
    `eforge resolve <scenario> --explain-composition --json`. Inspect selected
    identities, digests, exports, merges, and field origins. Write a resolved document only when the
    user requests an artifact.
-10. For a pack-backed `ENVIRONMENT.md`, add `--include-effective-scenario` to that non-writing
+11. For a pack-backed `ENVIRONMENT.md`, add `--include-effective-scenario` to that non-writing
     resolve and derive the briefing from its `effective_scenario` object. Never use storyline or
     suspicious activity, and never create a temporary resolved artifact for inspection.
 
@@ -145,9 +146,9 @@ the owning skill. Stop before a destructive rewrite when source or ownership is 
 
 ## Completion
 
-Summarize changed authored files, schema version, composition references, environment size, time
-window, narrative, canonical formats, generation target (`default`, `sof-elk`, or `splunk`),
-validation result, intentional warnings/blind spots, and whether existing generated output is stale.
+Summarize changed files, schema/composition, environment size, time window, narrative, formats,
+generation target (`default`, `sof-elk`, or `splunk`), validation, warnings/blind spots, and stale
+generated output.
 
 If the user wants logs, hand off to `/eforge generate`. If they want a focused validation or repair
 explanation, hand off to `/eforge validate`. Do not silently generate logs as part of authoring.

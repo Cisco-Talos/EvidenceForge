@@ -77,6 +77,17 @@ Read the HTTP reference before defining route/method request profiles or multipa
 `false`). Each log entry requires `format`; discover installed format names with
 `eforge info formats` because formats can differ by installation; use `--json` directly only when
 structured handling is needed.
+
+Sensor-backed formats require a compatible sensor in `environment.network.sensors`:
+
+| Requested output | Required sensor type | Compatible `log_formats` |
+| --- | --- | --- |
+| Zeek formats | `network` | `zeek` or the exact `zeek_*` format |
+| `snort_alert` | `ids` | `snort_alert` |
+| `cisco_asa` | `firewall` | `cisco_asa` |
+
+Host-local Windows, eCAR, syslog, and bash-history outputs do not require a network sensor. Proxy
+access instead requires a modeled forward-proxy system and is not produced by a placeholder sensor.
 The authored destination is a compatibility/provenance hint; the generate command owns the final
 bundle location. Rendering targets such as `default`, `sof-elk`, and `splunk` are CLI choices, not
 scenario fields.

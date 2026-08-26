@@ -200,6 +200,74 @@ def test_smb_unknown_reference_requires_exact_compiled_shape(scenarios_dir: Path
     assert issue.suggestion == "Use an exact compiled <system>.<share-id> reference."
 
 
+def test_generated_storage_collision_suggests_share_override(scenarios_dir: Path) -> None:
+    """A generated preset collision points authors to the supported override shape."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    scenario_data["environment"]["systems"].append(
+        {
+            "hostname": "FS-01",
+            "ip": "10.0.0.20",
+            "os": "Windows Server 2022",
+            "type": "server",
+            "roles": ["file_server"],
+            "services": ["smb"],
+        }
+    )
+    scenario_data["environment"]["storage"] = {
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": ["homes"],
+                "default_volume": "data",
+                "volumes": [{"id": "data", "mount": "D:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "homes",
+                        "name": "Homes",
+                        "volume": "data",
+                    }
+                ],
+            }
+        ]
+    }
+
+    issue = next(
+        issue
+        for issue in ScenarioValidator(Scenario.model_validate(scenario_data)).validate()
+        if issue.message.startswith("Storage topology cannot be compiled")
+    )
+
+    assert issue.field_path == "environment.storage"
+    assert "share_overrides" in issue.suggestion
+    assert "<system>.<share-id>" in issue.suggestion
+
+
+def test_rdp_receiver_diagnostic_lists_accepted_capabilities(scenarios_dir: Path) -> None:
+    """RDP validation names both host-type and workstation-service remedies."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    scenario_data["storyline"] = [
+        {
+            "id": "unsupported-rdp-target",
+            "time": "+10m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Attempt a modeled RDP session",
+            "events": [{"type": "rdp_session", "source_ip": "10.0.0.50"}],
+        }
+    ]
+
+    issue = next(
+        issue
+        for issue in ScenarioValidator(Scenario.model_validate(scenario_data)).validate()
+        if "lacks capability 'rdp_receiver'" in issue.message
+    )
+
+    assert "Windows server/domain_controller" in issue.suggestion
+    assert "rdp, remote-desktop, remote_desktop, or termservice" in issue.suggestion
+
+
 def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir: Path) -> None:
     """Every shipped scenario fixture must remain a valid public example."""
 
@@ -1723,12 +1791,15 @@ class TestNetworkValidation:
 
         issues = ScenarioValidator(scenario).validate()
 
-        assert any(
-            issue.severity == "error"
+        issue = next(
+            issue
+            for issue in issues
+            if issue.severity == "error"
             and "snort_alert" in issue.message
             and "requires an IDS sensor" in issue.message
-            for issue in issues
         )
+        assert "type: ids" in issue.suggestion
+        assert "snort_alert" in issue.suggestion
 
     def test_cisco_asa_output_without_firewall_sensor_errors(self):
         """cisco_asa output requires a firewall sensor."""
@@ -1756,12 +1827,15 @@ class TestNetworkValidation:
 
         issues = ScenarioValidator(scenario).validate()
 
-        assert any(
-            issue.severity == "error"
+        issue = next(
+            issue
+            for issue in issues
+            if issue.severity == "error"
             and "cisco_asa" in issue.message
             and "requires a firewall sensor" in issue.message
-            for issue in issues
         )
+        assert "type: firewall" in issue.suggestion
+        assert "cisco_asa" in issue.suggestion
 
     def test_sensor_backed_output_without_network_config_errors(self):
         """Sensor-backed output requires sensors even when network config is omitted."""

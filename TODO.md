@@ -148,9 +148,12 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Add output-target ingest guides covering which generated sources
   are parsed and normalized, parsed-only, unsupported, and how to ingest each
   target-specific dataset.
-- [ ] **P3** Evaluate a dedicated machine-readable `eforge schema` export only if editors or
-  external integrations need installed-version schema introspection. Keep agent authoring schema
-  in focused skill references and do not broaden `eforge info` back into a schema interface.
+- [x] **P1** Add focused machine-readable `eforge schema` selectors, executable minimal examples,
+  actionable grouped validation diagnostics, and staged authoring guidance while retaining focused
+  references as the semantic authoring guide.
+- [ ] **P1** Add clean-room scenario-agent acceptance tests measuring first-draft structural
+  validity, passes to zero errors, required-reference loading, warning churn, and regressions
+  introduced during repair across representative scenario families.
 
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,

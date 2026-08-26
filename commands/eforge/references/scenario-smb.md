@@ -95,6 +95,23 @@ A share override requires `share` plus at least one of `population`, `activity`,
 `credential_mode: per_user|fixed`, optional `principal`, and `lifecycle: persistent|on_demand`.
 Fixed credentials require a principal; per-user credentials forbid one.
 
+Preset shares are generated automatically. Do not redeclare a generated ID such as `homes` under
+`shares`; customize it with its exact compiled reference under `share_overrides`:
+
+```yaml
+storage:
+  servers:
+    - system: FS-01
+      presets: [homes]
+      share_overrides:
+        - share: FS-01.homes
+          population: small
+          activity: low
+```
+
+Use `shares` only for genuinely additional IDs. Validate with `--show-storage` to inspect exact
+compiled references before writing mappings or overrides.
+
 Linux `samba`, `smbd`, or `smb_server` services imply server capability, as does explicit storage
 configuration. A generic Linux `file_server`, mail server, or application server does not. Linux
 client capability requires `cifs-utils`, `cifs-client`, or `smbclient`; OS identity alone is not

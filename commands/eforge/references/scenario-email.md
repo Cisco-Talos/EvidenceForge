@@ -72,7 +72,16 @@ Fields: `type`, `mailbox`, `server`, `protocol`, `message_ids`, `count`, `durati
 `technique`, and `description`. Mailbox defaults to the actor's email; `server` names an
 `environment.email.mail_servers` entry; protocol is `imaps` or `owa` and otherwise derives from
 the server platform. `message_ids` defaults to `[]`, `count` defaults to 1 and is bounded 1–500,
-and optional `duration` must be positive.
+and optional `duration` is a positive numeric number of seconds. It is not one of the duration
+string fields used by periodic events or the scenario time window:
+
+```yaml
+type: email_read
+server: primary
+protocol: owa
+count: 4
+duration: 45.0
+```
 
 Client submission normally uses port 587 with STARTTLS. Server relay uses port 25 with its
 configured STARTTLS policy. IMAPS uses 993; OWA-style access uses 443. Network email evidence still

@@ -319,18 +319,34 @@ def test_specialized_non_event_examples_match_runtime_models() -> None:
     """Focused environment fragments remain aligned without the exhaustive schema reference."""
 
     environment_blocks = _yaml_blocks(REFERENCE_ROOT / "scenario-environment.md")
-    email = _yaml_blocks(REFERENCE_ROOT / "scenario-email.md")[0]
+    identity_blocks = _yaml_blocks(REFERENCE_ROOT / "scenario-environment-identities.md")
+    network_event_raw = re.findall(
+        r"```yaml\n(.*?)```",
+        _read(REFERENCE_ROOT / "scenario-events-network.md"),
+        flags=re.DOTALL,
+    )
+    email_blocks = _yaml_blocks(REFERENCE_ROOT / "scenario-email.md")
+    email = email_blocks[0]
     proxy = next(
         block for block in _yaml_blocks(REFERENCE_ROOT / "scenario-http.md") if "proxy" in block
     )
-    storage = _yaml_blocks(REFERENCE_ROOT / "scenario-smb.md")[0]
+    storage_blocks = _yaml_blocks(REFERENCE_ROOT / "scenario-smb.md")
+    storage = storage_blocks[0]
     storyline = _yaml_blocks(REFERENCE_ROOT / "scenario-storyline.md")[0]
 
     NetworkConfig.model_validate(environment_blocks[1]["network"])
     EmailConfig.model_validate(email["email"])
+    scenario_models.EmailReadEventSpec.model_validate(email_blocks[1])
     ProxyConfig.model_validate(proxy["proxy"])
     StorageConfig.model_validate(storage["storage"])
+    StorageConfig.model_validate(storage_blocks[2]["storage"])
+    scenario_models.SmbShareLocation.model_validate(storage_blocks[3]["target"])
+    SmbActivityEventSpec.model_validate(storage_blocks[4])
+    SmbActivityEventSpec.model_validate(storage_blocks[5])
+    rdp_system_example = yaml.safe_load(network_event_raw[1])
+    scenario_models.System.model_validate(rdp_system_example["systems"][0])
     StorylineEvent.model_validate(storyline["storyline"][0])  # type: ignore[index]
+    TypeAdapter(list[str]).validate_python(identity_blocks[1]["environment"]["service_accounts"])
 
     smb_schema = TypeAdapter(SmbActivityEventSpec).json_schema()
     assert "operation" in smb_schema["required"]
@@ -338,10 +354,18 @@ def test_specialized_non_event_examples_match_runtime_models() -> None:
     assert "<system>.<share-id>" in share_schema["description"]
     assert "bare share IDs" in share_schema["description"]
 
-    identity_example = _yaml_blocks(REFERENCE_ROOT / "scenario-environment-identities.md")[-1][
-        "environment"
-    ]["network_identities"][0]
+    identity_example = identity_blocks[-1]["environment"]["network_identities"][0]
     assert NetworkIdentity.model_validate(identity_example).id == "partner_portal"
+    assert email_blocks[1]["duration"] == 45.0
+
+
+def test_every_focused_yaml_block_parses() -> None:
+    """Every maintained focused-reference YAML block remains syntactically executable."""
+
+    for name in SCENARIO_REFERENCES:
+        text = _read(REFERENCE_ROOT / f"{name}.md")
+        for block in re.findall(r"```yaml\n(.*?)```", text, flags=re.DOTALL):
+            assert yaml.safe_load(block) is not None
 
 
 def test_smb_reference_requires_compiled_share_refs() -> None:

@@ -9,7 +9,8 @@ This document describes the EvidenceForge scenario file schema, including Phase 
 This is the consolidated human manual. Installed authoring skills use smaller topic references
 under `commands/eforge/references/` so they can load the complete schema and semantics relevant to
 one change without loading this entire document. `eforge info` reports installation- and
-project-dependent inventories; it is not the scenario-schema interface.
+project-dependent inventories. Use `eforge schema <selector> --json` for an exact focused
+installed-version contract and executable minimal example.
 
 ## Contents
 

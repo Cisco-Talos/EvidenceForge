@@ -428,12 +428,18 @@ class ScenarioValidator:
         try:
             world = StorageWorldModel.compile(self.scenario)
         except (KeyError, TypeError, ValueError) as exc:
+            suggestion = "Correct the referenced volumes, generated-share overrides, or IDs."
+            if "explicit storage shares collide with generated preset IDs" in str(exc):
+                suggestion = (
+                    "Replace each colliding explicit share with a share_overrides entry using "
+                    "the exact compiled <system>.<share-id> reference named in the error."
+                )
             self.issues.append(
                 ValidationIssue(
                     severity="error",
                     field_path="environment.storage",
                     message=f"Storage topology cannot be compiled: {exc}",
-                    suggestion="Correct the referenced volumes, generated-share overrides, or IDs.",
+                    suggestion=suggestion,
                 )
             )
             return
@@ -1903,6 +1909,16 @@ class ScenarioValidator:
                     required = requirements.get(spec.type)
                     if required is None or world.hosts[target.hostname].supports(required):
                         continue
+                    if required == HostCapability.RDP_RECEIVER:
+                        suggestion = (
+                            "Use a Windows server/domain_controller target, or add one accepted "
+                            "workstation service: rdp, remote-desktop, remote_desktop, or termservice."
+                        )
+                    else:
+                        suggestion = (
+                            "Use a Linux server/domain_controller target, or add one accepted "
+                            "SSH service: ssh, sshd, or openssh-server."
+                        )
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
@@ -1911,10 +1927,7 @@ class ScenarioValidator:
                                 f"[{event.id}] Event type '{spec.type}' targets "
                                 f"'{target.hostname}', which lacks capability '{required.value}'"
                             ),
-                            suggestion=(
-                                "Declare a compatible target OS/type or add the corresponding "
-                                "server service explicitly"
-                            ),
+                            suggestion=suggestion,
                         )
                     )
 

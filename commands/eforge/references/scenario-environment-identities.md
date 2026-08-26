@@ -71,7 +71,14 @@ and evaluator context; emitted evidence timestamps remain UTC.
 
 ## Accounts and groups
 
-`service_accounts` is a list of additional principal names accepted as storyline actors.
+`service_accounts` is a list of scalar principal-name strings accepted as storyline actors; its
+entries are not user-like objects and cannot contain `name`, `description`, or account metadata:
+
+```yaml
+environment:
+  service_accounts: [svc-backup, svc-monitoring]
+```
+
 `stale_accounts` entries have exactly `username`, `last_active`, and `reason`; they are not active
 users and generate background failed-authentication texture. A stale username cannot collide with
 an active user or service account.
@@ -119,6 +126,8 @@ without preauthentication.
 `dns`. `id` is required; `hosts`, `ips`, and `tags` default to `[]`; `dns` defaults to `true`.
 Every entry must contain at least one host or IP. Hosts are bare hostnames without a scheme, port,
 path, or whitespace; IP values must parse as IPv4 or IPv6. IDs and normalized hosts are unique.
+Use the plural fields `hosts` and `ips`. Do not substitute `name`, `description`, `hostname`,
+`host`, or singular `ip`; those fields are rejected.
 
 ```yaml
 environment:

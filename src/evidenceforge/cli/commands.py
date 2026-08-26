@@ -684,6 +684,107 @@ def _schema_error_guidance(field_path: str, message: str) -> tuple[str, str]:
     return field_path, "Edit this field in its declaring source to match the scenario schema."
 
 
+def _focused_schema_selector(field_path: str) -> str | None:
+    """Map one authored diagnostic path to the narrowest public schema selector."""
+
+    prefixes = (
+        ("environment.network_identities.", "environment.network_identities"),
+        ("environment.service_accounts.", "environment.service_accounts"),
+        ("environment.network.segments.", "environment.network.segments"),
+        ("environment.network.sensors.", "environment.network.sensors"),
+        ("environment.storage.", "environment.storage"),
+        ("environment.email.", "environment.email"),
+        ("environment.proxy.", "environment.proxy"),
+        ("environment.users.", "environment.users"),
+        ("environment.systems.", "environment.systems"),
+        ("time_window.", "time_window"),
+        ("baseline_activity.", "baseline_activity"),
+        ("output.", "output"),
+    )
+    for prefix, selector in prefixes:
+        if field_path.startswith(prefix):
+            return selector
+
+    parts = field_path.split(".")
+    if parts and parts[0] in {"storyline", "red_herrings"} and "events" in parts:
+        event_index = parts.index("events")
+        if len(parts) > event_index + 2:
+            return f"event.{parts[event_index + 2]}"
+    return None
+
+
+def _group_object_shape_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse sibling missing/extra errors into one actionable object-shape issue."""
+
+    from evidenceforge.cli.schema import resolve_schema_contract, schema_contract_payload
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    ungrouped: list[dict[str, Any]] = []
+    for issue in issues:
+        if issue["code"] not in {
+            "scenario.schema.missing",
+            "scenario.schema.extra_forbidden",
+        }:
+            ungrouped.append(issue)
+            continue
+        parent, separator, _field = issue["field_path"].rpartition(".")
+        selector = _focused_schema_selector(issue["field_path"])
+        if not separator or selector is None:
+            ungrouped.append(issue)
+            continue
+        source_path = str(issue.get("source", {}).get("path", ""))
+        grouped.setdefault((parent, selector, source_path), []).append(issue)
+
+    collapsed: list[dict[str, Any]] = []
+    for (parent, selector, _source_path), siblings in grouped.items():
+        if len(siblings) == 1:
+            collapsed.append(siblings[0])
+            continue
+
+        missing = sorted(
+            issue["field_path"].rpartition(".")[2]
+            for issue in siblings
+            if issue["code"] == "scenario.schema.missing"
+        )
+        unsupported = sorted(
+            issue["field_path"].rpartition(".")[2]
+            for issue in siblings
+            if issue["code"] == "scenario.schema.extra_forbidden"
+        )
+        details: list[str] = []
+        if missing:
+            details.append("missing required fields: " + ", ".join(missing))
+        if unsupported:
+            details.append("unsupported fields: " + ", ".join(unsupported))
+
+        contract = resolve_schema_contract(selector)
+        allowed = (
+            sorted(schema_contract_payload(contract)["fields"]) if contract is not None else []
+        )
+        first = siblings[0]
+        collapsed.append(
+            {
+                **first,
+                "code": "scenario.schema.object_shape",
+                "field_path": parent,
+                "message": f"Object does not match {selector}: " + "; ".join(details),
+                "suggestion": (
+                    ("Use only these fields: " + ", ".join(allowed) + ". ") if allowed else ""
+                )
+                + f"Inspect the exact installed contract with `eforge schema {selector} --json`.",
+                "provenance": {
+                    **first.get("provenance", {}),
+                    "field_path": parent,
+                },
+            }
+        )
+
+    return sorted(
+        [*ungrouped, *collapsed],
+        key=lambda issue: (str(issue.get("field_path", "")), str(issue.get("code", ""))),
+    )
+
+
 def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[str, Any]]:
     """Convert a compilation failure and any chained Pydantic details into issues."""
 
@@ -715,6 +816,12 @@ def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[
                     field_path,
                     error["msg"],
                 )
+                selector = _focused_schema_selector(field_path)
+                if diagnostic_editable and selector is not None:
+                    authored_suggestion += (
+                        " Inspect the exact installed contract with "
+                        f"`eforge schema {selector} --json`."
+                    )
                 origin = _closest_diagnostic_origin(diagnostic_origins, field_path)
                 source: dict[str, str]
                 provenance: dict[str, Any]
@@ -741,6 +848,8 @@ def _exception_issue_payloads(exc: Exception, scenario_file: Path) -> list[dict[
                         "provenance": provenance,
                     }
                 )
+            if diagnostic_editable:
+                return _group_object_shape_issues(issues)
             return issues
         cause = cause.__cause__
 
@@ -813,7 +922,8 @@ def _validation_json_payload(
     if storage is not None:
         payload["storage"] = storage
     if not valid and issues:
-        payload["error"] = issues[0]["message"]
+        first_error = next(issue for issue in issues if issue.get("severity") == "error")
+        payload["error"] = first_error["message"]
     return payload
 
 
@@ -2218,6 +2328,45 @@ def info(
         print(format_json(data))
     else:
         console.print(format_human_readable(data))
+
+
+@app.command("schema")
+def scenario_schema(
+    selector: str = typer.Argument(
+        ...,
+        help=(
+            "Focused authored-schema selector, such as environment.network_identities "
+            "or event.email_read."
+        ),
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON for machine parsing"),
+) -> None:
+    """Show one focused installed-version scenario authoring contract."""
+
+    from evidenceforge.cli.schema import (
+        resolve_schema_contract,
+        schema_contract_payload,
+        schema_selectors,
+    )
+
+    contract = resolve_schema_contract(selector)
+    if contract is None:
+        message = f"Unknown schema selector: {selector}. Known selectors: " + ", ".join(
+            schema_selectors()
+        )
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    payload = schema_contract_payload(contract)
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console.print(f"[bold blue]EvidenceForge Scenario Schema[/bold blue]: {contract.selector}")
+    console.print_json(data=payload)
 
 
 @app.command("validate-config")

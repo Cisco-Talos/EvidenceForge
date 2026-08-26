@@ -49,6 +49,19 @@ Fields: `type`, optional `source_ip`, `ids_alerts`, `technique`, and `descriptio
 bundle owns the source client, TCP/3389, target Type 10 session, and teardown; do not add an
 independent Type 10 `logon` or port-3389 `connection` for the same session.
 
+The target must be Windows and RDP-capable. Windows servers and domain controllers receive that
+capability by type. A Windows workstation must declare at least one accepted service: `rdp`,
+`remote-desktop`, `remote_desktop`, or `termservice`.
+
+```yaml
+systems:
+  - hostname: WS-RDP-01
+    ip: "10.0.1.20"
+    os: "Windows 11"
+    type: workstation
+    services: [termservice]
+```
+
 ## `dhcp_lease`
 
 Fields: `type`, optional `mac_address`, `requested_ip`, `ids_alerts`, `technique`, and
