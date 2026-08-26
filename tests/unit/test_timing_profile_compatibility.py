@@ -118,6 +118,21 @@ def _legacy_authored(*, shared_profiles: bool = False) -> dict[str, Any]:
     }
 
 
+def _assert_legacy_alias_warnings(caught: list[warnings.WarningMessage]) -> None:
+    """Assert one explicit migration warning for each supported legacy timing alias."""
+
+    assert len(caught) == 2
+    assert all(warning.category is EvidenceForgeDeprecationWarning for warning in caught)
+    messages = [str(warning.message) for warning in caught]
+    assert (
+        sum("clock_skew_us" in message and "clock_offset_us" in message for message in messages)
+        == 1
+    )
+    assert (
+        sum("path_delay_us" in message and "route_delay_us" in message for message in messages) == 1
+    )
+
+
 def _return_value_loader(
     value: dict[str, Any],
     calls: list[int] | None = None,
@@ -3742,9 +3757,13 @@ def test_callback_coordinator_rebinding_uses_only_anchor_and_retries(
     assert current_effective_config() is None
     assert not config_provider._CONFIG_SCOPE_LEASE.owned_by_current_thread()
 
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", EvidenceForgeDeprecationWarning)
         recovered = invoke()
+    if callback_kind == "warning":
+        _assert_legacy_alias_warnings(caught)
+    else:
+        assert caught == []
     assert isinstance(recovered, Mapping)
 
 
@@ -3844,9 +3863,13 @@ def test_callback_ledger_rebinding_is_callback_free_and_retryable(
     assert current_effective_config() is None
     assert not config_provider._CONFIG_SCOPE_LEASE.owned_by_current_thread()
 
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", EvidenceForgeDeprecationWarning)
         recovered = invoke()
+    if callback_kind == "warning":
+        _assert_legacy_alias_warnings(caught)
+    else:
+        assert caught == []
     assert isinstance(recovered, Mapping)
 
 
@@ -3985,13 +4008,14 @@ def test_coordinator_protocol_ignores_callback_rebound_class_dispatch(
     assert current_effective_config() is None
     assert not config_provider._CONFIG_SCOPE_LEASE.owned_by_current_thread()
 
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", EvidenceForgeDeprecationWarning)
         with effective_config_scope(
             _effective_timing_config(),
             refresh_legacy_globals=False,
         ):
             assert load_timing_profiles()
+    _assert_legacy_alias_warnings(caught)
 
 
 @pytest.mark.parametrize("removed_target", ["module", "slot"])
