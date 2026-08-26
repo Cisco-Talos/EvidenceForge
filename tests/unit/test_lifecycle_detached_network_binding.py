@@ -1444,6 +1444,7 @@ def test_prepared_network_authentication_is_repeatable_and_read_only() -> None:
     authority.acknowledge_prepared_network_transaction(root, result)
 
 
+@pytest.mark.soak
 def test_production_handoff_retires_capacity_one_carrier_for_repeated_transactions() -> None:
     (
         authority,
@@ -1661,6 +1662,7 @@ def _publish_production_connection(
     )
 
 
+@pytest.mark.soak
 @pytest.mark.parametrize("family", ("ordinary", "http", "proxy"))
 def test_production_planner_retires_capacity_one_carrier_for_one_thousand_handoffs(
     family: str,

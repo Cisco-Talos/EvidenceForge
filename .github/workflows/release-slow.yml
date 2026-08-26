@@ -36,7 +36,7 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run slow comprehensive tests without coverage
-        run: uv run pytest --include-slow -m slow --no-cov --durations=20
+        run: uv run pytest -m slow --no-cov --durations=20
 
   release-required:
     name: Required Release CI

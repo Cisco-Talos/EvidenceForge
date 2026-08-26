@@ -56,6 +56,7 @@ from evidenceforge.generation.source_finalization import SourceFinalizationCoord
 from evidenceforge.generation.source_timing import SourceTimingPlanner, SourceTimingPreparation
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
+    SshChannelClosure,
     SshChannelPreparedCommit,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -64,6 +65,8 @@ from evidenceforge.generation.world_model import SessionPlan, WorldPlanner
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import reset_thread_rng
+
+pytestmark = pytest.mark.slow
 
 _START = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
 _SSH_AUTH_TIMING_RELATIONSHIPS = (
@@ -602,8 +605,8 @@ def test_real_ssh_caller_materializes_fully_suppressed_warmup_session(
         fixture.target,
         _START + timedelta(seconds=6),
         logon_id,
-        "/usr/bin/sleep",
-        "sleep 30",
+        "/usr/bin/tail",
+        "tail -f /var/log/syslog",
         parent_pid=shell_pid,
         suppress_command_file_effect=True,
     )
@@ -2075,6 +2078,100 @@ def test_exact_close_converges_after_public_ssh_application_watermark(
     fixture.generator.assert_ssh_session_lifecycles_drained()
     _assert_no_dispatcher_residue(fixture.generator.dispatcher)
     fixture.close_and_read()
+
+
+@pytest.mark.parametrize("retry", (False, True), ids=("direct", "retry"))
+def test_multi_hour_watermark_transfers_ssh_proof_without_rendering_lifecycle(
+    retry: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long watermark retains retryable proof while the action remains the renderer."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    request = replace(
+        fixture.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    SshSessionActionBundle(request, fixture.generator).execute()
+    manager = fixture.generator._ssh_channel_manager
+    registry = manager.application_registry
+    continuation = fixture.generator._pending_ssh_session_closures[0]
+    session = manager.find_by_transport(continuation.transaction.stable_id)
+    assert session is not None
+    target_session = fixture.state.get_session(session.binding.logon_id)
+    assert target_session is not None and target_session.transport_pid is not None
+    receiver_pid = target_session.transport_pid
+    frontier = continuation.transaction.closed_at + timedelta(hours=3)
+    adoption_attempts = 0
+    lifecycle_attempts = 0
+    original_adopt = _PreparedSshCloseContinuation.adopt_application_retirement
+
+    def adopt_with_retry(
+        prepared: _PreparedSshCloseContinuation,
+        closure: SshChannelClosure,
+    ) -> None:
+        nonlocal adoption_attempts
+        adoption_attempts += 1
+        if retry and adoption_attempts == 1:
+            raise OSError("injected SSH closure adoption failure")
+        original_adopt(prepared, closure)
+
+    def forbid_lifecycle_rendering(*_args: object, **_kwargs: object) -> None:
+        nonlocal lifecycle_attempts
+        lifecycle_attempts += 1
+        raise AssertionError("watermark rendered an SSH terminal lifecycle")
+
+    with monkeypatch.context() as watermark_patch:
+        watermark_patch.setattr(
+            _PreparedSshCloseContinuation,
+            "adopt_application_retirement",
+            adopt_with_retry,
+        )
+        watermark_patch.setattr(
+            ActivityGenerator,
+            "_execute_exact_ssh_close_continuation",
+            forbid_lifecycle_rendering,
+        )
+        if retry:
+            with pytest.raises(OSError, match="SSH closure adoption failure"):
+                fixture.generator.advance_application_channel_watermark(frontier)
+            failed_census = fixture.generator.ssh_close_journal_census()
+            assert failed_census.manager_pending == 1
+            assert failed_census.exact_pending == 1
+            assert registry.get(session.channel_id) is not None
+
+        fixture.generator.advance_application_channel_watermark(frontier)
+        fixture.generator.advance_application_channel_watermark(frontier)
+
+    assert lifecycle_attempts == 0
+    assert adoption_attempts == (2 if retry else 1)
+    assert manager.session_view(session.channel_id) is None
+    assert registry.get(session.channel_id) is None
+    retained_census = fixture.generator.ssh_close_journal_census()
+    assert retained_census.manager_pending == 0
+    assert retained_census.exact_pending == 1
+    assert retained_census.total_pending == 1
+    assert fixture.state.get_session(target_session.logon_id) is not None
+    assert fixture.state.get_process(fixture.target.hostname, receiver_pid) is not None
+
+    fixture.generator.finalize_ssh_session_lifecycles(frontier)
+
+    assert fixture.state.get_session(target_session.logon_id) is None
+    assert fixture.state.get_process(fixture.target.hostname, receiver_pid) is None
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    fixture.generator.assert_ssh_session_lifecycles_drained()
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    ecar_rows, zeek_rows = fixture.close_and_read()
+    target_rows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == fixture.target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_rows] == ["LOGIN", "LOGOUT"]
+    assert len(zeek_rows) == 1
 
 
 @pytest.mark.parametrize("threaded", (False, True), ids=("direct", "threaded"))
@@ -4348,8 +4445,8 @@ def _open_exact_ssh_receiver_descendant_graph(
         fixture.target,
         _START + timedelta(seconds=6),
         logon_id,
-        "/usr/bin/sleep",
-        "sleep 30",
+        "/usr/bin/tail",
+        "tail -f /var/log/syslog &",
         parent_pid=shell_pid,
         suppress_command_file_effect=True,
     )

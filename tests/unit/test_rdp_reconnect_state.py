@@ -653,7 +653,7 @@ def test_exact_logical_lookup_inspects_one_routed_candidate() -> None:
     assert after_hit.lookup_candidates_inspected - before.lookup_candidates_inspected == 1
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_one_million_exact_affinity_queries_keep_one_candidate_bound() -> None:
     """A million routed reads each inspect exactly one of 1,000 affinities."""
 
@@ -722,6 +722,7 @@ def test_concurrent_one_four_eight_worker_digests_match() -> None:
     assert _concurrency_digest(1) == _concurrency_digest(4) == _concurrency_digest(8)
 
 
+@pytest.mark.slow
 def test_public_state_digest_ignores_python_hash_seed() -> None:
     """Semantic sharding and state transitions must not depend on hash randomization."""
 
@@ -863,6 +864,7 @@ def _duration_checkpoints(
     return manager, checkpoints
 
 
+@pytest.mark.soak
 def test_thirty_day_unique_session_churn_plateaus_without_completed_history() -> None:
     """Fixed-rate unique-key churn plateaus after shards and reusable slots warm."""
 

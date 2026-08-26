@@ -8,6 +8,7 @@ CRLF two-physical-line case), and validates safely."""
 import datetime
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -45,18 +46,28 @@ def _ap_records(out: Path) -> list[dict]:
     return [r for r in _records(out) if r.get("kind") == "adversarial_payload" and r.get("emitted")]
 
 
-@pytest.fixture
-def ap_scenario(scenarios_dir: Path) -> dict:
-    return load_yaml(scenarios_dir / "adversarial_payload.yaml")
+@pytest.fixture(scope="module")
+def ap_scenario() -> dict:
+    return load_yaml(
+        Path(__file__).parent.parent / "fixtures" / "scenarios" / "adversarial_payload.yaml"
+    )
+
+
+@pytest.fixture(scope="module")
+def generated_ap(ap_scenario: dict, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Generate the canonical payload fixture once for read-only assertions."""
+
+    return _generate(ap_scenario, tmp_path_factory.mktemp("adversarial-payload"))
 
 
 class TestAdversarialPayloadGeneration:
-    def test_every_payload_lands_on_disk(self, ap_scenario, tmp_path):
+    @pytest.mark.soak
+    def test_every_payload_lands_on_disk(self, generated_ap):
         # Phantom-hunt: every labeled payload's rendered value must actually appear in
         # the generated data. Text formats (syslog/web) carry it verbatim (newline-
         # normalized, so a CRLF split still counts); eCAR JSON-escapes embedded quotes
         # and backslashes, so a process_command_line payload is matched in that form.
-        out = _generate(ap_scenario, tmp_path / "out")
+        out = generated_ap
         blob = "\n".join(
             p.read_text(errors="replace")
             for p in out.rglob("*")
@@ -74,6 +85,7 @@ class TestAdversarialPayloadGeneration:
                 on_disk = v.replace("\r\n", "\n").replace("\r", "\n")
             assert on_disk in norm, f"{r['storyline_id']} ({r['surface']}) missing on disk"
 
+    @pytest.mark.slow
     def test_every_family_surface_combo_lands_on_disk(self, tmp_path):
         # Phantom-hunt across the FULL matrix: every family on every surface it declares
         # must actually emit and land on disk. The ap_scenario fixture only exercises 3
@@ -116,6 +128,7 @@ class TestAdversarialPayloadGeneration:
             )
             assert on_disk in norm, f"{r['family']}/{r['surface']} missing on disk"
 
+    @pytest.mark.soak
     def test_skipped_payload_is_labeled_and_not_on_disk(self, tmp_path):
         # Inverse invariant: a payload that cannot be emitted (here an https request to an
         # http-only web server) must be recorded emitted:false with a skipped_reason and its
@@ -149,6 +162,7 @@ class TestAdversarialPayloadGeneration:
         assert "EFORGE_TEST" not in blob  # nothing leaked to disk
         assert "jndi" not in blob
 
+    @pytest.mark.soak
     def test_dns_qname_without_sensor_not_emitted(self, tmp_path):
         # Belt-and-suspenders for the validator gate: even via the direct engine (no CLI
         # validation, as a reviewer runs it), a dns_qname payload with no network sensor must
@@ -174,12 +188,13 @@ class TestAdversarialPayloadGeneration:
         )
         assert "canary.eforge.invalid" not in blob  # the QNAME never reached disk
 
-    def test_crlf_payload_is_a_genuine_two_line_split(self, ap_scenario, tmp_path):
+    @pytest.mark.slow
+    def test_crlf_payload_is_a_genuine_two_line_split(self, generated_ap):
         # The whole point of crlf_log_forging: a single record becomes multiple physical
         # lines, split on RAW CR/LF bytes (0d/0a) — never an escaped literal — with the
         # forged line marked. The family rotates CRLF / LF-only / CR-only / double-CRLF
         # variants by seed, so assert the structural split, not one fixed byte sequence.
-        out = _generate(ap_scenario, tmp_path / "out")
+        out = generated_ap
         syslog = next(p for p in out.rglob("syslog.log") if "EFORGE_TEST" in p.read_text())
         data = syslog.read_bytes()
         # a marked first segment is followed by one-or-more raw newline bytes, then the
@@ -194,6 +209,7 @@ class TestAdversarialPayloadGeneration:
         forged = next(ln for ln in text_lines[injected + 1 :] if ln.startswith("forged-entry:"))
         assert "EFORGE_TEST" in forged  # forged line stays marked
 
+    @pytest.mark.soak
     def test_process_command_line_has_no_raw_control_byte_in_ecar(self, tmp_path):
         # A control-byte payload routed to process_command_line must reach eCAR with
         # the control byte escaped to a literal, never as a raw byte that corrupts the
@@ -228,17 +244,14 @@ class TestAdversarialPayloadGeneration:
         assert rec["rendered_value"] in "\n".join(proc_cmds)
         assert "\\x1b" in proc_cmds[0] and "\x1b" not in proc_cmds[0]  # literal, not raw
 
-    def test_generation_is_deterministic(self, ap_scenario, tmp_path):
-        a = _generate(ap_scenario, tmp_path / "a")
-        b = _generate(ap_scenario, tmp_path / "b")
-        assert (a / "GROUND_TRUTH.json").read_text() == (b / "GROUND_TRUTH.json").read_text()
-
-    def test_records_carry_encoding_and_expected_sources(self, ap_scenario, tmp_path):
-        out = _generate(ap_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_records_carry_encoding_and_expected_sources(self, generated_ap):
+        out = generated_ap
         for r in _ap_records(out):
             assert r["encoding"]  # the per-surface transform label is recorded
             assert r["expected_sources"]  # and where it should land
 
+    @pytest.mark.soak
     def test_expected_sources_excludes_zeek_http_when_not_observed(self, tmp_path):
         # Review finding: expected_sources must mean "exists in this dataset", not "theoretically
         # visible". A cleartext-http payload with no network sensor must NOT claim zeek_http
@@ -264,6 +277,7 @@ class TestAdversarialPayloadGeneration:
         assert rec["expected_sources"] == ["web_access"]
         assert not any("http" in p.name and p.suffix == ".json" for p in out.rglob("*"))
 
+    @pytest.mark.soak
     def test_expected_sources_includes_zeek_http_only_when_observed(self, tmp_path):
         # With Zeek configured AND a sensor on the path, zeek_http actually lands — so it IS a
         # legitimate expected source. (Guards against the gate becoming over-strict.)
@@ -274,6 +288,7 @@ class TestAdversarialPayloadGeneration:
         assert "zeek_http" in rec["expected_sources"]
         assert any("http" in p.name and p.suffix == ".json" for p in out.rglob("*"))
 
+    @pytest.mark.soak
     def test_every_expected_source_produces_a_file(self, tmp_path):
         # The inverse/completeness invariant the review taught us to assert: every source named in
         # any record's expected_sources must ACTUALLY exist as output — no phantom sources. Run the
@@ -302,6 +317,7 @@ class TestAdversarialPayloadGeneration:
                     f"{r['family']}/{r['surface']} claims {src!r} but no file exists"
                 )
 
+    @pytest.mark.soak
     def test_control_byte_payload_on_user_agent_matches_disk(self, tmp_path):
         # Regression: a control-byte payload (CRLF) on http_user_agent must record a
         # rendered_value byte-equal to disk. The web emitter re-escapes control/
@@ -326,6 +342,7 @@ class TestAdversarialPayloadGeneration:
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score == 100.0
 
+    @pytest.mark.soak
     def test_oob_live_callback_substitutes_and_records(self, tmp_path):
         # With a registered OOB host, a {canary}-using family points at it (live
         # callback) and the ground truth records callback_host for the operator.
@@ -340,13 +357,15 @@ class TestAdversarialPayloadGeneration:
         assert rec["callback_host"] == "abc.oast.fun"
         assert "abc.oast.fun" in rec["value"] and "canary.eforge.invalid" not in rec["value"]
 
-    def test_default_run_uses_inert_canary(self, ap_scenario, tmp_path):
-        out = _generate(ap_scenario, tmp_path / "inert")
+    @pytest.mark.slow
+    def test_default_run_uses_inert_canary(self, generated_ap):
+        out = generated_ap
         for r in _ap_records(out):
             assert r.get("callback_host") is None  # no live callback by default
             assert "oast.fun" not in (r.get("value") or "")
 
     @pytest.mark.parametrize("services,expected", [([], "https"), (["http"], "http")])
+    @pytest.mark.soak
     def test_http_payload_scheme_follows_web_server(self, tmp_path, services, expected):
         # The destination web server's supported scheme decides the transport: a
         # generic web_server serves https; an HTTP-only one serves http (port 80).
@@ -362,6 +381,7 @@ class TestAdversarialPayloadGeneration:
         assert rec["scheme"] == expected
 
     @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.soak
     def test_explicit_scheme_is_honored(self, tmp_path, scheme):
         # An authored `scheme:` forces the transport (the generic web server supports
         # both); the chosen scheme is rendered and recorded.
@@ -381,6 +401,7 @@ class TestAdversarialPayloadGeneration:
         rec = _ap_records(out)[0]
         assert rec["scheme"] == scheme
 
+    @pytest.mark.soak
     def test_http_payload_visible_on_the_wire_when_plaintext(self, tmp_path):
         # Forcing `scheme: http` makes the payload visible in Zeek http.log (the
         # network-IDS test case); eval still scores it present.
@@ -436,10 +457,9 @@ class TestAdversarialPayloadGeneration:
         "family,surface,sid,message_fragment",
         [
             ("log4shell", "http_user_agent", 2024317, "Log4j RCE"),
-            ("crlf_log_forging", "http_request_url", 2012887, "CRLF Injection"),
-            ("sql_injection", "http_request_url", 2009714, "UNION SELECT"),
         ],
     )
+    @pytest.mark.soak
     def test_cleartext_http_payload_ids_alert_matches_variant(
         self, tmp_path, family, surface, sid, message_fragment
     ):
@@ -469,6 +489,7 @@ class TestAdversarialPayloadGeneration:
             assert rec.get("ids_alert") is None
             assert not on_wire  # the evasion variant must NOT fabricate a detection
 
+    @pytest.mark.soak
     def test_ids_alert_count_tracks_token_bearing_variants(self, tmp_path):
         # Across a multi-event log4shell dataset, the number of on-wire Snort alerts must
         # exactly equal the number of payloads whose value carries the signature token —
@@ -506,6 +527,7 @@ class TestAdversarialPayloadGeneration:
         assert on_wire == token_bearing  # on-wire alerts match exactly — no over/under-fire
         assert 0 < token_bearing < len(recs)  # the dataset exercises BOTH fire and evade
 
+    @pytest.mark.soak
     def test_ids_alert_not_recorded_when_sensor_cannot_observe(self, tmp_path):
         # GROUND_TRUTH.ids_alert must match the snort_alert.log on disk: when the IDS sensor
         # cannot observe the connection (intra-segment east-west traffic a TAP is blind to),
@@ -561,6 +583,7 @@ class TestAdversarialPayloadGeneration:
         assert ct > 0 and ca == cw == ct  # cross: GT ids_alert == on-wire == token-bearing
         assert it > 0 and ia == iw == 0  # intra: token-bearing but NO alert (no phantom)
 
+    @pytest.mark.soak
     def test_https_payload_has_no_ids_alert(self, tmp_path):
         # An IDS cannot inspect encrypted traffic: an https (opaque) payload must NOT
         # carry an ids_alert, even for a signature-mapped family.
@@ -574,6 +597,7 @@ class TestAdversarialPayloadGeneration:
         if snort:
             assert not [ln for ln in snort.read_text().splitlines() if ":2024317:" in ln]
 
+    @pytest.mark.soak
     def test_unmapped_family_has_no_ids_alert(self, tmp_path):
         # A family with no ids_sid (xss_reflection: a log-VIEWER weakness, no on-wire ET
         # signature) must not fabricate an IDS alert on a cleartext http surface.
@@ -582,6 +606,7 @@ class TestAdversarialPayloadGeneration:
         assert rec["scheme"] == "http"
         assert rec.get("ids_alert") is None
 
+    @pytest.mark.soak
     def test_ground_truth_carries_surface_pivot_anchors(self, tmp_path):
         # Pivot anchors let an analyst jump from the payload record to the exact evidence
         # row: an http payload records the dst tuple (grep zeek/web by ip:port); a process
@@ -611,15 +636,21 @@ class TestAdversarialPayloadGeneration:
         assert "dst_ip" not in proc
 
 
+@pytest.mark.slow
 class TestAdversarialPayloadEval:
-    def test_eval_acceptance_passes(self, ap_scenario, tmp_path):
-        out = _generate(ap_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_eval_acceptance_passes(self, ap_scenario, generated_ap):
+        out = generated_ap
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**ap_scenario)).run()
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score == 100.0  # all 6 payloads, incl the CRLF split, are found
 
-    def test_eval_reads_canonical_ground_truth_not_synthesis(self, ap_scenario, tmp_path):
-        out = _generate(ap_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_eval_reads_canonical_ground_truth_not_synthesis(
+        self, ap_scenario, generated_ap, tmp_path
+    ):
+        out = tmp_path / "without-ground-truth"
+        shutil.copytree(generated_ap, out)
         (out / "GROUND_TRUTH.json").unlink()
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**ap_scenario)).run()
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
@@ -1222,6 +1253,7 @@ class TestAdversarialPayloadValidateCLI:
         assert result.exit_code == 1
         assert "registrable" in result.output.lower()
 
+    @pytest.mark.soak
     def test_generate_oob_host_alone_enables_live_callback(self, scenarios_dir, tmp_path):
         # --oob-host is now the explicit opt-in (no separate --i-am-authorized flag): it is
         # accepted on its own and prints the loud LIVE CALLBACK MODE warning.

@@ -41,6 +41,8 @@ from evidenceforge.generation.activity import (
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture
 def state_manager():

@@ -83,13 +83,16 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
-    "slow: Tests requiring large dataset generation (100+ users, minutes to run)",
+    "slow: Extended release-gate tests excluded from the routine inner-loop suite",
+    "soak: Exceptional scale, duration, exhaustive-matrix, or full-demo diagnostics",
     "external_parser: Tests that run third-party parser containers",
 ]
 addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
+    "-m",
+    "not slow and not soak",
 ]
 filterwarnings = [
     "error",

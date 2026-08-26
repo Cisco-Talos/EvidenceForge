@@ -1023,6 +1023,8 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
 
+For Linux process command lines, an exact two-token `sleep <duration>` after shell tokenization models the requested foreground lifetime. `<duration>` may be an unsigned integer or decimal number of seconds, including `30`, `30.5`, and `.5`; signs, suffixes such as `30s`, exponents, non-finite values, malformed quoting, and extra arguments use the existing short fallback lifetime. Modeled numeric sleeps are capped at 86,400 seconds. When the process belongs to a closing SSH or other bounded session, its independent termination is clamped at least 1,425 ms before the session owner closes so the maximum shell-release jitter fits; an impossible action-owned interval is rejected before mutation, while compatibility generation leaves termination to the session owner.
+
 #### `smb_activity`
 
 Use `smb_activity` for file/share semantics. A generic `connection` on TCP/445 is

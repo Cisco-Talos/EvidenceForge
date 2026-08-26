@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from evidenceforge.composition import compile_scenario
@@ -31,6 +32,8 @@ from evidenceforge.generation.activity.traffic_profiles import (
     get_persona_connections,
     load_traffic_profiles,
 )
+
+pytestmark = pytest.mark.slow
 
 
 def _profile(terms: list[str]) -> dict:

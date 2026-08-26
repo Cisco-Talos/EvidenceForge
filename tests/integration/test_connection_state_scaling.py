@@ -24,7 +24,11 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from evidenceforge.generation.state_manager import StateManager
+
+pytestmark = pytest.mark.soak
 
 
 def test_45_day_connection_state_remains_bounded() -> None:

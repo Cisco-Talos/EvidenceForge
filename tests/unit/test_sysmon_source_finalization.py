@@ -58,6 +58,8 @@ from evidenceforge.models import (
 from evidenceforge.output_targets import OutputTarget
 from tests.network_factories import network_plan
 
+pytestmark = pytest.mark.slow
+
 HOST = "WIN-TEST-01.corp.local"
 BASE_TIME = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
 

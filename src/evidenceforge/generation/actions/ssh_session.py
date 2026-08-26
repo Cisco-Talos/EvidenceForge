@@ -78,7 +78,10 @@ from evidenceforge.generation.activity.timing_profiles import (
     ssh_authentication_timing_support,
     sysmon_envelope_timing,
 )
-from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.application_channels import (
+    ApplicationChannelRegistry,
+    ApplicationChannelRetirementProof,
+)
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.deferred_session_composition import (
     DeferredSessionCompositionCoordinator,
@@ -1599,6 +1602,7 @@ class _SshApplicationRetirementBinding:
         "_lock",
         "_prepared",
         "_retired",
+        "_retirement_proof",
         "_session",
         "_transaction",
     )
@@ -1611,6 +1615,7 @@ class _SshApplicationRetirementBinding:
         self._application_identity: ApplicationChannelIdentity | None = None
         self._expected_closed_at: datetime | None = None
         self._expected_close_reason: str | None = None
+        self._retirement_proof: ApplicationChannelRetirementProof | None = None
         self._retired = False
 
     def claim(self, prepared: _PreparedSshCloseContinuation) -> None:
@@ -1713,7 +1718,13 @@ class _SshApplicationRetirementBinding:
     def _bound_facts(
         self,
         prepared: _PreparedSshCloseContinuation,
-    ) -> tuple[SshSessionView, ApplicationChannelIdentity, datetime | None, str | None]:
+    ) -> tuple[
+        SshSessionView,
+        ApplicationChannelIdentity,
+        datetime | None,
+        str | None,
+        ApplicationChannelRetirementProof | None,
+    ]:
         """Return immutable facts without invoking an external owner under the cell lock."""
 
         with self._lock:
@@ -1726,6 +1737,7 @@ class _SshApplicationRetirementBinding:
                 self._application_identity,
                 self._expected_closed_at,
                 self._expected_close_reason,
+                self._retirement_proof,
             )
 
     def _retain_expected_close(
@@ -1768,6 +1780,7 @@ class _SshApplicationRetirementBinding:
         closure: SshChannelClosure,
         session: SshSessionView,
         expected_closed_at: datetime,
+        expected_reason: str,
     ) -> None:
         """Authenticate the lock-free SSH manager return against the retained sidecar."""
 
@@ -1780,11 +1793,74 @@ class _SshApplicationRetirementBinding:
             or closure.principal != session.binding.principal
             or closure.transport_id != session.transport.transport_id
             or closure.closed_at != expected_closed_at
-            or closure.reason != "bundle_close"
+            or closure.reason != expected_reason
             or closure.source_process != session.transport.source_process
             or closure.receiver_process != session.transport.receiver_process
+            or type(closure.retirement_proof) is not ApplicationChannelRetirementProof
         ):
             raise StateError("Exact SSH application retirement returned a forged closure")
+
+    def _retain_retirement_proof(
+        self,
+        prepared: _PreparedSshCloseContinuation,
+        session: SshSessionView,
+        application_identity: ApplicationChannelIdentity,
+        proof: ApplicationChannelRetirementProof,
+        *,
+        expected_closed_at: datetime,
+        expected_reason: str,
+    ) -> None:
+        """Retain one authentic stateless terminal proof on the exact close owner."""
+
+        prepared.require_application_owner_shape()
+        registry = prepared.application_registry_owner
+        snapshot = proof.snapshot
+        if (
+            not registry.authenticates_retirement_proof(proof)
+            or snapshot.identity != application_identity
+            or snapshot.identity.channel_id != session.channel_id
+            or snapshot.closed_at != expected_closed_at
+            or snapshot.close_reason != expected_reason
+        ):
+            raise StateError("Exact SSH shared application retirement proof is not authentic")
+        with self._lock:
+            if self._prepared is not prepared:
+                raise StateError("Exact SSH close crossed its application retirement owner")
+            if self._retirement_proof is None:
+                self._retirement_proof = proof
+            elif self._retirement_proof != proof:
+                raise StateError("Exact SSH application retirement proof changed")
+            self._retired = True
+
+    def adopt(
+        self,
+        prepared: _PreparedSshCloseContinuation,
+        closure: SshChannelClosure,
+    ) -> None:
+        """Adopt one manager-produced closure without rendering terminal evidence."""
+
+        prepared.require_application_owner_shape()
+        (
+            session,
+            application_identity,
+            retained_close,
+            retained_reason,
+            _retained_proof,
+        ) = self._bound_facts(prepared)
+        if prepared.ssh_manager_owner.session_view(session.channel_id) is not None:
+            raise StateError("SSH manager closure was adopted before sidecar retirement")
+        expected_close = closure.closed_at if retained_close is None else retained_close
+        expected_reason = closure.reason if retained_reason is None else retained_reason
+        self._retain_expected_close(prepared, expected_close, expected_reason)
+        self._require_closure(closure, session, expected_close, expected_reason)
+        self._retain_retirement_proof(
+            prepared,
+            session,
+            application_identity,
+            closure.retirement_proof,
+            expected_closed_at=expected_close,
+            expected_reason=expected_reason,
+        )
 
     def _require_retirement_proof(
         self,
@@ -1798,16 +1874,17 @@ class _SshApplicationRetirementBinding:
             application_identity,
             expected_closed_at,
             expected_close_reason,
+            retirement_proof,
         ) = self._bound_facts(prepared)
-        if expected_closed_at is None or expected_close_reason is None:
+        if expected_closed_at is None or expected_close_reason is None or retirement_proof is None:
             raise StateError("Exact SSH application retirement has no retained close intent")
         manager = prepared.ssh_manager_owner
         registry = prepared.application_registry_owner
         if manager.session_view(session.channel_id) is not None:
             raise StateError("Exact SSH application sidecar remains open after retirement")
-        snapshot = registry.get(session.channel_id)
+        snapshot = retirement_proof.snapshot
         if (
-            type(snapshot) is not ApplicationChannelSnapshot
+            not registry.authenticates_retirement_proof(retirement_proof)
             or snapshot.identity != application_identity
             or snapshot.closed_at != expected_closed_at
             or snapshot.close_reason != expected_close_reason
@@ -1823,7 +1900,13 @@ class _SshApplicationRetirementBinding:
         """Retire the bound original SSH owner idempotently outside progress locks."""
 
         prepared.require_application_owner_shape()
-        session, application_identity, retained_close, retained_reason = self._bound_facts(prepared)
+        (
+            session,
+            application_identity,
+            retained_close,
+            retained_reason,
+            retained_proof,
+        ) = self._bound_facts(prepared)
         manager = prepared.ssh_manager_owner
         registry = prepared.application_registry_owner
         current_sidecar = manager.session_view(session.channel_id)
@@ -1846,27 +1929,40 @@ class _SshApplicationRetirementBinding:
             )
             if type(closure) is not SshChannelClosure:
                 raise StateError("Exact SSH application retirement returned no closure")
-            self._require_closure(closure, session, expected_close)
-        elif retained_close is None:
+            self._require_closure(closure, session, expected_close, "bundle_close")
+            self._retain_retirement_proof(
+                prepared,
+                session,
+                application_identity,
+                closure.retirement_proof,
+                expected_closed_at=expected_close,
+                expected_reason="bundle_close",
+            )
+        elif retained_proof is None:
             if (
                 type(snapshot) is not ApplicationChannelSnapshot
                 or snapshot.identity != application_identity
                 or snapshot.closed_at is None
-                or snapshot.close_reason != "deadline"
+                or not snapshot.close_reason
             ):
-                raise StateError("Exact SSH application session disappeared before retirement")
-            expected_close = self._expected_close_time(snapshot, requested_close)
-            if snapshot.closed_at != expected_close:
-                raise StateError("Exact SSH application deadline retirement changed its close time")
-            self._retain_expected_close(prepared, expected_close, "deadline")
-        elif retained_reason is None:
+                raise StateError("Exact SSH shared application retirement is not proven")
+            expected_close = snapshot.closed_at if retained_close is None else retained_close
+            expected_reason = snapshot.close_reason if retained_reason is None else retained_reason
+            if snapshot.closed_at != expected_close or snapshot.close_reason != expected_reason:
+                raise StateError("Exact SSH application retirement changed its terminal facts")
+            self._retain_expected_close(prepared, expected_close, expected_reason)
+            self._retain_retirement_proof(
+                prepared,
+                session,
+                application_identity,
+                registry.retirement_proof(session.channel_id),
+                expected_closed_at=expected_close,
+                expected_reason=expected_reason,
+            )
+        elif retained_close is None or retained_reason is None:
             raise StateError("Exact SSH application retirement lost its close reason")
 
         self._require_retirement_proof(prepared)
-        with self._lock:
-            if self._prepared is not prepared:
-                raise StateError("Exact SSH close changed its application retirement owner")
-            self._retired = True
 
     def require_retired(self, prepared: _PreparedSshCloseContinuation) -> None:
         """Reauthenticate exact retirement immediately before journal acknowledgement."""
@@ -2025,6 +2121,11 @@ class _PreparedSshCloseContinuation:
         """Retire the exact original SSH manager session through its retained proof."""
 
         self._application_retirement.retire(self, requested_close)
+
+    def adopt_application_retirement(self, closure: SshChannelClosure) -> None:
+        """Transfer one manager watermark closure into this exact action owner."""
+
+        self._application_retirement.adopt(self, closure)
 
     def require_application_session_retired(self) -> None:
         """Prove exact original application retirement before journal acknowledgement."""

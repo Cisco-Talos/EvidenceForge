@@ -96,6 +96,7 @@ def _make_scenario(systems: list[System], *, duration: str = "2h") -> Scenario:
     )
 
 
+@pytest.mark.slow
 class TestRDPBaselineNoise:
     """Verify that baseline generates RDP admin connections to Windows servers."""
 

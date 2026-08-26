@@ -59,6 +59,8 @@ from evidenceforge.generation.actions.network_identity import (
 from evidenceforge.models import System
 from evidenceforge.utils.rng import generation_seed_scope
 
+pytestmark = pytest.mark.slow
+
 
 class _IdentityString(str):
     """Distinct string semantic type used by stable-ID boundary tests."""

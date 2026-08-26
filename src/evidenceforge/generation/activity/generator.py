@@ -45,6 +45,7 @@ from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Optional, cast
@@ -2090,7 +2091,28 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         "free",
     }:
         return (0.05, 0.8)
-    if exe_name in {"sleep", "test"}:
+    if exe_name == "sleep":
+        try:
+            argv = shlex.split(command_line)
+        except ValueError:
+            argv = []
+        if (
+            len(argv) == 2
+            and argv[0].rsplit("/", 1)[-1].lower() == "sleep"
+            and re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", argv[1]) is not None
+        ):
+            try:
+                requested = Decimal(argv[1])
+            except InvalidOperation:
+                requested = Decimal(-1)
+            if requested.is_finite() and requested >= 0:
+                bounded = min(requested, Decimal(86_400))
+                bounded_seconds = float(bounded)
+                lower = max(0.05, bounded_seconds)
+                completion_slack = min(2.0, max(0.05, bounded_seconds * 0.02))
+                return (lower, lower + completion_slack)
+        return (0.2, 2.0)
+    if exe_name == "test":
         return (0.2, 2.0)
     if exe_name in {"mysql", "psql"}:
         if " -p " in f" {command} " or command.endswith(" -p"):
@@ -2148,6 +2170,9 @@ def _linux_shell_process_reserves_foreground(process_name: str, command_line: st
         return False
     exe_name = process_name.rsplit("/", 1)[-1].lower()
     return exe_name not in {"code", "codium", "gnome-terminal", "konsole", "xterm"}
+
+
+_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS = 1_400
 
 
 _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
@@ -4714,13 +4739,14 @@ class SshCloseJournalCensus:
     prepared_reservations: int
     exact_pending: int
     legacy_pending: int
+    manager_pending: int
     capacity: int
 
     @property
     def total_pending(self) -> int:
         """Return all installed exact and compatibility close entries."""
 
-        return self.exact_pending + self.legacy_pending
+        return self.exact_pending + self.legacy_pending + self.manager_pending
 
 
 @dataclass(frozen=True, slots=True)
@@ -5706,6 +5732,7 @@ class ActivityGenerator:
         self._ssh_close_journal_capacity = 65_536
         self._prepared_ssh_close_continuations: dict[str, Any] = {}
         self._pending_ssh_session_closures: list[Any] = []
+        self._pending_ssh_manager_closures: dict[str, Any] = {}
         self._rdp_lifecycle_journal_lock = Lock()
         self._rdp_lifecycle_journal_capacity = 65_536
         self._rdp_lifecycle_watermark = proxy_window_start
@@ -5788,8 +5815,12 @@ class ActivityGenerator:
         self._advance_rdp_manager_watermark(canonical_cutoff)
         self._proxy_channel_manager.watermark(canonical_cutoff)
         self._http_channel_manager.watermark(canonical_cutoff)
+        self._drain_ssh_manager_closures()
         while True:
             ssh_page = self._ssh_channel_manager.watermark(canonical_cutoff)
+            for closure in ssh_page.closures:
+                self._retain_ssh_manager_closure(closure)
+            self._drain_ssh_manager_closures()
             if reject_terminal_closures and ssh_page.closures:
                 raise StateError(
                     "SSH manager produced unprojected closures at the terminal watermark"
@@ -7132,7 +7163,9 @@ class ActivityGenerator:
                 for existing in self._pending_ssh_session_closures
             )
             if (
-                len(self._prepared_ssh_close_continuations) + exact_pending
+                len(self._prepared_ssh_close_continuations)
+                + exact_pending
+                + len(self._pending_ssh_manager_closures)
                 >= self._ssh_close_journal_capacity
             ):
                 raise StateError(
@@ -7203,6 +7236,70 @@ class ActivityGenerator:
                     raise StateError("Exact SSH close continuation changed after installation")
                 return existing
         raise StateError("Exact SSH close continuation was not durably installed")
+
+    def _retain_ssh_manager_closure(self, closure: Any) -> None:
+        """Retain one manager-produced closure before fallible action adoption."""
+
+        from evidenceforge.generation.ssh_channels import SshChannelClosure
+
+        if type(closure) is not SshChannelClosure:
+            raise TypeError("SSH manager closure journal requires its built-in payload")
+        with self._ssh_close_journal_lock:
+            retained = self._pending_ssh_manager_closures.get(closure.transport_id)
+            if retained is not None:
+                if retained != closure:
+                    raise StateError("SSH manager closure changed for one transport")
+                return
+            if (
+                len(self._prepared_ssh_close_continuations)
+                + len(self._pending_ssh_session_closures)
+                + len(self._pending_ssh_manager_closures)
+                >= self._ssh_close_journal_capacity
+            ):
+                raise StateError("SSH close journal capacity is exhausted by manager closures")
+            self._pending_ssh_manager_closures[closure.transport_id] = closure
+
+    def _adopt_ssh_manager_closure(self, closure: Any) -> None:
+        """Transfer one retained manager closure into its exact action continuation."""
+
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+        from evidenceforge.generation.ssh_channels import SshChannelClosure
+
+        if type(closure) is not SshChannelClosure:
+            raise TypeError("SSH manager closure adoption requires its built-in payload")
+        with self._ssh_close_journal_lock:
+            retained = self._pending_ssh_manager_closures.get(closure.transport_id)
+            if retained is not closure:
+                raise StateError("SSH manager closure is not durably retained")
+            matches = tuple(
+                existing
+                for existing in self._pending_ssh_session_closures
+                if type(existing) is _SshCloseContinuation
+                and existing.transaction.stable_id == closure.transport_id
+            )
+        if len(matches) != 1:
+            raise StateError(
+                "SSH manager closure has no unique exact action continuation: "
+                f"transport_id={closure.transport_id!r}, matches={len(matches)}"
+            )
+        matches[0].prepared.adopt_application_retirement(closure)
+        with self._ssh_close_journal_lock:
+            if self._pending_ssh_manager_closures.get(closure.transport_id) is not closure:
+                raise StateError("SSH manager closure changed before adoption acknowledgement")
+            self._pending_ssh_manager_closures.pop(closure.transport_id)
+
+    def _drain_ssh_manager_closures(self) -> None:
+        """Retry retained manager-to-action proof transfers in deterministic order."""
+
+        with self._ssh_close_journal_lock:
+            retained = tuple(
+                sorted(
+                    self._pending_ssh_manager_closures.values(),
+                    key=lambda closure: (closure.closed_at, closure.transport_id),
+                )
+            )
+        for closure in retained:
+            self._adopt_ssh_manager_closure(closure)
 
     def _execute_exact_ssh_close_continuation(self, continuation: Any) -> None:
         """Execute one authenticated terminal continuation outside owner locks."""
@@ -7289,6 +7386,7 @@ class ActivityGenerator:
                 prepared_reservations=len(self._prepared_ssh_close_continuations),
                 exact_pending=exact_pending,
                 legacy_pending=len(self._pending_ssh_session_closures) - exact_pending,
+                manager_pending=len(self._pending_ssh_manager_closures),
                 capacity=self._ssh_close_journal_capacity,
             )
 
@@ -7300,7 +7398,8 @@ class ActivityGenerator:
             raise StateError(
                 "SSH close journal is not drained: "
                 f"prepared={census.prepared_reservations}, "
-                f"exact={census.exact_pending}, legacy={census.legacy_pending}"
+                f"exact={census.exact_pending}, legacy={census.legacy_pending}, "
+                f"manager={census.manager_pending}"
             )
 
     def _generate_bounded_foreground_process_termination(
@@ -7329,18 +7428,21 @@ class ActivityGenerator:
             )
             if deadline is not None
         ]
+        latest_termination: datetime | None = None
         if lifecycle_deadlines:
             deadline = min(lifecycle_deadlines)
             # A foreground command belongs to its interactive session.  Its
             # sampled lifetime cannot outlive the transport/session deadline;
             # leave a small canonical margin for source-native termination
             # latency before the session's close observation.
-            latest_termination = deadline - timedelta(seconds=2)
+            latest_termination = deadline - timedelta(
+                milliseconds=_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
+            )
             if latest_termination <= ensure_utc(start_time):
-                latest_termination = min(
-                    deadline - timedelta(milliseconds=25),
-                    ensure_utc(start_time) + timedelta(milliseconds=100),
-                )
+                # The session owner has the only valid close window. Do not
+                # create an independent process close whose shell-release tail
+                # would cross the session deadline.
+                return deadline
             termination_time = min(termination_time, latest_termination)
         resolved_termination_time = self.resolve_process_lifecycle_close_candidate(
             system.hostname,
@@ -7350,8 +7452,8 @@ class ActivityGenerator:
         lifecycle_deadline = min(lifecycle_deadlines) if lifecycle_deadlines else None
         resolved_precedes_deadline = (
             resolved_termination_time is None
-            or lifecycle_deadline is None
-            or resolved_termination_time < lifecycle_deadline
+            or latest_termination is None
+            or resolved_termination_time <= latest_termination
         )
         if resolved_precedes_deadline:
             tracked_termination_time = resolved_termination_time or termination_time
@@ -7482,7 +7584,9 @@ class ActivityGenerator:
                 f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
             )
         )
-        release_time = termination_time + timedelta(milliseconds=rng.randint(180, 1400))
+        release_time = termination_time + timedelta(
+            milliseconds=rng.randint(180, _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS)
+        )
         bash_key = (system.hostname, username, logon_id)
         self._bash_history_next_time[bash_key] = max(
             self._bash_history_next_time.get(bash_key, release_time),
@@ -19439,7 +19543,13 @@ class ActivityGenerator:
                 )
                 provisional_termination = max(provisional_termination, endpoint_close_floor)
             if actor.session_deadline is not None and provisional_termination is not None:
-                close_ceiling = actor.session_deadline - timedelta(milliseconds=25)
+                release_margin_ms = (
+                    _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
+                    if os_category == "linux"
+                    and _linux_foreground_lifetime(actor.image, actor.command_line) is not None
+                    else 25
+                )
+                close_ceiling = actor.session_deadline - timedelta(milliseconds=release_margin_ms)
                 if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
                     raise ExecutionEffectPlanError(
                         ExecutionEffectPlanErrorCode.INVALID_ACTOR,

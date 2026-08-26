@@ -25,7 +25,7 @@ def test_pid_allocator_state_reaches_same_plateau_across_durations() -> None:
     assert results[1].allocator_retained_bytes == results[2].allocator_retained_bytes
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_pid_allocator_late_window_performance_is_stable_across_repeated_probes() -> None:
     """Repeated 30-day probes keep final-window cost within 25% of steady state."""
     for _repeat in range(3):

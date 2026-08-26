@@ -441,6 +441,57 @@ def test_versioned_close_is_idempotent_and_never_materializes_identity(
     assert registry.census().open_channels == 0
 
 
+def test_retirement_proof_survives_eviction_and_rejects_foreign_or_altered_facts() -> None:
+    """Terminal channel truth remains authentic after its compact tombstone expires."""
+
+    registry = _registry(closed_grace=timedelta(seconds=30))
+    foreign = _registry(closed_grace=timedelta(seconds=30))
+    opened = registry.open_channel(_identity())
+    token = registry.channel_close_token(opened.channel_id)
+    assert token is not None
+    closed_at = _START + timedelta(minutes=3)
+
+    result = registry.close_channel_by_token(
+        opened.channel_id,
+        token=token,
+        closed_at=closed_at,
+        reason="ssh deadline",
+        include_retirement_proof=True,
+    )
+    proof = result.retirement_proof
+    assert proof is not None
+    assert proof.snapshot.identity == opened.identity
+    assert proof.snapshot.closed_at == closed_at
+    assert proof.snapshot.close_reason == "ssh deadline"
+    assert registry.authenticates_retirement_proof(proof)
+
+    registry.watermark(closed_at + timedelta(hours=3))
+    assert registry.get(opened.channel_id) is None
+    assert registry.authenticates_retirement_proof(proof)
+    assert not foreign.authenticates_retirement_proof(proof)
+
+    altered_identity = replace(
+        proof,
+        snapshot=replace(
+            proof.snapshot,
+            identity=replace(proof.snapshot.identity, owner_id="foreign-owner"),
+        ),
+    )
+    altered_close = replace(
+        proof,
+        snapshot=replace(proof.snapshot, closed_at=closed_at + timedelta(microseconds=1)),
+    )
+    altered_reason = replace(
+        proof,
+        snapshot=replace(proof.snapshot, close_reason="forged reason"),
+    )
+    forged = replace(proof, _integrity_token="0" * 64)
+    assert not registry.authenticates_retirement_proof(altered_identity)
+    assert not registry.authenticates_retirement_proof(altered_close)
+    assert not registry.authenticates_retirement_proof(altered_reason)
+    assert not registry.authenticates_retirement_proof(forged)
+
+
 def test_versioned_close_rejects_active_operations_and_recycled_handle_aba() -> None:
     """Blocker checks are atomic and recycled handles invalidate old sidecar tokens."""
 

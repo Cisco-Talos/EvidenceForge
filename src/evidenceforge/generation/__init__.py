@@ -23,7 +23,7 @@
 """Log generation components for EvidenceForge."""
 
 from .activity import ActivityGenerator
-from .application_channels import ApplicationChannelRegistry
+from .application_channels import ApplicationChannelRegistry, ApplicationChannelRetirementProof
 from .collection_deployment import (
     CollectionDeploymentCensus,
     CompiledCollectionDeployment,
@@ -72,6 +72,7 @@ from .state_manager import StateManager
 __all__ = [
     "ActivityGenerator",
     "ApplicationChannelRegistry",
+    "ApplicationChannelRetirementProof",
     "AssignmentCategoryIndexCensus",
     "BinaryPathIndexCensus",
     "CollectionDeploymentCensus",

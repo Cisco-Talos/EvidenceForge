@@ -27,6 +27,9 @@ from evidenceforge.utils import ScenarioIncludeBudget
 runner = CliRunner()
 
 
+pytestmark = pytest.mark.slow
+
+
 def _write_yaml(path: Path, document: dict[str, Any]) -> None:
     """Write one test-owned YAML document."""
 

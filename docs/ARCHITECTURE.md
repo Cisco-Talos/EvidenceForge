@@ -391,6 +391,12 @@ it would delay the transport observation past remote authentication. The SSH
 auth graph accounts for both the resolved network-sensor transport timestamp and
 the canonical connection event's eCAR/EDR source-latency window before placing
 syslog authentication rows.
+Application-channel watermarks may retire an SSH sidecar, but they transfer only an
+authenticated terminal-channel proof into the exact SSH close continuation. The proof is
+registry-keyed and remains verifiable after the compact closed-channel tombstone expires.
+Watermark advancement never renders endpoint process termination, PAM/logind close, or
+`USER_SESSION/LOGOUT` evidence; the installed SSH lifecycle continuation remains the sole
+renderer, and failed proof adoption is retained for bounded retry before another manager page.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
@@ -410,6 +416,11 @@ interactive logons rather than inventing self-sourced RDP evidence.
 Endpoint FLOW rendering keeps RDP transport observations near the connection
 open, dropping late process identity when necessary instead of moving FLOW rows
 past target authentication.
+If source publication raises after the canonical RDP network/application commit, recovery uses
+the retained full materialization graph: transport result, authenticated RDP application receipt,
+and durable identity capture. Recovery installs the exact close continuation without
+redispatching source rows. A reservation is cancelled only after non-commit is proven; an
+indeterminate recovery retains the reservation and reports the recovery failure.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
@@ -597,6 +608,12 @@ foreground process telemetry through existing process helpers. The current slice
 keeps command pools, lifecycle clamps, and process side-effect builders as
 adapter hooks while moving the orchestration boundary above individual canonical
 occurrences.
+For an exact two-token Linux `sleep <duration>` command, process planning models the bounded
+numeric duration rather than the generic short-command fallback. A foreground process close is
+clamped at least 1,425 ms before an owning session deadline: 1,400 ms for the maximum shell-release
+jitter plus a 25 ms lifecycle margin. Impossible action-cohort intervals are rejected before
+mutation; compatibility paths leave the close to the session owner instead of publishing an
+independent invalid termination.
 
 Process-execution callers supply one process create or process terminate intent.
 `ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the

@@ -24,6 +24,8 @@ from evidenceforge.generation.emitters.base import ExactPublicationAuthority, Ex
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from tests.unit.test_syslog_family_renderer import _samba_event
 
+pytestmark = pytest.mark.slow
+
 _HOST = "linux01.example.test"
 _START = datetime(2026, 6, 15, 14, 23, 5, tzinfo=UTC)
 _PARENT_HASHES = {

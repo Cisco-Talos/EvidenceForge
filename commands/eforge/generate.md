@@ -136,8 +136,8 @@ so otherwise reproducible replays need not have byte-identical manifest files.
 - Exit `1`: check the input/output path, permissions, YAML syntax, target, seed, and OOB host.
 - Exit `2`: use the reported field/provenance path. Pack or composition failures belong in
   `/eforge pack`; scenario reference failures belong in `/eforge validate` or `/eforge scenario`.
-- Exit `21`: preserve the error, confirm free disk against the forecast, then retry with `--verbose`
-  or `--debug`. Do not destroy a prior good bundle; overwrite generation is transactionally staged.
+- Exit `21`: preserve the error, traceback, and staged bundle, then retry with `--verbose` or `--debug`.
+  Lifecycle/channel/continuation invariant failures are generator defects; do not rewrite scenario timing to mask them or destroy a prior good bundle.
 - Implausible output with a successful run: inspect `primary_system`, roles, services, topology,
   observation policy, and selected formats before treating it as an engine defect.
 

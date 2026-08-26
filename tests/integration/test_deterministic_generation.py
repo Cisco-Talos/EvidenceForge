@@ -28,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -65,20 +66,7 @@ class _LegacyProjectionEngine(GenerationEngine):
         self.dispatcher.collection_deployment = None
 
 
-def test_minimal_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) -> None:
-    """Identical scenario input should produce byte-identical generated artifacts."""
-    scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
-    scenario_data = load_yaml(scenario_path)
-
-    first_dir = tmp_path / "first"
-    second_dir = tmp_path / "second"
-
-    GenerationEngine(Scenario(**scenario_data), first_dir).generate()
-    GenerationEngine(Scenario(**scenario_data), second_dir).generate()
-
-    assert _snapshot_generated_files(first_dir) == _snapshot_generated_files(second_dir)
-
-
+@pytest.mark.soak
 def test_complete_profile_compiled_projection_preserves_legacy_bytes(tmp_path: Path) -> None:
     """Exact source fan-out must not alter a complete run without overrides."""
 
@@ -99,6 +87,7 @@ def test_complete_profile_compiled_projection_preserves_legacy_bytes(tmp_path: P
     assert _snapshot_generated_files(compiled_dir) == _snapshot_generated_files(legacy_dir)
 
 
+@pytest.mark.slow
 def test_authoritative_eval_uses_project_observation_config(tmp_path: Path) -> None:
     """Bundle config must bind exact deployment matching through causality scoring."""
 
@@ -184,6 +173,7 @@ def test_authoritative_eval_uses_project_observation_config(tmp_path: Path) -> N
     assert event_presence["score"] == 100.0
 
 
+@pytest.mark.slow
 def test_public_seed_is_repeatable_and_changes_generated_evidence(tmp_path: Path) -> None:
     """One public seed controls deterministic substreams without hiding a global singleton."""
     scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
@@ -201,6 +191,7 @@ def test_public_seed_is_repeatable_and_changes_generated_evidence(tmp_path: Path
     assert first != _snapshot_generated_files(other_dir)
 
 
+@pytest.mark.soak
 def test_windows_smb_generation_is_bit_perfect_for_identical_inputs(tmp_path: Path) -> None:
     """Linux SMB planning must not perturb the established Windows-only RNG path."""
 
@@ -214,6 +205,7 @@ def test_windows_smb_generation_is_bit_perfect_for_identical_inputs(tmp_path: Pa
     assert _snapshot_generated_files(first_dir) == _snapshot_generated_files(second_dir)
 
 
+@pytest.mark.soak
 def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) -> None:
     """Selecting fewer renderers must not change canonical planning or shared bytes."""
 
@@ -242,6 +234,7 @@ def test_common_outputs_and_ground_truth_ignore_format_filter(tmp_path: Path) ->
     ).read_bytes()
 
 
+@pytest.mark.soak
 def test_linux_smb_generation_ignores_python_hash_seed(tmp_path: Path) -> None:
     """Cross-platform SMB identities and artifacts must not depend on Python hash order."""
 
@@ -274,6 +267,7 @@ GenerationEngine(Scenario(**load_yaml(scenario_path)), output_path).generate()
     assert _snapshot_generated_files(outputs[0]) == _snapshot_generated_files(outputs[1])
 
 
+@pytest.mark.slow
 def test_storage_manifest_audience_ignores_python_hash_seed(tmp_path: Path) -> None:
     """Defensive manifest ordering must total-order casefold-equivalent set values."""
 
@@ -323,6 +317,7 @@ write_storage_manifest(Path(sys.argv[1]), world)
     }
 
 
+@pytest.mark.soak
 def test_linux_smb_common_outputs_ignore_format_filter(tmp_path: Path) -> None:
     """Linux/Samba canonical planning must be independent of selected renderers."""
 

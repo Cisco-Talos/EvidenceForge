@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import (
@@ -23,6 +24,8 @@ from evidenceforge.composition.artifacts import (
     serialize_resolved_document,
 )
 from evidenceforge.config.provider import effective_config_scope
+
+pytestmark = pytest.mark.slow
 
 runner = CliRunner()
 _MINIMAL = Path("tests/fixtures/scenarios/minimal.yaml").resolve()

@@ -1404,12 +1404,28 @@ class ApplicationChannelCloseRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ApplicationChannelRetirementProof:
+    """Registry-authenticated terminal snapshot that survives tombstone expiry."""
+
+    snapshot: ApplicationChannelSnapshot
+    _registry_token: int = field(repr=False, default=0)
+    _integrity_token: str = field(repr=False, default="")
+
+    @property
+    def proof_token(self) -> str:
+        """Return the opaque keyed proof over the terminal snapshot."""
+
+        return self._integrity_token
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationChannelCloseResult:
     """Minimal authoritative outcome from a versioned channel close."""
 
     channel_id: str
     closed_at: datetime
     newly_closed: bool
+    retirement_proof: ApplicationChannelRetirementProof | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1785,6 +1801,26 @@ def _application_channel_snapshot_proof_payload(snapshot: object) -> bytes:
     if len(payload) > _MAX_PREPARED_CLOSE_PROJECTION_PAYLOAD_BYTES:
         raise ValueError("prepared-close snapshot proof exceeds its payload bound")
     return bytes(payload)
+
+
+def _application_channel_retirement_proof_integrity_token(
+    authority_secret: bytes,
+    proof: ApplicationChannelRetirementProof,
+) -> str:
+    """Authenticate one exact terminal snapshot independently of retained rows."""
+
+    payload = bytearray(b"application-channel-retirement-proof-v1\0")
+    payload.extend(
+        _prepared_close_proof_uint(
+            proof._registry_token,
+            64,
+            "retirement.registry",
+        )
+    )
+    snapshot_payload = _application_channel_snapshot_proof_payload(proof.snapshot)
+    payload.extend(struct.pack(">I", len(snapshot_payload)))
+    payload.extend(snapshot_payload)
+    return hmac.new(authority_secret, bytes(payload), hashlib.sha256).hexdigest()
 
 
 def _application_admission_optional_datetime(value: object, field_name: str) -> bytes:
@@ -3292,6 +3328,63 @@ class ApplicationChannelRegistry:
         if not owner_id.strip():
             raise ValueError("Application channel owner_id must not be empty")
         return self._owner_shard_id(owner_id)
+
+    def _retirement_proof_for_snapshot(
+        self,
+        snapshot: ApplicationChannelSnapshot,
+    ) -> ApplicationChannelRetirementProof:
+        """Issue one stateless proof for an exact terminal registry snapshot."""
+
+        if (
+            type(snapshot) is not ApplicationChannelSnapshot
+            or snapshot.closed_at is None
+            or not snapshot.close_reason
+        ):
+            raise StateError("Application retirement proof requires a terminal snapshot")
+        placeholder = ApplicationChannelRetirementProof(
+            snapshot=snapshot,
+            _registry_token=id(self),
+        )
+        return replace(
+            placeholder,
+            _integrity_token=_application_channel_retirement_proof_integrity_token(
+                self._admission_secret,
+                placeholder,
+            ),
+        )
+
+    def retirement_proof(self, channel_id: str) -> ApplicationChannelRetirementProof:
+        """Return authenticated terminal truth while its registry row is retained."""
+
+        snapshot = self.get(channel_id)
+        if snapshot is None:
+            raise StateError(f"Application channel {channel_id!r} has no retained terminal row")
+        return self._retirement_proof_for_snapshot(snapshot)
+
+    def authenticates_retirement_proof(self, proof: object) -> bool:
+        """Authenticate terminal truth without consulting a possibly expired row."""
+
+        if type(proof) is not ApplicationChannelRetirementProof:
+            return False
+        try:
+            if (
+                proof._registry_token != id(self)
+                or type(proof.snapshot) is not ApplicationChannelSnapshot
+                or proof.snapshot.closed_at is None
+                or not proof.snapshot.close_reason
+            ):
+                return False
+            expected = _application_channel_retirement_proof_integrity_token(
+                self._admission_secret,
+                proof,
+            )
+            retained = _prepared_close_proof_digest(
+                proof._integrity_token,
+                "retirement.integrity",
+            )
+        except (AttributeError, TypeError, ValueError):
+            return False
+        return hmac.compare_digest(retained, expected)
 
     def authenticates_admission_token(self, token: ApplicationChannelAdmissionToken) -> bool:
         """Return whether one intact token is currently active in this registry."""
@@ -4989,6 +5082,7 @@ class ApplicationChannelRegistry:
             channel_id=token.channel_id,
             closed_at=token.closed_at,
             newly_closed=True,
+            retirement_proof=self._retirement_proof_for_snapshot(updated),
         )
         placeholder = ApplicationChannelCloseAdmissionReceipt(
             publication_token=token.publication_token,
@@ -7076,6 +7170,7 @@ class ApplicationChannelRegistry:
         channel_id: str,
         closed_at: datetime,
         reason: str,
+        include_retirement_proof: bool = False,
     ) -> ApplicationChannelCloseResult:
         """Commit one validated primitive close while the owner lock is held."""
 
@@ -7096,10 +7191,15 @@ class ApplicationChannelRegistry:
                 (authoritative_time + self._closed_grace).timestamp(),
             )
             shard.open_channels -= 1
+        retirement_proof = None
+        if include_retirement_proof:
+            terminal = shard.channels.detached_by_handle(channel_handle)
+            retirement_proof = self._retirement_proof_for_snapshot(terminal)
         return ApplicationChannelCloseResult(
             channel_id=channel_id,
             closed_at=authoritative_time,
             newly_closed=newly_closed,
+            retirement_proof=retirement_proof,
         )
 
     def _close_channel_by_token_admitted(
@@ -7109,6 +7209,7 @@ class ApplicationChannelRegistry:
         token: ApplicationChannelCloseToken,
         closed_at: datetime,
         reason: str,
+        include_retirement_proof: bool = False,
     ) -> ApplicationChannelCloseResult:
         """Close one token after mutation admission has fenced watermarks."""
 
@@ -7137,6 +7238,7 @@ class ApplicationChannelRegistry:
                 channel_id=normalized_channel_id,
                 closed_at=canonical_time,
                 reason=normalized_reason,
+                include_retirement_proof=include_retirement_proof,
             )
 
     def close_channel_by_token(
@@ -7146,6 +7248,7 @@ class ApplicationChannelRegistry:
         token: ApplicationChannelCloseToken,
         closed_at: datetime,
         reason: str,
+        include_retirement_proof: bool = False,
     ) -> ApplicationChannelCloseResult:
         """Close one exact channel without reconstructing its identity or plan."""
 
@@ -7155,6 +7258,7 @@ class ApplicationChannelRegistry:
                 token=token,
                 closed_at=closed_at,
                 reason=reason,
+                include_retirement_proof=include_retirement_proof,
             )
 
     def close_channels_by_token(

@@ -484,6 +484,7 @@ def windows_two_file_control(
     return output, result.operations, _source_bytes(output)
 
 
+@pytest.mark.slow
 def test_generate_smb_activity_uses_one_persistent_windows_root(
     windows_read_control: tuple[tuple[str, bytes], ...],
 ) -> None:
@@ -500,6 +501,7 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
     )
 
 
+@pytest.mark.slow
 def test_persistent_smb_result_uses_exact_published_transport_identifier() -> None:
     """Terminal activity truth selects the authenticated transport projection exactly."""
 
@@ -554,6 +556,7 @@ def test_persistent_smb_result_uses_exact_published_transport_identifier() -> No
         )
 
 
+@pytest.mark.slow
 def test_persistent_smb_two_file_order_counters_and_transport_bytes(
     windows_two_file_control: tuple[
         Path,
@@ -601,6 +604,7 @@ def test_persistent_smb_two_file_order_counters_and_transport_bytes(
     )
 
 
+@pytest.mark.slow
 def test_persistent_smb_second_file_failure_is_neutral_and_replayable(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -647,6 +651,7 @@ def test_persistent_smb_second_file_failure_is_neutral_and_replayable(
     assert _source_bytes(tmp_path) == windows_two_file_control[2]
 
 
+@pytest.mark.soak
 def test_persistent_smb_50_file_batch_uses_one_bounded_carrier(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -671,6 +676,7 @@ def test_persistent_smb_50_file_batch_uses_one_bounded_carrier(
     assert [row["action"] for row in smb_rows[1::2]] == ["SMB::FILE_READ"] * 50
 
 
+@pytest.mark.slow
 def test_persistent_smb_denied_batch_is_short_framing_only_and_file_neutral(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -708,6 +714,7 @@ def test_persistent_smb_denied_batch_is_short_framing_only_and_file_neutral(
     ]
 
 
+@pytest.mark.slow
 def test_persistent_smb_target_preflight_capacity_and_empty_cancel_are_neutral(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -772,6 +779,7 @@ def test_persistent_smb_target_preflight_capacity_and_empty_cancel_are_neutral(
         engine._close_emitters()
 
 
+@pytest.mark.slow
 def test_persistent_smb_fail_before_transport_cancels_empty_group_and_replays(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -803,6 +811,7 @@ def test_persistent_smb_fail_before_transport_cancels_empty_group_and_replays(
     assert _source_bytes(tmp_path) == windows_read_control
 
 
+@pytest.mark.soak
 def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -865,7 +874,13 @@ def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
         engine._close_emitters()
 
 
-@pytest.mark.parametrize("mode", ("fail_before", "lost_return"))
+@pytest.mark.parametrize(
+    "mode",
+    (
+        pytest.param("fail_before", marks=pytest.mark.soak),
+        pytest.param("lost_return", marks=pytest.mark.slow),
+    ),
+)
 def test_persistent_smb_application_terminal_faults_converge_exactly_once(
     mode: Literal["fail_before", "lost_return"],
     scenarios_dir: Path,
@@ -898,6 +913,7 @@ def test_persistent_smb_application_terminal_faults_converge_exactly_once(
 
 
 @pytest.mark.parametrize("mode", ("fail_before", "lost_return"))
+@pytest.mark.soak
 def test_persistent_smb_state_terminal_faults_recover_without_second_commit(
     mode: Literal["fail_before", "lost_return"],
     scenarios_dir: Path,
@@ -939,7 +955,13 @@ def test_persistent_smb_state_terminal_faults_recover_without_second_commit(
     assert _source_bytes(tmp_path) == windows_read_control
 
 
-@pytest.mark.parametrize("mode", ("fail_before", "lost_return"))
+@pytest.mark.parametrize(
+    "mode",
+    (
+        pytest.param("fail_before", marks=pytest.mark.soak),
+        pytest.param("lost_return", marks=pytest.mark.slow),
+    ),
+)
 def test_persistent_smb_projection_and_publication_faults_recover_exact_bytes(
     mode: Literal["fail_before", "lost_return"],
     scenarios_dir: Path,
@@ -1037,14 +1059,52 @@ def test_persistent_smb_projection_and_publication_faults_recover_exact_bytes(
 
 
 @pytest.mark.parametrize(
-    ("owner_name", "method_name"),
+    ("owner_name", "method_name", "mode"),
     (
-        ("dispatcher", "acknowledge_persistent_smb_source_publication"),
-        ("state", "acknowledge_smb_file_mutation_commit"),
-        ("state", "acknowledge_smb_connection_finalization"),
+        pytest.param(
+            "dispatcher",
+            "acknowledge_persistent_smb_source_publication",
+            "fail_before",
+            marks=pytest.mark.slow,
+            id="fail_before-dispatcher-acknowledge_persistent_smb_source_publication",
+        ),
+        pytest.param(
+            "dispatcher",
+            "acknowledge_persistent_smb_source_publication",
+            "lost_return",
+            marks=pytest.mark.soak,
+            id="lost_return-dispatcher-acknowledge_persistent_smb_source_publication",
+        ),
+        pytest.param(
+            "state",
+            "acknowledge_smb_file_mutation_commit",
+            "fail_before",
+            marks=pytest.mark.soak,
+            id="fail_before-state-acknowledge_smb_file_mutation_commit",
+        ),
+        pytest.param(
+            "state",
+            "acknowledge_smb_file_mutation_commit",
+            "lost_return",
+            marks=pytest.mark.soak,
+            id="lost_return-state-acknowledge_smb_file_mutation_commit",
+        ),
+        pytest.param(
+            "state",
+            "acknowledge_smb_connection_finalization",
+            "fail_before",
+            marks=pytest.mark.soak,
+            id="fail_before-state-acknowledge_smb_connection_finalization",
+        ),
+        pytest.param(
+            "state",
+            "acknowledge_smb_connection_finalization",
+            "lost_return",
+            marks=pytest.mark.soak,
+            id="lost_return-state-acknowledge_smb_connection_finalization",
+        ),
     ),
 )
-@pytest.mark.parametrize("mode", ("fail_before", "lost_return"))
 def test_persistent_smb_terminal_acknowledgements_resume_exactly_once(
     owner_name: Literal["dispatcher", "state"],
     method_name: str,
@@ -1082,6 +1142,7 @@ def test_persistent_smb_terminal_acknowledgements_resume_exactly_once(
     assert _source_bytes(tmp_path) == windows_read_control
 
 
+@pytest.mark.slow
 def test_persistent_smb_ordinary_retry_resumes_terminal_cursor_without_new_root(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -1200,6 +1261,7 @@ def _exercise_terminal_continuation_guards(
     monkeypatch.undo()
 
 
+@pytest.mark.slow
 def test_persistent_smb_terminal_continuation_guards_and_proof_release(
     scenarios_dir: Path,
     tmp_path: Path,

@@ -745,7 +745,10 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 - pytest-cov for coverage reporting
 - pytest-mock for mocking
 - pytest-benchmark for performance tests
-- Separate marker @pytest.mark.slow for large dataset tests (excluded from default run via --include-slow flag)
+- `@pytest.mark.slow` extended release tests are excluded from the routine gate and selected with
+  `uv run pytest -m slow --no-cov`; exceptional scale, duration, exhaustive-matrix, and full-demo
+  diagnostics use the mutually exclusive `@pytest.mark.soak` tier and are selected with
+  `uv run pytest -m soak --no-cov`
 
 **Format Support:**
 - Standard library json/csv for text formats

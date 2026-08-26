@@ -9,7 +9,11 @@ import ast
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 import evidenceforge.generation as generation_package
+
+pytestmark = pytest.mark.slow
 
 _LEGACY_HELPERS = frozenset({"sample_timing_delta", "sample_packet_timing_delta"})
 _RAW_TEMPORAL_METHODS = frozenset(

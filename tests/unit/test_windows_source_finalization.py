@@ -45,6 +45,8 @@ from evidenceforge.models import (
 )
 from evidenceforge.output_targets import OutputTarget
 
+pytestmark = pytest.mark.slow
+
 
 def _event(timestamp: datetime, username: str) -> dict[str, object]:
     return {

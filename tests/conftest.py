@@ -37,12 +37,6 @@ from evidenceforge.utils.rng import _thread_local
 def pytest_addoption(parser):
     """Register custom CLI options."""
     parser.addoption(
-        "--include-slow",
-        action="store_true",
-        default=False,
-        help="Include slow tests (large dataset generation, 100+ users)",
-    )
-    parser.addoption(
         "--include-external-parsers",
         action="store_true",
         default=False,
@@ -50,15 +44,25 @@ def pytest_addoption(parser):
     )
 
 
+def _validate_test_tiers(items: list[pytest.Item]) -> None:
+    """Reject tests assigned to more than one cost tier."""
+
+    overlapping = [
+        item.nodeid for item in items if "slow" in item.keywords and "soak" in item.keywords
+    ]
+    if overlapping:
+        rendered = "\n".join(f"  - {nodeid}" for nodeid in overlapping)
+        raise pytest.UsageError("Tests must not be marked both 'slow' and 'soak':\n" + rendered)
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """Skip opt-in test groups unless their matching CLI flag is passed."""
-    skip_slow = pytest.mark.skip(reason="slow test — pass --include-slow to run")
+    """Enforce exclusive cost tiers and skip unrequested external parser tests."""
+    _validate_test_tiers(items)
     skip_external_parser = pytest.mark.skip(
         reason="external parser test — pass --include-external-parsers to run"
     )
     for item in items:
-        if "slow" in item.keywords and not config.getoption("--include-slow"):
-            item.add_marker(skip_slow)
         if "external_parser" in item.keywords and not config.getoption(
             "--include-external-parsers"
         ):

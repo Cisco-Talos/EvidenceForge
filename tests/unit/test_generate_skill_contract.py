@@ -12,6 +12,9 @@ import yaml
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GENERATE_SKILL = REPOSITORY_ROOT / "commands" / "eforge" / "generate.md"
 PUBLIC_EVIDENCE_REFERENCE = REPOSITORY_ROOT / "docs" / "reference" / "EVIDENCE_FORMATS.md"
+ARCHITECTURE = REPOSITORY_ROOT / "docs" / "ARCHITECTURE.md"
+AGENT_GUIDANCE = REPOSITORY_ROOT / "AGENTS.md"
+PUBLIC_SCENARIO_REFERENCE = REPOSITORY_ROOT / "docs" / "reference" / "scenario-reference.md"
 REFERENCE_ROOT = REPOSITORY_ROOT / "commands" / "eforge" / "references"
 FOCUSED_REFERENCES = {
     "generation-bundle-targets": REFERENCE_ROOT / "generation-bundle-targets.md",
@@ -123,6 +126,16 @@ def test_generate_skill_verifies_the_authoritative_bundle() -> None:
     assert "manifest contains a timestamp" in normalized
 
 
+def test_generate_skill_preserves_lifecycle_defect_evidence() -> None:
+    """Invariant failures stay actionable instead of being hidden by scenario edits."""
+
+    normalized = " ".join(_read(GENERATE_SKILL).split())
+
+    assert "preserve the error, traceback, and staged bundle" in normalized
+    assert "Lifecycle/channel/continuation invariant failures are generator defects" in normalized
+    assert "do not rewrite scenario timing to mask them" in normalized
+
+
 def test_evidence_references_are_focused_and_track_current_formats() -> None:
     """Agents can load one small reference without inheriting the exhaustive public document."""
 
@@ -143,6 +156,9 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     assert "HTTP is not limited to\nport 80" in network
     assert "optional nonnegative\ntop-level `pid`/`tid`/`ppid`" in endpoint
     assert "Program/message coverage is curated and role/distro-aware" in endpoint
+    assert "retirement remains provable after the shared channel tombstone expires" in endpoint
+    assert "`sleep 30`, `sleep 30.5`, and `sleep .5`" in endpoint
+    assert "1,425 ms release" in endpoint
     assert "Every successfully transmitted visible nonempty" in web
     assert "Client submission uses port 587 and may upgrade to\nSTARTTLS" in web
     assert "Client submission is currently plaintext" not in web
@@ -150,6 +166,9 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     exhaustive = _read(PUBLIC_EVIDENCE_REFERENCE)
     assert "Client submission uses port 587 and may upgrade to STARTTLS" in exhaustive
     assert "Client submission is currently plaintext" not in exhaustive
+    assert "complete terminal ownership" in exhaustive
+    assert "numeric `sleep <duration>`" in exhaustive
+    assert "1,425 ms" in exhaustive
 
     for stale_claim in (
         "Proxy, web access, IDS, eCAR, bash history | Unchanged",
@@ -159,3 +178,20 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     ):
         assert stale_claim not in exhaustive
         assert all(stale_claim not in content for content in references.values())
+
+
+def test_lifecycle_recovery_and_foreground_release_invariants_are_documented() -> None:
+    """Architecture, agent rules, and scenario reference expose the imported guarantees."""
+
+    architecture = " ".join(_read(ARCHITECTURE).split())
+    agents = " ".join(_read(AGENT_GUIDANCE).split())
+    scenario = " ".join(_read(PUBLIC_SCENARIO_REFERENCE).split())
+
+    for text in (architecture, agents):
+        assert "authenticated RDP application receipt" in text
+        assert "Watermark advancement" in text
+        assert "1,400 ms" in text
+        assert "25 ms lifecycle margin" in text
+    assert "unsigned integer or decimal" in scenario
+    assert "capped at 86,400 seconds" in scenario
+    assert "1,425 ms" in scenario

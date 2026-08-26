@@ -12,6 +12,7 @@ import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
@@ -683,6 +684,142 @@ def test_linux_bounded_foreground_commands_use_executable_aware_lifetimes(
 
     assert lifetime is not None
     assert lifetime[1] <= maximum
+
+
+@pytest.mark.parametrize(
+    ("command_line", "expected"),
+    (
+        ("sleep 30", (30.0, 30.6)),
+        ("sleep 30.5", (30.5, 31.11)),
+        ("sleep .5", (0.5, 0.55)),
+        ("sleep 0", (0.05, 0.1)),
+        ("/usr/bin/sleep 2", (2.0, 2.05)),
+        ("sleep 999999999", (86_400.0, 86_402.0)),
+    ),
+)
+def test_linux_numeric_sleep_lifetime_uses_strict_bounded_seconds(
+    command_line: str,
+    expected: tuple[float, float],
+) -> None:
+    """Exact two-token numeric sleeps preserve their requested duration and cap."""
+
+    first = _linux_foreground_lifetime("/usr/bin/sleep", command_line)
+    second = _linux_foreground_lifetime("/usr/bin/sleep", command_line)
+
+    assert first == pytest.approx(expected)
+    assert second == first
+
+
+@pytest.mark.parametrize(
+    "command_line",
+    (
+        "sleep 30s",
+        "sleep -1",
+        "sleep +1",
+        "sleep 1e3",
+        "sleep nan",
+        "sleep inf",
+        "sleep 30 extra",
+        "env sleep 30",
+        "sleep",
+        "sleep 'unterminated",
+    ),
+)
+def test_linux_unsupported_sleep_forms_keep_short_fallback(command_line: str) -> None:
+    """Suffixes, signs, exponents, malformed input, and extra tokens stay unsupported."""
+
+    assert _linux_foreground_lifetime("/usr/bin/sleep", command_line) == (0.2, 2.0)
+
+
+def test_linux_numeric_sleep_lifetime_applies_outside_ssh_sessions() -> None:
+    """A local interactive shell receives the same deterministic numeric duration."""
+
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/sleep",
+        command_line="sleep 30.5",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+
+    running = state.get_process(system.hostname, pid)
+    assert running is not None
+    termination_time = generator.foreground_process_termination_time(system.hostname, pid)
+    assert termination_time is not None
+    assert timedelta(seconds=30.5) <= termination_time - running.start_time
+    assert termination_time - running.start_time <= timedelta(seconds=31.11)
+
+
+def test_linux_numeric_sleep_release_precedes_ssh_owner_by_full_jitter_margin() -> None:
+    """A clamped SSH foreground process releases before every allowed shell jitter."""
+
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    deadline = start + timedelta(seconds=40)
+    state.update_session_metadata(logon_id, network_close_time=deadline)
+    pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/sleep",
+        command_line="sleep 300",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+
+    running = state.get_process(system.hostname, pid)
+    assert running is not None
+    termination_time = generator.foreground_process_termination_time(system.hostname, pid)
+    release_time = generator._foreground_shell_next_time[
+        (system.hostname, user.username, logon_id, shell_pid)
+    ]
+    assert termination_time is not None
+    assert deadline - termination_time >= timedelta(milliseconds=1_425)
+    assert release_time < deadline
+
+
+def test_impossible_linux_foreground_close_is_rejected_before_process_mutation() -> None:
+    """Action-cohort preparation rejects a command with no valid pre-session close window."""
+
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    state.update_session_metadata(
+        logon_id,
+        network_close_time=start + timedelta(seconds=1),
+    )
+    before = state.materialization_digest()
+
+    with pytest.raises(ExecutionEffectPlanError, match="no (session interval|interval)"):
+        generator.generate_process(
+            user=user,
+            system=system,
+            time=start,
+            logon_id=logon_id,
+            process_name="/usr/bin/sleep",
+            command_line="sleep 30",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+        )
+
+    assert state.materialization_digest() == before
+    assert not any(
+        event.event_type == "process_create"
+        and event.process is not None
+        and event.process.command_line == "sleep 30"
+        for event in events
+    )
 
 
 def test_linux_test_utility_keeps_short_lifetime() -> None:

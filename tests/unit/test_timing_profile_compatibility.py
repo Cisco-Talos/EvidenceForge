@@ -44,6 +44,8 @@ from evidenceforge.generation.activity.timing_profiles import (
     reset_timing_profiles_cache,
 )
 
+pytestmark = pytest.mark.slow
+
 _TIMING_PROFILE_OVERLAY_PATH = "activity/timing_profiles.yaml"
 _NO_TIMING_DOCUMENT = object()
 

@@ -40,6 +40,8 @@ from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.utils import load_yaml
 from evidenceforge.utils.assets import load_email_corpus_yaml
 
+pytestmark = pytest.mark.slow
+
 _MINIMAL = Path("tests/fixtures/scenarios/minimal.yaml")
 _FINANCE = Path("tests/fixtures/scenarios/finance-industry-pack.yaml")
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")

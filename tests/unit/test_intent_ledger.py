@@ -319,7 +319,7 @@ print(json.dumps({
     assert outputs[0] == outputs[1]
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_million_occurrence_one_intent_skew_has_bounded_candidates_and_bytes() -> None:
     """One million unique occurrences plateau at the explicit hot/sample/window bounds."""
 

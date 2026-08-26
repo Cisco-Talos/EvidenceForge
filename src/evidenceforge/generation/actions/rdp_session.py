@@ -1682,9 +1682,19 @@ class RdpSessionActionBundle:
             type(receipt) is RdpSessionAdmissionReceipt
             and prepared.manager.authenticates_admission_receipt(receipt)
         )
+        error_state = object.__getattribute__(primary, "__dict__")
+        indeterminate = bool(
+            type(error_state) is dict
+            and error_state.get("deferred_session_commit_indeterminate") is True
+        )
         try:
             if committed:
                 self._executor._recover_exact_rdp_lifecycle_continuation_no_fail(prepared.bind())
+            elif indeterminate:
+                primary.add_note(
+                    "Exact RDP lifecycle reservation retained because deferred-session "
+                    "commit recovery is indeterminate"
+                )
             else:
                 self._executor._cancel_exact_rdp_lifecycle_continuation_reservation(prepared)
         except BaseException as recovery_error:

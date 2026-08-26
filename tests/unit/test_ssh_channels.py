@@ -583,6 +583,7 @@ def test_ssh_disjoint_owner_mutations_make_overlapping_progress(
     assert manager.census().open_sessions == 2
 
 
+@pytest.mark.slow
 def test_ssh_hash_seed_determinism_in_fresh_processes() -> None:
     root = Path(__file__).resolve().parents[2]
     code = """
@@ -626,7 +627,14 @@ print(hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest())
     assert len(set(digests)) == 1
 
 
-@pytest.mark.parametrize("hours", [24, 24 * 7, 24 * 30])
+@pytest.mark.parametrize(
+    "hours",
+    [
+        24,
+        pytest.param(24 * 7, marks=pytest.mark.slow),
+        pytest.param(24 * 30, marks=pytest.mark.soak),
+    ],
+)
 def test_ssh_retention_plateaus_across_24h_7d_30d(hours: int) -> None:
     start = _START
     end = start + timedelta(hours=hours + 2)

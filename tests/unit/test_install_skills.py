@@ -207,6 +207,24 @@ class TestInstallSkills:
         assert "source_path" in validation_reference
         assert "`transfer` requires" in validation_reference
 
+    def test_installed_generate_skill_retains_lifecycle_diagnostics_and_linux_contract(
+        self,
+        tmp_path,
+    ):
+        """Generated ChatGPT skills include the compact defect rule and focused evidence detail."""
+
+        install_chatgpt_skills(tmp_path)
+        generate = (tmp_path / "eforge-generate" / "SKILL.md").read_text(encoding="utf-8")
+        endpoint = (
+            tmp_path / "eforge-generate" / "references" / "evidence-endpoint-linux.md"
+        ).read_text(encoding="utf-8")
+
+        assert "Lifecycle/channel/continuation invariant failures are generator defects" in generate
+        assert "do not rewrite scenario timing to mask them" in generate
+        assert "retirement remains provable after the shared channel tombstone expires" in endpoint
+        assert "`sleep 30`, `sleep 30.5`, and `sleep .5`" in endpoint
+        assert "1,425 ms release" in endpoint
+
     def test_chatgpt_manifest_covers_every_canonical_command(self):
         """Every canonical top-level command has an explicit ChatGPT install mapping."""
         repository = Path(__file__).parents[2]

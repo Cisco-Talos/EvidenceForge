@@ -27,6 +27,8 @@ from evidenceforge.generation.activity.smb_profiles import (
     select_server_profile,
 )
 
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(autouse=True)
 def _reset_profiles() -> None:

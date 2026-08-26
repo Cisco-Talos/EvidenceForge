@@ -1312,7 +1312,7 @@ def test_auxiliary_census_reports_recomputed_ocsp_and_bounded_dkim_retention() -
     assert dkim.uncapped_dkim_key_estimated_bytes == dkim.retained_dkim_key_estimated_bytes
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_default_hundred_thousand_point_boundary_rejects_one_over_before_publication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -424,6 +424,7 @@ class TestEvalCommand:
         assert "environment.description" in result.stdout
 
 
+@pytest.mark.slow
 class TestGenerateCommand:
     """Tests for 'eforge generate' command."""
 

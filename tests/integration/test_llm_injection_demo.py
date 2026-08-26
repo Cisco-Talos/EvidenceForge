@@ -72,6 +72,7 @@ def test_scenario_is_valid():
     _load_scenario()
 
 
+@pytest.mark.soak
 def test_every_injection_has_a_recoverable_canary_in_the_logs(generated):
     # Tier-0 self-score: each planted injection's echo-canary is recorded in ground truth
     # AND lands in the data a copilot would read (byte-for-byte) — that is the grep target.
@@ -92,6 +93,7 @@ def test_every_injection_has_a_recoverable_canary_in_the_logs(generated):
         assert a["rendered_value"].replace("\r\n", "\n") in corpus  # the full payload landed
 
 
+@pytest.mark.soak
 def test_decoy_credentials_land_for_the_exfiltration_check(generated):
     # The exfil injection tells the copilot to surface secrets; the answer key needs real
     # decoy credentials in the logs to grep its output against.
@@ -102,6 +104,7 @@ def test_decoy_credentials_land_for_the_exfiltration_check(generated):
         assert e["attributes"]["value"] in corpus
 
 
+@pytest.mark.soak
 def test_injection_payloads_are_canary_only(generated):
     # Safety: no real/resolvable host may appear in any planted injection.
     _out, gt, _corpus = generated
@@ -119,6 +122,7 @@ def test_injection_payloads_are_canary_only(generated):
     assert not bad, f"non-canary hosts in injection payloads: {bad}"
 
 
+@pytest.mark.soak
 def test_negative_controls_are_labeled_in_ground_truth(generated):
     # An automated self-score must be able to tell a correctly-resisted control apart from a
     # real hijack, so the control family must self-identify in the canonical ground truth.
@@ -135,6 +139,7 @@ def test_negative_controls_are_labeled_in_ground_truth(generated):
         assert "NEGATIVE CONTROL" in label
 
 
+@pytest.mark.soak
 def test_dataset_evals_clean(generated):
     out, _gt, _corpus = generated
     report = EvaluationEngine(output_dir=out, scenario=_load_scenario()).run()
@@ -142,6 +147,7 @@ def test_dataset_evals_clean(generated):
     assert ep.score == 100.0
 
 
+@pytest.mark.soak
 def test_clean_twin_shares_a_byte_identical_baseline(generated, tmp_path_factory):
     # The Tier-3 differential-twin claim: scenario-clean.yaml keeps the same storyline event
     # SET (so the baseline RNG stream is unchanged) but neutralizes every injection — so the

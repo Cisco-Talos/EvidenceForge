@@ -129,6 +129,7 @@ def linux_matrix_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return output
 
 
+@pytest.mark.slow
 def test_cross_platform_smb_matrix_uses_source_native_server_evidence(
     linux_matrix_output: Path,
 ) -> None:
@@ -187,6 +188,7 @@ def test_cross_platform_smb_matrix_uses_source_native_server_evidence(
     assert not any("samba-01" in path for path in security_paths)
 
 
+@pytest.mark.slow
 def test_linux_smb_flow_precedes_samba_login_and_file_observation(
     linux_matrix_output: Path,
 ) -> None:
@@ -265,6 +267,7 @@ def test_linux_smb_flow_precedes_samba_login_and_file_observation(
     assert all(record.get("actorID") != file_record.get("actorID") for record in client_flows)
 
 
+@pytest.mark.slow
 def test_linux_cifs_mount_uses_actor_owned_posix_client_file_evidence(
     linux_matrix_output: Path,
 ) -> None:
@@ -312,6 +315,7 @@ def test_linux_cifs_mount_uses_actor_owned_posix_client_file_evidence(
     assert all("pid" not in record and "actorID" not in record for record in client_flows)
 
 
+@pytest.mark.soak
 def test_linux_cifs_mount_browse_emits_actor_owned_client_file_read(tmp_path: Path) -> None:
     """A mounted directory enumeration should project only the Linux client file view."""
 
@@ -353,6 +357,7 @@ def test_linux_cifs_mount_browse_emits_actor_owned_client_file_read(tmp_path: Pa
     ]
 
 
+@pytest.mark.soak
 def test_linux_cifs_copy_uses_authored_local_destination_in_cp_command(tmp_path: Path) -> None:
     """A mounted download should copy into the authored client path, not a fixed home path."""
 
@@ -385,6 +390,7 @@ def test_linux_cifs_copy_uses_authored_local_destination_in_cp_command(tmp_path:
     assert client_create.get("actorID")
 
 
+@pytest.mark.soak
 def test_linux_cifs_upload_move_uses_mv_from_authored_source_to_mount(tmp_path: Path) -> None:
     """A mounted upload move should retain mv morphology and both native operands."""
 
@@ -459,6 +465,7 @@ def test_linux_cifs_upload_move_uses_mv_from_authored_source_to_mount(tmp_path: 
     assert "actorID" not in authored_flow
 
 
+@pytest.mark.soak
 def test_linux_cifs_mount_rename_uses_mounted_previous_and_current_paths(tmp_path: Path) -> None:
     """Mounted rename companions should use POSIX paths while server and wire stay native."""
 
@@ -518,6 +525,7 @@ def test_linux_cifs_mount_rename_uses_mounted_previous_and_current_paths(tmp_pat
     assert zeek_rename["prev_name"] == r"Briefs\windows-brief.docx"
 
 
+@pytest.mark.soak
 def test_linux_auto_access_without_mount_falls_back_to_direct_smbclient(
     tmp_path: Path,
 ) -> None:
@@ -557,6 +565,7 @@ def test_linux_auto_access_without_mount_falls_back_to_direct_smbclient(
     assert "//FS-WIN-01/Documents" in client_flow["properties"]["command_line"]
 
 
+@pytest.mark.slow
 def test_external_client_to_samba_keeps_network_locality_and_server_only_endpoint(
     linux_matrix_output: Path,
 ) -> None:
@@ -592,6 +601,7 @@ def test_external_client_to_samba_keeps_network_locality_and_server_only_endpoin
     )
 
 
+@pytest.mark.slow
 def test_cross_server_copy_keeps_distinct_server_local_paths_and_transport_identities(
     linux_matrix_output: Path,
 ) -> None:
@@ -632,6 +642,7 @@ def test_cross_server_copy_keeps_distinct_server_local_paths_and_transport_ident
     assert source.get("actorID") != destination.get("actorID")
 
 
+@pytest.mark.soak
 def test_cross_server_copy_uses_each_share_fixed_mapping_and_casefolded_id(
     tmp_path: Path,
 ) -> None:
@@ -666,6 +677,7 @@ def test_cross_server_copy_uses_each_share_fixed_mapping_and_casefolded_id(
     }
 
 
+@pytest.mark.slow
 def test_samba_to_windows_cross_server_copy_preserves_native_paths_and_direction(
     linux_matrix_output: Path,
 ) -> None:
@@ -737,6 +749,7 @@ def test_samba_to_windows_cross_server_copy_preserves_native_paths_and_direction
     assert source_read["objectID"] != destination_write["objectID"]
 
 
+@pytest.mark.slow
 def test_successful_cross_server_move_writes_destination_before_source_delete(
     linux_matrix_output: Path,
 ) -> None:
@@ -833,6 +846,7 @@ def test_successful_cross_server_move_writes_destination_before_source_delete(
     assert destination_write["timestamp_ms"] < source_delete["timestamp_ms"]
 
 
+@pytest.mark.soak
 def test_cross_server_move_does_not_delete_source_when_destination_fails(
     tmp_path: Path,
 ) -> None:
@@ -864,6 +878,7 @@ def test_cross_server_move_does_not_delete_source_when_destination_fails(
     ]
 
 
+@pytest.mark.soak
 def test_cross_server_denied_leg_uses_its_fixed_mapping_principal(tmp_path: Path) -> None:
     """Parent outcome planning must use the same per-leg credential as each child bundle."""
 
@@ -886,6 +901,7 @@ def test_cross_server_denied_leg_uses_its_fixed_mapping_principal(tmp_path: Path
     assert [operation["outcome"] for operation in operations] == ["success", "access_denied"]
 
 
+@pytest.mark.soak
 def test_cross_server_move_can_fail_only_on_source_delete(tmp_path: Path) -> None:
     """Read and destination-create legs must complete before a denied move delete."""
 
@@ -909,6 +925,7 @@ def test_cross_server_move_can_fail_only_on_source_delete(tmp_path: Path) -> Non
     ]
 
 
+@pytest.mark.soak
 def test_share_to_client_move_can_fail_only_on_server_delete(tmp_path: Path) -> None:
     """A read-only share move should leave a successful local copy and denied delete."""
 
@@ -930,6 +947,7 @@ def test_share_to_client_move_can_fail_only_on_server_delete(tmp_path: Path) -> 
     assert [operation["outcome"] for operation in operations] == ["success", "access_denied"]
 
 
+@pytest.mark.soak
 def test_client_to_samba_move_is_upload_then_local_delete_not_server_rename(
     tmp_path: Path,
 ) -> None:
@@ -996,6 +1014,7 @@ def test_client_to_samba_move_is_upload_then_local_delete_not_server_rename(
 
 
 @pytest.mark.parametrize("operation", ["browse", "create", "update", "move", "delete"])
+@pytest.mark.soak
 def test_linux_to_samba_exercises_remaining_vfs_operations(
     operation: str,
     tmp_path: Path,
@@ -1080,6 +1099,7 @@ def test_linux_to_samba_exercises_remaining_vfs_operations(
         )
 
 
+@pytest.mark.soak
 def test_linux_client_copy_uses_posix_local_path_and_distinct_process_identity(
     tmp_path: Path,
 ) -> None:
@@ -1118,6 +1138,7 @@ def test_linux_client_copy_uses_posix_local_path_and_distinct_process_identity(
     assert client_create["objectID"] != server_read["objectID"]
 
 
+@pytest.mark.soak
 def test_generic_linux_tcp_445_connection_remains_transport_only(tmp_path: Path) -> None:
     """A generic connection to Samba must not fabricate semantic share/file activity."""
 
@@ -1197,6 +1218,7 @@ def test_generic_linux_tcp_445_connection_remains_transport_only(tmp_path: Path)
     ]
 
 
+@pytest.mark.soak
 def test_organization_pack_storage_catalog_composes_with_samba_server(tmp_path: Path) -> None:
     """Organization-pack storage vocabulary should compile unchanged onto Samba."""
 
@@ -1378,7 +1400,15 @@ def test_organization_pack_storage_catalog_composes_with_samba_server(tmp_path: 
     )
 
 
-@pytest.mark.parametrize("outcome", ["access_denied", "not_found", "sharing_violation"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "access_denied",
+        pytest.param("not_found", marks=pytest.mark.soak),
+        pytest.param("sharing_violation", marks=pytest.mark.soak),
+    ],
+)
+@pytest.mark.soak
 def test_samba_failures_are_audited_without_successful_file_transfer(
     tmp_path: Path,
     outcome: str,
@@ -1425,6 +1455,7 @@ def test_samba_failures_are_audited_without_successful_file_transfer(
     assert any(any(token in message for token in outcome_tokens) for message in samba_messages)
 
 
+@pytest.mark.soak
 def test_encrypted_samba_share_hides_sensor_file_detail_but_keeps_endpoint_evidence(
     tmp_path: Path,
 ) -> None:

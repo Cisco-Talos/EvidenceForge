@@ -6,6 +6,8 @@
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from evidenceforge.evaluation.engine import EvaluationEngine
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
@@ -23,6 +25,7 @@ from evidenceforge.models.scenario import (
 )
 
 
+@pytest.mark.slow
 def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None:
     scenario = Scenario(
         version="1.0",
@@ -148,6 +151,7 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     assert report.generated_at == datetime.fromisoformat(ground_truth["generated_at"])
 
 
+@pytest.mark.soak
 def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(tmp_path) -> None:
     systems = [
         System(

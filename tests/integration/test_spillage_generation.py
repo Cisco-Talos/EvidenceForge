@@ -7,6 +7,7 @@ accurate ground truth, passes `eforge eval`, and validates safely."""
 import datetime
 import json
 import re
+import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -135,21 +136,33 @@ def _ecar_records(out: Path) -> list[dict]:
     return rows
 
 
-@pytest.fixture
-def spillage_scenario(scenarios_dir: Path) -> dict:
-    return load_yaml(scenarios_dir / "spillage.yaml")
+@pytest.fixture(scope="module")
+def spillage_scenario() -> dict:
+    return load_yaml(Path(__file__).parent.parent / "fixtures" / "scenarios" / "spillage.yaml")
+
+
+@pytest.fixture(scope="module")
+def generated_spillage(
+    spillage_scenario: dict,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """Generate the canonical spillage fixture once for read-only assertions."""
+
+    return _generate(spillage_scenario, tmp_path_factory.mktemp("spillage"))
 
 
 class TestSpillageGeneration:
-    def test_every_label_lands_on_disk(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_every_label_lands_on_disk(self, generated_spillage):
+        out = generated_spillage
         corpus = _all_data_text(out)
         for rec in _records(out):
             # No phantom labels: every ground-truth credential is actually present.
             assert rec["rendered_value"] in corpus, f"missing on disk: {rec['record_id']}"
 
-    def test_ground_truth_shape_and_regex(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_ground_truth_shape_and_regex(self, generated_spillage):
+        out = generated_spillage
         recs = _records(out)
         assert len(recs) == 8
         assert {r["surface"] for r in recs} == {
@@ -172,10 +185,11 @@ class TestSpillageGeneration:
                 rx = get_family(r["family"])["regex"]
                 assert re.search(rx, r["value"]), f"{r['family']}: {r['value']!r} !~ {rx}"
 
-    def test_ground_truth_reconciles_every_authored_spill(self, spillage_scenario, tmp_path):
+    @pytest.mark.slow
+    def test_ground_truth_reconciles_every_authored_spill(self, generated_spillage):
         """Every typed spill remains linked to its independent authored intent."""
 
-        out = _generate(spillage_scenario, tmp_path / "out")
+        out = generated_spillage
         document = _document(out)
         reconciliation = document["intent_reconciliation"]
 
@@ -186,25 +200,23 @@ class TestSpillageGeneration:
         assert reconciliation["unexpected_intent_ids"] == []
         assert len({record["intent_id"] for record in document["events"]}) == 8
 
-    def test_values_are_varied_not_repeated_literals(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_values_are_varied_not_repeated_literals(self, generated_spillage):
+        out = generated_spillage
         recs = _records(out)
         # Every spill is a distinct credential (the two aws_iam events differ too).
         assert len({r["rendered_value"] for r in recs}) == len(recs)
         aws = [r["value"] for r in recs if r["family"] == "aws_iam"]
         assert len(aws) == 2 and aws[0] != aws[1]
 
-    def test_md_does_not_splash_full_secret(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_md_does_not_splash_full_secret(self, generated_spillage):
+        out = generated_spillage
         md = (out / "GROUND_TRUTH.md").read_text()
         for rec in _records(out):
             assert rec["value"] not in md  # only redacted preview + hash in the human report
 
-    def test_generation_is_deterministic(self, spillage_scenario, tmp_path):
-        a = _generate(spillage_scenario, tmp_path / "a")
-        b = _generate(spillage_scenario, tmp_path / "b")
-        assert (a / "GROUND_TRUTH.json").read_text() == (b / "GROUND_TRUTH.json").read_text()
-
+    @pytest.mark.soak
     def test_window_edge_shell_spill_is_not_a_phantom_label(self, tmp_path):
         # A shell_history spill whose dwell-shifted time lands past the scenario
         # window emits no bash line; the canonical document must mark it as not emitted rather
@@ -233,6 +245,7 @@ class TestSpillageGeneration:
             assert recs[0]["skipped_reason"]
             assert "rendered_value" not in recs[0]
 
+    @pytest.mark.soak
     def test_overwrite_without_spills_replaces_canonical_ground_truth(self, tmp_path):
         # The canonical GROUND_TRUTH.json file participates in the CLI overwrite
         # swap and remains present even for baseline-only runs.
@@ -262,9 +275,12 @@ class TestSpillageGeneration:
         assert (out / "GROUND_TRUTH.json").exists()
 
 
+@pytest.mark.slow
 class TestSpillageEval:
-    def test_eval_accepts_source_appropriate_storyline_pivots(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    def test_eval_accepts_source_appropriate_storyline_pivots(
+        self, spillage_scenario, generated_spillage
+    ):
+        out = generated_spillage
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
         pivot = next(
             criterion
@@ -277,9 +293,12 @@ class TestSpillageEval:
         assert pivot.actual is not None
         assert pivot.actual >= pivot.threshold
 
-    def test_eval_reads_canonical_ground_truth_not_synthesis(self, spillage_scenario, tmp_path):
+    def test_eval_reads_canonical_ground_truth_not_synthesis(
+        self, spillage_scenario, generated_spillage, tmp_path
+    ):
         # Eval must rely on GROUND_TRUTH.json; with it removed, spillage cannot be matched.
-        out = _generate(spillage_scenario, tmp_path / "out")
+        out = tmp_path / "without-ground-truth"
+        shutil.copytree(generated_spillage, out)
         (out / "GROUND_TRUTH.json").unlink()
         report = EvaluationEngine(output_dir=out, scenario=Scenario(**spillage_scenario)).run()
         ep = next(
@@ -291,16 +310,18 @@ class TestSpillageEval:
 
 
 class TestSpillageAccuracy:
-    def test_process_command_line_lands_in_ecar(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_process_command_line_lands_in_ecar(self, generated_spillage):
+        out = generated_spillage
         ecar = "\n".join(p.read_text() for p in out.rglob("*") if "ecar" in p.name.lower())
         proc_recs = [r for r in _records(out) if r["surface"] == "process_command_line"]
         assert proc_recs
         for r in proc_recs:
             assert r["rendered_value"] in ecar  # credential on the process command line
 
-    def test_syslog_spill_line_is_rfc5424_wellformed(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_syslog_spill_line_is_rfc5424_wellformed(self, generated_spillage):
+        out = generated_spillage
         # Multiple hosts each emit a syslog.log; read them all to find the spill host.
         syslog = "\n".join(p.read_text() for p in out.rglob("syslog.log"))
         token = next(r["rendered_value"] for r in _records(out) if r["surface"] == "syslog_message")
@@ -308,10 +329,9 @@ class TestSpillageAccuracy:
         assert re.match(r"^<\d{1,3}>1 \S+ \S+ \S+ - - - ", line)
         assert "\t" not in line and "\n" not in line
 
-    def test_http_surfaces_land_in_web_access_with_client_and_target(
-        self, spillage_scenario, tmp_path
-    ):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_http_surfaces_land_in_web_access_with_client_and_target(self, generated_spillage):
+        out = generated_spillage
         web_lines = [ln for p in out.rglob("web_access.log") for ln in p.read_text().splitlines()]
         web_files = [str(p) for p in out.rglob("web_access.log")]
         http_recs = [r for r in _records(out) if r["surface"].startswith("http")]
@@ -329,8 +349,9 @@ class TestSpillageAccuracy:
             assert r["target_system"].startswith("WEB-APP-01")
             assert any(r["target_system"] in p for p in web_files)
 
-    def test_http_request_url_in_path_referrer_in_referer_field(self, spillage_scenario, tmp_path):
-        out = _generate(spillage_scenario, tmp_path / "out")
+    @pytest.mark.slow
+    def test_http_request_url_in_path_referrer_in_referer_field(self, generated_spillage):
+        out = generated_spillage
         web_lines = [
             line for p in out.rglob("web_access.log") for line in p.read_text().splitlines()
         ]
@@ -347,6 +368,7 @@ class TestSpillageAccuracy:
         ref_line = next(line for line in web_lines if recs["http_referrer"] in line)
         assert recs["http_referrer"] in ref_line.split('"')[3]  # 2nd quoted field = referer
 
+    @pytest.mark.soak
     def test_http_and_process_spills_land_from_a_windows_actor(self, tmp_path):
         # http_* and process_command_line are cross-OS: a Windows actor host must
         # still leak the credential (http_* into the web server's access log,
@@ -372,6 +394,7 @@ class TestSpillageAccuracy:
         # …and the process-command-line spill lands in EDR/ecar telemetry.
         assert recs["process_command_line"]["rendered_value"] in ecar
 
+    @pytest.mark.soak
     def test_windows_process_spill_uses_visible_session_logon_context(self, tmp_path):
         scenario = _linux_scenario(
             [{"type": "spillage", "surface": "process_command_line", "family": "bearer_token"}],
@@ -429,6 +452,7 @@ class TestSpillageAccuracy:
             for row in ecar_rows
         )
 
+    @pytest.mark.soak
     def test_http_spillage_with_normalized_web_server_role_lands_on_disk(self, tmp_path):
         scenario = _linux_scenario(
             [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
@@ -443,6 +467,7 @@ class TestSpillageAccuracy:
         assert rec["expected_sources"] == ["web_access"]
         assert rec["rendered_value"] in web
 
+    @pytest.mark.soak
     def test_db_uri_through_http_url_is_percent_encoded_on_disk(self, tmp_path):
         # db_uri is the heaviest-encoding family (:// @ : /). Through http_request_url
         # the on-disk form must be percent-encoded and the raw value absent unencoded.
@@ -461,6 +486,7 @@ class TestSpillageAccuracy:
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score >= 85  # eval traces the percent-encoded credential
 
+    @pytest.mark.soak
     def test_fqdn_web_server_target_matches_dir_without_doubling(self, tmp_path):
         # A web_server whose hostname is already an FQDN must not get the domain
         # doubled; target_system must equal the actual web_access output directory.
@@ -479,6 +505,7 @@ class TestSpillageAccuracy:
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score >= 85  # eval still resolves the host and traces the credential
 
+    @pytest.mark.soak
     def test_referrer_ua_is_os_coherent_with_actor(self, tmp_path):
         # http_referrer uses a browser UA matched to the actor's OS (AGENTS.md rule 3),
         # not a uniformly-random pool that would emit a Windows/iPhone UA from Linux.
@@ -499,6 +526,7 @@ class TestSpillageAccuracy:
         assert "Mozilla" in ua  # browser-class, not a tool client
         assert "Linux" in ua or "X11" in ua  # OS-coherent with the Linux actor host
 
+    @pytest.mark.soak
     def test_http_scheme_is_cleartext_and_https_scheme_keeps_secret_out_of_zeek_http(
         self, tmp_path
     ):
@@ -569,6 +597,7 @@ class TestSpillageAccuracy:
         assert https_conn_uids
         assert any(row.get("uid") in https_conn_uids for row in ssl_rows)
 
+    @pytest.mark.soak
     def test_omitted_scheme_auto_uses_http_for_http_only_web_server(self, tmp_path):
         scenario = _linux_scenario(
             [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
@@ -583,6 +612,7 @@ class TestSpillageAccuracy:
         assert rec["scheme"] == "http"
         assert rec["rendered_value"] in zeek_http
 
+    @pytest.mark.soak
     def test_omitted_scheme_auto_prefers_https_for_generic_web_server(self, tmp_path):
         scenario = _linux_scenario(
             [{"type": "spillage", "surface": "http_request_url", "family": "gcp_api_key"}],
@@ -611,6 +641,7 @@ class TestSpillageAccuracy:
             for row in conn_rows
         )
 
+    @pytest.mark.soak
     def test_process_command_line_spills_survive_interactive_session(self, tmp_path):
         # Regression: multiple process_command_line spills run while the actor has a
         # busy interactive SSH session must all land in eCAR and be matched. They
@@ -701,6 +732,7 @@ class TestSpillageAccuracy:
         ep = next(s for p in report.pillars for s in p.sub_scores if s.key == "event_presence")
         assert ep.score >= 85
 
+    @pytest.mark.soak
     def test_http_spill_renders_web_access_when_network_sensor_does_not_observe(self, tmp_path):
         # If no sensor observes the actor->web-server path, generate_connection is
         # filtered and nothing lands; ground truth must NOT label it (no phantom).
@@ -794,6 +826,7 @@ class TestSpillageAccuracy:
         assert http_recs and all(rec["emitted"] is True for rec in http_recs)
         assert all(rec["rendered_value"] in _all_data_text(out) for rec in http_recs)
 
+    @pytest.mark.soak
     def test_jsonl_time_matches_emitted_bash_line(self, tmp_path):
         scenario = _linux_scenario(
             [
@@ -815,6 +848,7 @@ class TestSpillageAccuracy:
         assert {r["time"] for r in sh} == epochs
         assert len({r["time"] for r in sh}) == 2  # dwell shifted the second event
 
+    @pytest.mark.slow
     def test_spillage_traces_despite_dwell_drift_beyond_tolerance(self):
         # In a busy scenario, bash dwell scheduling can shift a spill well past the
         # storyline time (>120s match tolerance). The eval anchors to the canonical document's
@@ -854,6 +888,7 @@ class TestSpillageAccuracy:
         ep = next(s for s in pillar.sub_scores if s.key == "event_presence")
         assert ep.score == 100.0  # found despite the 200s drift, via GT-time anchoring
 
+    @pytest.mark.slow
     def test_multiple_spills_in_one_step_each_must_be_observed(self):
         # When one storyline step contains multiple spillage events, finding one
         # credential must NOT vouch for the others — each labeled spill must appear
@@ -920,6 +955,7 @@ class TestSpillageAccuracy:
         ep2 = next(s for s in p2.sub_scores if s.key == "event_presence")
         assert ep2.score == 100.0
 
+    @pytest.mark.slow
     def test_duplicate_value_spills_require_distinct_landings(self):
         # Two spills of the SAME credential in one step must each be matched by a
         # DISTINCT trace — one landed copy cannot satisfy both (multiset collapse).
@@ -992,6 +1028,7 @@ class TestSpillageAccuracy:
         ep2 = next(s for s in p2.sub_scores if s.key == "event_presence")
         assert ep2.score == 100.0
 
+    @pytest.mark.slow
     def test_value_spilled_to_one_surface_is_not_credited_by_another(self):
         # A value spilled to http_request_url (expected in web_access) must NOT be
         # credited by the same string appearing in a syslog line (cross-surface

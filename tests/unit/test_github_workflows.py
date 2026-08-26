@@ -51,3 +51,15 @@ def test_external_github_actions_are_pinned_to_full_commit_shas() -> None:
     assert not failures, "External GitHub Actions must use full commit SHAs:\n" + "\n".join(
         failures
     )
+
+
+def test_release_slow_workflow_excludes_soak_diagnostics() -> None:
+    """The release lane selects the exclusive slow tier through native pytest markers."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = (repo_root / ".github" / "workflows" / "release-slow.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "uv run pytest -m slow --no-cov" in workflow
+    assert "--include-slow" not in workflow
+    assert "--include-soak" not in workflow

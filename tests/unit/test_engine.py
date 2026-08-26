@@ -89,6 +89,7 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
     )
 
 
+@pytest.mark.slow
 class TestGenerationEngine:
     """Tests for GenerationEngine class."""
 

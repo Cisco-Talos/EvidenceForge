@@ -95,6 +95,8 @@ from evidenceforge.generation.timing import (
 from evidenceforge.models.exceptions import EventContractError
 from tests.network_factories import network_plan
 
+pytestmark = pytest.mark.slow
+
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 _MIGRATED_FORMATS = {
     "zeek_conn",

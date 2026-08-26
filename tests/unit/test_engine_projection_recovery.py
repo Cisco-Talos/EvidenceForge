@@ -46,6 +46,8 @@ from evidenceforge.models import (
     User,
 )
 
+pytestmark = pytest.mark.slow
+
 
 class _RecoveryDispatcher:
     """Small protocol double for the dispatcher-owned recovery carrier."""

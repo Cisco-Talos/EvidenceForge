@@ -43,6 +43,7 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelCloseToken,
     ApplicationChannelPreparedCommit,
     ApplicationChannelRegistry,
+    ApplicationChannelRetirementProof,
 )
 from evidenceforge.generation.indexes import (
     IndexMetrics,
@@ -682,6 +683,7 @@ class SshChannelClosure:
     reason: str
     source_process: SshProcessHold | None
     receiver_process: SshProcessHold
+    retirement_proof: ApplicationChannelRetirementProof
 
 
 @dataclass(frozen=True, slots=True)
@@ -2590,6 +2592,7 @@ class SshApplicationChannelManager:
         *,
         closed_at: datetime,
         reason: str,
+        retirement_proof: ApplicationChannelRetirementProof,
     ) -> SshChannelClosure:
         return SshChannelClosure(
             channel_id=session.channel_id,
@@ -2603,6 +2606,7 @@ class SshApplicationChannelManager:
             reason=reason,
             source_process=session.transport.source_process,
             receiver_process=session.transport.receiver_process,
+            retirement_proof=retirement_proof,
         )
 
     def _retire_locked(
@@ -2615,6 +2619,8 @@ class SshApplicationChannelManager:
     ) -> SshChannelClosure:
         snapshot = self._registry.get(session.channel_id)
         close_time = _canonical_utc(at)
+        retirement_proof: ApplicationChannelRetirementProof
+        handle = shard.sessions.handle_for(session.channel_id)
         if snapshot is not None and snapshot.is_open:
             if snapshot.active_operations:
                 raise StateError(
@@ -2629,20 +2635,31 @@ class SshApplicationChannelManager:
                 effective_deadline,
                 max(close_time, snapshot.identity.opened_at, snapshot.last_activity_at),
             )
-            self._registry.close_channel(
+            close_result = self._registry.close_channel_by_token(
                 session.channel_id,
+                token=shard.sessions.close_token_by_handle(handle),
                 closed_at=close_time,
                 reason=reason,
+                include_retirement_proof=True,
             )
+            close_time = close_result.closed_at
+            if close_result.retirement_proof is None:
+                raise StateError("SSH channel close returned no retirement proof")
+            retirement_proof = close_result.retirement_proof
         elif snapshot is not None and snapshot.closed_at is not None:
             close_time = snapshot.closed_at
+            retirement_proof = self._registry.retirement_proof(session.channel_id)
         else:
-            close_time = min(close_time, session.transport.closes_at)
-        handle = shard.sessions.handle_for(session.channel_id)
+            raise StateError("SSH sidecar lost its shared application retirement owner")
         shard.expiry.pop(handle, None)
         shard.sessions.delete(session.channel_id)
         self._evict_cached_session(session.channel_id)
-        return self._closure(session, closed_at=close_time, reason=reason)
+        return self._closure(
+            session,
+            closed_at=close_time,
+            reason=retirement_proof.snapshot.close_reason,
+            retirement_proof=retirement_proof,
+        )
 
     def close_session(
         self,
@@ -2753,6 +2770,7 @@ class SshApplicationChannelManager:
                                     token=close_token,
                                     closed_at=datetime.fromtimestamp(deadline, tz=UTC),
                                     reason="deadline",
+                                    include_retirement_proof=True,
                                 )
                             except StateError as exc:
                                 if "active operations" not in str(exc):
@@ -2764,11 +2782,15 @@ class SshApplicationChannelManager:
                             shard.expiry.pop(handle, None)
                             shard.sessions.delete(session.channel_id)
                             self._evict_cached_session(session.channel_id)
+                            retirement_proof = close_result.retirement_proof
+                            if retirement_proof is None:
+                                raise StateError("SSH watermark close returned no retirement proof")
                             closures.append(
                                 self._closure(
                                     session,
                                     closed_at=close_result.closed_at,
-                                    reason="deadline",
+                                    reason=retirement_proof.snapshot.close_reason,
+                                    retirement_proof=retirement_proof,
                                 )
                             )
                             remaining -= 1

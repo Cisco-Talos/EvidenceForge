@@ -57,6 +57,7 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.slow
 class TestConnStateDistribution:
     """Verify conn_state distribution is varied."""
 
@@ -154,6 +155,7 @@ class TestConnStateRebalance:
         assert "S2" in states, "S2 state missing"
         assert "S3" in states, "S3 state missing"
 
+    @pytest.mark.soak
     def test_statistical_sf_ratio(self, activity_gen, timestamp, state_manager, mock_emitters):
         """Over 2000 connections, SF% should fall between 50% and 78%."""
         import random

@@ -85,17 +85,25 @@ handoff details in `docs/worklog/` until they are no longer useful.
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
-- Default test runs should avoid coverage instrumentation: use `uv run pytest --no-cov`
+- Default test runs should avoid coverage instrumentation: use `uv run pytest`
   for normal local and feature-PR validation. Coverage is a release/readiness
   gate before `dev` → `main`, run explicitly with
   `uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70`.
-- Separate test markers: `@pytest.mark.slow` for large dataset/workload tests
-  (not run by default). Run slow tests with `--no-cov` unless you are
-  specifically profiling coverage behavior, because coverage instrumentation
-  makes the generator workload much slower.
-- Do not combine `--include-slow` with coverage during release validation. Slow
+- Separate test markers: `@pytest.mark.slow` for the extended release gate and
+  `@pytest.mark.soak` for exceptional million-entry, multi-week, exhaustive-matrix, or full-demo
+  workloads. Neither runs by default. Keep narrow correctness and lifecycle
+  contracts in the routine gate; put distinct but expensive fault matrices,
+  fresh-process determinism checks, and representative end-to-end generation in
+  `slow`. Slow and soak are mutually exclusive tiers. Soak tests are diagnostic
+  and are not routine or release gates. Run
+  slow and soak tests with `--no-cov` because coverage instrumentation makes
+  generator workloads much slower.
+- Do not combine `-m slow` or `-m soak` with coverage during release validation. Extended
   tests are intentionally run with `--no-cov`; coverage is measured on the
   default non-slow suite.
+- Run soak tests only for a relevant scalability, duration, or exhaustive-path
+  change with `uv run pytest -m soak --no-cov`. Run the extended release tier
+  with `uv run pytest -m slow --no-cov`.
 - Enforced release coverage gate: 70% minimum. Aspirational target: 95%+ overall
   and 95%+ for the core generation engine.
 
@@ -461,6 +469,11 @@ past remote authentication, omit that FLOW's process identity rather than moving
 the transport observation later. SSH syslog auth timing must account for the
 canonical event's eCAR/EDR FLOW source-latency window, not only the network
 sensor's final rendered connection timestamp.
+An SSH application-channel watermark may retire its sidecar only by transferring a
+registry-authenticated terminal snapshot proof into the exact SSH continuation. The proof must
+remain authentic after the closed-channel grace tombstone expires. Watermark advancement owns no
+terminal rendering: retain and retry failed adoption before requesting another manager page, and
+leave endpoint/session termination evidence to the existing lifecycle finalizer.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
@@ -479,6 +492,11 @@ bundle.
 As with SSH, endpoint `FLOW` rows for RDP transport should stay near the
 transport open; if late process visibility would invert transport-before-auth
 ordering, drop PID/principal from the FLOW instead of delaying it.
+If RDP source publication fails after canonical network/application commit, recover the full
+retained materialization graph, including the authenticated RDP application receipt, before
+installing the exact lifecycle continuation. Do not redispatch source rows. Cancel the reserved
+continuation only when non-commit is positively established; preserve it and surface the recovery
+failure when commit state is indeterminate.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action
@@ -587,6 +605,10 @@ commands, align commands after SSH/session readiness, schedule per-user
 bash-history timestamps, emit bash history, and then emit optional process
 telemetry through shared adapter hooks. Do not hand-roll separate bash-history
 and process timing paths for the same modeled command.
+For foreground Linux commands, the process close plus at most 1,400 ms of shell-release jitter
+must precede the owning session close; reserve a 25 ms lifecycle margin as well. Reject an
+impossible action-cohort interval before mutation. Compatibility paths with no valid independent
+close window leave termination to the session owner rather than emitting an invalid process close.
 
 For process execution, route canonical process create/terminate lifecycle and
 process-owned side effects through the process-execution action bundle. The
@@ -729,10 +751,10 @@ When adding or significantly modifying event types, emitters, or the event schem
 targets are 95%+ overall, 95%+ core engine, 90%+ formats, and 85%+ CLI. Exclude:
 `__main__.py`, type stubs, test fixtures.
 
-**Default validation:** run `uv run pytest --no-cov` for normal development and
+**Default validation:** run `uv run pytest` for normal development and
 feature PRs. Run the explicit coverage command only for release readiness before
-opening or updating a `dev` → `main` PR. Do not combine `--include-slow` with
-coverage during release validation.
+opening or updating a `dev` → `main` PR. Do not combine `-m slow` or `-m soak`
+with coverage during release validation.
 
 **Conventions:**
 - Test naming: `test_<function>_<scenario>_<expected_result>`

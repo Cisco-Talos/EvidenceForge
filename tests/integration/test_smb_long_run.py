@@ -134,7 +134,7 @@ def _transport_plan(
     )
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_31_day_smb_state_and_external_sorting_remain_bounded(tmp_path: Path) -> None:
     """A 31-day output keeps finalization memory independent of record count."""
 
@@ -156,7 +156,7 @@ def test_31_day_smb_state_and_external_sorting_remain_bounded(tmp_path: Path) ->
         assert sum(1 for _line in output) == 31 * 24 * 100
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_31_day_mixed_windows_and_samba_state_remains_bounded() -> None:
     """Hourly SMB closure and daily common expiry plateau by day seven."""
 

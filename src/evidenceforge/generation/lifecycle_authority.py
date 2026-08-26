@@ -1152,6 +1152,32 @@ class LifecycleConnectionCompositeResult:
     receipt: LifecycleConnectionCompositeReceipt
 
 
+_LIFECYCLE_CONNECTION_COMPOSITE_RESULT_FIELD_NAMES = (
+    "state",
+    "lifecycle",
+    "application",
+    "receipt",
+)
+_LIFECYCLE_CONNECTION_COMPOSITE_RESULT_DESCRIPTORS = tuple(
+    vars(LifecycleConnectionCompositeResult)[field_name]
+    for field_name in _LIFECYCLE_CONNECTION_COMPOSITE_RESULT_FIELD_NAMES
+)
+_APPLICATION_RESULT_RECEIPT_DESCRIPTORS: tuple[
+    tuple[type[object], MemberDescriptorType],
+    ...,
+] = tuple(
+    (result_type, vars(result_type)["receipt"])
+    for result_type in (
+        ApplicationChannelAdmissionResult,
+        HttpChannelAdmissionResult,
+        ExplicitProxyAdmissionCommitResult,
+        SmbChannelAdmissionResult,
+        SshChannelAdmissionResult,
+        RdpSessionAdmissionResult,
+    )
+)
+
+
 _MAX_DETACHED_NETWORK_BINDING_TEXT_BYTES = 64 * 1024
 _MAX_DETACHED_NETWORK_BINDING_PAYLOAD_BYTES = 1024 * 1024
 _DETACHED_NETWORK_BINDING_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -2436,6 +2462,8 @@ def _prepared_network_authoritative_graph_matches(
     snapshot: object,
     *,
     _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
+    _root_descriptors: tuple[MemberDescriptorType, ...] | None = None,
+    _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
 ) -> bool:
     """Compare one public graph to its neutral snapshot without invoking value callbacks."""
 
@@ -2455,14 +2483,28 @@ def _prepared_network_authoritative_graph_matches(
             or type(expected_fields) is not tuple
         ):
             return False
-        for expected_field in expected_fields:
+        if (
+            _root_descriptors is not None
+            and index == 0
+            and len(_root_descriptors) != len(expected_fields)
+        ):
+            return False
+        for field_index, expected_field in enumerate(expected_fields):
             if type(expected_field) is not tuple or len(expected_field) != 2:
                 return False
             field_name, expected = expected_field
             if type(field_name) is not str:
                 return False
             try:
-                actual = _object_getattribute(target, field_name)
+                actual = (
+                    _member_get(
+                        _root_descriptors[field_index],
+                        target,
+                        expected_type,
+                    )
+                    if _root_descriptors is not None and index == 0
+                    else _object_getattribute(target, field_name)
+                )
             except AttributeError:
                 return False
             expected_value_type = type(expected)
@@ -2475,6 +2517,37 @@ def _prepared_network_authoritative_graph_matches(
             elif actual is not expected:
                 return False
     return True
+
+
+def _prepared_network_result_authoritative_graph_matches(
+    root: object,
+    snapshot: object,
+    *,
+    _field_names: tuple[str, ...] = _PREPARED_NETWORK_RESULT_FIELD_NAMES,
+    _descriptors: tuple[MemberDescriptorType, ...] = _PREPARED_NETWORK_RESULT_DESCRIPTORS,
+    _graph_matches: Callable[..., bool] = _prepared_network_authoritative_graph_matches,
+) -> bool:
+    """Match a retained result without consulting replaceable class descriptors."""
+
+    if type(root) is not LifecyclePreparedNetworkResult or type(snapshot) is not tuple:
+        return False
+    if not snapshot or type(snapshot[0]) is not tuple or len(snapshot[0]) != 3:
+        return False
+    expected_fields = snapshot[0][2]
+    if (
+        type(expected_fields) is not tuple
+        or tuple(
+            field[0] if type(field) is tuple and len(field) == 2 else None
+            for field in expected_fields
+        )
+        != _field_names
+    ):
+        return False
+    return _graph_matches(
+        root,
+        snapshot,
+        _root_descriptors=_descriptors,
+    )
 
 
 def _restore_prepared_network_authoritative_graph(
@@ -5505,6 +5578,9 @@ class GeneratorLifecycleAuthority:
         _graph_matches: Callable[[object, object], bool] = (
             _prepared_network_authoritative_graph_matches
         ),
+        _result_graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_result_authoritative_graph_matches
+        ),
     ) -> None:
         """Bind one exact durable planner handoff into its terminal carrier."""
 
@@ -5534,7 +5610,7 @@ class GeneratorLifecycleAuthority:
                 or type(record.result_graph) is not tuple
                 or type(record.receipt_graph) is not tuple
                 or not _graph_matches(root, record.root_graph)
-                or not _graph_matches(result, record.result_graph)
+                or not _result_graph_matches(result, record.result_graph)
                 or not _graph_matches(record.receipt, record.receipt_graph)
                 or not _capture_matches(root, record.receipt, capture, facts)
             ):
@@ -5544,6 +5620,198 @@ class GeneratorLifecycleAuthority:
                 record.durable_capture_facts = facts
             elif record.durable_capture is not capture or record.durable_capture_facts is not facts:
                 raise StateError("Prepared-network durable capture binding changed")
+
+    def retained_prepared_network_recovery_projection(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        result: object,
+        *,
+        _graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_authoritative_graph_matches
+        ),
+        _result_descriptors: tuple[MemberDescriptorType, ...] = (
+            _PREPARED_NETWORK_RESULT_DESCRIPTORS
+        ),
+        _connection_descriptors: tuple[MemberDescriptorType, ...] = (
+            _LIFECYCLE_CONNECTION_COMPOSITE_RESULT_DESCRIPTORS
+        ),
+        _application_receipt_descriptors: tuple[
+            tuple[type[object], MemberDescriptorType],
+            ...,
+        ] = _APPLICATION_RESULT_RECEIPT_DESCRIPTORS,
+        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
+    ) -> tuple[LifecyclePreparedNetworkReceipt, object | None] | None:
+        """Return exact retained receipt identities without consuming their issuance."""
+
+        if (
+            type(root) is not PreparedNetworkTransactionRoot
+            or type(result) is not LifecyclePreparedNetworkResult
+        ):
+            return None
+        try:
+            result_values = tuple(
+                _member_get(descriptor, result, LifecyclePreparedNetworkResult)
+                for descriptor in _result_descriptors
+            )
+            connection_result = result_values[0]
+            result_receipt = result_values[3]
+            if type(connection_result) is not LifecycleConnectionCompositeResult:
+                return None
+            application_result = _member_get(
+                _connection_descriptors[2],
+                connection_result,
+                LifecycleConnectionCompositeResult,
+            )
+            application_receipt = None
+            if application_result is not None:
+                for result_type, receipt_descriptor in _application_receipt_descriptors:
+                    if type(application_result) is result_type:
+                        application_receipt = _member_get(
+                            receipt_descriptor,
+                            application_result,
+                            result_type,
+                        )
+                        break
+                if application_receipt is None:
+                    return None
+        except (AttributeError, IndexError, TypeError):
+            return None
+        root_id = id(root)
+        missing = object()
+
+        def sealed_graph_member(
+            snapshot: object,
+            owner: object,
+            field_name: str,
+        ) -> object:
+            if type(snapshot) is not tuple:
+                return missing
+            found = missing
+            for index, node in enumerate(snapshot):
+                if type(node) is not tuple or len(node) != 3:
+                    return missing
+                retained, _expected_type, expected_fields = node
+                target = result if index == 0 else retained
+                if target is not owner:
+                    continue
+                if found is not missing or type(expected_fields) is not tuple:
+                    return missing
+                for expected_field in expected_fields:
+                    if type(expected_field) is not tuple or len(expected_field) != 2:
+                        return missing
+                    expected_name, expected_value = expected_field
+                    if expected_name == field_name:
+                        found = expected_value
+                        break
+            return found
+
+        def retained_snapshot() -> tuple[object, ...] | None:
+            with self._prepared_network_receipt_issuance_lock:
+                generation = self._prepared_network_receipt_issuance_generations.get(root_id)
+                key = None if generation is None else (root_id, generation)
+                record = None if key is None else self._prepared_network_receipt_issuances.get(key)
+                if (
+                    type(generation) is not int
+                    or generation <= 0
+                    or type(record) is not _PreparedNetworkReceiptIssuance
+                    or record.root is not root
+                    or record.result is not result
+                    or record.receipt is not result_receipt
+                    or record.generation != generation
+                    or type(record.result_values) is not tuple
+                    or len(record.result_values) != len(result_values)
+                    or any(
+                        current is not expected
+                        for current, expected in zip(
+                            result_values,
+                            record.result_values,
+                            strict=True,
+                        )
+                    )
+                    or not record.canonical_committed
+                    or not record.terminal
+                    or record.claim_ref is not None
+                    or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt))
+                    != key
+                    or type(record.root_graph) is not tuple
+                    or type(record.result_graph) is not tuple
+                    or type(record.receipt_graph) is not tuple
+                    or not _graph_matches(root, record.root_graph)
+                    or not _graph_matches(record.receipt, record.receipt_graph)
+                    or any(
+                        sealed_graph_member(record.result_graph, result, field_name) is not value
+                        for field_name, value in zip(
+                            _PREPARED_NETWORK_RESULT_FIELD_NAMES,
+                            result_values,
+                            strict=True,
+                        )
+                    )
+                    or sealed_graph_member(
+                        record.result_graph,
+                        connection_result,
+                        "application",
+                    )
+                    is not application_result
+                    or (
+                        application_result is not None
+                        and sealed_graph_member(
+                            record.result_graph,
+                            application_result,
+                            "receipt",
+                        )
+                        is not application_receipt
+                    )
+                ):
+                    return None
+                return (
+                    record,
+                    generation,
+                    result_receipt,
+                    application_receipt,
+                    record.root_graph,
+                    record.result_graph,
+                    record.receipt_graph,
+                    record.result_values,
+                )
+
+        try:
+            before = retained_snapshot()
+            if (
+                before is None
+                or self.authenticates_prepared_network_receipt(root, result_receipt) is not True
+            ):
+                return None
+            after = retained_snapshot()
+            if after is None or len(after) != len(before):
+                return None
+            stable = all(
+                (
+                    type(current) is int and type(expected) is int and current == expected
+                    if index == 1
+                    else current is expected
+                )
+                for index, (current, expected) in enumerate(zip(after, before, strict=True))
+            )
+            return (result_receipt, application_receipt) if stable else None
+        except (
+            AttributeError,
+            LookupError,
+            RecursionError,
+            RuntimeError,
+            StateError,
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+    def authenticates_retained_prepared_network_result(
+        self,
+        root: PreparedNetworkTransactionRoot,
+        result: object,
+    ) -> bool:
+        """Return whether one exact terminal result still owns its issuance."""
+
+        return self.retained_prepared_network_recovery_projection(root, result) is not None
 
     def acknowledge_prepared_network_transaction(
         self,
@@ -5585,6 +5853,9 @@ class GeneratorLifecycleAuthority:
         _weak_ref: Callable[..., ReferenceType[object]] = ref,
         _graph_matches: Callable[[object, object], bool] = (
             _prepared_network_authoritative_graph_matches
+        ),
+        _result_graph_matches: Callable[[object, object], bool] = (
+            _prepared_network_result_authoritative_graph_matches
         ),
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
@@ -5722,7 +5993,7 @@ class GeneratorLifecycleAuthority:
                 or expected_result_values[3] is not receipt
                 or issuance_values[10] is not expected_result_values[2]
                 or not _graph_matches(root, root_graph)
-                or not _graph_matches(result, result_graph)
+                or not _result_graph_matches(result, result_graph)
                 or not _graph_matches(receipt, receipt_graph)
                 or not durable_capture_matches()
             ):
@@ -5836,7 +6107,7 @@ class GeneratorLifecycleAuthority:
                         raise StateError("Prepared-network acknowledgement is not canonical")
                     if (
                         not _graph_matches(root, root_graph)
-                        or not _graph_matches(result, result_graph)
+                        or not _result_graph_matches(result, result_graph)
                         or not _graph_matches(receipt, receipt_graph)
                         or not durable_capture_matches()
                     ):

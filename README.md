@@ -309,11 +309,14 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 # Install dependencies and development tools
 uv sync --all-extras
 
-# Run tests without coverage instrumentation (skips slow by default)
-uv run pytest --no-cov
+# Run the routine test tier (coverage is opt-in)
+uv run pytest
 
-# Run slow comprehensive workload tests without coverage instrumentation
-uv run pytest --include-slow -m slow --no-cov --durations=20
+# Run the extended release gate without coverage instrumentation
+uv run pytest -m slow --no-cov --durations=20
+
+# Run exceptional scale/duration/exhaustive diagnostics only when relevant
+uv run pytest -m soak --no-cov --durations=20
 
 # Run optional third-party parser validation tests.
 # Requires Docker Compose v2 or Podman Compose.
@@ -322,8 +325,8 @@ uv run pytest --include-external-parsers -m external_parser --no-cov
 # Run the release coverage gate before a dev -> main PR
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
-# Do not combine slow tests with coverage during release validation.
-# Slow tests are run with --no-cov; coverage is measured on the default non-slow suite.
+# Do not combine extended or soak tests with coverage during release validation.
+# Coverage is measured on the default routine suite.
 
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v

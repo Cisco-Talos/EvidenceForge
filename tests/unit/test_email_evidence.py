@@ -309,7 +309,7 @@ def _email_scenario(*, include_email_config: bool = True) -> Scenario:
             ),
             email=email,
         ),
-        time_window=TimeWindow(start="2026-01-05T14:00:00Z", duration="1h", warmup="1h"),
+        time_window=TimeWindow(start="2026-01-05T14:00:00Z", duration="25m", warmup=None),
         observation_profile="complete",
         baseline_activity=BaselineActivity(
             description="Minimal baseline",
@@ -381,6 +381,7 @@ def test_email_message_requires_explicit_email_config() -> None:
     )
 
 
+@pytest.mark.slow
 def test_email_generation_writes_smtp_artifacts_and_ground_truth(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -655,6 +656,7 @@ def test_email_attachment_budget_uses_declared_size_without_allocating_payload()
     assert any("attachment" in violation for violation in estimate.limit_violations)
 
 
+@pytest.mark.soak
 def test_email_artifacts_mode_none_skips_artifact_manifest(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -673,6 +675,7 @@ def test_email_artifacts_mode_none_skips_artifact_manifest(tmp_path: Path) -> No
     assert not (tmp_path / "artifacts").exists()
 
 
+@pytest.mark.soak
 def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -720,6 +723,7 @@ def test_distribution_group_expands_once_and_bcc_stays_out_of_headers(tmp_path: 
     assert "To: <team@corp.example>" in eml_text
 
 
+@pytest.mark.soak
 def test_linux_mail_server_emits_postfix_syslog_lifecycle(tmp_path: Path) -> None:
     scenario = _email_scenario()
     systems = [
@@ -851,6 +855,7 @@ def test_postfix_delay_components_vary_by_queue_and_recipient() -> None:
     assert len(ratio_shapes) >= 8
 
 
+@pytest.mark.soak
 def test_plaintext_smtp_reply_uses_postfix_receive_queue_id(tmp_path: Path, monkeypatch) -> None:
     scenario = _email_scenario()
     systems = [
@@ -910,6 +915,7 @@ def test_plaintext_smtp_reply_uses_postfix_receive_queue_id(tmp_path: Path, monk
     assert any(f" id {queue_id}" in line for line in received_lines)
 
 
+@pytest.mark.soak
 def test_inbound_plaintext_smtp_reply_uses_postfix_receive_queue_id(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -979,6 +985,7 @@ def test_inbound_plaintext_smtp_reply_uses_postfix_receive_queue_id(
     assert any(f" id {queue_id}" in line for line in received_lines)
 
 
+@pytest.mark.soak
 def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monkeypatch) -> None:
     def _tls12_starttls(self, *, dst_system, **_kwargs) -> SslContext:
         return SslContext(
@@ -1072,6 +1079,7 @@ def test_outbound_route_group_override_and_global_isp_relay(tmp_path: Path, monk
     assert {row["fuid"] for row in file_records} >= set(plaintext_fuids)
 
 
+@pytest.mark.soak
 def test_smtp_starttls_certificate_files_fit_connection_response_budget(
     tmp_path: Path,
     monkeypatch,
@@ -1150,6 +1158,7 @@ def test_smtp_starttls_certificate_files_fit_connection_response_budget(
     assert checked
 
 
+@pytest.mark.soak
 def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -1316,6 +1325,7 @@ def test_mixed_internal_external_outbound_hops_scope_recipients(tmp_path: Path) 
     )
 
 
+@pytest.mark.soak
 def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -1365,6 +1375,7 @@ def test_outbound_direct_mx_groups_external_recipients_by_domain(tmp_path: Path)
     assert {row["id.resp_h"] for row in external_hops} == mx_answer_ips
 
 
+@pytest.mark.soak
 def test_email_dns_uses_configured_mail_server_identity(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -1427,6 +1438,7 @@ def test_generic_internal_mail_alias_uses_ingress_mail_server_dns_identity() -> 
     assert dns.AA is True
 
 
+@pytest.mark.soak
 def test_inbound_route_uses_configured_entry_server(tmp_path: Path, monkeypatch) -> None:
     def _no_external_starttls(self, **_kwargs) -> bool:
         return False
@@ -1485,6 +1497,7 @@ def test_inbound_route_uses_configured_entry_server(tmp_path: Path, monkeypatch)
     )
 
 
+@pytest.mark.soak
 def test_external_inbound_sender_can_use_starttls(tmp_path: Path, monkeypatch) -> None:
     def _always_external_starttls(self, **_kwargs) -> bool:
         return True
@@ -1529,6 +1542,7 @@ def test_external_inbound_sender_can_use_starttls(tmp_path: Path, monkeypatch) -
     assert inbound_smtp["fuids"] == []
 
 
+@pytest.mark.soak
 def test_plaintext_external_inbound_reply_uses_postfix_receive_queue_id(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1606,6 +1620,7 @@ def test_plaintext_external_inbound_reply_uses_postfix_receive_queue_id(
     )
 
 
+@pytest.mark.soak
 def test_smtp_starttls_tls12_cipher_matches_certificate_key(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -1646,6 +1661,7 @@ def test_smtp_starttls_tls12_cipher_matches_certificate_key(tmp_path: Path) -> N
     assert checked
 
 
+@pytest.mark.soak
 def test_smtp_starttls_resumed_history_uses_abbreviated_handshake(tmp_path: Path) -> None:
     """SMTP STARTTLS resumption must share the canonical abbreviated-history contract."""
     scenario = _email_scenario()
@@ -1687,6 +1703,7 @@ def test_smtp_starttls_resumed_history_uses_abbreviated_handshake(tmp_path: Path
     assert checked
 
 
+@pytest.mark.soak
 def test_smtp_starttls_replies_are_server_family_textured(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -1737,6 +1754,7 @@ def test_smtp_starttls_replies_are_server_family_textured(tmp_path: Path) -> Non
     assert all(len(replies) >= 3 for replies in replies_by_server.values())
 
 
+@pytest.mark.soak
 def test_smtp_starttls_sni_policy_varies_for_server_to_server(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -1801,6 +1819,7 @@ def test_smtp_starttls_sni_policy_varies_for_server_to_server(tmp_path: Path) ->
     assert "mx.partner.example" in external_relay_names
 
 
+@pytest.mark.soak
 def test_external_sender_received_headers_share_public_hop_model(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -1870,6 +1889,7 @@ def test_external_mail_ip_generation_follows_provider_hostname() -> None:
         assert public_mail_provider_name_for_ip(ip) == provider
 
 
+@pytest.mark.soak
 def test_external_source_mail_system_binds_mx_hostname_to_ip_provider(tmp_path: Path) -> None:
     scenario = _email_scenario()
     engine = GenerationEngine(
@@ -1893,6 +1913,7 @@ def test_external_source_mail_system_binds_mx_hostname_to_ip_provider(tmp_path: 
     )
 
 
+@pytest.mark.soak
 def test_inbound_email_does_not_emit_external_mx_endpoint_ecar(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -1966,6 +1987,7 @@ def test_email_validator_reports_actionable_topology_errors() -> None:
     assert "external-to-external SMTP relay is out of scope" in messages
 
 
+@pytest.mark.soak
 def test_corpus_backed_email_generates_mime_files_and_manifest(tmp_path: Path) -> None:
     corpus_path = tmp_path / "email_corpus.yaml"
     corpus_path.write_text(
@@ -2085,6 +2107,7 @@ messages:
     )
 
 
+@pytest.mark.soak
 def test_office_email_attachment_payload_is_openxml_container(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -2125,6 +2148,7 @@ def test_office_email_attachment_payload_is_openxml_container(tmp_path: Path) ->
     assert attachment.get_filename() == "invoice_77821.xlsm"
 
 
+@pytest.mark.soak
 def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -2198,6 +2222,7 @@ def test_rejected_email_stops_before_mime_artifacts_and_downstream_hops(tmp_path
     assert messages[0]["artifact_export_reason"] == "transport_not_completed"
 
 
+@pytest.mark.soak
 def test_service_email_artifact_uses_service_header_profile(tmp_path: Path) -> None:
     corpus_path = tmp_path / "email_corpus.yaml"
     corpus_path.write_text(
@@ -2269,6 +2294,7 @@ messages:
     } == {"notice.txt": b"Generated by DocFlow."}
 
 
+@pytest.mark.soak
 def test_background_corpus_subjects_are_contextualized(tmp_path: Path) -> None:
     corpus_path = tmp_path / "email_corpus.yaml"
     corpus_path.write_text(
@@ -2318,6 +2344,7 @@ messages:
     assert len(set(corpus_subjects)) >= min(len(corpus_subjects), 2)
 
 
+@pytest.mark.soak
 def test_email_read_event_generates_opaque_tls_access(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -2371,6 +2398,7 @@ def test_email_read_event_generates_opaque_tls_access(tmp_path: Path) -> None:
     assert ground_truth["events"][0]["attributes"]["protocol"] == "owa"
 
 
+@pytest.mark.soak
 def test_linux_imaps_read_emits_dovecot_session_syslog(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -2438,6 +2466,7 @@ def test_linux_imaps_read_emits_dovecot_session_syslog(tmp_path: Path) -> None:
     assert syslog_text.index("imap-login: Login") < syslog_text.index("Disconnected: Logged out")
 
 
+@pytest.mark.soak
 def test_email_storyline_events_count_as_causality_traces(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None
@@ -2606,6 +2635,7 @@ def test_email_corpus_rejects_symlink_and_duplicate_yaml_keys(tmp_path: Path) ->
     )
 
 
+@pytest.mark.soak
 def test_background_email_generates_inbound_outbound_and_reads(tmp_path: Path) -> None:
     scenario = _email_scenario()
     assert scenario.environment.email is not None

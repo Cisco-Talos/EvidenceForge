@@ -86,6 +86,7 @@ def linux_system():
     return System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
 
 
+@pytest.mark.slow
 class TestSystemProcessProtection:
     """Verify seeded system processes are never terminated."""
 

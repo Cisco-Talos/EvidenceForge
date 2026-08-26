@@ -20,18 +20,10 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Integration tests for medium-scale dataset generation.
-
-Phase 2.8: Validates that the generation engine handles 100 users x 8 hours
-without errors, within reasonable time and output bounds.
-
-These tests are marked @pytest.mark.slow and skipped in normal test runs.
-Run explicitly with: pytest -m slow
-"""
+"""Representative release and opt-in soak generation workloads."""
 
 import json
 import tempfile
-import tracemalloc
 from datetime import datetime
 from pathlib import Path
 
@@ -43,10 +35,28 @@ from evidenceforge.utils.files import load_yaml
 
 
 @pytest.fixture(scope="module")
-def medium_scenario():
-    """Load and parse the medium-dataset scenario."""
+def medium_scenario() -> Scenario:
+    """Load a representative 16-user, six-system, one-hour release scenario.
+
+    The checked-in 100-user, eight-hour fixture remains the soak workload. The
+    release gate needs a multi-host/persona integration run, not 800 user-hours
+    of repeated baseline evidence. Four users from each persona family keep
+    behavior diversity while only four workstations, one Linux server, and one
+    domain controller participate.
+    """
     scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "medium-dataset.yaml"
     data = load_yaml(scenario_path)
+    data["name"] = "release-medium-dataset"
+    data["description"] = "Release integration scenario (16 users, 6 systems, 1 hour)"
+    all_users = data["environment"]["users"]
+    data["environment"]["users"] = (
+        all_users[0:4] + all_users[10:14] + all_users[30:34] + all_users[60:64]
+    )
+    keep_systems = {"WS-01", "WS-02", "WS-03", "WS-04", "SRV-LIN-01", "DC-01"}
+    data["environment"]["systems"] = [
+        system for system in data["environment"]["systems"] if system["hostname"] in keep_systems
+    ]
+    data["time_window"]["duration"] = "1h"
     return Scenario(**data)
 
 
@@ -95,20 +105,12 @@ def _generated_file(generated_output: dict, *names: str) -> dict | None:
 
 @pytest.mark.slow
 class TestMediumDatasetGeneration:
-    """Tests for 100-user 8-hour dataset generation."""
+    """Tests over one shared representative release generation."""
 
     def test_generates_without_errors(self, generated_output):
-        """100 users x 8 hours should complete without exceptions."""
+        """The representative multi-user scenario completes without exceptions."""
         assert generated_output["duration"] > 0
         assert len(generated_output["files"]) > 0
-
-    @pytest.mark.skip(
-        reason="Host-dependent five-minute ceiling is not a release gate; retained as reference"
-    )
-    def test_completes_in_reasonable_time(self, generated_output):
-        """Retain the legacy five-minute performance target as a non-gating reference."""
-        duration = generated_output["duration"]
-        assert duration < 300, f"Generation took {duration:.1f}s (limit: 300s)"
 
     def test_produces_expected_output_files(self, generated_output):
         """Should produce at least Windows Event, Zeek, eCAR, and syslog files."""
@@ -119,16 +121,16 @@ class TestMediumDatasetGeneration:
         assert "syslog.log" in filenames
 
     def test_windows_events_substantial(self, generated_output):
-        """Should produce substantial Windows Event output (>1MB)."""
+        """Should produce non-trivial Windows Event output."""
         win_file = generated_output["files"].get("windows_event_security.xml")
         assert win_file is not None
-        assert win_file["size"] > 1_000_000, f"Windows events too small: {win_file['size']} bytes"
+        assert win_file["size"] > 50_000, f"Windows events too small: {win_file['size']} bytes"
 
     def test_zeek_events_substantial(self, generated_output):
-        """Should produce substantial Zeek output (>100KB)."""
+        """Should produce non-trivial Zeek output."""
         zeek_file = _generated_file(generated_output, "conn.json", "zeek_conn.json")
         assert zeek_file is not None
-        assert zeek_file["size"] > 100_000, f"Zeek output too small: {zeek_file['size']} bytes"
+        assert zeek_file["size"] > 5_000, f"Zeek output too small: {zeek_file['size']} bytes"
 
     def test_zeek_events_valid_json(self, generated_output):
         """All Zeek events should be valid JSON (NDJSON)."""
@@ -156,24 +158,16 @@ class TestMediumDatasetGeneration:
                 json.loads(line)
                 line_count += 1
 
-        assert line_count > 100, f"Only {line_count} eCAR events generated"
+        assert line_count > 50, f"Only {line_count} eCAR events generated"
 
 
-@pytest.mark.slow
-class TestMediumDatasetMemory:
-    """Memory usage tests for medium dataset generation."""
+@pytest.mark.soak
+def test_full_hundred_user_eight_hour_fixture_generates() -> None:
+    """The historical 800-user-hour workload remains an explicit diagnostic."""
 
-    @pytest.mark.skip(reason="500MB ceiling is not a release gate; retained as reference only")
-    def test_peak_memory_under_500mb(self, medium_scenario):
-        """Peak memory during generation should stay under 500MB."""
-        tracemalloc.start()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(medium_scenario, Path(tmpdir).resolve())
-            engine.generate()
-
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-
-        peak_mb = peak / (1024 * 1024)
-        assert peak_mb < 500, f"Peak memory {peak_mb:.1f}MB exceeds 500MB limit"
+    scenario_path = Path(__file__).parent.parent / "fixtures" / "scenarios" / "medium-dataset.yaml"
+    scenario = Scenario(**load_yaml(scenario_path))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output = Path(tmpdir).resolve()
+        GenerationEngine(scenario, output).generate()
+        assert (output / "GENERATION_MANIFEST.json").exists()

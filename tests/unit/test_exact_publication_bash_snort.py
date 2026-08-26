@@ -34,6 +34,8 @@ from evidenceforge.generation.emitters.base import (
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
 
+pytestmark = pytest.mark.slow
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 

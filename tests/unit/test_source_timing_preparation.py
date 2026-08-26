@@ -37,6 +37,8 @@ from evidenceforge.generation.timing import TimingDistributionError, TimingRunti
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 
+pytestmark = pytest.mark.slow
+
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 
 

@@ -577,6 +577,95 @@ class _PreparedNetworkBoundary:
         self.identity_capture_claim = None
         return True
 
+    def recover_committed_materialization_no_fail(
+        self,
+        *,
+        executor: Any,
+        root: Any,
+        materialization: Any,
+    ) -> bool:
+        """Publish and acknowledge one authenticated deferred postcommit result."""
+
+        from evidenceforge.generation.actions.network_connection import (
+            NetworkConnectionPublicationOutcome,
+        )
+        from evidenceforge.generation.lifecycle_authority import (
+            GeneratorLifecycleAuthority,
+            LifecyclePreparedNetworkResult,
+        )
+
+        if (
+            type(materialization) is not LifecyclePreparedNetworkResult
+            or type(root.runtime_token.lifecycle_mode) is not str
+            or root.runtime_token.lifecycle_mode != "deferred_session"
+        ):
+            raise StateError("Deferred-session committed materialization is malformed")
+        authority = executor._lifecycle_authority
+        recovery_projection = authority.retained_prepared_network_recovery_projection(
+            root,
+            materialization,
+        )
+        if type(recovery_projection) is not tuple or len(recovery_projection) != 2:
+            raise StateError("Deferred-session committed materialization is not authentic")
+        network_receipt, application_receipt = recovery_projection
+        if application_receipt is None:
+            raise StateError("Deferred-session committed materialization lost its application")
+        outcome = NetworkConnectionPublicationOutcome.PUBLISHED
+        durable_capture = self.publish_committed_capture_no_fail(
+            root=root,
+            receipt=network_receipt,
+            application_receipt=application_receipt,
+            outcome=outcome,
+        )
+        durable_capture_facts = self.authenticate_committed_capture_for_ack(
+            durable_capture,
+            authority=authority,
+            root=root,
+            receipt=network_receipt,
+            application_receipt=application_receipt,
+            persistent_smb_root_handoff=None,
+            outcome=outcome,
+        )
+        if durable_capture is not None:
+            GeneratorLifecycleAuthority._bind_prepared_network_durable_capture_for_ack(
+                authority,
+                root,
+                materialization,
+                durable_capture,
+                durable_capture_facts,
+                expected_persistent_smb_root_handoff=None,
+            )
+        try:
+            authority.acknowledge_prepared_network_transaction_if_retained(
+                root,
+                materialization,
+                durable_capture=durable_capture,
+                durable_capture_facts=durable_capture_facts,
+            )
+        except BaseException:
+            self.restore_committed_capture_after_ack(
+                durable_capture,
+                durable_capture_facts,
+                authority=authority,
+                root=root,
+                receipt=network_receipt,
+                application_receipt=application_receipt,
+                persistent_smb_root_handoff=None,
+                outcome=outcome,
+            )
+            raise
+        self.restore_committed_capture_after_ack(
+            durable_capture,
+            durable_capture_facts,
+            authority=authority,
+            root=root,
+            receipt=network_receipt,
+            application_receipt=application_receipt,
+            persistent_smb_root_handoff=None,
+            outcome=outcome,
+        )
+        return True
+
     def track_network_dependent_batch(self, dispatcher: Any, batch: Any) -> None:
         """Own one claimed projection-only dependent batch until root acceptance."""
 
@@ -2093,6 +2182,52 @@ class NetworkTransactionPlanner:
             boundary.claim_identity_capture(request.identity_capture)
             result = self._execute(request, boundary)
         except BaseException as error:
+            if boundary.transferred and boundary.root is not None:
+                attached_materialization_present = False
+                recovered_materialization = False
+                try:
+                    error_state = object.__getattribute__(error, "__dict__")
+                    attached_materialization_present = bool(
+                        type(error_state) is dict
+                        and "deferred_session_materialization" in error_state
+                    )
+                    attached_materialization = (
+                        error_state.get("deferred_session_materialization")
+                        if attached_materialization_present
+                        else None
+                    )
+                    if attached_materialization_present:
+                        recovered_materialization = (
+                            boundary.recover_committed_materialization_no_fail(
+                                executor=self._executor,
+                                root=boundary.root,
+                                materialization=attached_materialization,
+                            )
+                        )
+                except BaseException as recovery_error:
+                    try:
+                        object.__setattr__(
+                            error,
+                            "deferred_session_commit_indeterminate",
+                            True,
+                        )
+                    except BaseException:
+                        pass
+                    error.add_note(
+                        "Committed deferred-session materialization recovery also failed: "
+                        f"{recovery_error!r}"
+                    )
+                if not attached_materialization_present and not recovered_materialization:
+                    try:
+                        boundary.recover_committed_capture_no_fail(
+                            executor=self._executor,
+                            root=boundary.root,
+                        )
+                    except BaseException as recovery_error:
+                        error.add_note(
+                            f"Committed network identity recovery also failed: {recovery_error!r}"
+                        )
+                boundary.transferred = False
             if boundary.terminal_materialization is not None and boundary.root is not None:
                 try:
                     object.__setattr__(error, "prepared_network_root", boundary.root)
@@ -5773,19 +5908,7 @@ class NetworkTransactionPlanner:
                 persistent_smb_root_handoff=persistent_smb_handoff,
                 outcome=outcome,
             )
-        except BaseException as primary:
-            # Re-enable exact-token cleanup at the caller boundary.  Reversible
-            # precommit reservations cancel; committed owners and exact source
-            # recovery reject cancellation without losing their durable truth.
-            # Receipt authentication and capture publication are inside this
-            # window because either may lose its return after canonical commit.
-            try:
-                boundary.recover_committed_capture_no_fail(executor=executor, root=root)
-            except BaseException as recovery_error:
-                primary.add_note(
-                    f"Committed network identity recovery also failed: {recovery_error!r}"
-                )
-            boundary.transferred = False
+        except BaseException:
             raise
 
         executor._last_connection_effective_dst_ip = event.network.dst_ip

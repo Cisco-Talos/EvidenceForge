@@ -52,6 +52,8 @@ from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.files import load_yaml
 from evidenceforge.utils.rng import _stable_seed, _thread_local
 
+pytestmark = pytest.mark.slow
+
 _SCENARIO_START = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
 
 

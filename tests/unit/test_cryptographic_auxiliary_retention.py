@@ -369,7 +369,7 @@ def test_auxiliary_outputs_and_census_are_hashseed_stable() -> None:
     assert _hashseed_probe(1) == _hashseed_probe(999)
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_auxiliary_thirty_day_rss_plateaus_after_seven_days() -> None:
     """Fresh-process RSS and exact census plateau under hourly unique-key churn."""
 

@@ -6,16 +6,24 @@
 import copy
 import random
 
+import pytest
+
 from evidenceforge.cli.validate_config import validate_config
 
 
+@pytest.mark.slow
+def test_validate_config_clean() -> None:
+    """The packaged effective configuration must remain clean in the release gate."""
+
+    result = validate_config()
+    assert result.issues == [], f"validate-config has {len(result.issues)} issues:\n" + "\n".join(
+        f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues
+    )
+
+
+@pytest.mark.soak
 class TestValidateConfig:
-    def test_validate_config_clean(self):
-        result = validate_config()
-        assert result.issues == [], (
-            f"validate-config has {len(result.issues)} issues:\n"
-            + "\n".join(f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues)
-        )
+    """Exhaustive mutation diagnostics for individual configuration families."""
 
     def test_validate_config_accepts_proxy_dns_query_after_decision_timing(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_phase_profiles

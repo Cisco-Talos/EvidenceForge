@@ -55,6 +55,8 @@ from evidenceforge.generation.timing import (
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 
+pytestmark = pytest.mark.slow
+
 _START = datetime(2024, 1, 15, 10, tzinfo=UTC)
 _GENERATION_ROOT = Path(timing_profiles_module.__file__).parents[1]
 _PUBLIC_KEY_RELATIONSHIPS = {

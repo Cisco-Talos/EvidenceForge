@@ -78,6 +78,7 @@ def test_packed_unique_digest_map_probes_resizes_mutates_and_pops_exactly() -> N
     assert metrics.primary_map_backing_bytes > 0
 
 
+@pytest.mark.slow
 def test_packed_unique_digest_map_releases_empty_peak_capacity_in_constant_work() -> None:
     """Forced empty compaction drops peak arrays without scanning old slots."""
 
@@ -748,7 +749,7 @@ def test_expiring_index_rebuilds_stale_heap_in_bounded_dual_heap_pages() -> None
         index.compact(max_entries=-1)
 
 
-@pytest.mark.slow
+@pytest.mark.soak
 def test_expiring_index_million_entry_skew_compaction_page_is_bounded() -> None:
     index: ExpiringIndex[str, int] = ExpiringIndex()
     for ordinal in range(1_000_000):

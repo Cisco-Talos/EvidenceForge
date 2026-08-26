@@ -7,6 +7,8 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.composition import compile_scenario
 from evidenceforge.composition.packs import PackRepository
 from evidenceforge.generation.engine import GenerationEngine
@@ -110,6 +112,7 @@ def _forecast(output: Path) -> ResourceForecast:
     )
 
 
+@pytest.mark.slow
 def test_semantic_smb_read_projects_correlated_sparse_evidence(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -185,6 +188,7 @@ def test_semantic_smb_read_projects_correlated_sparse_evidence(
     assert any(share["ref"] == "FS-01.finance" for share in manifest["shares"])
 
 
+@pytest.mark.soak
 def test_organization_pack_tiny_storage_vocabulary_generates_with_auto_population(
     tmp_path: Path,
 ) -> None:
@@ -348,6 +352,7 @@ def test_organization_pack_tiny_storage_vocabulary_generates_with_auto_populatio
     assert manifest["resolved_storyline_targets"][0]["operations"][0]["path"]
 
 
+@pytest.mark.soak
 def test_high_audit_smb_lifecycle_uses_native_fields_and_ordering(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -450,6 +455,7 @@ def test_high_audit_smb_lifecycle_uses_native_fields_and_ordering(
     }
 
 
+@pytest.mark.soak
 def test_generic_successful_smb_connection_is_transport_only(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -491,6 +497,7 @@ def test_generic_successful_smb_connection_is_transport_only(
     ]
 
 
+@pytest.mark.soak
 def test_smb_copy_fans_out_required_client_file_effect(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -552,6 +559,7 @@ def test_smb_copy_fans_out_required_client_file_effect(
     )
 
 
+@pytest.mark.soak
 def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operations(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -605,6 +613,7 @@ def test_encrypted_share_keeps_mapping_and_endpoint_evidence_but_hides_operation
     ), endpoint_records
 
 
+@pytest.mark.soak
 def test_external_smb_client_keeps_network_locality_and_server_only_endpoint_evidence(
     scenarios_dir: Path,
     tmp_path: Path,

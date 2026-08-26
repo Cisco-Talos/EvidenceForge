@@ -4975,6 +4975,7 @@ class TestExplicitProxyVisibility:
             name: emitter.emit.call_count for name, emitter in emitters.items()
         } == output_before
 
+    @pytest.mark.soak
     def test_production_proxy_channel_state_plateaus_at_24h_7d_and_30d(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -5116,6 +5117,7 @@ class TestExplicitProxyVisibility:
         assert census.open_tunnel_views == 0
         assert census.application.retained_channels == 0
 
+    @pytest.mark.slow
     def test_tight_https_requests_open_transports_when_payload_capacity_is_consumed(self):
         generator, emitters = _generator(
             [

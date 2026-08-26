@@ -307,6 +307,10 @@ Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what
 | USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `smb`, `remote`, `local`, or `service`. Samba sessions use neutral `auth_session_ref`/`session_id`, protocol/scope, and optional effective UID/GID; they do not invent Windows logon ID/type/GUID fields. Failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
 
+Modeled successful SSH and RDP sessions have complete terminal ownership: their source client and target receiver/session processes terminate, and the target `USER_SESSION/LOGOUT` is emitted exactly once even when initial source publication loses its return or an SSH channel is retired by a long watermark. Watermark retirement transfers authenticated ownership only; it does not itself render endpoint or session close rows.
+
+For bounded Linux foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
+
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
 - FLOW events carry endpoint process attribution only when the platform owns one. Examples include svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for Windows-native SMB, mstsc.exe for RDP, a direct `smbclient` operation process, or the active Samba `smbd` worker. Mounted CIFS transport is kernel-owned and must not be attributed to `mount.cifs` for every operation. GVFS remains opaque background TCP/445/process texture and does not produce typed SMB file/auth/session semantics. Unavailable pid/tid identity is omitted rather than rendered as a placeholder
@@ -337,7 +341,9 @@ coordinated by action-bundle semantics above individual canonical occurrences: t
 bundle owns lifecycle, ordering, source timing, and shared identities, while each
 syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
 failed-password rows reuse the same source port as the companion Zeek SSH
-connection tuple.
+connection tuple. SSH terminal syslog and endpoint evidence remains complete after application
+channel tombstone eviction because the lifecycle owner retains an authenticated retirement proof;
+watermark advancement does not render PAM/logind or session termination rows itself.
 
 Samba server evidence is rendered through this existing syslog family; there is no separate
 journal or audit-log output format. `smbd` records authentication and share connection lifecycle.
@@ -383,6 +389,8 @@ not canonical typed file activity.
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
 Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving. Bash-history timing and optional foreground process telemetry are coordinated by the internal Linux shell-command bundle so command text, source-visible timing, and endpoint process evidence stay aligned.
+
+An exact two-token numeric `sleep` command (for example, `sleep 30`, `sleep 30.5`, or `sleep .5`) models that process lifetime, capped at 86,400 seconds. Suffixes, signs, exponents, extra arguments, non-finite values, and malformed quoting use the existing short fallback. A bounded session clamps independent termination at least 1,425 ms before its owner closes so the full shell-release jitter fits.
 
 **Known Limitations:**
 - No command typos, tab-completion artifacts, or repeated commands

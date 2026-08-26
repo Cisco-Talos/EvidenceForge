@@ -75,6 +75,7 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.slow
 class TestHostnameConsistency:
     """DNS query domain, SSL SNI, and proxy hostname must be identical."""
 
@@ -1155,6 +1156,7 @@ class TestNoSinkhole:
         )
 
 
+@pytest.mark.slow
 class TestWeirdProtocolConstraint:
     """Zeek weird.log anomaly types must match the connection protocol."""
 
@@ -1939,7 +1941,7 @@ class TestWeirdProtocolConstraint:
             udp_on_tcp = weird_names & self._UDP_NAMES
             assert len(udp_on_tcp) == 0, f"UDP weird names on TCP connections: {udp_on_tcp}"
 
-    def test_udp_connections_get_udp_weird_names(
+    def _assert_udp_connections_get_udp_weird_names(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
         """UDP connections should only get UDP-specific weird names."""
@@ -1966,6 +1968,18 @@ class TestWeirdProtocolConstraint:
         if weird_names:
             tcp_on_udp = weird_names & self._TCP_NAMES
             assert len(tcp_on_udp) == 0, f"TCP weird names on UDP connections: {tcp_on_udp}"
+
+
+@pytest.mark.soak
+def test_udp_connections_get_udp_weird_names(activity_gen, timestamp, state_manager, mock_emitters):
+    """A high-volume UDP sample must not acquire TCP-specific weird names."""
+
+    TestWeirdProtocolConstraint()._assert_udp_connections_get_udp_weird_names(
+        activity_gen,
+        timestamp,
+        state_manager,
+        mock_emitters,
+    )
 
 
 class TestSuspiciousNoiseHostname:

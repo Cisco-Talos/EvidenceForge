@@ -424,6 +424,7 @@ def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_
     assert http_event.network.resp_bytes >= http_event.protocol.http.response_body_len
 
 
+@pytest.mark.slow
 class TestSslContextPopulation:
     """Verify SSL context is attached to connection events for port 443."""
 

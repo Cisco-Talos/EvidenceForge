@@ -18,6 +18,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
+import pytest
+
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.actions.rdp_session import (
     RdpSessionActionBundle,
@@ -37,6 +39,8 @@ from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.scenario import System, User
+
+pytestmark = pytest.mark.slow
 
 _START = datetime(2024, 1, 15, 10, tzinfo=UTC)
 _GENERATION_ROOT = Path(timing_profiles_module.__file__).parents[1]

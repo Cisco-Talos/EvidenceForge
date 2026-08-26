@@ -2768,3 +2768,101 @@ logoff, terminal admission, process lifetimes, source-clock headroom, dispatcher
 deferred transport binary ownership, and SSH/RDP deferred production. Repository diff validation is
 clean. The 2.5-hour full slow-inclusive suite was not duplicated after the bounded
 generic-logoff repair; its only two failing nodes are included in the green 947-test rerun.
+
+### 2026-08-25 deferred lifecycle concepts reimplemented
+
+The three useful deferred behaviors previously left in the safety worktree were subsequently
+approved for a current-native implementation. None of the stale implementation was cherry-picked.
+The imported concepts and their reconciled ownership decisions are:
+
+- RDP postcommit recovery now projects and authenticates the complete retained network
+  materialization, including the RDP application admission receipt, then reconstructs the durable
+  identity capture and installs the exact close continuation without redispatching source rows.
+  Proven non-commit cancels the reservation; indeterminate recovery preserves it and annotates the
+  original failure. The retained-result graph check uses frozen member descriptors so recovery
+  cannot be redirected through a replaced public result property.
+- SSH channel retirement now returns a keyed immutable terminal snapshot proof, carries it in the
+  manager closure, and authenticates it against the exact continuation after the registry's closed
+  tombstone grace has expired. Manager closures enter a bounded retry journal before adoption and
+  are drained before another watermark page. Unlike the abandoned worktree behavior, watermark
+  advancement transfers ownership only and never renders endpoint/PAM/logind/session termination;
+  the existing exact lifecycle continuation remains the sole renderer.
+- Linux foreground timing now recognizes only a shell-tokenized two-token numeric `sleep`, accepts
+  unsigned integer/decimal seconds, caps the modeled duration at 86,400 seconds, and preserves the
+  short fallback for unsupported forms and `test`. One 1,400 ms shell-release jitter maximum drives
+  a 1,425 ms pre-session close margin. Impossible action-cohort intervals fail before mutation;
+  compatibility scheduling leaves an impossible independent close to the session owner.
+
+Focused verification currently passes the new RDP fail-before/lost-return recovery cases, SSH
+proof tampering/foreign-registry/three-hour watermark/adoption-retry cases, and numeric-sleep syntax,
+cap, non-SSH, deterministic, session-clamp, and pre-mutation rejection cases. Documentation and
+canonical `commands/eforge/` skill sources now carry the same invariants; generated workspace skill
+copies remain unmodified. Final repository-wide Ruff, normal-suite, and slow-inclusive results will
+be appended after those gates complete.
+
+### 2026-08-25 routine, release, and soak suite reorganization
+
+The full slow-inclusive audit had grown from the project's historical roughly 25-minute release
+runtime to 2.5 hours. A JUnit duration inventory showed that the increase did not come primarily
+from narrow lifecycle assertions: it came from repeatedly generating similar datasets, running
+full configuration mutation matrices, retaining full demonstration scenarios as tests, and
+executing million-entry or multi-week capacity probes on every release.
+
+The suite now has three explicit cost tiers:
+
+- the default routine gate keeps inexpensive unit, contract, validation, and focused lifecycle
+  coverage and runs with `uv run pytest`;
+- `slow` is an extended release-only gate containing representative end-to-end generation,
+  distinct expensive fault injection, and fresh-process determinism checks, run with
+  `uv run pytest -m slow --no-cov`; and
+- `soak` is an opt-in diagnostic tier for million-entry capacity, multi-week retention, exhaustive
+  full-generation matrices, and complete demo workloads, run with
+  `uv run pytest -m soak --no-cov`. It is not a release gate and should be selected only when its
+  owning subsystem changes. `slow` and `soak` are mutually exclusive; collection rejects overlap.
+
+The pruning preserved behavior while removing duplicated cost. The standalone inbound and NAT
+full-generation pipeline modules were deleted because their assertions duplicated the canonical
+network bundle, NAT computation, visibility/routing, firewall, ASA, and Zeek unit contracts.
+Parallel generation now uses one shared comprehensive run instead of five separate runs. Medium,
+adversarial-payload, spillage, email, and SMB modules share representative generated fixtures;
+variants that merely repeat the complete engine are soak-only. The release medium fixture is now
+16 users across four persona families, four workstations, one Linux server, one domain controller,
+and one hour. The historical 100-user/eight-hour fixture remains unchanged as an explicit soak
+diagnostic. Redundant module-local determinism checks were removed where the global public-seed
+and hash-seed contracts already cover the same property.
+
+The retained expensive release representatives are intentional: one multi-persona medium run,
+one email topology, one Windows SMB semantic read, one cross-platform Linux SMB matrix, one
+canonical adversarial/spillage landing fixture, and the public-seed repeat/change proof. The
+remaining large RDP, SSH, syslog, source-finalization, and timing selections are mostly fast
+in-memory parameterized contracts rather than repeated dataset generations.
+
+Final clean timings on this checkout are:
+
+- routine: 8,115 passed and 2,057 opt-in/platform tests skipped in 182.83 seconds (3:02);
+- extended release-only: 1,823 passed and 8,349 deselected in 724.93 seconds (12:04); and
+- routine plus extended release: approximately 907.76 seconds (15:08), comfortably below both
+  the historical roughly 27-minute combined runtime and the temporary multi-hour regression.
+
+The soak inventory contains 229 explicitly selected test cases. It was collection-validated but
+not executed wholesale because doing so would recreate the cost this policy removes; relevant
+soak cases remain available for targeted scalability, duration, or exhaustive-path work. The
+resized representative medium fixture passes all six release assertions in 88.86 seconds. The
+final clean routine and release gates include the imported RDP, SSH, and numeric-`sleep`
+regressions and are green.
+
+The first tier interface used custom `--include-slow`/`--include-soak` flags and permitted some
+soak tests to inherit `slow` from a parent module or class. That worked but made the release command
+needlessly repetitive. The final interface uses native, mutually exclusive pytest markers:
+
+- `uv run pytest` selects the configured `not slow and not soak` routine tier;
+- `uv run pytest -m slow --no-cov` selects only the extended release tier; and
+- `uv run pytest -m soak --no-cov` selects only occasional diagnostics.
+
+The custom inclusion flags and their skip hook were removed. A collection-time contract now rejects
+any test marked both `slow` and `soak`, with focused unit coverage for accepted and rejected tier
+assignments. Broad inherited markers were narrowed without changing the release population. The
+final partition is exact: 8,122 routine, 1,823 slow, and 229 soak cases, totaling all 10,174
+collected tests with zero overlap. The new slow selection's complete node-ID set is identical to the
+previously executed 1,823-test release report. The exact new routine command passes 8,117 tests,
+skips five platform/external cases, and deselects 2,052 opt-in cases in 180.47 seconds (3:00).

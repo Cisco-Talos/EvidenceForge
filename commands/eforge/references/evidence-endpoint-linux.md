@@ -32,6 +32,9 @@ eCAR is optional and may not exist on every system. Linux coverage focuses on PR
 USER_SESSION, FLOW, and FILE rather than every endpoint object family. File paths come from
 curated OS-aware profiles, not a complete endpoint inventory.
 
+Successful SSH and RDP sessions retain complete terminal ownership: source/receiver processes and the
+target session close exactly once; watermarks transfer proof only, and finalization renders the close.
+
 For SMB, keep every actor host-local. Windows-native clients may expose System PID 4, direct
 `smbclient` uses its one-shot operation process, mounted CIFS is kernel-owned rather than falsely
 owned by `mount.cifs`, and Samba responder FLOW/FILE evidence uses the active `smbd` worker. Samba
@@ -48,7 +51,8 @@ SID, LUID, logon-type, or logon-GUID fields. Do not carry a PID from one host to
 Evaluation recognizes these current variants and compatible legacy flat formats. Each row is a
 distinct canonical occurrence. Higher-level bundles coordinate multi-row SSH/session lifecycles,
 timing, tuple identity, and source ordering. Failed-password rows reuse the companion Zeek SSH
-source port.
+source port. SSH retirement remains provable after the shared channel tombstone expires, while the
+existing lifecycle finalizer remains the sole owner of PAM/logind and endpoint termination rows.
 
 | Activity/program family | Behavior |
 | --- | --- |
@@ -89,6 +93,8 @@ SSH protocol negotiation transcript.
 
 Baseline SSH sessions generate role-appropriate administration commands. Storyline processes can
 interleave a small amount of organic command noise. The Linux shell-command bundle aligns command
-text, visible time, and optional foreground-process evidence. History does not include command
-output, error text, tab-completion artifacts, or realistic typo/retry behavior, and may be sparse
-relative to a long SSH session.
+text, visible time, and optional foreground-process evidence. Exact two-token numeric sleeps such
+as `sleep 30`, `sleep 30.5`, and `sleep .5` model their requested lifetime up to 86,400 seconds;
+unsupported forms keep the short fallback, and bounded sessions preserve a 1,425 ms release margin.
+History omits output, errors, completion artifacts, and realistic typo/retry behavior, and may be
+sparse relative to a long SSH session.

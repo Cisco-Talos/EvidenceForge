@@ -51,6 +51,7 @@ def _read_zeek_conn_records(output_dir: Path) -> list[dict]:
 
 
 class TestStorylineBeaconExplicitProxy:
+    @pytest.mark.soak
     def test_allowed_http_beacon_to_documentation_ip_appears_in_proxy_access(self, tmp_path):
         """Storyline beacons with external hostnames should route through explicit proxy."""
         scenario = Scenario(
@@ -155,6 +156,7 @@ class TestStorylineBeaconExplicitProxy:
         )
         assert not list(tmp_path.rglob("conn.json"))
 
+    @pytest.mark.slow
     def test_allowed_https_beacon_preserves_user_agent_on_connect(self, tmp_path):
         """HTTPS storyline beacons should write the specified UA to proxy CONNECT rows."""
         custom_ua = "EvilBeacon/4.2 (compatible; legacy-updater)"
@@ -264,7 +266,7 @@ class TestStorylineBeaconExplicitProxy:
         assert len(inspected_lines) == 3
         assert all(custom_ua in line for line in beacon_lines)
 
-    @pytest.mark.slow
+    @pytest.mark.soak
     def test_explicit_proxy_fixture_includes_zeek_proxy_and_firewall_visibility(self, tmp_path):
         """Review fixtures should exercise proxy, Zeek, and ASA correlation together."""
         allowed_host = "telemetry-sync.example.net"

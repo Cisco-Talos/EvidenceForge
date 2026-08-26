@@ -58,6 +58,8 @@ from tests.unit.test_deferred_session_composition import (
     _PublicationFixture,
 )
 
+pytestmark = pytest.mark.slow
+
 
 class _WindowsSubclass(WindowsEventEmitter):
     """Concrete-type impostor that repeats the public marker."""

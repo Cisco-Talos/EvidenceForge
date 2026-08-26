@@ -53,13 +53,19 @@ from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
     HostDeploymentSpec,
 )
-from evidenceforge.generation.emitters.base import ExactPublicationAuthority
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationKey
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.baseline import BaselineMixin
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+    LifecyclePreparedNetworkResult,
+)
+from evidenceforge.generation.network_runtime import PreparedNetworkTransactionRoot
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
 from evidenceforge.generation.source_finalization import SourceFinalizationCoordinator
@@ -69,6 +75,8 @@ from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import reset_thread_rng
+
+pytestmark = pytest.mark.slow
 
 _START = datetime(2026, 1, 5, 9, tzinfo=UTC)
 _END = _START + timedelta(days=1)
@@ -2701,6 +2709,210 @@ def test_initial_rdp_session_publishes_one_exact_transport_and_windows_cohort(tm
     ]
     assert len(ecar_rows) >= 6
     assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "rebind_after_projection"),
+    (
+        ("fail-before", False),
+        ("lost-return", False),
+        ("fail-before", True),
+    ),
+)
+def test_initial_rdp_source_publication_failure_recovers_full_materialization(
+    failure_mode: str,
+    rebind_after_projection: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A committed RDP open retains its application receipt and exact close owner."""
+
+    reset_thread_rng(42)
+    state = StateManager()
+    state.set_current_time(_START - timedelta(minutes=5))
+    ecar = EcarEmitter(load_format("ecar"), tmp_path / "ecar", threaded=False)
+    zeek = ZeekEmitter(load_format("zeek_conn"), tmp_path / "zeek.json", threaded=False)
+    windows = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path / "windows",
+        threaded=False,
+        source_finalization=True,
+    )
+    emitters = {
+        "ecar": ecar,
+        "windows_event_security": windows,
+        "zeek_conn": zeek,
+    }
+    dispatcher = EventDispatcher(state, emitters)
+    generator = ActivityGenerator(
+        state,
+        emitters,
+        dispatcher=dispatcher,
+        generation_window_start=_START - timedelta(days=1),
+        generation_window_end=_END,
+    )
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    generator._ip_to_system = {source.ip: source, target.ip: target}
+    source_logon = generator.generate_logon(
+        user,
+        source,
+        _START - timedelta(seconds=30),
+        logon_type=2,
+    )
+    source_pid = generator.generate_process(
+        user,
+        source,
+        _START - timedelta(seconds=3),
+        source_logon,
+        r"C:\Windows\System32\mstsc.exe",
+        f"mstsc.exe /v:{target.hostname}",
+        parent_pid=4,
+    )
+    original = ExternalSortedLineWriter._commit_exact_row
+    attempts = 0
+    public_connection_reads = 0
+    projected_application_receipts: list[object] = []
+
+    if rebind_after_projection:
+        original_projection = (
+            GeneratorLifecycleAuthority.retained_prepared_network_recovery_projection
+        )
+
+        def project_then_rebind(
+            authority: GeneratorLifecycleAuthority,
+            root: PreparedNetworkTransactionRoot,
+            result: object,
+        ) -> object:
+            projection = original_projection(authority, root, result)
+            assert projection is not None
+            projected_application_receipts.append(projection[1])
+
+            def hostile_connection(_result: LifecyclePreparedNetworkResult) -> object:
+                nonlocal public_connection_reads
+                public_connection_reads += 1
+                raise AssertionError("planner reopened authenticated result descriptors")
+
+            monkeypatch.setattr(
+                LifecyclePreparedNetworkResult,
+                "connection",
+                property(hostile_connection),
+            )
+            return projection
+
+        monkeypatch.setattr(
+            GeneratorLifecycleAuthority,
+            "retained_prepared_network_recovery_projection",
+            project_then_rebind,
+        )
+
+    def inject(
+        writer: ExternalSortedLineWriter,
+        key: ExactPublicationKey,
+        digest: str,
+        frozen: object,
+    ) -> None:
+        nonlocal attempts
+        if writer.output_path.name == "ecar.json" and attempts == 0:
+            attempts += 1
+            if failure_mode == "lost-return":
+                original(writer, key, digest, frozen)
+            raise OSError(f"injected RDP source {failure_mode}")
+        original(writer, key, digest, frozen)
+
+    monkeypatch.setattr(ExternalSortedLineWriter, "_commit_exact_row", inject)
+    with pytest.raises(OSError, match=f"RDP source {failure_mode}"):
+        generator._execute_rdp_session_bundle(
+            user=user,
+            target_system=target,
+            time=_START,
+            source_ip=source.ip,
+            source_system=source,
+            source_pid=source_pid,
+            source_port=50_001,
+        )
+
+    target_sessions = [
+        session
+        for session in state.get_sessions_for_user(user.username)
+        if session.system == target.hostname
+    ]
+    assert attempts == 1
+    assert len(target_sessions) == 1
+    target_session = target_sessions[0]
+    journal = generator.rdp_lifecycle_journal_census()
+    assert journal.prepared_reservations == 0
+    assert journal.pending_generations == 1
+    assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 1
+    lifecycle_authority = generator._lifecycle_authority
+    assert lifecycle_authority._prepared_network_receipt_issuances == {}
+    assert lifecycle_authority._prepared_network_receipt_issuance_generations == {}
+    assert lifecycle_authority._prepared_network_receipt_issuance_receipts == {}
+    assert public_connection_reads == 0
+    if rebind_after_projection:
+        assert len(projected_application_receipts) == 1
+        assert generator.rdp_session_manager.authenticates_admission_receipt(
+            projected_application_receipts[0]
+        )
+
+    recovery_results = dispatcher.drain_exact_projection_recoveries()
+    assert len(recovery_results) == 1
+    assert all(outcome.status == "succeeded" for outcome in recovery_results[0].projections)
+    generator.finalize_rdp_session_lifecycles(_END)
+
+    assert state.get_session(target_session.logon_id) is None
+    assert state.get_process(source.hostname, source_pid) is None
+    assert generator.rdp_lifecycle_journal_census().pending_generations == 0
+    assert dispatcher.deferred_session_publication_census().prepared_batches == 0
+    assert generator.rdp_session_manager.census().active_operations == 0
+    assert generator.rdp_session_manager.census().active_leases == 0
+    assert generator._application_channel_registry.census().open_channels == 0
+
+    coordinator = SourceFinalizationCoordinator(
+        (windows,),
+        ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=256,
+            byte_capacity=8 * 1024 * 1024,
+        ),
+    )
+    coordinator.finalize()
+    windows.close()
+    coordinator.mark_closed()
+    ecar.close()
+    zeek.close()
+    ecar_rows = [
+        json.loads(line)
+        for output in (tmp_path / "ecar").rglob("ecar.json")
+        for line in output.read_text(encoding="utf-8").splitlines()
+    ]
+    target_session_rows = [
+        row
+        for row in ecar_rows
+        if row.get("hostname") == target.hostname and row.get("object") == "USER_SESSION"
+    ]
+    assert [row["action"] for row in target_session_rows] == ["LOGIN", "LOGOUT"]
+    zeek_rows = [
+        json.loads(line)
+        for line in (tmp_path / "zeek.json").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(zeek_rows) == 1
 
 
 def test_generic_type10_from_modeled_linux_source_uses_exact_rdp_owner(

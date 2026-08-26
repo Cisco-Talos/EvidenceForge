@@ -3400,6 +3400,7 @@ class TestActivityGenerator:
 
         assert second == first
 
+    @pytest.mark.slow
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
     ):
@@ -3634,6 +3635,7 @@ class TestActivityGenerator:
         assert min(second_octets) < 20
         assert max(second_octets) > 230
 
+    @pytest.mark.slow
     def test_nmap_ping_scan_emits_modeled_replies_and_silent_attempts(
         self,
         activity_gen,
@@ -14676,7 +14678,7 @@ class TestActivityGenerator:
             rng=random.Random(7),
         )
 
-        assert release_time == deadline - timedelta(seconds=2)
+        assert release_time == deadline - timedelta(milliseconds=1_425)
         assert generated[0]["time"] == release_time
         assert generated[0]["session_end_plan"] == plan
 
@@ -14726,7 +14728,7 @@ class TestActivityGenerator:
             rng=random.Random(7),
         )
 
-        assert release_time == transport_close - timedelta(seconds=2)
+        assert release_time == transport_close - timedelta(milliseconds=1_425)
         assert generated[0]["session_end_plan"] is None
 
     def test_linux_session_shell_reuses_user_manager_when_rebuilt(
