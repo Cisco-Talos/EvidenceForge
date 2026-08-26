@@ -100,8 +100,9 @@ overwrite generated output unless the user explicitly requests the owning genera
 
 ## Runtime discovery
 
-Run `eforge info <field> --json` before choosing configured
-names.
+Inspect configured names with the field-specific `eforge info <field>` inventory. Use its
+line-oriented output for simple lists, or consume `--json` directly when structured results are
+needed; do not pipe JSON through another command solely to reformat a list.
 Useful fields include `personas`, `formats`, `system_roles`, `dns_tags`, `application_ids`, and
 `identity_pools`. Project `.eforge/config` can change these inventories, so installed defaults are
 not a reliable substitute for inspection.

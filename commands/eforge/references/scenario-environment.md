@@ -92,8 +92,8 @@ without a compatible firewall produces a validation warning.
 
 Choose only sources the exercise needs. Common canonical formats include Windows, Zeek, eCAR,
 syslog, bash history, Snort alerts, Cisco ASA, web access, and proxy access. Discover current names
-with `eforge info formats --json`. Read only the compact
-evidence-family reference that matches the expected source.
+with `eforge info formats`; use `--json` directly only when structured handling is needed. Read
+only the compact evidence-family reference that matches the expected source.
 
 Scenario `output.logs` selects canonical formats. Parser target is a generation-time CLI choice:
 `default`, `sof-elk`, or `splunk`; do not encode it in scenario YAML. A runtime `--formats` filter

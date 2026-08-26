@@ -75,7 +75,8 @@ Read the HTTP reference before defining route/method request profiles or multipa
 
 `output` supports exactly required `logs`, required `destination`, and `compression` (default
 `false`). Each log entry requires `format`; discover installed format names with
-`eforge info formats --json` because formats can differ by installation.
+`eforge info formats` because formats can differ by installation; use `--json` directly only when
+structured handling is needed.
 The authored destination is a compatibility/provenance hint; the generate command owns the final
 bundle location. Rendering targets such as `default`, `sof-elk`, and `splunk` are CLI choices, not
 scenario fields.

@@ -90,8 +90,9 @@ Fields: `type`, required `dst_ip`, `dst_port`, `hostname`, `source_ip`, `preset`
 `user_agent`, `status_codes`, `start_time`, `interval`, `rate`, `end_time`, `duration`, `count`,
 `jitter`, `ids_alerts`, `technique`, and `description`. It requires positive `rate`, forbids
 `interval`, and requires `preset`, `paths`, or both. `dst_port` defaults to 80 and jitter to 0.4.
-Discover configured preset names with `eforge info web_scan_presets --json`;
-the names are runtime inventory, while this event structure is not.
+Discover configured preset names with `eforge info web_scan_presets`; use `--json` directly only
+when structured handling is needed. The names are runtime inventory, while this event structure is
+not.
 
 ## `credential_spray`
 
