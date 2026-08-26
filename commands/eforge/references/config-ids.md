@@ -8,6 +8,10 @@ overlay can add a signature or replace selected fields, including its default
 alert policy. Start a new CLI process after edits, then run
 `eforge validate-config --json`.
 
+Inspect the effective catalog with `eforge info ids_signatures` before selecting or changing an
+entry. The text form lists valid SIDs with concise transport and message context; `--json` exposes
+the compact structured catalog when exact compatibility fields are needed.
+
 ```yaml
 signatures:
   - sid: 2002910

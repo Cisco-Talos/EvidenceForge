@@ -46,7 +46,7 @@ def test_generate_skill_is_compact_and_routes_narrowly() -> None:
 
     text = _read(GENERATE_SKILL)
 
-    assert 100 <= len(text.splitlines()) <= 150
+    assert 100 <= len(text.splitlines()) <= 155
     assert len(text.split()) < 1_200
     assert set(_frontmatter(text)) == {"name", "description"}
     assert _frontmatter(text)["name"] == "eforge-generate"

@@ -62,6 +62,7 @@ eforge info personas
 eforge info dns_tags
 eforge info application_ids
 eforge info identity_pools
+eforge info ids_signatures
 eforge info paths.activity
 eforge info paths.personas
 ```

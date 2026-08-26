@@ -1456,6 +1456,10 @@ sensor-observed timestamp, source port, tuple, and NAT/PAT view with the related
 network evidence. This is an assertion that the signature matched; EvidenceForge
 does not execute the complete Snort rule predicate.
 
+Inspect the effective curated catalog with `eforge info ids_signatures` before choosing an
+attachment. The text output lists valid SIDs with concise transport and message context; use its
+`--json` form directly when exact structured compatibility fields are needed.
+
 Attachments fan out only across transports owned by that authored event: one
 SSH/RDP session transport, the authored DHCP transaction, every scan probe or
 web request, and every authored DNS/DGA/tunnel query. Later automatic DHCP

@@ -59,6 +59,11 @@ Typed `connection`, `beacon`, `ssh_session`, `rdp_session`, `dhcp_lease`, `port_
 decrypt traffic, apply IPS actions, or implement arbitrary `rate_filter`/CIDR suppression. A tuple
 without explicit or built-in IDS context does not alert.
 
+Inspect the effective curated signature catalog with `eforge info ids_signatures` before authoring
+an attachment. Its rows identify the valid SID and the signature's protocol, preferred port,
+direction, and message; use `--json` directly only when the structured compatibility fields are
+needed.
+
 Attachments follow only transports owned by their authored event:
 
 - SSH/RDP: the session transport only.

@@ -225,6 +225,10 @@ Signature entries merge by SID, but `alert_policy` is replaced as one policy. Sc
 policy has final precedence. A default policy neither attaches IDS to unrelated traffic nor decrypts
 payloads.
 
+Use `eforge info ids_signatures` to inspect the effective curated signature catalog before adding
+or changing an entry. It includes project-overlay changes, so do not copy a SID list from package
+files or another installation.
+
 ## Important families
 
 | Area | Files |

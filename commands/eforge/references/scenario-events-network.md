@@ -15,6 +15,8 @@ integer from 1 through 2,147,483,647 and must be unique on the event. Omit `poli
 configured signature policy, or use `policy: every`. A structured override may contain a
 `detection_filter` and/or `event_filter`; each uses `track: by_src|by_dst`, positive `count`, and
 positive `seconds`, while an event filter also requires `type: limit|threshold|both`.
+Before attaching a SID, inspect the effective curated catalog with `eforge info ids_signatures` and
+choose one compatible with the event's transport, direction, target, and inspection visibility.
 
 Periodic events share `start_time`, exactly one of `interval` or `rate`, exactly one of `end_time`,
 `duration`, or positive `count`, and `jitter` from 0 through 1. Duration strings use positive

@@ -42,6 +42,9 @@ Run validation before a potentially long generation:
 eforge validate <input.yaml> --json [--show-storage]
 ```
 
+Consume this JSON directly. For a concise human repair list, rerun the validator without `--json`
+rather than post-processing its JSON output.
+
 Use `--show-storage` when SMB is authored or implied by Windows file-server/DC roles, Linux Samba
 services/roles, or explicit storage. Review platform/native roots, backing/advertised filesystems,
 mappings, credentials, client mode, and audit eligibility. Review both forecast values: final output is durable size; peak working disk includes temporary sort files. Summarize compiled counts, time,

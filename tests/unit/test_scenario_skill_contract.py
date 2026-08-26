@@ -270,8 +270,8 @@ def test_scenario_skill_is_compact_and_has_standard_frontmatter() -> None:
     """The always-loaded dispatcher stays small and portable."""
 
     text = _read(SKILL_PATH)
-    assert 120 <= len(text.splitlines()) <= 160
-    assert len(text.split()) < 1_250
+    assert 120 <= len(text.splitlines()) <= 165
+    assert len(text.split()) < 1_325
     assert set(_frontmatter(text)) == {"name", "description"}
     assert _frontmatter(text)["name"] == "eforge-scenario"
     description = _frontmatter(text)["description"]

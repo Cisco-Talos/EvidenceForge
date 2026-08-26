@@ -34,7 +34,7 @@ def test_validate_skill_is_compact_and_routes_narrowly() -> None:
     """The always-loaded body stays compact and excludes pack/config validation."""
 
     text = _read(SKILL_PATH)
-    assert 100 <= len(text.splitlines()) <= 140
+    assert 100 <= len(text.splitlines()) <= 150
     assert set(_frontmatter(text)) == {"name", "description"}
     assert "authored EvidenceForge Scenario 1.0/2.0" in text
     assert "authoritative RESOLVED_SCENARIO.yaml" in text

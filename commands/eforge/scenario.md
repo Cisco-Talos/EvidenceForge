@@ -111,8 +111,13 @@ available; otherwise omit the optional technique field and disclose the uncertai
    collection/storage/observation/artifact manifests, output markers, or `data/`. After an authored
    change, treat an adjacent generated bundle as stale until regeneration replaces it.
 5. Inspect runtime inventories with `eforge info <field>` instead of guessing project-dependent
-   names; authored schema comes from the focused references. Query its exact installed shape with
-   `eforge schema <selector> --json`. Use exact pack JSON. Never probe with invalid YAML.
+   names. For list inventories—`system_roles`, `personas`, `formats`, `dns_tags`,
+   `application_ids`, and `web_scan_presets`—run that command without `--json`; it emits one value
+   per line. For `ids_alerts`, inspect `eforge info ids_signatures` to choose a compatible curated
+   SID; it emits one concise signature row per line. Use `--json` directly only for object-valued
+   inventories or `eforge schema <selector>`, whose structured fields must be inspected. Do not
+   reformat either output through a shell/Python pipeline. The authored schema comes from the focused
+   references. Use exact pack JSON. Never probe with invalid YAML.
 6. Author the smallest coherent change. Use precise OS-native commands, paths, identities, ports,
    timing, roles, services, and typed events. `activity` documents intent; it does not generate logs.
 7. Let action bundles and causal expansion own ordinary DNS, transport, authentication, audit,

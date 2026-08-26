@@ -32,12 +32,18 @@ not warn about their absence.
 
 ## Validate read-only
 
-Default to machine-readable output:
+Use `--json` directly when structured diagnostics are needed; inspect `severity_counts` and
+`issues`, including each issue's field path, message, suggestion, and source. Do not pipe its JSON
+through Python merely to regroup or reprint issues.
 
 ```bash
 eforge validate <absolute-scenario-path> \
   --json
 ```
+
+For a compact repair-oriented display, run `eforge validate <absolute-scenario-path>` without
+`--json`. It already prints issue severity, field paths, messages, and suggestions while preserving
+the validator's exit status.
 
 For a resolved document, omit `--project-root`:
 

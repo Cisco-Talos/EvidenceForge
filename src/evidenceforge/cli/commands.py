@@ -2250,6 +2250,7 @@ def info(
     """
     from evidenceforge.cli.info import (
         format_human_readable,
+        format_ids_signature_inventory,
         format_json,
         gather_info,
         list_fields,
@@ -2317,6 +2318,8 @@ def info(
             raise typer.Exit(EXIT_INPUT_ERROR)
         if json_output:
             print(json.dumps(value, indent=2, sort_keys=True))
+        elif field == "ids_signatures":
+            print(format_ids_signature_inventory(value))
         elif isinstance(value, list):
             print("\n".join(str(v) for v in value))
         elif isinstance(value, dict):

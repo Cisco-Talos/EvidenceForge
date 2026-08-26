@@ -195,6 +195,65 @@ def _collect_beacon_profiles() -> list[str]:
     return list_profile_names()
 
 
+def _collect_ids_signatures() -> list[dict[str, Any]]:
+    """Collect the effective curated IDS signature catalog for scenario authors.
+
+    The catalog is deliberately limited to fields that help an author choose a
+    compatible attachment. Raw predicates remain engine configuration details.
+    """
+    from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+
+    signatures: list[dict[str, Any]] = []
+    for signature in load_ids_signatures().get("signatures", []):
+        if not isinstance(signature, dict) or not isinstance(signature.get("sid"), int):
+            continue
+        predicate = signature.get("predicate")
+        inspection = (
+            predicate.get("inspection")
+            if isinstance(predicate, dict) and isinstance(predicate.get("inspection"), str)
+            else signature.get("inspection")
+        )
+        entry: dict[str, Any] = {
+            field: signature[field]
+            for field in (
+                "sid",
+                "rev",
+                "message",
+                "classification",
+                "priority",
+                "proto",
+                "dst_port",
+                "direction",
+            )
+            if field in signature
+        }
+        for field in ("target_services", "target_os", "baseline_fp_allowed", "alert_policy"):
+            if field in signature:
+                entry[field] = signature[field]
+        if isinstance(inspection, str):
+            entry["inspection"] = inspection
+        signatures.append(entry)
+    return sorted(signatures, key=lambda signature: int(signature["sid"]))
+
+
+def format_ids_signature_inventory(value: Any) -> str:
+    """Render concise text rows for the IDS signature inventory field."""
+    if not isinstance(value, list):
+        return str(value)
+
+    rows = ["SID\tPROTO/PORT\tDIRECTION\tMESSAGE"]
+    for signature in value:
+        if not isinstance(signature, dict):
+            continue
+        sid = signature.get("sid", "?")
+        protocol = signature.get("proto", "?")
+        port = signature.get("dst_port", "?")
+        direction = signature.get("direction", "?")
+        message = signature.get("message", "")
+        rows.append(f"{sid}\t{protocol}/{port}\t{direction}\t{message}")
+    return "\n".join(rows)
+
+
 def _collect_format_groups() -> dict[str, list[str]]:
     """Collect format group names and their expanded formats."""
     from evidenceforge.events.dispatcher import FORMAT_GROUPS
@@ -364,6 +423,7 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
         "system_roles": _collect_system_roles,
         "web_scan_presets": _collect_web_scan_presets,
         "beacon_profiles": _collect_beacon_profiles,
+        "ids_signatures": _collect_ids_signatures,
         "format_groups": _collect_format_groups,
         "identity_pools": _collect_identity_pools,
         "packs": lambda: _collect_packs(resolved_project_root),
@@ -508,6 +568,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
     "identity_pools": "Generated identity pool counts and overlay paths",
+    "ids_signatures": "Effective curated IDS signature catalog for ids_alerts attachments",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",
     "overlay.files": "YAML files in the overlay directory",
