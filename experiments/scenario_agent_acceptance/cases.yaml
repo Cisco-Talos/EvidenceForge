@@ -1,0 +1,216 @@
+cases:
+  - id: guided_interview
+    title: Scripted guided interview
+    suites: [smoke, full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/minimal.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to interview me and then create
+      scenario.yaml. Ask one concise question per turn. Do not infer requirements before I answer.
+      The controlled answers describe a one-hour, attack-free Windows environment with one user,
+      one workstation, Windows and Zeek outputs, and no reusable packs. Validate the complete file.
+    scripted_answers:
+      - Attack-free baseline only.
+      - One enabled user, test_user, assigned to Windows 11 workstation TEST-01 at 10.0.0.10.
+      - One internal /24 segment with a bidirectional Zeek SPAN sensor.
+      - One hour starting 2026-08-27T13:00:00Z; Windows and Zeek output.
+      - Medium baseline intensity and low variation. Write and validate scenario.yaml now.
+    required_references:
+      - scenario-core.md
+      - scenario-environment.md
+      - scenario-baseline-output.md
+    required_schema_selectors:
+      - environment.users
+      - environment.systems
+      - environment.network
+    requirements:
+      - {id: scenario_version, path: scenario_version, predicate: equals, expected: "2.0"}
+      - {id: one_user, path: environment.users, predicate: min_items, expected: 1}
+      - {id: one_system, path: environment.systems, predicate: min_items, expected: 1}
+      - {id: windows_output, path: output.logs.*.format, predicate: any_equals, expected: windows_event_security}
+      - {id: zeek_output, path: output.logs.*.format, predicate: any_equals, expected: zeek_conn}
+
+  - id: windows_email
+    title: Windows phishing and mailbox access
+    suites: [smoke, full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/full-coverage-apt.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill and create scenario.yaml directly.
+      Model a small Windows domain in which analyst alex reads a delivered phishing message over
+      OWA for exactly 45 seconds. Include a scalar svc-backup service account and an external
+      network identity with id partner_portal, host partner.example.test, and IP 203.0.113.60.
+      Include appropriate endpoint, email, and network evidence and validate the complete file.
+    required_references:
+      - scenario-environment-identities.md
+      - scenario-email.md
+      - scenario-events-network.md
+    required_schema_selectors:
+      - environment.service_accounts
+      - environment.network_identities
+      - event.email_read
+    requirements:
+      - {id: scenario_version, path: scenario_version, predicate: equals, expected: "2.0"}
+      - {id: service_account, path: environment.service_accounts, predicate: contains, expected: svc-backup}
+      - {id: network_identity_id, path: environment.network_identities.*.id, predicate: any_equals, expected: partner_portal}
+      - {id: network_identity_host, path: environment.network_identities.*.hosts, predicate: contains, expected: partner.example.test}
+      - {id: email_duration, path: storyline.*.events.*.duration, predicate: any_equals, expected: 45.0}
+
+  - id: windows_rdp
+    title: Windows RDP receiver and sensor prerequisites
+    suites: [full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/full-coverage-apt.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to create and validate scenario.yaml.
+      Model a Windows 11 administrator workstation initiating an RDP session to a second Windows 11
+      workstation. Make the receiver explicitly RDP-capable and provide Windows, eCAR, and Zeek
+      evidence with the necessary network sensor. Use one rdp_session event and do not duplicate its
+      connection or Type 10 logon lifecycle.
+    required_references:
+      - scenario-events-network.md
+      - scenario-environment-network.md
+      - evidence-windows.md
+    required_schema_selectors:
+      - environment.systems
+      - environment.network
+      - event.rdp_session
+    requirements:
+      - {id: rdp_event, path: storyline.*.events.*.type, predicate: any_equals, expected: rdp_session}
+      - {id: rdp_service, path: environment.systems.*.services, predicate: contains, expected: termservice}
+      - {id: zeek_output, path: output.logs.*.format, predicate: any_equals, expected: zeek_conn}
+
+  - id: linux_ssh
+    title: Linux SSH endpoint and Zeek evidence
+    suites: [full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/arch-firm-ssh-bruteforce.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to create and validate scenario.yaml.
+      Model a Linux administrator opening one SSH session from a modeled workstation to an Ubuntu
+      server. Include receiver SSH capability, a visible bidirectional Zeek sensor, Linux endpoint
+      evidence, and one ssh_session event without a duplicate port-22 connection or logon.
+    required_references:
+      - scenario-events-network.md
+      - evidence-endpoint-linux.md
+      - scenario-environment-network.md
+    required_schema_selectors:
+      - environment.systems
+      - environment.network
+      - event.ssh_session
+    requirements:
+      - {id: ssh_event, path: storyline.*.events.*.type, predicate: any_equals, expected: ssh_session}
+      - {id: ssh_service, path: environment.systems.*.services, predicate: contains, expected: ssh}
+      - {id: syslog_output, path: output.logs.*.format, predicate: any_equals, expected: syslog}
+      - {id: zeek_output, path: output.logs.*.format, predicate: any_equals, expected: zeek_conn}
+
+  - id: mixed_smb
+    title: Mixed Windows and Linux SMB storage
+    suites: [full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/smb-linux-matrix.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to create and validate scenario.yaml.
+      Model Windows and Linux clients accessing a Windows SMB file server. Use a generated storage
+      preset and customize one compiled share through share_overrides, retaining Windows, Linux,
+      eCAR, and Zeek evidence needed for the activity.
+    required_references:
+      - scenario-smb.md
+      - scenario-environment-overrides.md
+      - evidence-endpoint-linux.md
+    required_schema_selectors:
+      - environment.storage
+      - event.smb_activity
+    requirements:
+      - {id: smb_event, path: storyline.*.events.*.type, predicate: any_equals, expected: smb_activity}
+      - {id: storage, path: environment.storage, predicate: exists}
+      - {id: share_overrides, path: environment.storage.servers.*.share_overrides, predicate: exists}
+
+  - id: healthcare_pack
+    title: Publisher-qualified healthcare pack composition
+    suites: [full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/northstar-health-pack.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to create and validate scenario.yaml.
+      Compose the packaged EvidenceForge Northstar Health organization pack at exact version 1.0.0
+      using its publisher-qualified structured reference. Add only a one-hour time window and
+      Windows, Zeek, eCAR, and syslog outputs. Inspect and non-writing-resolve the composition.
+    required_references:
+      - scenario-pack-consumption.md
+      - pack-reference.md
+      - scenario-baseline-output.md
+    required_schema_selectors:
+      - time_window
+      - output
+    requirements:
+      - {id: source, path: composition.organization.source, predicate: equals, expected: package}
+      - {id: publisher, path: composition.organization.publisher, predicate: equals, expected: evidenceforge}
+      - {id: pack_name, path: composition.organization.name, predicate: equals, expected: northstar-health}
+      - {id: pack_version, path: composition.organization.version, predicate: equals, expected: 1.0.0}
+
+  - id: sensor_compatibility
+    title: Zeek, Snort, and Cisco ASA output compatibility
+    suites: [full]
+    mode: author
+    scenario_path: scenario.yaml
+    known_good_fixture: tests/fixtures/scenarios/full-coverage-apt.yaml
+    prompt: |
+      Use the installed EvidenceForge scenario-authoring skill to create and validate scenario.yaml.
+      Model one internal segment and one DMZ, with compatible sensors and outputs for Zeek, Snort
+      alert, and Cisco ASA evidence. Include one inbound connection carrying an IDS alert so each
+      output has an eligible observation path.
+    required_references:
+      - scenario-environment-network.md
+      - scenario-baseline-output.md
+      - evidence-network-ids.md
+    required_schema_selectors:
+      - environment.network
+      - event.connection
+      - output
+    requirements:
+      - {id: zeek_output, path: output.logs.*.format, predicate: any_equals, expected: zeek_conn}
+      - {id: snort_output, path: output.logs.*.format, predicate: any_equals, expected: snort_alert}
+      - {id: asa_output, path: output.logs.*.format, predicate: any_equals, expected: cisco_asa}
+      - {id: zeek_sensor, path: environment.network.sensors.*.log_formats, predicate: contains, expected: zeek_conn}
+      - {id: snort_sensor, path: environment.network.sensors.*.log_formats, predicate: contains, expected: snort_alert}
+      - {id: asa_sensor, path: environment.network.sensors.*.log_formats, predicate: contains, expected: cisco_asa}
+
+  - id: controlled_repair
+    title: Controlled repair of demonstrated schema errors
+    suites: [smoke, full]
+    mode: repair
+    scenario_path: scenario.yaml
+    starting_fixture: experiments/scenario_agent_acceptance/fixtures/controlled_repair.invalid.yaml
+    known_good_fixture: experiments/scenario_agent_acceptance/fixtures/controlled_repair.valid.yaml
+    prompt: |
+      Use the installed EvidenceForge validation skill to repair scenario.yaml. Fix validation
+      blockers before warnings. Preserve the scenario's organization, actors, systems, timeline,
+      and narrative. You may change only environment.service_accounts,
+      environment.network_identities, the receiver's services, and the email_read duration. Do not
+      generate data or make unrelated semantic changes. Finish with zero validation errors.
+    required_references:
+      - scenario-environment-identities.md
+      - scenario-email.md
+      - scenario-events-network.md
+    required_schema_selectors:
+      - environment.service_accounts
+      - environment.network_identities
+      - event.email_read
+      - event.rdp_session
+    allowed_repair_paths:
+      - environment.service_accounts
+      - environment.network_identities
+      - environment.systems.1.services
+      - storyline.0.events.0.duration
+    requirements:
+      - {id: service_account, path: environment.service_accounts, predicate: contains, expected: svc-backup}
+      - {id: identity_id, path: environment.network_identities.*.id, predicate: any_equals, expected: partner_portal}
+      - {id: duration, path: storyline.*.events.*.duration, predicate: any_equals, expected: 45.0}
+      - {id: rdp_service, path: environment.systems.*.services, predicate: contains, expected: rdp}
