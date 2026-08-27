@@ -19,7 +19,7 @@ import yaml
 from evidenceforge.models.exceptions import PackError
 
 from .models import PackReference
-from .packs import LoadedPack, PackRepository
+from .packs import LoadedPack, PackRepository, version_satisfies_constraint
 
 EFPACK_FORMAT_VERSION = "1.0"
 EFPACK_MANIFEST = "efpack.yaml"
@@ -61,7 +61,15 @@ def build_efpack(repository: PackRepository, root: LoadedPack, destination: Path
     members = [*dependencies, root]
     payloads: dict[str, bytes] = {}
     manifest_members: list[dict[str, str]] = []
-    for pack in sorted(members, key=lambda value: (_member(value)["type"], _member(value)["name"])):
+    for pack in sorted(
+        members,
+        key=lambda value: (
+            value.manifest.publisher,
+            value.manifest.type,
+            value.manifest.name,
+            value.manifest.version,
+        ),
+    ):
         member = _member(pack)
         manifest_members.append(member)
         for relative, content in (*pack.semantic_file_bytes, *pack.companion_file_bytes):
@@ -141,6 +149,12 @@ def validate_efpack(path: Path) -> ValidatedEFPack:
                 }:
                     raise PackError(".efpack member has invalid release identity")
                 members.append({key: str(value) for key, value in member.items()})
+            member_identities = {
+                (member["publisher"], member["type"], member["name"], member["version"])
+                for member in members
+            }
+            if len(member_identities) != len(members):
+                raise PackError(".efpack contains duplicate release identities")
             if root not in members:
                 raise PackError(".efpack root is not one of its members")
             expected = {str(key): str(value) for key, value in raw_files.items()}
@@ -158,13 +172,125 @@ def validate_efpack(path: Path) -> ValidatedEFPack:
         manifest_name = f"{prefix}pack.yaml"
         if manifest_name not in files or f"{prefix}pack.lock.yaml" not in files:
             raise PackError(f".efpack member is missing manifest or lock: {_prefix(member)}")
-    return ValidatedEFPack(
+    validated = ValidatedEFPack(
         root={key: str(value) for key, value in root.items()}, members=tuple(members), files=files
     )
+    _validate_archive_pack_graph(validated)
+    return validated
+
+
+def _validate_archive_pack_graph(validated: ValidatedEFPack) -> None:
+    """Validate every contained pack and its exact locked closure before consent."""
+
+    staging = Path(tempfile.mkdtemp(prefix=".efpack-validate-")).resolve()
+    try:
+        for name, content in validated.files.items():
+            target = staging / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        repository = PackRepository(Path.cwd())
+        closure: dict[tuple[str, str, str, str], LoadedPack] = {}
+        for member in validated.members:
+            source = staging / _prefix(member)
+            loaded = repository._load(
+                source,
+                source="path",
+                reference=PackReference(
+                    source="path",
+                    path=str(source),
+                    publisher=member["publisher"],
+                    name=member["name"],
+                    version=member["version"],
+                ),
+                expected_type=member["type"],  # type: ignore[arg-type]
+            )
+            if loaded.digest != member["digest"]:
+                raise PackError(f".efpack canonical digest mismatch for {_prefix(member)}")
+            closure[(member["publisher"], member["type"], member["name"], member["version"])] = (
+                loaded
+            )
+        _validate_locked_closure(closure, context=".efpack")
+        root_identity = (
+            validated.root["publisher"],
+            validated.root["type"],
+            validated.root["name"],
+            validated.root["version"],
+        )
+        reachable: set[tuple[str, str, str, str]] = set()
+        pending = [root_identity]
+        while pending:
+            identity = pending.pop()
+            if identity in reachable:
+                continue
+            selected = closure.get(identity)
+            if selected is None:
+                raise PackError(".efpack root or dependency is absent from its member closure")
+            reachable.add(identity)
+            pending.extend(
+                (
+                    dependency.publisher,
+                    dependency.type,
+                    dependency.name,
+                    dependency.version,
+                )
+                for dependency in selected.lock.dependencies
+            )
+        if reachable != set(closure):
+            extras = sorted(set(closure) - reachable)
+            raise PackError(
+                f".efpack contains unrelated releases outside the root closure: {extras}"
+            )
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _validate_locked_closure(
+    closure: dict[tuple[str, str, str, str], LoadedPack],
+    *,
+    context: str,
+) -> None:
+    """Validate manifest constraints and exact locks against a materialized closure."""
+
+    for loaded in closure.values():
+        declared = {
+            (dependency.publisher, dependency.type, dependency.name): dependency
+            for dependency in loaded.manifest.industry_dependencies
+        }
+        locked = {
+            (dependency.publisher, dependency.type, dependency.name): dependency
+            for dependency in loaded.lock.dependencies
+        }
+        if declared.keys() != locked.keys():
+            missing = sorted(declared.keys() - locked.keys())
+            extra = sorted(locked.keys() - declared.keys())
+            raise PackError(
+                f"{context} manifest/lock dependency mismatch for "
+                f"{loaded.manifest.publisher}/{loaded.manifest.name}: "
+                f"missing={missing}, extra={extra}"
+            )
+        for identity, dependency in locked.items():
+            declaration = declared[identity]
+            selected_identity = (*identity, dependency.version)
+            selected = closure.get(selected_identity)
+            if selected is None or selected.digest != dependency.digest:
+                raise PackError(
+                    f"{context} lock closure is incomplete or mismatched for "
+                    f"{dependency.publisher}/{dependency.name}@{dependency.version}"
+                )
+            if not version_satisfies_constraint(dependency.version, declaration.version_constraint):
+                raise PackError(
+                    f"{context} locked version {dependency.version} is outside constraint "
+                    f"{declaration.version_constraint} for "
+                    f"{dependency.publisher}/{dependency.name}"
+                )
 
 
 def import_efpack(
-    path: Path, *, scope: Literal["project", "user"], project_root: Path
+    path: Path,
+    *,
+    scope: Literal["project", "user"],
+    project_root: Path,
+    accepted_publishers: set[str],
 ) -> dict[str, Any]:
     """Validate then atomically materialize a release archive into an immutable library."""
 
@@ -222,6 +348,11 @@ def import_efpack(
                         f".efpack lock closure is incomplete or mismatched for {dependency.publisher}/"
                         f"{dependency.name}@{dependency.version}"
                     )
+        required_publishers = {member["publisher"] for member in validated.members}
+        missing_consent = sorted(required_publishers - accepted_publishers)
+        if missing_consent:
+            flags = " ".join(f"--accept-publisher {publisher}" for publisher in missing_consent)
+            raise PackError("publisher consent is required for every import; repeat with " + flags)
         for member in validated.members:
             source = staging / _prefix(member)
             destination = (
@@ -272,22 +403,179 @@ def import_efpack(
     return {"scope": scope, "root": validated.root, "members": list(validated.members)}
 
 
-def hydrate_release(reference: str, project_root: Path) -> dict[str, str]:
-    """Copy one explicitly selected immutable user release into a project pack repository."""
+def _release_library(project_root: Path, scope: Literal["project", "user"]) -> Path:
+    """Return one immutable release-library root."""
+
+    if scope == "project":
+        return project_root / ".eforge" / "releases"
+    return Path.home() / ".eforge" / "releases"
+
+
+def hydrate_release(
+    reference: str,
+    project_root: Path,
+    *,
+    scope: Literal["project", "user"],
+) -> dict[str, Any]:
+    """Atomically copy one immutable release and its locked closure into project packs."""
 
     try:
         publisher, pack_type, versioned = reference.split(":", 2)
         name, version = versioned.split("@", 1)
     except ValueError as exc:
         raise PackError("release must be publisher:type:name@version") from exc
-    source = Path.home() / ".eforge" / "releases" / publisher / pack_type / name / version
-    destination = project_root / ".eforge" / "packs" / pack_type / name / version
+    library = _release_library(project_root, scope)
+    source = library / publisher / pack_type / name / version
     if not (source / "pack.yaml").is_file():
-        raise PackError(f"user-library release was not found: {reference}")
-    if destination.exists():
-        if (destination / "pack.yaml").read_bytes() != (source / "pack.yaml").read_bytes():
-            raise PackError(f"project contains a conflicting pack release: {destination}")
-        return {"reference": reference, "destination": str(destination), "hydrated": "false"}
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination, copy_function=shutil.copy2)
-    return {"reference": reference, "destination": str(destination), "hydrated": "true"}
+        raise PackError(f"{scope}-library release was not found: {reference}")
+    repository = PackRepository(project_root)
+    pending = [(publisher, pack_type, name, version)]
+    closure: dict[tuple[str, str, str, str], LoadedPack] = {}
+    while pending:
+        identity = pending.pop()
+        if identity in closure:
+            continue
+        member_source = library.joinpath(*identity)
+        loaded = repository._load(
+            member_source,
+            source="path",
+            reference=PackReference(
+                source="path",
+                path=str(member_source),
+                publisher=identity[0],
+                name=identity[2],
+                version=identity[3],
+            ),
+            expected_type=identity[1],  # type: ignore[arg-type]
+        )
+        closure[identity] = loaded
+        for dependency in loaded.lock.dependencies:
+            dependency_identity = (
+                dependency.publisher,
+                dependency.type,
+                dependency.name,
+                dependency.version,
+            )
+            dependency_source = library.joinpath(*dependency_identity)
+            if not dependency_source.is_dir():
+                raise PackError(
+                    f"immutable release closure is missing {dependency.publisher}/"
+                    f"{dependency.name}@{dependency.version}"
+                )
+            pending.append(dependency_identity)
+
+    _validate_locked_closure(closure, context="immutable release")
+
+    destination_root = project_root / ".eforge" / "packs"
+    staged_parent = project_root / ".eforge"
+    staged_parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".hydrate-", dir=staged_parent))
+    destinations: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for identity, loaded in sorted(closure.items()):
+            destination = destination_root.joinpath(*identity)
+            if destination.exists():
+                existing = repository._load(
+                    destination,
+                    source="path",
+                    reference=PackReference(
+                        source="path",
+                        path=str(destination),
+                        publisher=identity[0],
+                        name=identity[2],
+                        version=identity[3],
+                    ),
+                    expected_type=identity[1],  # type: ignore[arg-type]
+                )
+                if existing.digest != loaded.digest:
+                    raise PackError(f"project contains a conflicting pack release: {destination}")
+                continue
+            staged = staging.joinpath(*identity)
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(loaded.root, staged, copy_function=shutil.copy2)
+            destinations.append((staged, destination))
+        for staged, destination in destinations:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staged, destination)
+            published.append(destination)
+    except (OSError, PackError) as exc:
+        for destination in reversed(published):
+            shutil.rmtree(destination, ignore_errors=True)
+        if isinstance(exc, PackError):
+            raise
+        raise PackError(f"unable to hydrate release closure: {exc}") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return {
+        "reference": reference,
+        "scope": scope,
+        "hydrated": bool(destinations),
+        "members": [
+            _member(pack)
+            for pack in sorted(
+                closure.values(),
+                key=lambda item: (
+                    item.manifest.publisher,
+                    item.manifest.type,
+                    item.manifest.name,
+                    item.manifest.version,
+                ),
+            )
+        ],
+    }
+
+
+def list_release_library(
+    project_root: Path,
+    *,
+    scope: Literal["project", "user"],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Return valid immutable releases and isolated validation issues."""
+
+    library = _release_library(project_root, scope)
+    records: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    if not library.is_dir():
+        return records, issues
+    repository = PackRepository(project_root)
+    for root in sorted(path for path in library.glob("*/*/*/*") if path.is_dir()):
+        relative = root.relative_to(library)
+        if len(relative.parts) != 4:
+            continue
+        publisher, pack_type, name, version = relative.parts
+        try:
+            loaded = repository._load(
+                root,
+                source="path",
+                reference=PackReference(
+                    source="path",
+                    path=str(root),
+                    publisher=publisher,
+                    name=name,
+                    version=version,
+                ),
+                expected_type=pack_type,  # type: ignore[arg-type]
+            )
+            hydrated_path = (
+                project_root / ".eforge" / "packs" / publisher / pack_type / name / version
+            )
+            records.append(
+                {
+                    **_member(loaded),
+                    "scope": f"{scope}-release",
+                    "location": str(root),
+                    "mutable": False,
+                    "resolvable": False,
+                    "hydration_state": "hydrated" if hydrated_path.is_dir() else "dehydrated",
+                }
+            )
+        except PackError as exc:
+            issues.append(
+                {
+                    "scope": f"{scope}-release",
+                    "location": str(root),
+                    "error": str(exc),
+                }
+            )
+    return records, issues

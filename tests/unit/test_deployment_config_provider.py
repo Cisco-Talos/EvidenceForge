@@ -51,7 +51,7 @@ def _effective_config() -> SimpleNamespace:
         project_overlays={},
         catalogs={
             "process_catalog": {
-                "finance:browsers": {
+                "evidenceforge/finance:browsers": {
                     "data": {
                         "builtins": ["chrome"],
                         "custom": [],
@@ -60,10 +60,10 @@ def _effective_config() -> SimpleNamespace:
                 }
             },
             "application_catalog": {
-                "finance:browser": {
+                "evidenceforge/finance:browser": {
                     "data": {
-                        "personas": ["finance:analyst"],
-                        "processes": ["finance:browsers"],
+                        "personas": ["evidenceforge/finance:analyst"],
+                        "processes": ["evidenceforge/finance:browsers"],
                         "connections": {},
                     }
                 }
@@ -79,7 +79,7 @@ def test_pack_application_overlay_preserves_product_identity_and_current_root_fi
     qualified = applications[0]
     deployment = qualified["platforms"]["windows"]["deployment"]
 
-    assert qualified["id"] == "finance:browsers::chrome"
+    assert qualified["id"] == "evidenceforge/finance:browsers::chrome"
     assert deployment["product_id"] == "chrome"
     assert (
         "product_id"
@@ -87,7 +87,9 @@ def test_pack_application_overlay_preserves_product_identity_and_current_root_fi
             "platforms"
         ]["windows"]["deployment"]
     )
-    assert runtime["finance:browser"]["application_ids"] == ["finance:browsers::chrome"]
+    assert runtime["evidenceforge/finance:browser"]["application_ids"] == [
+        "evidenceforge/finance:browsers::chrome"
+    ]
 
     with effective_config_scope(effective, refresh_legacy_globals=False):
         overlay = pack_overlay_document("activity/application_catalog.yaml")

@@ -31,10 +31,18 @@ from .models import (
 )
 
 
+def _pack_namespace(publisher: str, name: str) -> str:
+    """Return the public namespace owned by one publisher-qualified pack."""
+
+    return f"{publisher}/{name}"
+
+
 class SelectedPackForValidation(Protocol):
     """Structural interface accepted from the repository/compiler pack result."""
 
     manifest: PackManifest
+    lock: Any
+    digest: str
     source: PackSource
     catalogs: Mapping[str, Mapping[str, Any]]
     environment: Mapping[str, Any]
@@ -185,7 +193,10 @@ def _pack_label(pack: SelectedPackForValidation) -> str:
     """Return a portable identity for actionable diagnostics."""
 
     manifest = pack.manifest
-    return f"{manifest.type} pack {manifest.name}@{manifest.version} ({pack.source})"
+    return (
+        f"{manifest.type} pack {manifest.publisher}/{manifest.name}@{manifest.version} "
+        f"({pack.source})"
+    )
 
 
 def _qualified_export(owner: str, identity: str, *, context: str) -> str:
@@ -203,15 +214,19 @@ def _allowed_qualifiers(pack: SelectedPackForValidation) -> set[str]:
     """Return namespaces the pack may reference under its dependency contract."""
 
     manifest = pack.manifest
+    owner = _pack_namespace(manifest.publisher, manifest.name)
     if manifest.type == "industry":
-        return {manifest.name}
-    dependency_names = [dependency.name for dependency in manifest.industry_dependencies]
+        return {owner}
+    dependency_names = [
+        _pack_namespace(dependency.publisher, dependency.name)
+        for dependency in manifest.industry_dependencies
+    ]
     if len(dependency_names) != len(set(dependency_names)):
         raise PackError(
             f"{_pack_label(pack)} declares multiple versions/sources for one industry name; "
             "qualified references cannot disambiguate them"
         )
-    return {manifest.name, *dependency_names}
+    return {owner, *dependency_names}
 
 
 def _qualified_reference(
@@ -225,7 +240,10 @@ def _qualified_reference(
     if ":" in reference:
         qualifier, local_id = reference.split(":", 1)
     else:
-        qualifier, local_id = pack.manifest.name, reference
+        qualifier, local_id = (
+            _pack_namespace(pack.manifest.publisher, pack.manifest.name),
+            reference,
+        )
     if qualifier not in _allowed_qualifiers(pack):
         allowed = ", ".join(sorted(_allowed_qualifiers(pack)))
         raise PackError(
@@ -250,7 +268,11 @@ def _validated_entries(
     result: dict[str, Any] = {}
     for identity, raw_entry in entries.items():
         context = f"{_pack_label(pack)} {catalog_name}.{identity}"
-        qualified = _qualified_export(pack.manifest.name, identity, context=context)
+        qualified = _qualified_export(
+            _pack_namespace(pack.manifest.publisher, pack.manifest.name),
+            identity,
+            context=context,
+        )
         try:
             entry = model.model_validate(raw_entry)
         except ValidationError as exc:
@@ -267,20 +289,27 @@ def _validate_dependency_selection(packs: Sequence[SelectedPackForValidation]) -
     namespace_owners: dict[str, tuple[PackSource, str, str]] = {}
     for pack in packs:
         manifest = pack.manifest
+        namespace = _pack_namespace(manifest.publisher, manifest.name)
         identity = (pack.source, manifest.type, manifest.version)
-        existing = namespace_owners.get(manifest.name)
+        existing = namespace_owners.get(namespace)
         if existing is not None:
             existing_source, existing_type, existing_version = existing
             raise PackError(
-                f"selected packs share namespace {manifest.name!r} but have different exact "
+                f"selected packs share namespace {namespace!r} but have different exact "
                 "identities: "
-                f"{existing_source}:{existing_type}:{manifest.name}@{existing_version} and "
-                f"{pack.source}:{manifest.type}:{manifest.name}@{manifest.version}"
+                f"{existing_source}:{existing_type}:{namespace}@{existing_version} and "
+                f"{pack.source}:{manifest.type}:{namespace}@{manifest.version}"
             )
-        namespace_owners[manifest.name] = identity
+        namespace_owners[namespace] = identity
 
     selected = {
-        (pack.source, pack.manifest.type, pack.manifest.name, pack.manifest.version)
+        (
+            pack.manifest.publisher,
+            pack.manifest.type,
+            pack.manifest.name,
+            pack.manifest.version,
+            pack.digest,
+        )
         for pack in packs
     }
     organizations = [pack for pack in packs if pack.manifest.type == "organization"]
@@ -288,17 +317,18 @@ def _validate_dependency_selection(packs: Sequence[SelectedPackForValidation]) -
         names = ", ".join(pack.manifest.name for pack in organizations)
         raise PackError(f"selected composition contains multiple organization packs: {names}")
     for organization in organizations:
-        for dependency in organization.manifest.industry_dependencies:
+        for dependency in organization.lock.dependencies:
             identity = (
-                dependency.source,
-                "industry",
+                dependency.publisher,
+                dependency.type,
                 dependency.name,
                 dependency.version,
+                dependency.digest,
             )
             if identity not in selected:
                 raise PackError(
                     f"{_pack_label(organization)} requires exact industry dependency "
-                    f"{dependency.source}:{dependency.name}@{dependency.version}, but it was "
+                    f"{dependency.publisher}/{dependency.name}@{dependency.version}, but it was "
                     "not selected"
                 )
 
@@ -329,7 +359,9 @@ def _require_organization_model_reference(
     """Resolve an organization-local export or packaged built-in shorthand."""
 
     if ":" not in reference:
-        local_reference = f"{pack.manifest.name}:{reference}"
+        local_reference = (
+            f"{_pack_namespace(pack.manifest.publisher, pack.manifest.name)}:{reference}"
+        )
         if local_reference in targets:
             return local_reference
         if reference in builtin_ids:
@@ -435,7 +467,9 @@ def validate_selected_pack_semantics(
                     + ", ".join(unknown_builtins)
                 )
             for custom in process_entry.data.custom:
-                runtime_id = f"{pack.manifest.name}:{custom.id}"
+                runtime_id = (
+                    f"{_pack_namespace(pack.manifest.publisher, pack.manifest.name)}:{custom.id}"
+                )
                 existing_custom = custom_process_owners.get(runtime_id)
                 if existing_custom is not None:
                     raise PackError(
@@ -468,7 +502,7 @@ def validate_selected_pack_semantics(
             context = f"{_pack_label(pack)} destination_catalog.{identity}"
             for tag in destination_entry.data.tags:
                 qualified_tag = _qualified_export(
-                    pack.manifest.name,
+                    _pack_namespace(pack.manifest.publisher, pack.manifest.name),
                     tag,
                     context=f"{context}.data.tags",
                 )
@@ -589,7 +623,9 @@ def validate_selected_pack_semantics(
                             )
                         referenced_destinations.update(destination_tags[qualified_tag])
                         continue
-                    local_tag = f"{pack.manifest.name}:{tag}"
+                    local_tag = (
+                        f"{_pack_namespace(pack.manifest.publisher, pack.manifest.name)}:{tag}"
+                    )
                     if local_tag in destination_tags:
                         referenced_destinations.update(destination_tags[local_tag])
                     elif tag not in builtin_tags:

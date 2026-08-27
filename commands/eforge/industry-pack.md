@@ -39,6 +39,10 @@ eforge info pack_builtin_dns_tags
 Inspect any candidate base pack with `pack show --json`. Do not scan package directories to
 reconstruct inventory.
 
+Before `pack init` or `pack copy`, require an explicit effective identity from `eforge pack
+publisher show --json`. If none exists, ask for the publisher ID/display name and configure the
+chosen user or project scope; do not derive a fallback.
+
 ## Interview one decision at a time
 
 Determine:
@@ -91,7 +95,8 @@ directory/subject/file-type vocabulary only. Do not put drive letters, POSIX mou
 advertised filesystem labels, audit policy, credentials, or internal `smb_profiles.yaml` data in an
 industry catalog.
 
-Use local IDs inside the pack; the loader qualifies them as `<pack-name>:<local-id>`. Reference an
+Use local IDs inside the pack; the loader qualifies them as
+`<publisher>/<pack-name>:<local-id>`. Reference an
 export from another pack only where the contract explicitly permits it. Industry packs cannot
 declare dependencies on other industry packs.
 
@@ -123,7 +128,7 @@ addresses where appropriate. A pack is untrusted inert YAML: add no hooks or arb
 After each coherent edit:
 
 ```bash
-eforge pack validate <project:industry:name@version> --json
+eforge pack validate <project:evidenceforge:industry:name@version> --json
 ```
 
 Repair every schema, reference, compatibility, collision, containment, or runtime-semantic error
@@ -133,7 +138,7 @@ catalog chain.
 At handoff, inspect identity and exports:
 
 ```bash
-eforge pack show <project:industry:name@version> --json
+eforge pack show <project:evidenceforge:industry:name@version> --json
 ```
 
 ## Prove composition and runtime behavior

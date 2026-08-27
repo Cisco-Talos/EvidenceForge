@@ -3,11 +3,12 @@ type: organization
 publisher: evidenceforge
 publisher_display_name: "EvidenceForge Official"
 name: northstar-health
-version: "1.0.0"
+version: "1.1.0"
 requires_evidenceforge: ">=2.0.0,<3.0.0"
-description: "Fictional regional healthcare organization with email and SMB storage."
+description: "Fictional regional healthcare organization with cross-platform SMB storage."
 industry_dependencies:
   - source: package
+    publisher: evidenceforge
     type: industry
     name: healthcare
-    version: "1.0.0"
+    version_constraint: ">=1.0.0,<2.0.0"

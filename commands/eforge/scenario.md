@@ -45,8 +45,9 @@ duplicates. Use selected versioned packs for portable content. Route reusable se
 `/eforge industry-pack`, organizations to `/eforge organization-pack`, lifecycle to `/eforge pack`,
 and project defaults to `/eforge config`.
 
-When discovery identifies a user-library-only pack, present it as dehydrated and offer a confirmed
-handoff to `/eforge pack-release` for hydration. Never resolve it implicitly.
+When discovery identifies a project- or user-release-only pack, present it as dehydrated and offer
+a confirmed handoff to `/eforge pack-release` for closure hydration from that exact scope. Never
+resolve an immutable release implicitly.
 
 Do not scan after choosing Scenario 1.0 or no-pack authoring. No-pack industry and organization
 decisions must remain explicit.

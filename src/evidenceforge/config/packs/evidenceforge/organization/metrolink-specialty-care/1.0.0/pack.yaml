@@ -11,5 +11,4 @@ industry_dependencies:
     publisher: evidenceforge
     type: industry
     name: healthcare
-    version: "1.0.0"
     version_constraint: ">=1.0.0,<2.0.0"

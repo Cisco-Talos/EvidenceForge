@@ -43,8 +43,8 @@ filenames.
 - A pack is selected as one whole unit. Catalog subcomponents are not independently selectable.
 - Every pack has the same six catalog filenames and root keys, including empty catalogs.
 - Only organization packs have model fragments and industry dependencies.
-- Persisted references always contain an exact source, name, and version.
-- Pack-local IDs become qualified public IDs: `<pack-name>:<local-id>`.
+- Persisted references always contain an exact source, publisher, name, and version.
+- Pack-local IDs become qualified public IDs: `<publisher>/<pack-name>:<local-id>`.
 - Industry peer collisions fail. Ordering never silently resolves incompatible exports.
 - Pack data must be effective at runtime. Do not add generation-looking fields that merely survive
   validation or provenance serialization.
@@ -112,14 +112,14 @@ from an include. The manifest name/version must match the persisted values.
 Use this exact form for package and project repositories:
 
 ```text
-source:type:name@version
+source:publisher:type:name@version
 ```
 
 Examples:
 
 ```text
-package:industry:healthcare@1.0.0
-project:organization:northstar-health@1.1.0
+package:evidenceforge:industry:healthcare@1.0.0
+project:evidenceforge:organization:northstar-health@1.1.0
 ```
 
 CLI commands that accept a path may receive a pack directory or its `pack.yaml`. Prefer a concrete
@@ -191,8 +191,10 @@ Empty catalogs are meaningful and valid. Do not delete an unused canonical file.
 Industry manifest:
 
 ```yaml
-pack_schema_version: "1.0"
+pack_schema_version: "2.0"
 type: industry
+publisher: evidenceforge
+publisher_display_name: "EvidenceForge Official"
 name: healthcare
 version: "1.0.0"
 requires_evidenceforge: ">=2.0.0,<3.0.0"
@@ -203,22 +205,25 @@ industry_dependencies: []
 Organization manifest:
 
 ```yaml
-pack_schema_version: "1.0"
+pack_schema_version: "2.0"
 type: organization
+publisher: evidenceforge
+publisher_display_name: "EvidenceForge Official"
 name: northstar-health
 version: "1.0.0"
 requires_evidenceforge: ">=2.0.0,<3.0.0"
 description: "Fictional regional healthcare organization."
 industry_dependencies:
   - source: package
+    publisher: evidenceforge
     type: industry
     name: healthcare
-    version: "1.0.0"
+    version_constraint: ">=1.0.0,<2.0.0"
 ```
 
 Rules:
 
-- `pack_schema_version` is exactly `"1.0"`.
+- `pack_schema_version` is exactly `"2.0"`.
 - `type` is `industry` or `organization`.
 - `name` uses lower-case letters, digits, and hyphens and must match its directory identity.
 - `version` is exact `X.Y.Z` SemVer without leading zeroes and must match its directory identity.
@@ -227,7 +232,8 @@ Rules:
 - `description` explains the reusable scope, not one exercise.
 - Industry packs must have no dependencies.
 - Only organization packs may list industry dependencies.
-- Every dependency pins source, type, name, and version. Add `path` only when `source: path`.
+- Every dependency declares source, publisher, type, name, and `version_constraint`. Add `path`
+  only when `source: path`; exact version and digest belong only in `pack.lock.yaml`.
 - Dependencies cannot be cyclic, missing, incompatible, ambiguous, or silently substituted.
 
 ## Identity and namespace rules
@@ -240,19 +246,19 @@ Do not change an established valid ID only for style.
 When `healthcare` exports local `clinical-coordinator`, its public identity is:
 
 ```text
-healthcare:clinical-coordinator
+evidenceforge/healthcare:clinical-coordinator
 ```
 
 Inside the same pack, local references may use `clinical-coordinator`; loading qualifies them.
 Organization references to an industry dependency must be qualified, for example
-`healthcare:clinical-coordinator`. A built-in process ID such as `chrome` is intentionally
+`evidenceforge/healthcare:clinical-coordinator`. A built-in process ID such as `chrome` is intentionally
 unqualified in a process profile's `builtins` list.
 
 Scenarios use qualified pack exports:
 
 ```yaml
-persona: healthcare:clinical-coordinator
-preset: healthcare:clinical-department
+persona: evidenceforge/healthcare:clinical-coordinator
+preset: evidenceforge/healthcare:clinical-department
 ```
 
 Built-in and scenario-local shorthand remains valid for monolithic compatibility. Do not use
@@ -522,7 +528,7 @@ Within one effective composition, domains and endpoint identities must not colli
 Use `.example`, `.invalid`, or another reserved namespace for reusable external services.
 
 Built-in DNS tags retain their existing unqualified identity. Other destination tags are local at
-authoring time and become `<pack-name>:<tag>` in effective configuration. Use the same local tag in
+authoring time and become `<publisher>/<pack-name>:<tag>` in effective configuration. Use the same local tag in
 same-pack low-level traffic; EvidenceForge applies the namespace consistently.
 
 Every destination must be reachable from an application connection or a low-level traffic DNS tag.
@@ -726,7 +732,7 @@ environment:
     - username: case.worker
       full_name: "Case Worker"
       email: case.worker@northstarhealth.example
-      persona: healthcare:clinical-coordinator
+      persona: evidenceforge/healthcare:clinical-coordinator
       primary_system: CLINIC-WS-01
       enabled: true
   systems:
@@ -901,7 +907,7 @@ eforge pack list --json
 Success:
 
 ```json
-{"packs": [{"source": "package", "type": "industry", "name": "healthcare", "version": "1.0.0", "digest": "...", "location": "...", "exports": {}, "model_contributions": {"environment_fields": [], "baseline_activity_fields": []}}]}
+{"packs": [{"source": "package", "publisher": "evidenceforge", "type": "industry", "name": "healthcare", "version": "1.0.0", "digest": "...", "location": "...", "exports": {}, "model_contributions": {"environment_fields": [], "baseline_activity_fields": []}}], "issues": []}
 ```
 
 Failure, exit 1:
@@ -916,7 +922,7 @@ Failure, exit 1:
 eforge pack show <ref-or-path> --json
 ```
 
-Success is the raw pack metadata payload with `source`, `type`, `name`, `version`, `description`,
+Success is the raw pack metadata payload with `source`, `publisher`, `type`, `name`, `version`, `description`,
 `requires_evidenceforge`, `digest`, `location`, `industry_dependencies`, sorted catalog `exports`,
 and `model_contributions`. The latter lists top-level organization `environment` and
 `baseline_activity` fields without exposing raw model values. Empty catalog exports never imply

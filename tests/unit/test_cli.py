@@ -22,6 +22,7 @@
 
 """Unit tests for CLI commands."""
 
+import json
 from io import StringIO
 from unittest.mock import Mock, patch
 
@@ -296,12 +297,17 @@ environment:
                 "validate",
                 "tests/fixtures/scenarios/northstar-health-pack.yaml",
                 "--show-storage",
+                "--json",
             ],
             terminal_width=240,
         )
 
         assert result.exit_code == EXIT_SUCCESS, result.stdout
-        assert "healthcare:clinical-department" in result.stdout
+        payload = json.loads(result.stdout)
+        assert any(
+            share["preset"] == "evidenceforge/healthcare:clinical-department"
+            for share in payload["storage"]["shares"]
+        )
         assert "Fatal error" not in result.stdout
 
     def test_show_storage_renders_linux_platform_mount_and_filesystem_views(self):

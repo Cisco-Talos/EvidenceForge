@@ -1,0 +1,116 @@
+environment:
+  description: "MetroLink Specialty Care operates cardiology, imaging, and rehabilitation offices across a regional metro area."
+  timezone: {default: America/New_York}
+  domain: metrolinkcare.lab
+  users:
+    - {username: ana.ross, full_name: "Ana Ross", email: ana.ross@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-CARD-01, groups: [clinical]}
+    - {username: devon.price, full_name: "Devon Price", email: devon.price@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IMG-01, groups: [clinical]}
+    - {username: priya.shah, full_name: "Priya Shah", email: priya.shah@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-REHAB-01, groups: [clinical]}
+    - {username: marco.lee, full_name: "Marco Lee", email: marco.lee@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-BILL-01, groups: [billing]}
+    - {username: taylor.ng, full_name: "Taylor Ng", email: taylor.ng@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-ADMIN-01, groups: [administration]}
+    - {username: sam.irwin, full_name: "Sam Irwin", email: sam.irwin@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IT-01, groups: [it-operations]}
+    - {username: lila.morgan, full_name: "Lila Morgan", email: lila.morgan@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-CARD-02, groups: [clinical]}
+    - {username: noah.bennett, full_name: "Noah Bennett", email: noah.bennett@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-CARD-03, groups: [clinical]}
+    - {username: grace.chen, full_name: "Grace Chen", email: grace.chen@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IMG-02, groups: [clinical]}
+    - {username: omar.hassan, full_name: "Omar Hassan", email: omar.hassan@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IMG-03, groups: [clinical]}
+    - {username: emily.clark, full_name: "Emily Clark", email: emily.clark@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-REHAB-02, groups: [clinical]}
+    - {username: victor.reed, full_name: "Victor Reed", email: victor.reed@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-REHAB-03, groups: [clinical]}
+    - {username: nina.gupta, full_name: "Nina Gupta", email: nina.gupta@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-CLIN-07, groups: [clinical]}
+    - {username: liam.turner, full_name: "Liam Turner", email: liam.turner@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-CLIN-08, groups: [clinical]}
+    - {username: chloe.king, full_name: "Chloe King", email: chloe.king@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-BILL-02, groups: [billing]}
+    - {username: mason.hill, full_name: "Mason Hill", email: mason.hill@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-BILL-03, groups: [billing]}
+    - {username: zoe.adams, full_name: "Zoe Adams", email: zoe.adams@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-BILL-04, groups: [billing]}
+    - {username: caleb.ward, full_name: "Caleb Ward", email: caleb.ward@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-BILL-05, groups: [billing]}
+    - {username: ava.scott, full_name: "Ava Scott", email: ava.scott@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-ADMIN-02, groups: [administration]}
+    - {username: leo.green, full_name: "Leo Green", email: leo.green@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-ADMIN-03, groups: [administration]}
+    - {username: mia.baker, full_name: "Mia Baker", email: mia.baker@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-ADMIN-04, groups: [administration]}
+    - {username: jack.evans, full_name: "Jack Evans", email: jack.evans@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IT-02, groups: [it-operations]}
+    - {username: ella.carter, full_name: "Ella Carter", email: ella.carter@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IT-03, groups: [it-operations]}
+    - {username: henry.moore, full_name: "Henry Moore", email: henry.moore@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IT-04, groups: [it-operations]}
+    - {username: ivy.cooper, full_name: "Ivy Cooper", email: ivy.cooper@metrolinkcare.lab, persona: evidenceforge/healthcare:clinical_coordinator, primary_system: MLSC-IT-05, groups: [it-operations]}
+  systems:
+    - {hostname: MLSC-CARD-01, ip: 10.61.10.21, os: Windows 11, type: workstation, assigned_user: ana.ross, roles: [workstation]}
+    - {hostname: MLSC-IMG-01, ip: 10.61.20.21, os: Windows 11, type: workstation, assigned_user: devon.price, roles: [workstation]}
+    - {hostname: MLSC-REHAB-01, ip: 10.61.30.21, os: Windows 11, type: workstation, assigned_user: priya.shah, roles: [workstation]}
+    - {hostname: MLSC-BILL-01, ip: 10.61.40.21, os: Windows 11, type: workstation, assigned_user: marco.lee, roles: [workstation]}
+    - {hostname: MLSC-ADMIN-01, ip: 10.61.40.22, os: Windows 11, type: workstation, assigned_user: taylor.ng, roles: [workstation]}
+    - {hostname: MLSC-IT-01, ip: 10.61.50.21, os: Windows 11, type: workstation, assigned_user: sam.irwin, roles: [workstation]}
+    - {hostname: MLSC-CARD-02, ip: 10.61.10.22, os: Windows 11, type: workstation, assigned_user: lila.morgan, roles: [workstation]}
+    - {hostname: MLSC-CARD-03, ip: 10.61.10.23, os: Windows 11, type: workstation, assigned_user: noah.bennett, roles: [workstation]}
+    - {hostname: MLSC-IMG-02, ip: 10.61.20.22, os: Windows 11, type: workstation, assigned_user: grace.chen, roles: [workstation]}
+    - {hostname: MLSC-IMG-03, ip: 10.61.20.23, os: Windows 11, type: workstation, assigned_user: omar.hassan, roles: [workstation]}
+    - {hostname: MLSC-REHAB-02, ip: 10.61.30.22, os: Windows 11, type: workstation, assigned_user: emily.clark, roles: [workstation]}
+    - {hostname: MLSC-REHAB-03, ip: 10.61.30.23, os: Windows 11, type: workstation, assigned_user: victor.reed, roles: [workstation]}
+    - {hostname: MLSC-CLIN-07, ip: 10.61.30.24, os: Windows 11, type: workstation, assigned_user: nina.gupta, roles: [workstation]}
+    - {hostname: MLSC-CLIN-08, ip: 10.61.30.25, os: Windows 11, type: workstation, assigned_user: liam.turner, roles: [workstation]}
+    - {hostname: MLSC-BILL-02, ip: 10.61.40.23, os: Windows 11, type: workstation, assigned_user: chloe.king, roles: [workstation]}
+    - {hostname: MLSC-BILL-03, ip: 10.61.40.24, os: Windows 11, type: workstation, assigned_user: mason.hill, roles: [workstation]}
+    - {hostname: MLSC-BILL-04, ip: 10.61.40.25, os: Windows 11, type: workstation, assigned_user: zoe.adams, roles: [workstation]}
+    - {hostname: MLSC-BILL-05, ip: 10.61.40.26, os: Windows 11, type: workstation, assigned_user: caleb.ward, roles: [workstation]}
+    - {hostname: MLSC-ADMIN-02, ip: 10.61.40.27, os: Windows 11, type: workstation, assigned_user: ava.scott, roles: [workstation]}
+    - {hostname: MLSC-ADMIN-03, ip: 10.61.40.28, os: Windows 11, type: workstation, assigned_user: leo.green, roles: [workstation]}
+    - {hostname: MLSC-ADMIN-04, ip: 10.61.40.29, os: Windows 11, type: workstation, assigned_user: mia.baker, roles: [workstation]}
+    - {hostname: MLSC-IT-02, ip: 10.61.50.22, os: Windows 11, type: workstation, assigned_user: jack.evans, roles: [workstation]}
+    - {hostname: MLSC-IT-03, ip: 10.61.50.23, os: Windows 11, type: workstation, assigned_user: ella.carter, roles: [workstation]}
+    - {hostname: MLSC-IT-04, ip: 10.61.50.24, os: Windows 11, type: workstation, assigned_user: henry.moore, roles: [workstation]}
+    - {hostname: MLSC-IT-05, ip: 10.61.50.25, os: Windows 11, type: workstation, assigned_user: ivy.cooper, roles: [workstation]}
+    - {hostname: MLSC-DC-01, ip: 10.61.60.10, os: Windows Server 2022, type: domain_controller, services: [DNS, Kerberos, LDAP], roles: [domain_controller, dns_server]}
+    - {hostname: MLSC-FILE-01, ip: 10.61.60.20, os: Windows Server 2022, type: server, services: [SMB], roles: [file_server]}
+    - {hostname: MLSC-MAIL-01, ip: 10.61.60.30, os: Linux Ubuntu 24.04, type: server, services: [Postfix, Dovecot], roles: [mail_server]}
+  groups:
+    - {name: clinical, members: [ana.ross, devon.price, priya.shah, lila.morgan, noah.bennett, grace.chen, omar.hassan, emily.clark, victor.reed, nina.gupta, liam.turner]}
+    - {name: billing, members: [marco.lee, chloe.king, mason.hill, zoe.adams, caleb.ward]}
+    - {name: administration, members: [taylor.ng, ava.scott, leo.green, mia.baker]}
+    - {name: it-operations, members: [sam.irwin, jack.evans, ella.carter, henry.moore, ivy.cooper]}
+  network:
+    segments:
+      - {name: offices, cidr: 10.61.0.0/16, description: "Regional office workstations", exposure: internal}
+      - {name: services, cidr: 10.61.60.0/24, description: "Central services", exposure: internal}
+    sensors:
+      - {type: network, name: metrolink-core-span, monitoring_segments: [offices, services], direction: bidirectional, placement: span, log_formats: [zeek]}
+      - {type: firewall, name: metrolink-edge-fw, monitoring_segments: [offices, services], direction: bidirectional, placement: tap, log_formats: [cisco_asa]}
+  email:
+    accepted_domains: [metrolinkcare.lab]
+    mail_servers: [{name: primary, hostname: mail.metrolinkcare.lab, system: MLSC-MAIL-01, platform: generic_smtp}]
+    default_mailbox_servers: [primary]
+    outbound_routes: [{name: default, servers: [primary]}]
+    inbound_route: [primary]
+    background_messages_per_user_per_day: 2.0
+  storage:
+    population: medium
+    activity: normal
+    servers:
+      - system: MLSC-FILE-01
+        audit: standard
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\'
+            filesystem: ntfs
+            label: MetroLinkCareData
+        shares:
+          - id: care_operations
+            name: CareOperations
+            volume: data
+            root: Departments\CareOperations
+            preset: evidenceforge/healthcare:clinical-department
+            population: medium
+            activity: normal
+            seed_files:
+              - ref: referral-status
+                path: Care Coordination\Referral Status.pdf
+                size_bytes: 184320
+                tags: [referral, care-coordination]
+            access:
+              read: [clinical, billing, administration, it-operations]
+              modify: [clinical, billing, administration]
+              admin: [it-operations]
+              deny: []
+    mappings:
+      - id: care_operations_drive
+        share: MLSC-FILE-01.care_operations
+        audience:
+          groups: [clinical, billing, administration]
+        drive: "H:"
+        credential_mode: per_user
+        lifecycle: persistent

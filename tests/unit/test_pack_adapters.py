@@ -158,15 +158,19 @@ def test_finance_pack_adapts_exact_app_destination_service_and_cadence() -> None
     compiled = compile_scenario("tests/fixtures/scenarios/finance-industry-pack.yaml")
 
     with effective_config_scope(compiled.effective_config):
-        runtime_apps = get_applications_for_ids(["finance:finance-reporting::excel"], "windows")
+        runtime_apps = get_applications_for_ids(
+            ["evidenceforge/finance:finance-reporting::excel"], "windows"
+        )
         dns = load_dns_registry()
         traffic = load_traffic_profiles()["pack_persona_traffic"]
         finance_browser = is_browser_application_process(
-            ["finance:finance-browser::chrome"],
+            ["evidenceforge/finance:finance-browser::chrome"],
             "windows",
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         )
-        legacy_fallback = get_persona_connections("finance:finance_operations", "windows")
+        legacy_fallback = get_persona_connections(
+            "evidenceforge/finance:finance_operations", "windows"
+        )
 
     assert len(runtime_apps) == 1
     platform = runtime_apps[0]["platforms"]["windows"]
@@ -179,9 +183,11 @@ def test_finance_pack_adapts_exact_app_destination_service_and_cadence() -> None
 
     endpoint = next(item for item in dns["domains"] if item["domain"] == "payments.finance.example")
     assert endpoint["ips"] == ["192.0.2.80"]
-    assert "finance:payment-network" in endpoint["tags"]
+    assert "evidenceforge/finance:payment-network" in endpoint["tags"]
 
-    group = traffic["finance:finance_operations"]["finance:settlement-window"]
+    group = traffic["evidenceforge/finance:finance_operations"][
+        "evidenceforge/finance:settlement-window"
+    ]
     assert group["cadence"] == {
         "pattern": "weighted",
         "days": ["mon", "tue", "wed", "thu", "fri"],
@@ -190,8 +196,8 @@ def test_finance_pack_adapts_exact_app_destination_service_and_cadence() -> None
     connection = group["outbound"][0]
     assert connection["port"] == 443
     assert connection["service"] == "ssl"
-    assert connection["dns_tags"] == ["finance:payment-network"]
-    assert connection["application_ids"] == ["finance:finance-browser::chrome"]
+    assert connection["dns_tags"] == ["evidenceforge/finance:payment-network"]
+    assert connection["application_ids"] == ["evidenceforge/finance:finance-browser::chrome"]
     assert finance_browser is True
     assert legacy_fallback == []
 
@@ -246,19 +252,29 @@ def test_singleton_exact_pack_application_reuses_process_for_scheduled_connectio
 ) -> None:
     """Exact traffic finds its singleton after bounded process history evicts it."""
 
-    pack_root = tmp_path / ".eforge" / "packs" / "industry" / "singleton-app" / "1.0.0"
+    publisher = "evidenceforge-test-publisher"
+    pack_root = tmp_path / ".eforge" / "packs" / publisher / "industry" / "singleton-app" / "1.0.0"
     catalogs = pack_root / "catalogs"
     catalogs.mkdir(parents=True)
     _write_yaml(
         pack_root / "pack.yaml",
         {
-            "pack_schema_version": "1.0",
+            "pack_schema_version": "2.0",
             "type": "industry",
+            "publisher": publisher,
+            "publisher_display_name": "EvidenceForge Test Publisher",
             "name": "singleton-app",
             "version": "1.0.0",
             "requires_evidenceforge": ">=2.0.0,<3.0.0",
             "description": "Synthetic singleton application regression pack.",
             "industry_dependencies": [],
+        },
+    )
+    _write_yaml(
+        pack_root / "pack.lock.yaml",
+        {
+            "lock_schema_version": "1.0",
+            "dependencies": [],
         },
     )
     _write_yaml(
@@ -382,7 +398,14 @@ def test_singleton_exact_pack_application_reuses_process_for_scheduled_connectio
         {
             "scenario_version": "2.0",
             "composition": {
-                "industries": [{"source": "project", "name": "singleton-app", "version": "1.0.0"}]
+                "industries": [
+                    {
+                        "source": "project",
+                        "publisher": publisher,
+                        "name": "singleton-app",
+                        "version": "1.0.0",
+                    }
+                ]
             },
             "name": "singleton-exact-application-regression",
             "description": "Exercise repeated exact singleton application traffic.",
@@ -399,7 +422,7 @@ def test_singleton_exact_pack_application_reuses_process_for_scheduled_connectio
                         "username": "casey.park",
                         "full_name": "Casey Park",
                         "email": "casey.park@singleton.example",
-                        "persona": "singleton-app:operator",
+                        "persona": f"{publisher}/singleton-app:operator",
                         "primary_system": "SINGLETON-WS-01",
                     }
                 ],

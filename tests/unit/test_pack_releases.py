@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from evidenceforge.composition.releases import (
     build_efpack,
     hydrate_release,
     import_efpack,
+    list_release_library,
     validate_efpack,
 )
 from evidenceforge.models.exceptions import PackError
@@ -93,7 +95,7 @@ def test_build_is_deterministic_and_contains_the_locked_dependency_closure(tmp_p
         "type": "organization",
         "name": "metrolink-specialty-care",
         "version": "1.0.0",
-        "digest": "78064394ad268bc8b5210b8e06b52fbdf1575652d170f7242a4560766555eecd",
+        "digest": "c8d6db51dfa75cc1cfe4455efb4f656912045b23cf65710bd80e656d200ab132",
     }
     assert {
         (member["publisher"], member["type"], member["name"], member["version"])
@@ -122,14 +124,39 @@ def test_inspection_rejects_archive_traversal_and_hash_mismatch(tmp_path: Path) 
         validate_efpack(corrupted)
 
 
+def test_inspection_rejects_duplicate_release_identities(tmp_path: Path) -> None:
+    """An archive cannot alias one release identity through repeated member declarations."""
+
+    _repository, archive = _metrolink_release(tmp_path, tmp_path / "release.efpack")
+    entries = _archive_entries(archive)
+    document = yaml.safe_load(entries[EFPACK_MANIFEST])
+    document["members"].append(document["members"][0])
+    entries[EFPACK_MANIFEST] = yaml.safe_dump(document, sort_keys=True).encode("utf-8")
+    duplicated = tmp_path / "duplicated.efpack"
+    _rewrite_zip(duplicated, entries)
+
+    with pytest.raises(PackError, match="duplicate release identities"):
+        validate_efpack(duplicated)
+
+
 def test_project_import_is_idempotent_but_never_becomes_an_implicit_resolver_source(
     tmp_path: Path,
 ) -> None:
     """Project release storage reuses exact bytes and remains separate from editable packs."""
 
     _repository, archive = _metrolink_release(tmp_path, tmp_path / "release.efpack")
-    first = import_efpack(archive, scope="project", project_root=tmp_path)
-    second = import_efpack(archive, scope="project", project_root=tmp_path)
+    first = import_efpack(
+        archive,
+        scope="project",
+        project_root=tmp_path,
+        accepted_publishers={"evidenceforge"},
+    )
+    second = import_efpack(
+        archive,
+        scope="project",
+        project_root=tmp_path,
+        accepted_publishers={"evidenceforge"},
+    )
 
     assert first == second
     immutable = (
@@ -154,6 +181,20 @@ def test_project_import_is_idempotent_but_never_becomes_an_implicit_resolver_sou
         )
 
 
+def test_import_requires_fresh_consent_after_complete_archive_validation(tmp_path: Path) -> None:
+    """Declared publisher consent is mandatory and is not persisted between imports."""
+
+    _repository, archive = _metrolink_release(tmp_path, tmp_path / "release.efpack")
+    with pytest.raises(PackError, match="--accept-publisher evidenceforge"):
+        import_efpack(
+            archive,
+            scope="project",
+            project_root=tmp_path,
+            accepted_publishers=set(),
+        )
+    assert not (tmp_path / ".eforge" / "releases").exists()
+
+
 def test_user_import_requires_explicit_hydration_and_rejects_digest_collisions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,7 +202,12 @@ def test_user_import_requires_explicit_hydration_and_rejects_digest_collisions(
 
     home = _use_test_home(monkeypatch, tmp_path)
     _repository, archive = _metrolink_release(tmp_path, tmp_path / "release.efpack")
-    import_efpack(archive, scope="user", project_root=tmp_path)
+    import_efpack(
+        archive,
+        scope="user",
+        project_root=tmp_path,
+        accepted_publishers={"evidenceforge"},
+    )
 
     with pytest.raises(PackError, match="was not found"):
         PackRepository(tmp_path).resolve(
@@ -177,8 +223,9 @@ def test_user_import_requires_explicit_hydration_and_rejects_digest_collisions(
     hydrated = hydrate_release(
         "evidenceforge:organization:metrolink-specialty-care@1.0.0",
         tmp_path,
+        scope="user",
     )
-    assert hydrated["hydrated"] == "true"
+    assert hydrated["hydrated"] is True
     assert (
         PackRepository(tmp_path)
         .resolve(
@@ -191,8 +238,21 @@ def test_user_import_requires_explicit_hydration_and_rejects_digest_collisions(
             expected_type="organization",
         )
         .digest
-        == "78064394ad268bc8b5210b8e06b52fbdf1575652d170f7242a4560766555eecd"
+        == "c8d6db51dfa75cc1cfe4455efb4f656912045b23cf65710bd80e656d200ab132"
     )
+    organization = PackRepository(tmp_path).resolve(
+        PackReference(
+            source="project",
+            publisher="evidenceforge",
+            name="metrolink-specialty-care",
+            version="1.0.0",
+        ),
+        expected_type="organization",
+    )
+    assert [
+        dependency.manifest.name
+        for dependency in PackRepository(tmp_path).validate_semantics(organization)
+    ] == ["healthcare"]
 
     installed_manifest = (
         home
@@ -208,7 +268,39 @@ def test_user_import_requires_explicit_hydration_and_rejects_digest_collisions(
     document["description"] = "Different bytes under the same release identity."
     installed_manifest.write_text(yaml.safe_dump(document), encoding="utf-8")
     with pytest.raises(PackError, match="different release"):
-        import_efpack(archive, scope="user", project_root=tmp_path)
+        import_efpack(
+            archive,
+            scope="user",
+            project_root=tmp_path,
+            accepted_publishers={"evidenceforge"},
+        )
+
+
+def test_hydration_revalidates_manifest_constraint_against_the_immutable_lock(
+    tmp_path: Path,
+) -> None:
+    """Library tampering cannot hydrate a locked version outside its declared constraint."""
+
+    package_root = Path("src/evidenceforge/config/packs/evidenceforge").resolve()
+    library = tmp_path / ".eforge" / "releases" / "evidenceforge"
+    industry = library / "industry" / "healthcare" / "1.0.0"
+    organization = library / "organization" / "metrolink-specialty-care" / "1.0.0"
+    shutil.copytree(package_root / "industry" / "healthcare" / "1.0.0", industry)
+    shutil.copytree(
+        package_root / "organization" / "metrolink-specialty-care" / "1.0.0",
+        organization,
+    )
+    manifest_path = organization / "pack.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["industry_dependencies"][0]["version_constraint"] = ">=2.0.0,<3.0.0"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(PackError, match="outside constraint"):
+        hydrate_release(
+            "evidenceforge:organization:metrolink-specialty-care@1.0.0",
+            tmp_path,
+            scope="project",
+        )
 
 
 def test_import_rolls_back_the_entire_closure_when_publication_fails(
@@ -229,8 +321,58 @@ def test_import_rolls_back_the_entire_closure_when_publication_fails(
 
     monkeypatch.setattr(release_module.os, "replace", fail_second_publish)
     with pytest.raises(PackError, match="unable to publish"):
-        import_efpack(archive, scope="project", project_root=tmp_path)
+        import_efpack(
+            archive,
+            scope="project",
+            project_root=tmp_path,
+            accepted_publishers={"evidenceforge"},
+        )
 
     library = tmp_path / ".eforge" / "releases" / "evidenceforge"
     assert not (library / "industry" / "healthcare" / "1.0.0").exists()
     assert not (library / "organization" / "metrolink-specialty-care" / "1.0.0").exists()
+
+
+def test_release_inventory_preserves_valid_records_when_one_entry_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    """One invalid immutable directory cannot hide unaffected release records."""
+
+    _repository, archive = _metrolink_release(tmp_path, tmp_path / "release.efpack")
+    import_efpack(
+        archive,
+        scope="project",
+        project_root=tmp_path,
+        accepted_publishers={"evidenceforge"},
+    )
+    corrupt = tmp_path / ".eforge" / "releases" / "broken" / "industry" / "bad-pack" / "1.0.0"
+    corrupt.mkdir(parents=True)
+    (corrupt / "pack.yaml").write_text("pack_schema_version: '1.0'\n", encoding="utf-8")
+
+    records, issues = list_release_library(tmp_path, scope="project")
+
+    assert {record["name"] for record in records} == {
+        "healthcare",
+        "metrolink-specialty-care",
+    }
+    assert len(issues) == 1
+    assert issues[0]["scope"] == "project-release"
+    assert "Pack Schema 2.0 is required" in issues[0]["error"]
+
+
+def test_release_inventory_reports_a_version_directory_without_a_manifest(
+    tmp_path: Path,
+) -> None:
+    """A malformed immutable version directory remains visible as an inventory issue."""
+
+    corrupt = (
+        tmp_path / ".eforge" / "releases" / "broken" / "industry" / "missing-manifest" / "1.0.0"
+    )
+    corrupt.mkdir(parents=True)
+
+    records, issues = list_release_library(tmp_path, scope="project")
+
+    assert records == []
+    assert len(issues) == 1
+    assert issues[0]["location"] == str(corrupt)
+    assert "pack.yaml" in issues[0]["error"]

@@ -26,11 +26,11 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
     listed = runner.invoke(app, ["pack", "list", "--json"])
     shown = runner.invoke(
         app,
-        ["pack", "show", "package:industry:healthcare@1.0.0", "--json"],
+        ["pack", "show", "package:evidenceforge:industry:healthcare@1.0.0", "--json"],
     )
     validated = runner.invoke(
         app,
-        ["pack", "validate", "package:organization:northstar-health@1.0.0", "--json"],
+        ["pack", "validate", "package:evidenceforge:organization:northstar-health@1.0.0", "--json"],
     )
 
     assert listed.exit_code == 0
@@ -43,7 +43,9 @@ def test_pack_inventory_show_and_validation_have_stable_json() -> None:
     }
     shown_payload = json.loads(shown.stdout)
     assert shown.exit_code == 0
-    assert shown_payload["exports"]["persona_catalog"] == ["healthcare:clinical_coordinator"]
+    assert shown_payload["exports"]["persona_catalog"] == [
+        "evidenceforge/healthcare:clinical_coordinator"
+    ]
     assert shown_payload["model_contributions"] == {
         "baseline_activity_fields": [],
         "environment_fields": [],
@@ -63,7 +65,7 @@ def test_pack_release_build_inspect_and_import_have_stable_json(tmp_path: Path) 
         [
             "pack",
             "build",
-            "package:organization:metrolink-specialty-care@1.0.0",
+            "package:evidenceforge:organization:metrolink-specialty-care@1.0.0",
             "--output",
             str(archive),
             "--json",
@@ -78,6 +80,8 @@ def test_pack_release_build_inspect_and_import_have_stable_json(tmp_path: Path) 
             str(archive),
             "--scope",
             "project",
+            "--accept-publisher",
+            "evidenceforge",
             "--project-root",
             str(tmp_path),
             "--json",
@@ -102,7 +106,7 @@ def test_organization_show_distinguishes_model_fields_from_catalog_exports() -> 
 
     shown = runner.invoke(
         app,
-        ["pack", "show", "package:organization:northstar-health@1.0.0", "--json"],
+        ["pack", "show", "package:evidenceforge:organization:northstar-health@1.0.0", "--json"],
     )
 
     assert shown.exit_code == 0, shown.stdout
@@ -147,12 +151,80 @@ def test_package_packs_work_from_empty_directory_without_eforge(
     assert not (tmp_path / ".eforge").exists()
 
 
+def test_publisher_cli_set_show_force_and_clear_have_stable_json(tmp_path: Path) -> None:
+    """Publisher commands expose exact scope and require force for replacement."""
+
+    first = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "first-publisher",
+            "--display-name",
+            "First Publisher",
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+            "--json",
+        ],
+    )
+    shown = runner.invoke(
+        app,
+        ["pack", "publisher", "show", "--project-root", str(tmp_path), "--json"],
+    )
+    refused = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "second-publisher",
+            "--display-name",
+            "Second Publisher",
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+            "--json",
+        ],
+    )
+    cleared = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "clear",
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+            "--json",
+        ],
+    )
+
+    assert first.exit_code == 0
+    assert json.loads(first.stdout)["publisher"] == "first-publisher"
+    assert shown.exit_code == 0
+    assert json.loads(shown.stdout) == {
+        "configured": True,
+        "publisher": "first-publisher",
+        "publisher_display_name": "First Publisher",
+        "scope": "project",
+    }
+    assert refused.exit_code != 0
+    assert "--force" in json.loads(refused.stdout)["error"]
+    assert cleared.exit_code == 0
+    assert json.loads(cleared.stdout)["cleared"] is True
+
+
 def test_northstar_linux_pack_has_exact_dependency_and_indexed_digest() -> None:
     """Northstar 1.1 is additive, pinned, and independently digest-verified."""
 
     validated = runner.invoke(
         app,
-        ["pack", "validate", "package:organization:northstar-health@1.1.0", "--json"],
+        ["pack", "validate", "package:evidenceforge:organization:northstar-health@1.1.0", "--json"],
     )
 
     assert validated.exit_code == 0, validated.stdout
@@ -160,13 +232,14 @@ def test_northstar_linux_pack_has_exact_dependency_and_indexed_digest() -> None:
     assert payload["valid"] is True
     assert payload["pack"]["version"] == "1.1.0"
     assert payload["pack"]["digest"] == (
-        "479c5780ff995fd1b4c857832697a2627006b7620c324c6bc701158f6ad414cd"
+        "2b5c2142e4eae824e8a4463c914c6916661ed92817e3c9d7fd1be4d2cf891db1"
     )
     assert payload["dependencies"] == [
         {
             "digest": "91f369c55113c940a9a907282b53fcc5629c54d3b91b79a869814cbcb7b82220",
-            "location": "package:industry:healthcare@1.0.0",
+            "location": "package:evidenceforge:industry:healthcare@1.0.0",
             "name": "healthcare",
+            "publisher": "evidenceforge",
             "source": "package",
             "type": "industry",
             "version": "1.0.0",
@@ -196,9 +269,36 @@ def test_northstar_linux_fixture_resolves_exact_new_pack(tmp_path: Path) -> None
     ]
 
 
+def test_northstar_is_a_small_routine_validation_consumer() -> None:
+    """Northstar stays in the documented small tier without a generation run."""
+
+    result = runner.invoke(app, ["validate", str(_NORTHSTAR_LINUX), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    scenario = json.loads(result.stdout)["scenario"]
+    assert 5 <= scenario["users"] <= 10
+    assert 7 <= scenario["systems"] <= 15
+
+
 def test_pack_init_and_copy_are_complete_and_non_overwriting(tmp_path: Path) -> None:
     """Skeletons and forks land only in the project repository and preserve copy metadata."""
 
+    configured = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "test-publisher",
+            "--display-name",
+            "Test Publisher",
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+        ],
+    )
+    assert configured.exit_code == 0, configured.stdout
     initialized = runner.invoke(
         app,
         [
@@ -212,7 +312,9 @@ def test_pack_init_and_copy_are_complete_and_non_overwriting(tmp_path: Path) -> 
             str(tmp_path),
         ],
     )
-    root = tmp_path / ".eforge" / "packs" / "organization" / "example-org" / "1.0.0"
+    root = (
+        tmp_path / ".eforge" / "packs" / "test-publisher" / "organization" / "example-org" / "1.0.0"
+    )
 
     assert initialized.exit_code == 0
     assert all((root / relative).is_file() for _name, relative, _model in CATALOG_FILES)
@@ -238,7 +340,7 @@ def test_pack_init_and_copy_are_complete_and_non_overwriting(tmp_path: Path) -> 
         [
             "pack",
             "copy",
-            "package:industry:healthcare@1.0.0",
+            "package:evidenceforge:industry:healthcare@1.0.0",
             "--name",
             "tailored-healthcare",
             "--version",
@@ -247,16 +349,107 @@ def test_pack_init_and_copy_are_complete_and_non_overwriting(tmp_path: Path) -> 
             str(tmp_path),
         ],
     )
-    copied_root = tmp_path / ".eforge" / "packs" / "industry" / "tailored-healthcare" / "1.1.0"
+    copied_root = (
+        tmp_path
+        / ".eforge"
+        / "packs"
+        / "test-publisher"
+        / "industry"
+        / "tailored-healthcare"
+        / "1.1.0"
+    )
     manifest = yaml.safe_load((copied_root / "pack.yaml").read_text(encoding="utf-8"))
 
     assert copied.exit_code == 0
     assert manifest["name"] == "tailored-healthcare"
+    assert manifest["publisher"] == "test-publisher"
     assert manifest["version"] == "1.1.0"
     assert "copied_from" not in manifest
-    assert "package:industry:healthcare@1.0.0" in (copied_root / "COPY_PROVENANCE.md").read_text(
-        encoding="utf-8"
+    assert "package:evidenceforge:industry:healthcare@1.0.0" in (
+        copied_root / "COPY_PROVENANCE.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_pack_lock_previews_then_atomically_applies_exact_dependency(tmp_path: Path) -> None:
+    """Lock refresh previews changes and mutates only the lock when explicitly applied."""
+
+    configured = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "test-publisher",
+            "--display-name",
+            "Test Publisher",
+            "--scope",
+            "project",
+            "--project-root",
+            str(tmp_path),
+        ],
     )
+    assert configured.exit_code == 0, configured.stdout
+    copied = runner.invoke(
+        app,
+        [
+            "pack",
+            "copy",
+            "package:evidenceforge:organization:metrolink-specialty-care@1.0.0",
+            "--name",
+            "locked-care",
+            "--version",
+            "1.0.0",
+            "--project-root",
+            str(tmp_path),
+        ],
+    )
+    assert copied.exit_code == 0, copied.stdout
+    root = (
+        tmp_path / ".eforge" / "packs" / "test-publisher" / "organization" / "locked-care" / "1.0.0"
+    )
+    lock_path = root / "pack.lock.yaml"
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    lock["dependencies"][0]["digest"] = "0" * 64
+    lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
+    manifest_before = (root / "pack.yaml").read_bytes()
+    reference = "project:test-publisher:organization:locked-care@1.0.0"
+
+    preview = runner.invoke(
+        app,
+        ["pack", "lock", reference, "--project-root", str(tmp_path), "--json"],
+    )
+    assert preview.exit_code == 0, preview.stdout
+    preview_payload = json.loads(preview.stdout)
+    assert preview_payload["applied"] is False
+    assert preview_payload["changed"] is True
+    assert (
+        yaml.safe_load(lock_path.read_text(encoding="utf-8"))["dependencies"][0]["digest"]
+        == "0" * 64
+    )
+
+    applied = runner.invoke(
+        app,
+        ["pack", "lock", reference, "--apply", "--project-root", str(tmp_path), "--json"],
+    )
+    assert applied.exit_code == 0, applied.stdout
+    assert json.loads(applied.stdout)["applied"] is True
+    assert (root / "pack.yaml").read_bytes() == manifest_before
+    assert (
+        yaml.safe_load(lock_path.read_text(encoding="utf-8"))["dependencies"][0]["digest"]
+        == "91f369c55113c940a9a907282b53fcc5629c54d3b91b79a869814cbcb7b82220"
+    )
+
+
+def test_old_pack_cli_reference_is_rejected_immediately() -> None:
+    """The pre-release unqualified CLI syntax has no compatibility alias."""
+
+    result = runner.invoke(
+        app,
+        ["pack", "show", "package:industry:healthcare@1.0.0", "--json"],
+    )
+
+    assert result.exit_code != 0
+    assert "source:publisher:type:name@version" in json.loads(result.stdout)["error"]
 
 
 def test_resolve_explanation_is_portable_and_non_overwriting(tmp_path: Path) -> None:
@@ -355,7 +548,7 @@ def test_resolve_explanation_reports_concrete_layer_replacements(tmp_path: Path)
     assert {
         "path": "environment.domain",
         "action": "replace",
-        "lower_layer": "package:organization:northstar-health@1.0.0",
+        "lower_layer": "package:evidenceforge:organization:northstar-health@1.0.0",
         "higher_layer": "scenario",
         "winner": "scenario",
     } in decisions

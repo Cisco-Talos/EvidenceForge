@@ -11,7 +11,7 @@ description: >
 
 # EvidenceForge Organization Pack Author
 
-Author reusable organization context on top of exactly pinned industry packs. Default to a
+Author reusable organization context on top of exact locked industry packs. Default to a
 self-contained environment and baseline that a small Scenario 2.0 wrapper can consume directly.
 
 ## Establish context
@@ -38,13 +38,15 @@ eforge info pack_builtin_dns_tags
 ```
 
 Do not infer an implicit latest version or inspect package directories as a substitute for the CLI.
+Require `eforge pack publisher show --json` before init/copy; if no identity is configured, ask for
+an explicit publisher ID/display name and scope. Never derive one.
 
 ## Interview one decision at a time
 
 Determine:
 
 1. The organization boundary and whether all names must be newly fictionalized.
-2. The exact industry source, name, and version dependencies.
+2. The exact industry source/publisher/name and compatible version constraints.
 3. Whether to initialize a blank pack or fork the closest organization sample.
 4. Whether the pack must stand alone or intentionally depends on a named consumer scenario.
 5. Which reusable users, systems, groups, services, network segments, sensors, email topology,
@@ -78,13 +80,16 @@ Ask whether the user wants a namespace-only tailored copy or a full fictional re
 rebrand, inventory and deliberately update every organization-facing identity while preserving
 dependency namespaces; never apply an unreviewed global string replacement.
 
-## Pin dependencies first
+## Constrain and lock dependencies first
 
-Declare every industry dependency with exact `source`, `type: industry`, `name`, and `version`; add
-`path` only for `source: path`. Validate and inspect each dependency before referencing its exports.
-An organization may depend on industries; an industry may not depend on another industry.
+Declare every industry dependency with `source`, `publisher`, `type: industry`, `name`, and required
+`version_constraint`; add `path` only for `source: path`. Preview `eforge pack lock <project-ref>
+--json`, review exact changes, then use `--apply` when authorized. `pack.lock.yaml` alone owns exact
+versions and digests, with a one-to-one manifest/lock mapping. Validate and inspect each locked
+dependency before referencing its exports. An organization may depend on industries; an industry
+may not depend on another industry.
 
-Use qualified references such as `healthcare:clinical-coordinator`. Never copy a dependency export
+Use qualified references such as `evidenceforge/healthcare:clinical-coordinator`. Never copy a dependency export
 into the organization merely to avoid qualification.
 
 ## Author organization content
@@ -92,7 +97,7 @@ into the organization merely to avoid qualification.
 Keep all six fixed catalog files and both model files, including empty root mappings. Work in this
 order:
 
-1. Pin and validate dependencies.
+1. Constrain, lock, and validate dependencies.
 2. Add only organization-specific catalog exports.
 3. Author the partial or complete `environment` fragment.
 4. Author the partial or complete `baseline_activity` fragment.
@@ -154,7 +159,7 @@ executable hooks or arbitrary assets.
 After each coherent edit:
 
 ```bash
-eforge pack validate <project:organization:name@version> --json
+eforge pack validate <project:evidenceforge:organization:name@version> --json
 ```
 
 Treat structural validation as necessary but not sufficient: partial model fragments can be valid
@@ -164,7 +169,7 @@ runtime-semantic error before continuing.
 At handoff, inspect identity, dependencies, and exports:
 
 ```bash
-eforge pack show <project:organization:name@version> --json
+eforge pack show <project:evidenceforge:organization:name@version> --json
 ```
 
 ## Prove the effective organization

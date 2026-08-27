@@ -2838,7 +2838,7 @@ class StorageFileSetConfig(BaseModel):
     id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
     system: str
     root: str
-    preset: str = Field(default="homes", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:_-]*$")
+    preset: str = Field(default="homes", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:/_-]*$")
     population: Literal["auto", "small", "medium", "large"] = "auto"
     seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
 
@@ -2867,7 +2867,7 @@ class StorageShareConfig(BaseModel):
     name: str
     volume: str
     root: str = ""
-    preset: str = Field(default="collaboration", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:_-]*$")
+    preset: str = Field(default="collaboration", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:/_-]*$")
     backing_file_set: str | None = Field(
         default=None,
         pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",

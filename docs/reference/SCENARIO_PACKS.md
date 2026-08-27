@@ -49,7 +49,7 @@ name: healthcare-example
 # Supply the concrete environment, time window, output, and optional storyline here.
 ```
 
-Or select one organization pack, which brings its exactly pinned industry dependencies:
+Or select one organization pack, which brings its lock-selected industry dependencies:
 
 ```yaml
 scenario_version: "2.0"
@@ -64,7 +64,7 @@ output: ...
 ```
 
 Direct industries and an organization are mutually exclusive. Persisted references always contain
-an exact source, name, and `X.Y.Z` version; EvidenceForge never selects an implicit latest version.
+an exact source, publisher, name, and `X.Y.Z` version; EvidenceForge never selects an implicit latest version.
 `source` is `package`, `project`, or `path`. A path reference also contains `path`:
 
 ```yaml
@@ -128,8 +128,10 @@ key across all packs.
 A pack manifest identifies its public contract and compatibility:
 
 ```yaml
-pack_schema_version: "1.0"
+pack_schema_version: "2.0"
 type: industry
+publisher: evidenceforge
+publisher_display_name: "EvidenceForge Official"
 name: healthcare
 version: "1.0.0"
 requires_evidenceforge: ">=2.0.0,<3.0.0"
@@ -137,12 +139,13 @@ description: "Reusable fictional healthcare behavior and vocabulary."
 industry_dependencies: []
 ```
 
-Only organization packs may declare `industry_dependencies`. Every dependency pins its exact
-source, `type: industry`, name, and version. Industry packs cannot depend on other industries.
+Only organization packs may declare `industry_dependencies`. Every dependency declares its
+source, publisher, `type: industry`, name, and version constraint. `pack.lock.yaml` alone owns the
+selected exact version and digest. Industry packs cannot depend on other industries.
 
-Pack-local IDs become public qualified IDs in the form `<pack-name>:<local-id>`. For example,
+Pack-local IDs become public qualified IDs in the form `<publisher>/<pack-name>:<local-id>`. For example,
 `healthcare` local persona `clinical-coordinator` becomes
-`healthcare:clinical-coordinator`. Inside the same pack, references may use local IDs; an
+`evidenceforge/healthcare:clinical-coordinator`. Inside the same pack, references may use local IDs; an
 organization must use qualified references to dependency exports. Built-in and scenario-local
 names retain their existing shorthand for monolithic compatibility.
 
@@ -218,7 +221,7 @@ Effective generation data is applied in this order:
 
 Packs are peers, not arbitrary recursive overlays. Industry order does not resolve incompatible
 definitions: export collisions and incompatible identities fail with source and pack provenance.
-An organization's exactly pinned dependencies are resolved before its own catalogs/model. The
+An organization's exact locked dependencies are resolved before its own catalogs/model. The
 compiled scenario records selected identities and digests, authored `field_origins`, qualified
 `catalog_field_origins`, `organization_model_origins`, and concrete `merge_decisions`. Origin paths
 are portable and retain the exact included YAML file that declared each value.
@@ -247,19 +250,26 @@ that pack fields affect evidence rather than merely serialize.
 
 ## CLI lifecycle
 
-Use exact CLI references in the form `source:type:name@version`:
+Use exact CLI references in the form `source:publisher:type:name@version`. Configure the authoring
+identity explicitly before `pack init` or `pack copy`:
 
 ```bash
 eforge pack list --json
-eforge pack show package:industry:healthcare@1.0.0 --json
-eforge pack validate package:organization:northstar-health@1.0.0 --json
+eforge pack publisher set example-publisher --display-name "Example Publisher" \
+  --scope project --json
+eforge pack show package:evidenceforge:industry:healthcare@1.0.0 --json
+eforge pack validate package:evidenceforge:organization:northstar-health@1.0.0 --json
 
 # Create every canonical file under .eforge/packs; never overwrite.
 eforge pack init industry custom-healthcare --version 0.1.0 --json
 
 # Create an editable project-local fork with non-semantic copy provenance.
-eforge pack copy package:industry:healthcare@1.0.0 \
+eforge pack copy package:evidenceforge:industry:healthcare@1.0.0 \
   --name tailored-healthcare --version 1.0.0 --json
+
+# Preview and then atomically refresh only pack.lock.yaml.
+eforge pack lock project:example-publisher:organization:example-care@1.0.0 --json
+eforge pack lock project:example-publisher:organization:example-care@1.0.0 --apply --json
 
 # Compile without generation and explain exact selection, origins, and precedence.
 eforge resolve scenario.yaml --output resolved.yaml \
@@ -296,12 +306,12 @@ validate, generate, and inspect its representative consumer.
 
 EvidenceForge ships these ordinary, validated package packs:
 
-- `package:industry:finance@1.0.0`
-- `package:industry:healthcare@1.0.0`
-- `package:industry:technology@1.0.0`
-- `package:organization:northstar-health@1.0.0`
+- `package:evidenceforge:industry:finance@1.0.0`
+- `package:evidenceforge:industry:healthcare@1.0.0`
+- `package:evidenceforge:industry:technology@1.0.0`
+- `package:evidenceforge:organization:northstar-health@1.0.0`
 
-`northstar-health` pins the healthcare industry and demonstrates a concrete mixed environment,
+`northstar-health` constrains and locks the healthcare industry and demonstrates a concrete mixed environment,
 email activity, and SMB-backed storage. The samples use the same public schemas and runtime paths
 as custom packs; they are not special-cased built-ins.
 
