@@ -1,5 +1,19 @@
 # EvidenceForge Architecture
 
+## Trust Boundary
+
+EvidenceForge validates authored scenarios, composed packs, project configuration, payloads, and
+other external data before those values enter generation. Once validated and converted into exact
+engine-owned models, internal generation objects are trusted. The generator preserves ownership,
+version, lifecycle, RNG-drift, atomic commit, rollback, and recovery checks, but it does not attempt
+to defend against arbitrary Python code already executing inside the EvidenceForge process.
+
+This is not a supported public Python API boundary. In-process code can monkeypatch validators,
+invoke `object.__setattr__`, or otherwise rewrite interpreter state, so recursive graph validation
+and cryptographic authentication between engine-owned objects do not provide a meaningful security
+boundary. Internal plans therefore use constant-time owner and lifecycle fences; validation and
+copy isolation remain at external input boundaries.
+
 ## Scenario compilation and authoritative inputs
 
 Authored Scenario 1.0 and Scenario 2.0 documents compile into a frozen per-run input containing the

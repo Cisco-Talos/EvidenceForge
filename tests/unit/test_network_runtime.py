@@ -8,7 +8,7 @@ from __future__ import annotations
 import random
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import FrozenInstanceError, dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
 
@@ -649,8 +649,8 @@ def test_token_tamper_after_claim_cannot_break_trusted_no_fail_commit() -> None:
     assert runtime.last_result.transaction.stable_id == original_transaction_id
 
 
-def test_commit_result_is_frozen_before_tls_seal_and_never_revisited_at_commit() -> None:
-    """Caller-owned result/State aliases cannot fail after nested crypto commits."""
+def test_commit_result_validates_external_values_and_reuses_immutable_engine_result() -> None:
+    """Seal rejects malformed input and safely reuses its frozen engine-owned result."""
 
     @dataclass(frozen=True)
     class UnsupportedHttp:
@@ -722,8 +722,10 @@ def test_commit_result_is_frozen_before_tls_seal_and_never_revisited_at_commit()
         materialization_mode=ConnectionMaterializationMode.PHYSICAL,
     )
     with runtime.claimed_preparation(root.runtime_token) as prepared:
-        object.__setattr__(root.state_plan.transaction, "started_at", object())
-        object.__setattr__(root.result, "http", UnsupportedHttp())
+        with pytest.raises(FrozenInstanceError):
+            root.state_plan.transaction.started_at = object()  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            root.result.http = UnsupportedHttp()  # type: ignore[misc]
         receipt = prepared.commit_no_fail()
 
     assert runtime.authenticates_preparation_receipt(receipt)

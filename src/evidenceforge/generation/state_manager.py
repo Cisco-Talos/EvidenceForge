@@ -899,11 +899,12 @@ class ConnectionPlanningCursor:
     def cancel(self) -> None:
         """Revoke the cursor without changing its RNG owner or StateManager."""
 
-        self._preflight_owner()
+        manager = self._preflight_owner()
         if self._cancelled:
             raise StateError("Connection planning cursor is already cancelled")
         if self._sealed:
             raise StateError("Connection planning cursor is already sealed")
+        manager._validate_connection_cursor(self)
         self._cancelled = True
         self._preview_rng = None
         self._smb_connection_pin = None
@@ -916,12 +917,24 @@ class ConnectionPlanningCursor:
             raise StateError("Connection planning cursor is already sealed")
 
     def _preflight_owner(self) -> "StateManager":
-        """Resolve the exact owner and validate shape before any cursor truthiness."""
+        """Resolve the trusted owner using constant-time lifecycle checks."""
 
         manager = self._manager
         if type(manager) is not StateManager:
             raise StateError("Connection planning cursor owner has an invalid exact type")
-        manager._preflight_connection_cursor_safe(self)
+        if type(self._sealed) is not bool or type(self._cancelled) is not bool:
+            raise StateError("Connection planning cursor lifecycle flags are malformed")
+        if (
+            type(self._owner_rng) is not random.Random
+            or id(self._owner_rng) != self._owner_identity
+        ):
+            raise StateError("Connection planning cursor RNG owner changed")
+        if (
+            not self._sealed
+            and not self._cancelled
+            and type(self._preview_rng) is not random.Random
+        ):
+            raise StateError("Connection planning cursor preview RNG has an invalid exact type")
         return manager
 
     def _rng_attribute(self, name: str) -> object:
@@ -1896,8 +1909,9 @@ class ConnectionMaterializationMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ConnectionCompositeMaterializationPlan:
-    """Authenticated State-only transaction for connection and optional starts."""
+    """Manager-owned State transaction for connection and optional starts."""
 
+    _manager_token: str = field(repr=False, compare=False)
     _expected_version: int
     _expected_state_time: datetime | None
     _expected_connection_counter: int
@@ -3278,8 +3292,9 @@ def _connection_identity_integrity_token(
     rng_state_before: object,
     rng_state_after_identity: object,
 ) -> str:
-    """Authenticate every connection identity reservation field."""
+    """Bind trusted identity metadata without re-encoding full RNG states."""
 
+    del rng_state_before, rng_state_after_identity
     canonical = repr(
         (
             "connection-identity",
@@ -3287,8 +3302,6 @@ def _connection_identity_integrity_token(
             conn_id,
             zeek_uid,
             counter_after,
-            rng_state_before,
-            rng_state_after_identity,
         )
     ).encode()
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
@@ -3323,8 +3336,9 @@ def _connection_cursor_integrity_token(
     owner_identity: int,
     rng_state_entry: object,
 ) -> str:
-    """Authenticate one RNG-owner and StateManager transaction entry fence."""
+    """Bind trusted cursor metadata without re-encoding the full RNG state."""
 
+    del rng_state_entry
     canonical = repr(
         (
             "connection-planning-cursor",
@@ -3332,7 +3346,6 @@ def _connection_cursor_integrity_token(
             expected_state_time,
             expected_connection_counter,
             owner_identity,
-            rng_state_entry,
         )
     ).encode()
     return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
@@ -4380,6 +4393,7 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
+        self._connection_plan_owner_token = secrets.token_hex(32)
         self._active_sessions: IndexedEntityStore[str, ActiveSession] = IndexedEntityStore(
             username=lambda session: session.username,
             system=lambda session: session.system,
@@ -6242,20 +6256,12 @@ class StateManager:
         self,
         plan: ConnectionCompositeMaterializationPlan,
     ) -> None:
+        """Validate trusted plan structure without adversarial graph authentication."""
+
         if type(plan) is not ConnectionCompositeMaterializationPlan:
             raise StateError("Connection composite materialization requires an exact plan type")
-        if plan._smb_connection_pin is not None:
-            self._preflight_smb_connection_composite_safe(plan)
-        expected_cursor = _connection_cursor_integrity_token(
-            self._materialization_secret,
-            expected_version=plan._expected_version,
-            expected_state_time=plan._expected_state_time,
-            expected_connection_counter=plan._expected_connection_counter,
-            owner_identity=plan._owner_identity,
-            rng_state_entry=plan._rng_state_entry,
-        )
-        if not hmac.compare_digest(plan._cursor_token, expected_cursor):
-            raise StateError("Connection composite cursor integrity validation failed")
+        if plan._manager_token != self._connection_plan_owner_token:
+            raise StateError("Connection composite belongs to another StateManager")
         if plan._identity is not None:
             self._validate_connection_identity_plan(plan._identity)
         if plan._batch is not None:
@@ -6289,34 +6295,6 @@ class StateManager:
             self._retained_smb_file_mutation_for_terminal_binding_locked(
                 plan._smb_file_mutation_terminalization
             )
-        expected = _connection_composite_integrity_token(
-            self._materialization_secret,
-            expected_version=plan._expected_version,
-            expected_state_time=plan._expected_state_time,
-            expected_connection_counter=plan._expected_connection_counter,
-            owner_identity=plan._owner_identity,
-            rng_state_entry=plan._rng_state_entry,
-            rng_state_final=plan._rng_state_final,
-            cursor_token=plan._cursor_token,
-            identity=plan._identity,
-            transaction=plan._transaction,
-            source_system=plan._source_system,
-            source_hostname=plan._source_hostname,
-            hostname=plan._hostname,
-            initiating_pid=plan._initiating_pid,
-            mode=plan._mode,
-            parent_patch=plan._parent_patch,
-            batch=plan._batch,
-            existing_session_patch=plan._existing_session_patch,
-            existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
-            process_activity=plan._process_activity,
-            session_activity=plan._session_activity,
-            smb_connection_pin=plan._smb_connection_pin,
-            smb_file_mutation_terminalization=(plan._smb_file_mutation_terminalization),
-            final_state_time=plan._final_state_time,
-        )
-        if not hmac.compare_digest(plan._integrity_token, expected):
-            raise StateError("Connection composite plan integrity validation failed")
 
     def _validate_materialization_batch_plan(self, plan: MaterializationBatchPlan) -> None:
         if type(plan) is not MaterializationBatchPlan:
@@ -16527,134 +16505,23 @@ class StateManager:
                 cursor_token=token,
             )
 
-    def _preflight_smb_connection_identity_plan_safe(
-        self,
-        identity: ConnectionIdentityPlan,
-    ) -> None:
-        """Bound one caller-reachable identity before field access or legacy repr()."""
-
-        if type(identity) is not ConnectionIdentityPlan:
-            raise StateError("Connection identity reservation has an invalid exact type")
-        self._bounded_smb_connection_int(
-            identity._expected_version,
-            label="connection identity version",
-        )
-        self._bounded_smb_connection_text(
-            identity._conn_id,
-            label="connection identity ID",
-        )
-        self._bounded_smb_connection_text(
-            identity._zeek_uid,
-            label="connection identity Zeek UID",
-        )
-        self._bounded_smb_connection_int(
-            identity._counter_after,
-            label="connection identity counter",
-        )
-        self._validate_smb_random_state_safe(identity._rng_state_before)
-        self._validate_smb_random_state_safe(identity._rng_state_after_identity)
-        self._bounded_smb_connection_hex_token(
-            identity._integrity_token,
-            label="connection identity token",
-        )
-
-    def _preflight_connection_cursor_safe(self, cursor: ConnectionPlanningCursor) -> None:
-        """Exact-type every cursor field before truthiness, callbacks, or legacy HMAC."""
-
-        if type(cursor) is not ConnectionPlanningCursor:
-            raise StateError("Connection planning cursor has an invalid exact type")
-        if cursor._manager is not self:
-            raise StateError("Connection planning cursor belongs to another StateManager")
-        if type(cursor._sealed) is not bool or type(cursor._cancelled) is not bool:
-            raise StateError("Connection planning cursor lifecycle flags are malformed")
-        for value, label in (
-            (cursor._expected_version, "cursor version"),
-            (cursor._expected_connection_counter, "cursor connection counter"),
-            (cursor._admission_epoch, "cursor admission epoch"),
-            (cursor._owner_identity, "cursor RNG owner"),
-        ):
-            self._bounded_smb_connection_int(value, label=label)
-        if cursor._expected_state_time is not None:
-            self._require_smb_utc_datetime(
-                cursor._expected_state_time,
-                label="cursor expected State time",
-            )
-        if type(cursor._owner_rng) is not random.Random:
-            raise StateError("Connection planning cursor RNG owner has an invalid exact type")
-        if (
-            not cursor._sealed
-            and not cursor._cancelled
-            and (type(cursor._preview_rng) is not random.Random)
-        ):
-            raise StateError("Connection planning cursor preview RNG has an invalid exact type")
-        self._validate_smb_random_state_safe(cursor._rng_state_entry)
-        self._bounded_smb_connection_hex_token(
-            cursor._cursor_token,
-            label="cursor integrity token",
-        )
-        identity = cursor._identity
-        if identity is None:
-            if type(cursor._identity_binding_token) is not str or (cursor._identity_binding_token):
-                raise StateError("Connection planning cursor has an unexpected identity binding")
-        else:
-            self._preflight_smb_connection_identity_plan_safe(identity)
-            self._bounded_smb_connection_hex_token(
-                cursor._identity_binding_token,
-                label="cursor identity binding token",
-            )
-        pin = cursor._smb_connection_pin
-        if pin is not None:
-            if type(pin) is not SmbConnectionPin:
-                raise StateError("Connection planning cursor SMB pin has an invalid exact type")
-            self._validate_smb_connection_pin_public(pin)
-        file_binding = cursor._smb_file_mutation_terminalization
-        if file_binding is not None:
-            if type(file_binding) is not _SmbFileMutationTerminalBinding:
-                raise StateError("Connection planning cursor file binding has an invalid type")
-            for value, label in (
-                (file_binding.binding_id, "cursor file binding ID"),
-                (file_binding.journal_id, "cursor file journal ID"),
-                (file_binding.operation_id, "cursor file operation ID"),
-            ):
-                self._bounded_smb_connection_text(value, label=label)
-            for value, label in (
-                (file_binding.journal_publication_token, "cursor file journal token"),
-                (file_binding.expected_postimage_digest, "cursor file postimage digest"),
-                (file_binding._integrity_token, "cursor file binding token"),
-            ):
-                self._bounded_smb_connection_hex_token(value, label=label)
-
     def _validate_connection_cursor(self, cursor: ConnectionPlanningCursor) -> None:
-        """Validate a live cursor without sealing or sampling it."""
+        """Validate trusted cursor ownership and its ordinary lifecycle fences."""
 
-        self._preflight_connection_cursor_safe(cursor)
+        if type(cursor) is not ConnectionPlanningCursor or cursor._manager is not self:
+            raise StateError("Connection planning cursor belongs to another StateManager")
         cursor._require_active()
-        for value, label in (
-            (cursor._expected_version, "cursor version"),
-            (cursor._expected_connection_counter, "cursor connection counter"),
-            (cursor._admission_epoch, "cursor admission epoch"),
-            (cursor._owner_identity, "cursor RNG owner"),
+        if (
+            type(cursor._owner_rng) is not random.Random
+            or id(cursor._owner_rng) != cursor._owner_identity
         ):
-            self._bounded_smb_connection_int(value, label=label)
-        if cursor._expected_state_time is not None:
-            self._require_smb_utc_datetime(
-                cursor._expected_state_time,
-                label="cursor expected State time",
-            )
-        if type(cursor._owner_rng) is not random.Random:
             raise StateError("Connection planning cursor RNG owner has an invalid exact type")
-        self._validate_smb_random_state_safe(cursor._rng_state_entry)
-        self._bounded_smb_connection_hex_token(
-            cursor._cursor_token,
-            label="cursor integrity token",
-        )
+        if type(cursor._preview_rng) is not random.Random:
+            raise StateError("Connection planning cursor preview RNG has an invalid exact type")
         if cursor._identity is not None:
-            self._preflight_smb_connection_identity_plan_safe(cursor._identity)
+            if type(cursor._identity) is not ConnectionIdentityPlan:
+                raise StateError("Connection planning identity has an invalid exact type")
             self._validate_connection_identity_plan(cursor._identity)
-            self._bounded_smb_connection_hex_token(
-                cursor._identity_binding_token,
-                label="cursor identity binding token",
-            )
             expected_identity_binding = _connection_cursor_identity_binding_token(
                 self._materialization_secret,
                 cursor_token=cursor._cursor_token,
@@ -16667,16 +16534,6 @@ class StateManager:
                 raise StateError("Connection planning identity binding failed integrity validation")
         if cursor._admission_epoch != self._prepared_state_admission_epoch:
             raise StateError("Connection planning cursor crossed a prepared-State claim")
-        expected = _connection_cursor_integrity_token(
-            self._materialization_secret,
-            expected_version=cursor._expected_version,
-            expected_state_time=cursor._expected_state_time,
-            expected_connection_counter=cursor._expected_connection_counter,
-            owner_identity=cursor._owner_identity,
-            rng_state_entry=cursor._rng_state_entry,
-        )
-        if not hmac.compare_digest(cursor._cursor_token, expected):
-            raise StateError("Connection planning cursor integrity validation failed")
         if cursor._expected_version != self._materialization_version:
             raise StateError("Connection planning cursor became stale")
         if cursor._expected_state_time != self.state.current_time:
@@ -20419,21 +20276,6 @@ class StateManager:
             self._validate_connection_cursor(cursor)
             if type(mode) is not ConnectionMaterializationMode:
                 raise StateError("Connection composite requires an explicit typed mode")
-            if cursor._smb_connection_pin is not None:
-                self._preflight_smb_connection_root_inputs_safe(
-                    cursor,
-                    transaction,
-                    source_system=source_system,
-                    source_hostname=source_hostname,
-                    hostname=hostname,
-                    initiating_pid=initiating_pid,
-                    mode=mode,
-                    batch=batch,
-                    rdp_existing_session_patch=rdp_existing_session_patch,
-                    existing_session_process_roles_patch=(existing_session_process_roles_patch),
-                    process_activity=process_activity,
-                    session_activity=session_activity,
-                )
             normalized_process_activity = self._normalize_process_activity_patches(process_activity)
             normalized_session_activity = self._normalize_session_activity_patches(session_activity)
             if batch is not None:
@@ -20571,7 +20413,32 @@ class StateManager:
             rng_state_final = cursor._seal()
             validated_rng = random.Random()
             validated_rng.setstate(rng_state_final)
+            token_material = repr(
+                (
+                    "trusted-connection-composite-v1",
+                    self._connection_plan_owner_token,
+                    cursor._cursor_token,
+                    transaction.stable_id,
+                    mode.value,
+                    batch.publication_token if batch is not None else "",
+                    tuple(
+                        (patch.identity.object_id, patch.activity_time.isoformat())
+                        for patch in normalized_process_activity
+                    ),
+                    tuple(
+                        (patch.identity.object_id, patch.activity_time.isoformat())
+                        for patch in normalized_session_activity
+                    ),
+                    final_state_time.isoformat(),
+                )
+            ).encode()
+            publication_token = hmac.new(
+                self._materialization_secret,
+                token_material,
+                hashlib.sha256,
+            ).hexdigest()
             plan = ConnectionCompositeMaterializationPlan(
+                _manager_token=self._connection_plan_owner_token,
                 _expected_version=cursor._expected_version,
                 _expected_state_time=cursor._expected_state_time,
                 _expected_connection_counter=cursor._expected_connection_counter,
@@ -20596,35 +20463,9 @@ class StateManager:
                 _smb_connection_pin=cursor._smb_connection_pin,
                 _smb_file_mutation_terminalization=(smb_file_mutation_terminalization),
                 _final_state_time=final_state_time,
-                _integrity_token="",
+                _integrity_token=publication_token,
             )
-            token = _connection_composite_integrity_token(
-                self._materialization_secret,
-                expected_version=plan._expected_version,
-                expected_state_time=plan._expected_state_time,
-                expected_connection_counter=plan._expected_connection_counter,
-                owner_identity=plan._owner_identity,
-                rng_state_entry=plan._rng_state_entry,
-                rng_state_final=plan._rng_state_final,
-                cursor_token=plan._cursor_token,
-                identity=plan._identity,
-                transaction=plan._transaction,
-                source_system=plan._source_system,
-                source_hostname=plan._source_hostname,
-                hostname=plan._hostname,
-                initiating_pid=plan._initiating_pid,
-                mode=plan._mode,
-                parent_patch=plan._parent_patch,
-                batch=plan._batch,
-                existing_session_patch=plan._existing_session_patch,
-                existing_session_process_roles_patch=(plan._existing_session_process_roles_patch),
-                process_activity=plan._process_activity,
-                session_activity=plan._session_activity,
-                smb_connection_pin=plan._smb_connection_pin,
-                smb_file_mutation_terminalization=(plan._smb_file_mutation_terminalization),
-                final_state_time=plan._final_state_time,
-            )
-            return replace(plan, _integrity_token=token)
+            return plan
 
     def _validate_connection_composite_semantics(
         self,

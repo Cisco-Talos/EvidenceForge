@@ -227,6 +227,7 @@ _IDENTITY_ROOT_LABEL = (
 )
 _IDENTITY_ROOT_TYPE: type[object] | None = None
 _IDENTITY_ROOT_POLICY: tuple[object, ...] | None = None
+_TRUSTED_IDENTITY_TYPE_INSPECTOR: _IdentityTypeInspector | None = None
 
 
 def _identity_import_raw_attribute(value_type: type[object], name: str) -> object:
@@ -382,7 +383,7 @@ del _qualified_name
 def _register_network_request_type(request_type: type[object]) -> None:
     """Register the exact request class once while its defining module imports."""
 
-    global _IDENTITY_ROOT_POLICY, _IDENTITY_ROOT_TYPE
+    global _IDENTITY_ROOT_POLICY, _IDENTITY_ROOT_TYPE, _TRUSTED_IDENTITY_TYPE_INSPECTOR
     if _IDENTITY_ROOT_TYPE is not None:
         if request_type is not _IDENTITY_ROOT_TYPE:
             raise TypeError("Network connection identity request type is already registered")
@@ -394,6 +395,12 @@ def _register_network_request_type(request_type: type[object]) -> None:
         request_type,
         *_IDENTITY_ROOT_LABEL,
     )
+    inspector = _IdentityTypeInspector()
+    for policy in (*_IDENTITY_TRUSTED_DATACLASS_POLICIES, _IDENTITY_ROOT_POLICY):
+        inspector.dataclass_fields(policy[0], ())  # type: ignore[arg-type]
+    for policy in _IDENTITY_TRUSTED_PYDANTIC_POLICIES:
+        inspector.pydantic_fields(policy[0], ())  # type: ignore[arg-type]
+    _TRUSTED_IDENTITY_TYPE_INSPECTOR = inspector
 
 
 def _identity_location(path: tuple[str, ...]) -> str:
@@ -1285,8 +1292,8 @@ class _IdentityDigestWriter:
 class _CanonicalIdentityEncoder:
     """Build bounded Merkle-style identity digests without caller dispatch."""
 
-    def __init__(self) -> None:
-        self._types = _IdentityTypeInspector()
+    def __init__(self, *, type_inspector: _IdentityTypeInspector | None = None) -> None:
+        self._types = type_inspector if type_inspector is not None else _IdentityTypeInspector()
         self._active: dict[int, object] = {}
         self._memo: dict[int, tuple[object, bytes]] = {}
         self._nodes = 0
@@ -1880,6 +1887,28 @@ def _network_request_stable_id(request: object, expected_type: type[object]) -> 
 
     try:
         identity_digest, _projection = _CanonicalIdentityEncoder().encode_request(
+            request,
+            expected_type,
+        )
+    except RecursionError as exc:
+        raise ValueError(
+            f"Network connection identity exceeds the maximum depth of {_IDENTITY_MAX_DEPTH}"
+        ) from exc
+    except OverflowError as exc:
+        raise ValueError("Network connection identity arithmetic exceeds supported bounds") from exc
+    return f"network-connection-{stable_uuid('network-connection', 'v4', identity_digest.hex())}"
+
+
+def _trusted_network_request_stable_id(request: object, expected_type: type[object]) -> str:
+    """Return the same stable ID using import-captured trusted engine metadata."""
+
+    inspector = _TRUSTED_IDENTITY_TYPE_INSPECTOR
+    if inspector is None:
+        raise RuntimeError("Network connection identity request type is not registered")
+    try:
+        identity_digest, _projection = _CanonicalIdentityEncoder(
+            type_inspector=inspector,
+        ).encode_request(
             request,
             expected_type,
         )

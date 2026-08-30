@@ -552,18 +552,10 @@ def _validate_canonical_event_tree(
 def _canonical_commit_result(
     result: NetworkConnectionCommitResult,
 ) -> NetworkConnectionCommitResult:
-    """Freeze the sole trusted commit-result snapshot before nested sealing."""
+    """Validate the engine-owned immutable commit result once at sealing."""
 
     _validate_canonical_event_tree(result)
-    try:
-        canonical = copy.deepcopy(result)
-    except (copy.Error, AttributeError, TypeError, ValueError) as exc:
-        raise StateError("Network commit result cannot be frozen exactly") from exc
-    if type(canonical) is not NetworkConnectionCommitResult:
-        raise StateError("Network commit result changed type during canonicalization")
-    _validate_canonical_event_tree(canonical)
-    _freeze_digest_value(canonical)
-    return canonical
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -1514,8 +1506,7 @@ class NetworkTransactionPreparation:
                 raise StateError("Network commit result disagrees with the finalized transaction")
             trusted_result = _canonical_commit_result(final_result)
             trusted_transaction = trusted_result.transaction
-            state_transaction = copy.deepcopy(trusted_transaction)
-            _validate_canonical_event_tree(state_transaction)
+            state_transaction = trusted_transaction
 
             crypto_token = self._owner._seal_open_crypto(self)
             if materialization_mode is ConnectionMaterializationMode.APPLICATION_CHILD and (
@@ -2876,7 +2867,7 @@ class NetworkTransactionRuntime:
             _runtime_token=id(self),
         )
         token = replace(token, _integrity_token=_token_integrity(self._secret, token))
-        public_result = copy.deepcopy(trusted_result)
+        public_result = trusted_result
         root = PreparedNetworkTransactionRoot(
             public_result.transaction,
             state_plan,

@@ -55,6 +55,7 @@ from evidenceforge.generation.actions.network_connection import NetworkConnectio
 from evidenceforge.generation.actions.network_identity import (
     _NETWORK_CONNECTION_IDENTITY_EXCLUDED_FIELDS,
     _network_request_identity_fields,
+    _trusted_network_request_stable_id,
 )
 from evidenceforge.models import System
 from evidenceforge.utils.rng import generation_seed_scope
@@ -278,6 +279,52 @@ def test_network_request_identity_uses_full_width_collision_resistance() -> None
     assert first.stable_id != second.stable_id
     assert UUID(first.stable_id.removeprefix("network-connection-")).version == 4
     assert UUID(second.stable_id.removeprefix("network-connection-")).version == 4
+
+
+def test_trusted_network_request_identity_matches_public_encoder_bytes() -> None:
+    """The planner fast path preserves exact IDs across representative graphs and seeds."""
+
+    requests = (
+        NetworkConnectionRequest(
+            src_ip="10.0.0.10",
+            dst_ip="203.0.113.10",
+            time=datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+        ),
+        NetworkConnectionRequest(
+            src_ip="10.0.0.20",
+            dst_ip="10.0.0.53",
+            time=datetime(2026, 8, 30, 12, 1, tzinfo=UTC),
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(query="updates.example.test", query_type="AAAA"),
+            source_system=System(
+                hostname="client-01",
+                ip="10.0.0.20",
+                os="Linux",
+                type="workstation",
+            ),
+        ),
+        _request_with_payload(
+            {
+                "attachment": ["report.txt", 4096],
+                "labels": {"department": "finance", "classification": "internal"},
+            }
+        ),
+    )
+
+    ids_by_seed: list[tuple[str, ...]] = []
+    for seed in (17, 18):
+        with generation_seed_scope(seed):
+            public_ids = tuple(request.stable_id for request in requests)
+            trusted_ids = tuple(
+                _trusted_network_request_stable_id(request, NetworkConnectionRequest)
+                for request in requests
+            )
+        assert trusted_ids == public_ids
+        ids_by_seed.append(trusted_ids)
+
+    assert ids_by_seed[0] != ids_by_seed[1]
 
 
 @pytest.mark.parametrize(
