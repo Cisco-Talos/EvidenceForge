@@ -99,6 +99,8 @@ class ExpandedEvent:
     kwargs: dict[str, Any]
     timing: TimingSpec
     description: str = ""
+    occurrence_time_kwarg: str = "time"
+    trigger_time_kwarg: str | None = None
 
 
 class CausalExpansionEngine:

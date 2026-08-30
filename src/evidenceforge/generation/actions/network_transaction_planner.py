@@ -3160,16 +3160,18 @@ class NetworkTransactionPlanner:
         # after connection ownership has been resolved. The DNS bundle still
         # assigns resolver-service ownership to its separate UDP/53 transport.
         if force_visible_prereq_dns:
+            planned_query_time = time - generator_module.timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time - generator_module.timedelta(seconds=2),
+                time,
                 hostname=hostname,
                 force_address=True,
                 bypass_cache=True,
                 source_system=resolved_source_system,
                 source_pid=pid,
                 source_process_image=process_image or "",
+                planned_query_time=planned_query_time,
             )
         elif (
             (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
@@ -3201,13 +3203,15 @@ class NetworkTransactionPlanner:
             and src_ip_is_local
             and not suppress_prereq_dns
         ):
+            planned_query_time = time - generator_module.timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time - generator_module.timedelta(seconds=2),
+                time,
                 hostname=hostname,
                 force_address=True,
                 bypass_cache=True,
+                planned_query_time=planned_query_time,
             )
 
         kerberos_prerequisite_success = conn_state not in {

@@ -25,6 +25,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _dns_inclusive_millisecond_distribution,
 )
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
@@ -207,6 +208,84 @@ def test_unplanned_query_uses_one_runtime_sample_and_planned_query_uses_none() -
     )
     planned_counts = dict(planned.timing_runtime.audit.snapshot().sample_counts)
     assert "activity.dns.query_before_request" not in planned_counts
+
+
+def test_causal_dns_expansion_preserves_parent_anchor_and_plans_query_once() -> None:
+    """Causal timing is the query occurrence and is not reinterpreted as its parent anchor."""
+
+    generator = _generator()
+    generator._emit_dns_lookup = Mock()
+
+    generator._expand_and_emit(
+        "connection",
+        _START,
+        src_ip=_SOURCE_IP,
+        dst_ip=_DESTINATION_IP,
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+    )
+
+    generator._emit_dns_lookup.assert_called_once()
+    call = generator._emit_dns_lookup.call_args
+    assert call.kwargs["time"] == _START
+    planned_query_time = call.kwargs["planned_query_time"]
+    expected_gap = get_timing_window(
+        "network.dns_before_tcp",
+        default_min_ms=20,
+        default_max_ms=1500,
+        default_position="before",
+    )
+    assert (
+        _START - timedelta(milliseconds=expected_gap.max_ms)
+        <= planned_query_time
+        <= _START - timedelta(milliseconds=expected_gap.min_ms)
+    )
+
+
+def test_internal_dns_family_omits_only_children_behind_runtime_watermark() -> None:
+    """A retained address query does not publish an older optional SRV prerequisite."""
+
+    generator = _generator()
+    generator._ad_domain = "corp.example"
+    generator._dns_server_ips = [_DNS_SERVER_IP]
+    generator._dns_server_ips_are_public_fallback = False
+    generator._dc_systems = [
+        System(
+            hostname="DC-01",
+            ip=_DNS_SERVER_IP,
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+    ]
+    runtime = generator._network_transaction_runtime
+    page = runtime.advance_watermark_page(_START)
+    assert page.has_more is False
+    generator._allocate_ephemeral_port = Mock(return_value=53_000)
+    generator.generate_connection = Mock(return_value="CDnsBoundary1")
+    query_time = _START + timedelta(milliseconds=1)
+
+    generator._emit_dns_lookup(
+        src_ip=_SOURCE_IP,
+        dst_ip="10.0.0.25",
+        time=_START + timedelta(seconds=1),
+        hostname="files.corp.example",
+        force_address=True,
+        bypass_cache=True,
+        planned_query_time=query_time,
+    )
+
+    calls = generator.generate_connection.call_args_list
+    address_calls = [
+        call
+        for call in calls
+        if call.kwargs["dns"].query == "files.corp.example" and call.kwargs["dns"].query_type == "A"
+    ]
+    assert len(address_calls) == 1
+    assert address_calls[0].kwargs["time"] == query_time
+    assert all(call.kwargs["time"] >= _START for call in calls)
+    assert all(call.kwargs["dns"].query_type != "SRV" for call in calls)
+    assert runtime.census().live_points == 0
 
 
 def test_ad_srv_duplicate_consumes_no_additional_timing_sample() -> None:

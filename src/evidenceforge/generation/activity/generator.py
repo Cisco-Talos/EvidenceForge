@@ -13542,22 +13542,26 @@ class ActivityGenerator:
                 offset_ms = rng.randint(ev.timing.min_ms, ev.timing.max_ms)
                 offset = timedelta(milliseconds=offset_ms)
                 if ev.timing.position == "before":
-                    ev.kwargs["time"] = timestamp - offset
+                    occurrence_time = timestamp - offset
                 else:
-                    ev.kwargs["time"] = timestamp + offset
+                    occurrence_time = timestamp + offset
                     if event_type == "process_create":
                         process_system = kwargs.get("target_system") or kwargs.get("source_system")
                         source_pid = kwargs.get("source_pid")
                         if process_system is not None and isinstance(source_pid, int):
-                            ev.kwargs["time"] = self._clamp_after_visible_process_create(
+                            occurrence_time = self._clamp_after_visible_process_create(
                                 process_system,
                                 source_pid,
-                                ev.kwargs["time"],
+                                occurrence_time,
                                 "windows.audit_after_visible_admin_command",
                             )
-                    if previous_after_time is not None and ev.kwargs["time"] <= previous_after_time:
-                        ev.kwargs["time"] = previous_after_time + timedelta(milliseconds=1)
-                    previous_after_time = ev.kwargs["time"]
+                    if previous_after_time is not None and occurrence_time <= previous_after_time:
+                        occurrence_time = previous_after_time + timedelta(milliseconds=1)
+                    previous_after_time = occurrence_time
+
+                if ev.trigger_time_kwarg is not None:
+                    ev.kwargs[ev.trigger_time_kwarg] = timestamp
+                ev.kwargs[ev.occurrence_time_kwarg] = occurrence_time
 
                 method = getattr(self, ev.method)
                 method(**ev.kwargs)
@@ -31309,6 +31313,15 @@ class ActivityGenerator:
             return datetime.fromtimestamp(epoch) >= gate
         return datetime.fromtimestamp(epoch, tz=gate.tzinfo) >= gate
 
+    def _network_runtime_admits_occurrence(self, time: datetime) -> bool:
+        """Return whether a new network occurrence can enter retained runtime history."""
+
+        canonical_time = ensure_utc(time)
+        runtime = self._network_transaction_runtime
+        census = runtime.census()
+        fence = census.pending_watermark or census.watermark
+        return fence <= canonical_time < runtime.window_end
+
     def _emit_dns_lookup(
         self,
         src_ip: str,
@@ -31536,6 +31549,8 @@ class ActivityGenerator:
                 maximum_ms=1400,
             )
             dns_time = time - timedelta(milliseconds=query_lead_ms)
+        if not self._network_runtime_admits_occurrence(dns_time):
+            return
         query_process = self._dns_query_process_context(request, src_system, dns_time)
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
@@ -31671,15 +31686,20 @@ class ActivityGenerator:
                 minimum_ms=180,
                 maximum_ms=420,
             )
-            self._emit_ad_srv_discovery(
-                src_ip=src_ip,
-                dns_server_ip=dns_server_ip,
-                time=dns_time - timedelta(seconds=2, milliseconds=srv_discovery_lead_ms),
-                src_os=_src_os,
-                domain=ad_domain,
-                rng=rng,
-                query_process=query_process,
+            srv_discovery_time = dns_time - timedelta(
+                seconds=2,
+                milliseconds=srv_discovery_lead_ms,
             )
+            if self._network_runtime_admits_occurrence(srv_discovery_time):
+                self._emit_ad_srv_discovery(
+                    src_ip=src_ip,
+                    dns_server_ip=dns_server_ip,
+                    time=srv_discovery_time,
+                    src_os=_src_os,
+                    domain=ad_domain,
+                    rng=rng,
+                    query_process=query_process,
+                )
 
         # Internal authoritative names use stable TTLs. External answers may be
         # observed through a resolver cache, so expose realistic countdown TTLs.
@@ -31764,6 +31784,8 @@ class ActivityGenerator:
                 maximum_ms=30,
             )
             companion_time = dns_time + timedelta(milliseconds=companion_delay_ms)
+            if not self._network_runtime_admits_occurrence(companion_time):
+                return
             companion_src_port = self._allocate_ephemeral_port(
                 src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
             )
@@ -31887,6 +31909,8 @@ class ActivityGenerator:
                         maximum_ms=45,
                     )
                     mx_a_time = companion_time + timedelta(milliseconds=mx_a_delay_ms)
+                    if not self._network_runtime_admits_occurrence(mx_a_time):
+                        return
                     mx_a_src_port = self._allocate_ephemeral_port(
                         src_ip,
                         dns_server_ip,
@@ -31968,6 +31992,8 @@ class ActivityGenerator:
                 maximum_ms=10,
             )
             nx_time = dns_time - timedelta(milliseconds=nx_lead_ms)
+            if not self._network_runtime_admits_occurrence(nx_time):
+                return
             nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {
                 "wpad",
                 "wpad.local",
@@ -32095,6 +32121,8 @@ class ActivityGenerator:
         query_process: ProcessContext | None,
     ) -> None:
         """Emit low-volume AD SRV service-discovery DNS for domain clients."""
+        if not self._network_runtime_admits_occurrence(time):
+            return
         dc_systems = list(getattr(self, "_dc_systems", []) or [])
         if not dc_systems:
             return
@@ -32157,6 +32185,8 @@ class ActivityGenerator:
                         ordinal=index,
                     )
                 srv_time = time + timedelta(milliseconds=query_spacing_ms)
+                if not self._network_runtime_admits_occurrence(srv_time):
+                    continue
                 src_port = self._allocate_ephemeral_port(
                     src_ip,
                     dns_server_ip,
