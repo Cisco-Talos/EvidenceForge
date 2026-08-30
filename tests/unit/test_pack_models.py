@@ -18,6 +18,8 @@ from evidenceforge.composition.models import (
     BaselineActivityFragment,
     DestinationCatalogDocument,
     EnvironmentFragment,
+    LockedPack,
+    PackLock,
     PackManifest,
     ProcessCatalogDocument,
     StorageCatalogDocument,
@@ -208,6 +210,8 @@ class _Pack:
 
     manifest: PackManifest
     catalogs: dict[str, dict[str, Any]]
+    lock: PackLock = field(default_factory=PackLock)
+    digest: str = "0" * 64
     source: str = "project"
     environment: dict[str, Any] = field(default_factory=dict)
     baseline_activity: dict[str, Any] = field(default_factory=dict)
@@ -223,31 +227,37 @@ def _industry_pack(
 
     return _Pack(
         manifest=PackManifest(
-            pack_schema_version="1.0",
+            pack_schema_version="2.0",
             type="industry",
+            publisher="evidenceforge",
+            publisher_display_name="EvidenceForge Test",
             name=name,
             version="1.0.0",
             description="Cases industry",
         ),
         catalogs={
-            "persona_catalog": {f"{name}:case-worker": _persona(f"{name}:case-worker")},
+            "persona_catalog": {
+                f"evidenceforge/{name}:case-worker": _persona(f"evidenceforge/{name}:case-worker")
+            },
             "process_catalog": {
-                f"{name}:case-workflow": _process_document(custom=custom)["process_catalog"][
-                    "case-workflow"
-                ]
+                f"evidenceforge/{name}:case-workflow": _process_document(custom=custom)[
+                    "process_catalog"
+                ]["case-workflow"]
             },
             "application_catalog": {
-                f"{name}:case-management": _application_document()["application_catalog"][
-                    "case-management"
-                ]
+                f"evidenceforge/{name}:case-management": _application_document()[
+                    "application_catalog"
+                ]["case-management"]
             },
             "destination_catalog": {
-                f"{name}:case-portal": _destination_document(domain=domain)["destination_catalog"][
-                    "case-portal"
-                ]
+                f"evidenceforge/{name}:case-portal": _destination_document(domain=domain)[
+                    "destination_catalog"
+                ]["case-portal"]
             },
             "traffic_catalog": {
-                f"{name}:case-activity": _traffic_document()["traffic_catalog"]["case-activity"]
+                f"evidenceforge/{name}:case-activity": _traffic_document()["traffic_catalog"][
+                    "case-activity"
+                ]
             },
             "storage_catalog": {},
         },
@@ -557,7 +567,9 @@ def test_catalogs_reject_prototype_inert_fields_and_qualified_export_keys() -> N
             }
         )
     raw = _destination_document()
-    raw["destination_catalog"]["cases:portal"] = raw["destination_catalog"].pop("case-portal")
+    raw["destination_catalog"]["evidenceforge/cases:portal"] = raw["destination_catalog"].pop(
+        "case-portal"
+    )
     with pytest.raises(ValidationError, match="without colons"):
         DestinationCatalogDocument.model_validate(raw)
 
@@ -567,8 +579,10 @@ def test_pack_manifest_requires_canonical_semver() -> None:
 
     with pytest.raises(ValidationError, match="string_pattern_mismatch"):
         PackManifest(
-            pack_schema_version="1.0",
+            pack_schema_version="2.0",
             type="industry",
+            publisher="evidenceforge",
+            publisher_display_name="EvidenceForge Test",
             name="cases",
             version="01.0.0",
             description="Cases",
@@ -581,6 +595,8 @@ def test_pack_manifest_requires_supported_schema_version(raw_version: str | None
 
     raw: dict[str, Any] = {
         "type": "industry",
+        "publisher": "evidenceforge",
+        "publisher_display_name": "EvidenceForge Test",
         "name": "cases",
         "version": "1.0.0",
         "description": "Cases",
@@ -657,7 +673,7 @@ def test_partial_organization_fragments_validate_nested_values() -> None:
                         "username": "analyst",
                         "full_name": "Case Analyst",
                         "email": "analyst@example.test",
-                        "persona": "cases:case-worker",
+                        "persona": "evidenceforge/cases:case-worker",
                     }
                 ]
             }
@@ -825,23 +841,27 @@ def test_whole_pack_semantics_reject_missing_builtin_service_and_persona_eligibi
     """Generation-effective links fail at the field that would otherwise become inert."""
 
     unknown_builtin = _industry_pack()
-    unknown_builtin.catalogs["process_catalog"]["cases:case-workflow"]["data"]["builtins"] = [
-        "not-installed"
-    ]
+    unknown_builtin.catalogs["process_catalog"]["evidenceforge/cases:case-workflow"]["data"][
+        "builtins"
+    ] = ["not-installed"]
     with pytest.raises(PackError, match="unknown builtin application ID"):
         _validate_semantics([unknown_builtin], builtin_application_ids={"chrome", "excel"})
 
     missing_service = _industry_pack()
-    connection = missing_service.catalogs["application_catalog"]["cases:case-management"]["data"][
-        "connections"
-    ]["portal"]
+    connection = missing_service.catalogs["application_catalog"][
+        "evidenceforge/cases:case-management"
+    ]["data"]["connections"]["portal"]
     connection["service"] = "missing"
     with pytest.raises(PackError, match="missing service"):
         _validate_semantics([missing_service], builtin_application_ids={"chrome", "excel"})
 
     disallowed = _industry_pack()
-    disallowed.catalogs["persona_catalog"]["cases:auditor"] = _persona("cases:auditor")
-    disallowed.catalogs["traffic_catalog"]["cases:case-activity"]["data"]["audience"] = ["auditor"]
+    disallowed.catalogs["persona_catalog"]["evidenceforge/cases:auditor"] = _persona(
+        "evidenceforge/cases:auditor"
+    )
+    disallowed.catalogs["traffic_catalog"]["evidenceforge/cases:case-activity"]["data"][
+        "audience"
+    ] = ["auditor"]
     with pytest.raises(PackError, match="not allowed by that application"):
         _validate_semantics([disallowed], builtin_application_ids={"chrome", "excel"})
 
@@ -851,9 +871,9 @@ def test_industry_cannot_reference_peer_namespace_even_when_selected() -> None:
 
     cases = _industry_pack()
     audits = _industry_pack("audits", domain="audit.example.test")
-    cases.catalogs["application_catalog"]["cases:case-management"]["data"]["personas"] = [
-        "audits:case-worker"
-    ]
+    cases.catalogs["application_catalog"]["evidenceforge/cases:case-management"]["data"][
+        "personas"
+    ] = ["audits:case-worker"]
 
     with pytest.raises(PackError, match="undeclared pack namespace 'audits'"):
         _validate_semantics([cases, audits], builtin_application_ids={"chrome", "excel"})
@@ -876,8 +896,10 @@ def test_selected_pack_namespace_requires_one_exact_identity(source: str, versio
     }
     first = _Pack(
         manifest=PackManifest(
-            pack_schema_version="1.0",
+            pack_schema_version="2.0",
             type="industry",
+            publisher="evidenceforge",
+            publisher_display_name="EvidenceForge Test",
             name="cases",
             version="1.0.0",
             description="Cases industry",
@@ -887,8 +909,10 @@ def test_selected_pack_namespace_requires_one_exact_identity(source: str, versio
     )
     second = _Pack(
         manifest=PackManifest(
-            pack_schema_version="1.0",
+            pack_schema_version="2.0",
             type="industry",
+            publisher="evidenceforge",
+            publisher_display_name="EvidenceForge Test",
             name="cases",
             version=version,
             description="Other cases industry",
@@ -897,7 +921,10 @@ def test_selected_pack_namespace_requires_one_exact_identity(source: str, versio
         source=source,
     )
 
-    with pytest.raises(PackError, match="share namespace 'cases'.*different exact identities"):
+    with pytest.raises(
+        PackError,
+        match="share namespace 'evidenceforge/cases'.*different exact identities",
+    ):
         _validate_semantics([first, second], builtin_application_ids={"chrome"})
 
 
@@ -905,9 +932,11 @@ def test_low_level_dns_tags_resolve_builtin_or_visible_custom_destinations() -> 
     """Low-level DNS selection cannot name a nonexistent or undeclared custom tag."""
 
     pack = _industry_pack()
-    application_data = pack.catalogs["application_catalog"]["cases:case-management"]["data"]
+    application_data = pack.catalogs["application_catalog"]["evidenceforge/cases:case-management"][
+        "data"
+    ]
     application_data["connections"] = {}
-    traffic_data = pack.catalogs["traffic_catalog"]["cases:case-activity"]["data"]
+    traffic_data = pack.catalogs["traffic_catalog"]["evidenceforge/cases:case-activity"]["data"]
     traffic_data["applications"] = []
     traffic_data["outbound"] = [
         {
@@ -937,16 +966,16 @@ def test_semantics_reject_orphan_process_connection_and_destination_exports() ->
     """Catalog definitions must have a runtime consumer rather than provenance-only presence."""
 
     orphan_process = _industry_pack()
-    orphan_process.catalogs["process_catalog"]["cases:unused"] = copy.deepcopy(
-        orphan_process.catalogs["process_catalog"]["cases:case-workflow"]
+    orphan_process.catalogs["process_catalog"]["evidenceforge/cases:unused"] = copy.deepcopy(
+        orphan_process.catalogs["process_catalog"]["evidenceforge/cases:case-workflow"]
     )
     with pytest.raises(PackError, match="orphan process profile"):
         _validate_semantics([orphan_process], builtin_application_ids={"chrome"})
 
     orphan_connection = _industry_pack()
-    connections = orphan_connection.catalogs["application_catalog"]["cases:case-management"][
-        "data"
-    ]["connections"]
+    connections = orphan_connection.catalogs["application_catalog"][
+        "evidenceforge/cases:case-management"
+    ]["data"]["connections"]
     connections["unused"] = {"destination": "case-portal", "service": "database"}
     with pytest.raises(PackError, match="orphan application connection"):
         _validate_semantics([orphan_connection], builtin_application_ids={"chrome"})
@@ -955,7 +984,7 @@ def test_semantics_reject_orphan_process_connection_and_destination_exports() ->
     unused = _destination_document(domain="unused.example.test")["destination_catalog"][
         "case-portal"
     ]
-    orphan_destination.catalogs["destination_catalog"]["cases:unused"] = unused
+    orphan_destination.catalogs["destination_catalog"]["evidenceforge/cases:unused"] = unused
     with pytest.raises(PackError, match="orphan destination export"):
         _validate_semantics([orphan_destination], builtin_application_ids={"chrome"})
 
@@ -967,34 +996,49 @@ def test_organization_may_reference_only_exact_pinned_dependency() -> None:
     organization = _Pack(
         manifest=PackManifest.model_validate(
             {
-                "pack_schema_version": "1.0",
+                "pack_schema_version": "2.0",
                 "type": "organization",
+                "publisher": "evidenceforge",
+                "publisher_display_name": "EvidenceForge Test",
                 "name": "example-org",
                 "version": "1.0.0",
                 "description": "Example organization",
                 "industry_dependencies": [
                     {
                         "source": "project",
+                        "publisher": "evidenceforge",
+                        "type": "industry",
                         "name": "cases",
-                        "version": "1.0.0",
+                        "version_constraint": ">=1.0.0,<2.0.0",
                     }
                 ],
             }
         ),
         catalogs={name: {} for name in industry.catalogs},
+        lock=PackLock(
+            dependencies=[
+                LockedPack(
+                    publisher="evidenceforge",
+                    type="industry",
+                    name="cases",
+                    version="1.0.0",
+                    digest=industry.digest,
+                )
+            ]
+        ),
         environment={
             "users": [
                 {
                     "username": "analyst",
                     "full_name": "Case Analyst",
                     "email": "analyst@example.test",
-                    "persona": "cases:case-worker",
+                    "persona": "evidenceforge/cases:case-worker",
                 }
             ]
         },
         baseline_activity={
             "traffic_suppression": [
-                {"audience": {"personas": ["cases:case-worker"]}, "factor": 0.5}
+                {"audience": {"personas": ["evidenceforge/cases:case-worker"]}, "factor": 0.5}
             ]
         },
     )
@@ -1005,7 +1049,7 @@ def test_organization_may_reference_only_exact_pinned_dependency() -> None:
         _validate_semantics([organization], builtin_application_ids={"chrome", "excel"})
 
     organization.baseline_activity["traffic_suppression"][0]["audience"]["personas"] = [
-        "cases:missing-persona"
+        "evidenceforge/cases:missing-persona"
     ]
     with pytest.raises(PackError, match="baseline_activity.*missing export"):
         _validate_semantics([industry, organization], builtin_application_ids={"chrome", "excel"})
@@ -1016,8 +1060,10 @@ def test_organization_model_accepts_packaged_builtin_shorthand() -> None:
 
     organization = _Pack(
         manifest=PackManifest(
-            pack_schema_version="1.0",
+            pack_schema_version="2.0",
             type="organization",
+            publisher="evidenceforge",
+            publisher_display_name="EvidenceForge Test",
             name="example-org",
             version="1.0.0",
             description="Example organization",
@@ -1070,7 +1116,7 @@ def test_organization_model_accepts_packaged_builtin_shorthand() -> None:
     )
 
     organization.environment["storage"]["servers"][0]["shares"][0]["preset"] = "missing"
-    with pytest.raises(PackError, match="missing export 'example-org:missing'"):
+    with pytest.raises(PackError, match="missing export 'evidenceforge/example-org:missing'"):
         _validate_semantics(
             [organization],
             builtin_application_ids={"chrome"},
@@ -1101,7 +1147,7 @@ def test_whole_pack_semantics_reject_duplicate_domain_and_executable_claims() ->
 
     duplicate_custom_id = _industry_pack(custom=[_custom_process()])
     second_profile = copy.deepcopy(
-        duplicate_custom_id.catalogs["process_catalog"]["cases:case-workflow"]
+        duplicate_custom_id.catalogs["process_catalog"]["evidenceforge/cases:case-workflow"]
     )
     second_profile["data"]["builtins"] = []
     second_profile["data"]["custom"][0]["platforms"]["windows"]["image_path"] = (
@@ -1110,7 +1156,9 @@ def test_whole_pack_semantics_reject_duplicate_domain_and_executable_claims() ->
     second_profile["data"]["custom"][0]["platforms"]["windows"]["command_templates"] = [
         r'"C:\Program Files\Different\different.exe" --case "{document_term}"'
     ]
-    duplicate_custom_id.catalogs["process_catalog"]["cases:second-workflow"] = second_profile
+    duplicate_custom_id.catalogs["process_catalog"]["evidenceforge/cases:second-workflow"] = (
+        second_profile
+    )
     with pytest.raises(PackError, match="duplicates custom process ID"):
         _validate_semantics([duplicate_custom_id], builtin_application_ids={"chrome"})
 

@@ -2,6 +2,7 @@ scenario_version: "2.0"
 composition:
   organization:
     source: package
+    publisher: evidenceforge
     name: metrolink-specialty-care
     version: "1.0.0"
 generation_seed: 4242

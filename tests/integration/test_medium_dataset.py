@@ -143,8 +143,10 @@ class TestMediumDatasetGeneration:
                 "organization",
                 "metrolink-specialty-care",
                 "1.0.0",
-            ): "78064394ad268bc8b5210b8e06b52fbdf1575652d170f7242a4560766555eecd",
+            ): "c8d6db51dfa75cc1cfe4455efb4f656912045b23cf65710bd80e656d200ab132",
         }
+        assert len(generated_output["scenario"].environment.users) == 25
+        assert len(generated_output["scenario"].environment.systems) == 28
 
     def test_proves_email_storage_endpoint_and_network_evidence(self, generated_output):
         """MetroLink's owned services render the representative evidence its release claims."""
@@ -154,7 +156,7 @@ class TestMediumDatasetGeneration:
         share = next(
             item for item in storage["shares"] if item["ref"] == "MLSC-FILE-01.care_operations"
         )
-        assert share["preset"] == "healthcare:clinical-department"
+        assert share["preset"] == "evidenceforge/healthcare:clinical-department"
         assert share["file_count"] > 0
 
         syslog = "\n".join(path.read_text(encoding="utf-8") for path in output.rglob("syslog.log"))

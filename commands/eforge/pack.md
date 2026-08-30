@@ -54,11 +54,15 @@ Start with machine-readable commands:
 
 ```bash
 eforge pack list --json
-eforge pack show <source:type:name@version> --json
+eforge pack show <source:publisher:type:name@version> --json
 ```
 
-Use exact references such as `package:industry:healthcare@1.0.0` and
-`project:organization:northstar-health@1.0.0`. A bare directory may be supplied only to commands
+`pack list` includes package, editable project, project-release, and user-release scopes by
+default. Immutable records report dehydrated/hydrated state and remain non-resolving. Preserve
+valid records when `issues` reports a corrupt immutable entry; the command exits nonzero.
+
+Use exact references such as `package:evidenceforge:industry:healthcare@1.0.0` and
+`project:evidenceforge:organization:northstar-health@1.0.0`. A bare directory may be supplied only to commands
 that explicitly accept a path. Never invent a latest version.
 
 For comparison:
@@ -76,6 +80,10 @@ Package packs are read-only. Never edit a location reported with `source: packag
 location as diagnostic metadata, not as the scenario-consumption interface.
 
 ## Create or fork safely
+
+First inspect `eforge pack publisher show --json`. Configure either the user default or project
+override with `eforge pack publisher set <id> --display-name <name> --scope user|project --json`.
+Project scope wins. There is no derived fallback, and replacement requires `--force`.
 
 Choose one operation:
 
@@ -97,11 +105,11 @@ For example:
 
 ```bash
 # New complete tailored identity.
-eforge pack copy package:industry:finance@1.0.0 \
+eforge pack copy package:evidenceforge:industry:finance@1.0.0 \
   --name regional-finance --version 1.0.0 --json
 
 # Compatible addition to that shared identity.
-eforge pack copy project:industry:regional-finance@1.0.0 \
+eforge pack copy project:evidenceforge:industry:regional-finance@1.0.0 \
   --name regional-finance --version 1.1.0 --json
 ```
 
@@ -116,8 +124,8 @@ eforge pack copy <exact-ref-or-path> --name <name> --version <version> --json
 ```
 
 Do not overwrite an existing destination, hand-copy a package pack, or construct a pack path from
-unchecked input. After copy, confirm that the returned identity and any rewritten self-references
-use the new name while dependency references remain unchanged.
+unchecked input. After copy, confirm that the returned publisher/name and rewritten typed
+self-references use the configured publisher namespace while dependency namespaces remain unchanged.
 
 Route the created skeleton or fork to the matching authoring skill rather than filling substantive
 catalogs here.
@@ -136,7 +144,7 @@ On failure:
 1. Preserve the complete JSON error and its field path.
 2. Confirm the requested source, type, name, and version.
 3. Check the fixed filenames and root keys.
-4. Check exact dependencies and qualified references.
+4. Check manifest constraints, one-to-one lock entries, and publisher-qualified references.
 5. Fix only the reported semantic problem; never weaken containment, schema, or collision checks.
 6. Re-run validation before continuing.
 

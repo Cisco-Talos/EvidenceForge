@@ -55,28 +55,31 @@ scenario_version: "2.0"
 composition:
   industries:
     - source: package
+      publisher: evidenceforge
       name: healthcare
       version: "1.0.0"
 ```
 
-Or select one organization, which brings its exactly pinned industry dependencies:
+Or select one organization, which brings its exact locked industry dependencies:
 
 ```yaml
 scenario_version: "2.0"
 composition:
   organization:
     source: project
+    publisher: example-publisher
     name: northstar-health
     version: "1.0.0"
 ```
 
 Direct industries and an organization are mutually exclusive. Every persisted reference requires
-an explicit `source`, `name`, and semantic `version`; there is no implicit latest version. Source
+an explicit `source`, `publisher`, `name`, and semantic `version`; there is no implicit latest version. Source
 is `package`, `project`, or `path`. A path reference additionally requires `path`:
 
 ```yaml
 - source: path
   path: ../packs/custom-healthcare
+  publisher: example-publisher
   name: custom-healthcare
   version: "1.0.0"
 ```
@@ -111,7 +114,7 @@ packs, organization pack, project config, then scenario-local fields.
 
 ## Inspect before authoring against exports
 
-Use an exact CLI reference such as `package:industry:healthcare@1.0.0`:
+Use an exact CLI reference such as `package:evidenceforge:industry:healthcare@1.0.0`:
 
 ```bash
 eforge pack list --json

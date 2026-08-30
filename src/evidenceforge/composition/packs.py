@@ -35,6 +35,7 @@ from .models import (
     BaselineActivityFragment,
     DestinationCatalogDocument,
     EnvironmentFragment,
+    LockedPack,
     PackLock,
     PackManifest,
     PackReference,
@@ -87,6 +88,34 @@ class PackTreeBudget:
 
 PACK_TREE_BUDGET = PackTreeBudget()
 
+
+def pack_namespace(publisher: str, name: str) -> str:
+    """Return the public namespace owned by one publisher-qualified pack."""
+
+    return f"{publisher}/{name}"
+
+
+def version_satisfies_constraint(version: str, constraint: str) -> bool:
+    """Return whether an exact stable SemVer satisfies a dependency constraint."""
+
+    candidate = _version_tuple(version)
+    for raw_clause in constraint.split(","):
+        match = re.fullmatch(r"(>=|<=|==|>|<)(\d+\.\d+\.\d+)", raw_clause.strip())
+        if match is None:
+            raise PackError(f"invalid version constraint {constraint!r}")
+        operator, raw_required = match.groups()
+        required = _version_tuple(raw_required)
+        if not {
+            ">=": candidate >= required,
+            "<=": candidate <= required,
+            "==": candidate == required,
+            ">": candidate > required,
+            "<": candidate < required,
+        }[operator]:
+            return False
+    return True
+
+
 CATALOG_FILES: tuple[tuple[str, str, type[BaseModel]], ...] = (
     ("persona_catalog", "catalogs/persona_catalog.yaml", PersonaCatalogDocument),
     ("process_catalog", "catalogs/process_catalog.yaml", ProcessCatalogDocument),
@@ -125,10 +154,12 @@ class LoadedPack:
         """Return portable identity metadata for compiled/resolved documents."""
 
         location = (
-            f"{self.source}:{self.manifest.type}:{self.manifest.name}@{self.manifest.version}"
+            f"{self.source}:{self.manifest.publisher}:{self.manifest.type}:"
+            f"{self.manifest.name}@{self.manifest.version}"
         )
         return SelectedPack(
             source=self.source,
+            publisher=self.manifest.publisher,
             type=self.manifest.type,
             name=self.manifest.name,
             version=self.manifest.version,
@@ -664,6 +695,14 @@ def _load_pack_document(
         raise
     except (ConfigurationError, FileNotFoundError, OSError, yaml.YAMLError) as exc:
         raise PackError(f"invalid {relative_path}: {exc}") from exc
+    if model is PackManifest and (
+        not isinstance(graph.data, dict) or graph.data.get("pack_schema_version") != "2.0"
+    ):
+        version = graph.data.get("pack_schema_version") if isinstance(graph.data, dict) else None
+        raise PackError(
+            f"unsupported pack_schema_version {version!r}; Pack Schema 2.0 is required "
+            "and Schema 1.0 must be converted manually"
+        )
     try:
         return model.model_validate(graph.data), graph
     except ValidationError as exc:
@@ -787,21 +826,33 @@ class PackRepository:
         pack_type: PackType,
         name: str,
         version: str,
+        publisher: str,
+        publisher_display_name: str,
         source_manifest: PackManifest | None = None,
     ) -> PackManifest:
         """Freshly validate an authoring identity before it participates in a path."""
 
         if source_manifest is None:
             document: dict[str, Any] = {
-                "pack_schema_version": "1.0",
+                "pack_schema_version": "2.0",
                 "type": pack_type,
+                "publisher": publisher,
+                "publisher_display_name": publisher_display_name,
                 "name": name,
                 "version": version,
                 "description": f"{name} {pack_type} pack",
             }
         else:
             document = source_manifest.model_dump(mode="json", exclude_none=True)
-            document.update({"type": pack_type, "name": name, "version": version})
+            document.update(
+                {
+                    "type": pack_type,
+                    "publisher": publisher,
+                    "publisher_display_name": publisher_display_name,
+                    "name": name,
+                    "version": version,
+                }
+            )
         try:
             return PackManifest.model_validate(document)
         except ValidationError as exc:
@@ -810,7 +861,7 @@ class PackRepository:
     def _authoring_paths(self, manifest: PackManifest) -> tuple[Path, Path, Path]:
         """Return a safe parent, destination, and new sibling staging directory."""
 
-        parent = self.project_pack_root / manifest.type / manifest.name
+        parent = self.project_pack_root / manifest.publisher / manifest.type / manifest.name
         parent = self._ensure_project_directory(parent)
         destination = parent / manifest.version
         self._assert_project_path_safe(destination)
@@ -866,6 +917,7 @@ class PackRepository:
 
         reference = PackReference(
             source="project",
+            publisher=manifest.publisher,
             name=manifest.name,
             version=manifest.version,
         )
@@ -880,14 +932,47 @@ class PackRepository:
     def validate_semantics(self, pack: LoadedPack) -> list[LoadedPack]:
         """Validate one pack together with its exact declared industry dependencies."""
 
-        dependencies = [
-            self.resolve(
-                dependency,
+        declared = {
+            (dependency.publisher, dependency.type, dependency.name): (index, dependency)
+            for index, dependency in enumerate(pack.manifest.industry_dependencies)
+        }
+        locked = {
+            (dependency.publisher, dependency.type, dependency.name): dependency
+            for dependency in pack.lock.dependencies
+        }
+        missing = sorted(set(declared) - set(locked))
+        extra = sorted(set(locked) - set(declared))
+        if missing or extra:
+            raise PackError(
+                "pack manifest/lock dependency mapping must be one-to-one; "
+                f"missing={missing}, extra={extra}"
+            )
+        dependencies: list[LoadedPack] = []
+        for identity, (index, dependency) in declared.items():
+            selected = locked[identity]
+            if not version_satisfies_constraint(selected.version, dependency.version_constraint):
+                raise PackError(
+                    f"locked dependency {selected.publisher}/{selected.name}@{selected.version} "
+                    f"does not satisfy {dependency.version_constraint}"
+                )
+            loaded = self.resolve(
+                PackReference(
+                    source=dependency.source,
+                    publisher=dependency.publisher,
+                    name=dependency.name,
+                    version=selected.version,
+                    path=dependency.path,
+                ),
                 expected_type="industry",
                 declaring_file=pack.industry_dependency_declaring_files[index],
             )
-            for index, dependency in enumerate(pack.manifest.industry_dependencies)
-        ]
+            if loaded.digest != selected.digest:
+                raise PackError(
+                    f"locked dependency digest mismatch for {selected.publisher}/"
+                    f"{selected.name}@{selected.version}: expected {selected.digest}, "
+                    f"found {loaded.digest}"
+                )
+            dependencies.append(loaded)
         validate_selected_pack_semantics(
             [*dependencies, pack],
             builtin_application_ids=packaged_builtin_application_ids(),
@@ -898,6 +983,94 @@ class PackRepository:
             builtin_storage_preset_ids=packaged_builtin_storage_preset_ids(),
         )
         return dependencies
+
+    def proposed_lock(self, pack: LoadedPack) -> PackLock:
+        """Select the highest exact stable release for every declared dependency."""
+
+        selected: list[LockedPack] = []
+        for index, dependency in enumerate(pack.manifest.industry_dependencies):
+            declaring_file = pack.industry_dependency_declaring_files[index]
+            candidates: list[LoadedPack] = []
+            if dependency.source == "path":
+                raw_path = Path(dependency.path or "")
+                root = raw_path if raw_path.is_absolute() else declaring_file.parent / raw_path
+                reference, pack_type = parse_pack_cli_reference(str(root))
+                if pack_type != "industry":
+                    raise PackError(f"path dependency is not an industry pack: {root}")
+                candidates = [
+                    self.resolve(
+                        reference,
+                        expected_type="industry",
+                        declaring_file=declaring_file,
+                    )
+                ]
+            else:
+                name_root = (
+                    self.root_for(dependency.source)
+                    / dependency.publisher
+                    / "industry"
+                    / dependency.name
+                )
+                if name_root.is_dir() and not name_root.is_symlink():
+                    for version_root in name_root.iterdir():
+                        if not version_root.is_dir() or version_root.is_symlink():
+                            continue
+                        try:
+                            reference = PackReference(
+                                source=dependency.source,
+                                publisher=dependency.publisher,
+                                name=dependency.name,
+                                version=version_root.name,
+                            )
+                        except ValidationError:
+                            continue
+                        candidates.append(self.resolve(reference, expected_type="industry"))
+            compatible = [
+                candidate
+                for candidate in candidates
+                if version_satisfies_constraint(
+                    candidate.manifest.version, dependency.version_constraint
+                )
+            ]
+            if not compatible:
+                raise PackError(
+                    f"no stable release satisfies {dependency.source}:"
+                    f"{dependency.publisher}:industry:{dependency.name} "
+                    f"{dependency.version_constraint}"
+                )
+            winner = max(
+                compatible, key=lambda candidate: _version_tuple(candidate.manifest.version)
+            )
+            selected.append(
+                LockedPack(
+                    publisher=winner.manifest.publisher,
+                    type=winner.manifest.type,
+                    name=winner.manifest.name,
+                    version=winner.manifest.version,
+                    digest=winner.digest,
+                )
+            )
+        return PackLock(dependencies=selected)
+
+    def update_lock(self, pack: LoadedPack, proposed: PackLock) -> None:
+        """Atomically replace only a mutable project pack's lock document."""
+
+        if pack.source != "project":
+            raise PackError("pack lock --apply requires an editable project pack")
+        self._assert_project_path_safe(pack.root)
+        path = pack.root / PACK_LOCK_FILENAME
+        content = yaml.safe_dump(proposed.model_dump(mode="json"), sort_keys=False).encode("utf-8")
+        descriptor, temporary = tempfile.mkstemp(prefix=".pack.lock.", dir=pack.root)
+        temporary_path = Path(temporary)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+        except OSError as exc:
+            temporary_path.unlink(missing_ok=True)
+            raise PackError(f"unable to update pack lock {path}: {exc}") from exc
 
     def root_for(self, source: PackSource) -> Path:
         """Return a package or project repository root."""
@@ -917,27 +1090,31 @@ class PackRepository:
             root = self.root_for(source)
             if not root.is_dir():
                 continue
-            for pack_type in ("industry", "organization"):
-                type_root = root / pack_type
-                if not type_root.is_dir():
+            for publisher_root in sorted(root.iterdir()):
+                if not publisher_root.is_dir() or publisher_root.is_symlink():
                     continue
-                for name_root in sorted(type_root.iterdir()):
-                    if not name_root.is_dir() or name_root.is_symlink():
+                for pack_type in ("industry", "organization"):
+                    type_root = publisher_root / pack_type
+                    if not type_root.is_dir():
                         continue
-                    for version_root in sorted(name_root.iterdir()):
-                        if not version_root.is_dir() or version_root.is_symlink():
+                    for name_root in sorted(type_root.iterdir()):
+                        if not name_root.is_dir() or name_root.is_symlink():
                             continue
-                        try:
-                            reference = PackReference(
-                                source=source,
-                                name=name_root.name,
-                                version=version_root.name,
-                            )
-                        except ValidationError as exc:
-                            raise PackError(
-                                f"invalid {source} pack directory identity: {version_root}"
-                            ) from exc
-                        packs.append(self.resolve(reference, expected_type=pack_type))
+                        for version_root in sorted(name_root.iterdir()):
+                            if not version_root.is_dir() or version_root.is_symlink():
+                                continue
+                            try:
+                                reference = PackReference(
+                                    source=source,
+                                    publisher=publisher_root.name,
+                                    name=name_root.name,
+                                    version=version_root.name,
+                                )
+                            except ValidationError as exc:
+                                raise PackError(
+                                    f"invalid {source} pack directory identity: {version_root}"
+                                ) from exc
+                            packs.append(self.resolve(reference, expected_type=pack_type))
         return packs
 
     def resolve(
@@ -964,7 +1141,11 @@ class PackRepository:
             root = unresolved_root.resolve()
         else:
             unresolved_root = (
-                self.root_for(reference.source) / expected_type / reference.name / reference.version
+                self.root_for(reference.source)
+                / reference.publisher
+                / expected_type
+                / reference.name
+                / reference.version
             )
             if reference.source == "project":
                 self._assert_project_path_safe(unresolved_root)
@@ -1018,15 +1199,21 @@ class PackRepository:
             raise PackError(
                 f"pack type mismatch: expected {expected_type}, manifest declares {manifest.type}"
             )
-        if manifest.name != reference.name or manifest.version != reference.version:
+        if (
+            manifest.publisher != reference.publisher
+            or manifest.name != reference.name
+            or manifest.version != reference.version
+        ):
             raise PackError(
                 "pack reference identity does not match manifest: "
-                f"requested {reference.name}@{reference.version}, found "
-                f"{manifest.name}@{manifest.version}"
+                f"requested {reference.publisher}/{reference.name}@{reference.version}, found "
+                f"{manifest.publisher}/{manifest.name}@{manifest.version}"
             )
         if source != "path":
-            expected_suffix = Path(expected_type) / manifest.name / manifest.version
-            if root.parts[-3:] != expected_suffix.parts:
+            expected_suffix = (
+                Path(manifest.publisher) / expected_type / manifest.name / manifest.version
+            )
+            if root.parts[-4:] != expected_suffix.parts:
                 raise PackError(f"pack directory identity does not match manifest: {root}")
         _check_requires_evidenceforge(manifest.requires_evidenceforge)
 
@@ -1062,15 +1249,16 @@ class PackRepository:
             )
             raw_entries = document.model_dump(mode="json")[catalog_name]
             qualified_entries: dict[str, Any] = {}
+            namespace = pack_namespace(manifest.publisher, manifest.name)
             for entry_name, entry in raw_entries.items():
-                qualified_name = f"{manifest.name}:{entry_name}"
+                qualified_name = f"{namespace}:{entry_name}"
                 qualified_entry = copy.deepcopy(entry)
                 if catalog_name == "persona_catalog":
                     qualified_entry["name"] = qualified_name
                 elif catalog_name == "traffic_catalog":
                     audience = qualified_entry["data"].get("audience", [])
                     qualified_entry["data"]["audience"] = [
-                        name if ":" in name else f"{manifest.name}:{name}" for name in audience
+                        name if ":" in name else f"{namespace}:{name}" for name in audience
                     ]
                 qualified_entries[qualified_name] = qualified_entry
             catalogs[catalog_name] = qualified_entries
@@ -1087,7 +1275,7 @@ class PackRepository:
                     document_graph,
                     root=root,
                     catalog_name=catalog_name,
-                    owner=manifest.name,
+                    owner=namespace,
                 )
             )
 
@@ -1112,7 +1300,7 @@ class PackRepository:
             builtin_personas = packaged_builtin_persona_ids()
             _qualify_organization_environment_references(
                 environment,
-                manifest.name,
+                pack_namespace(manifest.publisher, manifest.name),
                 local_persona_exports=set(catalogs["persona_catalog"]),
                 local_storage_exports=set(catalogs["storage_catalog"]),
                 builtin_persona_ids=builtin_personas,
@@ -1120,7 +1308,7 @@ class PackRepository:
             )
             _qualify_organization_baseline_references(
                 baseline_activity,
-                manifest.name,
+                pack_namespace(manifest.publisher, manifest.name),
                 local_persona_exports=set(catalogs["persona_catalog"]),
                 builtin_persona_ids=builtin_personas,
             )
@@ -1232,20 +1420,30 @@ class PackRepository:
             raise PackError(
                 f"packaged pack digest index must contain a 'packs' mapping: {index_path}"
             )
-        key = f"{manifest.type}/{manifest.name}/{manifest.version}"
+        key = f"{manifest.publisher}/{manifest.type}/{manifest.name}/{manifest.version}"
         expected = data["packs"].get(key)
         if expected is None:
             raise PackError(f"packaged pack {key} is missing from the digest index")
         if expected != digest:
             raise PackError(f"packaged pack digest mismatch for {key}")
 
-    def create_skeleton(self, pack_type: PackType, name: str, version: str) -> Path:
+    def create_skeleton(
+        self,
+        pack_type: PackType,
+        name: str,
+        version: str,
+        *,
+        publisher: str,
+        publisher_display_name: str,
+    ) -> Path:
         """Create a complete project-local pack skeleton without overwriting."""
 
         manifest = self._validated_authoring_manifest(
             pack_type=pack_type,
             name=name,
             version=version,
+            publisher=publisher,
+            publisher_display_name=publisher_display_name,
         )
         _parent, destination, staging = self._authoring_paths(manifest)
         published = False
@@ -1278,6 +1476,7 @@ class PackRepository:
                 reference=PackReference(
                     source="path",
                     path=str(staging),
+                    publisher=manifest.publisher,
                     name=manifest.name,
                     version=manifest.version,
                 ),
@@ -1409,6 +1608,8 @@ class PackRepository:
         *,
         name: str,
         version: str,
+        publisher: str,
+        publisher_display_name: str,
     ) -> Path:
         """Copy one validated pack into the project repository with a new identity."""
 
@@ -1416,6 +1617,8 @@ class PackRepository:
             pack_type=source_pack.manifest.type,
             name=name,
             version=version,
+            publisher=publisher,
+            publisher_display_name=publisher_display_name,
             source_manifest=source_pack.manifest,
         )
         _parent, destination, staging = self._authoring_paths(manifest)
@@ -1425,7 +1628,7 @@ class PackRepository:
             destination=destination,
         )
         copied_from = (
-            f"{source_pack.source}:{source_pack.manifest.type}:"
+            f"{source_pack.source}:{source_pack.manifest.publisher}:{source_pack.manifest.type}:"
             f"{source_pack.manifest.name}@{source_pack.manifest.version}"
         )
         source_location = str(source_pack.root) if source_pack.source == "path" else copied_from
@@ -1434,8 +1637,8 @@ class PackRepository:
             self._copy_pack_tree(
                 source_pack,
                 staging,
-                old_name=source_pack.manifest.name,
-                new_name=manifest.name,
+                old_name=pack_namespace(source_pack.manifest.publisher, source_pack.manifest.name),
+                new_name=pack_namespace(manifest.publisher, manifest.name),
             )
             _write_new_file_no_follow(
                 staging / PACK_MANIFEST_FILENAME,
@@ -1460,6 +1663,7 @@ class PackRepository:
                 reference=PackReference(
                     source="path",
                     path=str(staging),
+                    publisher=manifest.publisher,
                     name=manifest.name,
                     version=manifest.version,
                 ),
@@ -1481,20 +1685,30 @@ class PackRepository:
 
 
 def parse_pack_cli_reference(value: str) -> tuple[PackReference, PackType | None]:
-    """Parse ``source:type:name@version`` or return a path reference candidate."""
+    """Parse ``source:publisher:type:name@version`` or a path reference."""
 
     match = re.fullmatch(
-        r"(package|project):(industry|organization):([a-z0-9][a-z0-9-]*)@(\d+\.\d+\.\d+)",
+        r"(package|project):([a-z0-9][a-z0-9.-]*):(industry|organization):"
+        r"([a-z0-9][a-z0-9-]*)@(\d+\.\d+\.\d+)",
         value,
     )
     if match:
-        source, pack_type, name, version = match.groups()
-        return PackReference(source=source, name=name, version=version), pack_type  # type: ignore[arg-type]
+        source, publisher, pack_type, name, version = match.groups()
+        return (
+            PackReference(
+                source=source,
+                publisher=publisher,
+                name=name,
+                version=version,
+            ),
+            pack_type,  # type: ignore[return-value]
+        )
     path = Path(value)
     manifest_path = path / PACK_MANIFEST_FILENAME if path.is_dir() else path
     if manifest_path.name != PACK_MANIFEST_FILENAME or not manifest_path.is_file():
         raise PackError(
-            "pack reference must be source:type:name@version or a pack directory/path to pack.yaml"
+            "pack reference must be source:publisher:type:name@version or a pack "
+            "directory/path to pack.yaml"
         )
     if any(component.is_symlink() for component in (manifest_path, *manifest_path.parents)):
         raise PackError(f"pack manifest path cannot contain a symlink: {manifest_path}")
@@ -1514,6 +1728,7 @@ def parse_pack_cli_reference(value: str) -> tuple[PackReference, PackType | None
         PackReference(
             source="path",
             path=str(root),
+            publisher=manifest.publisher,
             name=manifest.name,
             version=manifest.version,
         ),

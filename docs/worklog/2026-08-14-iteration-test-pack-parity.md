@@ -5,7 +5,7 @@
 Investigate the apparent data-volume reduction after extracting the canonical
 `iteration-test` assessment scenario into
 `project:organization:meridian-healthcare-solutions@1.0.0` with the exact
-`package:industry:technology@1.0.0` dependency.
+`package:evidenceforge:industry:technology@1.0.0` dependency.
 
 ## Decisive Result
 

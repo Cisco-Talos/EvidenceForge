@@ -42,6 +42,42 @@ from evidenceforge.utils.assets import load_email_corpus_yaml
 
 pytestmark = pytest.mark.slow
 
+
+def _create_pack(
+    repository: PackRepository,
+    pack_type: str,
+    name: str,
+    version: str,
+) -> Path:
+    """Create a test pack under one explicit publisher identity."""
+
+    return repository.create_skeleton(
+        pack_type,  # type: ignore[arg-type]
+        name,
+        version,
+        publisher="test-publisher",
+        publisher_display_name="Test Publisher",
+    )
+
+
+def _copy_pack(
+    repository: PackRepository,
+    source: object,
+    *,
+    name: str,
+    version: str,
+) -> Path:
+    """Copy a test pack under one explicit publisher identity."""
+
+    return repository.copy(
+        source,  # type: ignore[arg-type]
+        name=name,
+        version=version,
+        publisher="test-publisher",
+        publisher_display_name="Test Publisher",
+    )
+
+
 _MINIMAL = Path("tests/fixtures/scenarios/minimal.yaml")
 _FINANCE = Path("tests/fixtures/scenarios/finance-industry-pack.yaml")
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")
@@ -133,8 +169,8 @@ def test_iteration_pack_migration_preserves_assessment_semantics() -> None:
         ),
     }
     assert {pack.location for pack in packed.selected_packs} == {
-        "package:industry:technology@1.0.0",
-        "project:organization:meridian-healthcare-solutions@1.0.0",
+        "package:evidenceforge:industry:technology@1.0.0",
+        "project:evidenceforge:organization:meridian-healthcare-solutions@1.0.0",
     }
     assert packed.provenance["organization_model_origins"]["environment.domain"] == (
         "model/environment.yaml"
@@ -143,14 +179,16 @@ def test_iteration_pack_migration_preserves_assessment_semantics() -> None:
         "model/baseline_activity.yaml"
     )
     assert (
-        packed.provenance["catalog_origins"]["persona_catalog.technology:platform_engineer"]
-        == "technology@1.0.0"
+        packed.provenance["catalog_origins"][
+            "persona_catalog.evidenceforge/technology:platform_engineer"
+        ]
+        == "evidenceforge/technology@1.0.0"
     )
 
     archived_personas = {persona.name for persona in archived.scenario.personas}
     packed_personas = {persona.name for persona in packed.scenario.personas}
     assigned_personas = {user.persona for user in packed.scenario.environment.users}
-    assert packed_personas - archived_personas == {"technology:platform_engineer"}
+    assert packed_personas - archived_personas == {"evidenceforge/technology:platform_engineer"}
     assert (packed_personas - archived_personas).isdisjoint(assigned_personas)
     assert all(
         assigned_personas.isdisjoint(traffic["data"]["audience"])
@@ -174,22 +212,22 @@ def test_organization_pack_brings_exact_industry_and_environment() -> None:
     assert compiled.scenario.environment.email is not None
     assert compiled.scenario.environment.storage.servers[0].system == "NSH-FILE-01"
     assert {user.persona for user in compiled.scenario.environment.users} == {
-        "healthcare:clinical_coordinator",
-        "northstar-health:northstar_it",
+        "evidenceforge/healthcare:clinical_coordinator",
+        "evidenceforge/northstar-health:northstar_it",
     }
     assert (
         compiled.scenario.environment.storage.servers[0].shares[0].preset
-        == "healthcare:clinical-department"
+        == "evidenceforge/healthcare:clinical-department"
     )
     with effective_config_scope(compiled.effective_config):
-        assert "healthcare:clinical-department" in _load_catalog_config()["profiles"]
+        assert "evidenceforge/healthcare:clinical-department" in _load_catalog_config()["profiles"]
         assert any(
             entry["domain"] == "claims.healthcare.example"
             for entry in load_dns_registry()["domains"]
         )
-        assert load_traffic_profiles()["pack_persona_traffic"]["healthcare:clinical_coordinator"][
-            "healthcare:clinical-shift"
-        ]["outbound"]
+        assert load_traffic_profiles()["pack_persona_traffic"][
+            "evidenceforge/healthcare:clinical_coordinator"
+        ]["evidenceforge/healthcare:clinical-shift"]["outbound"]
 
     with effective_config_scope(compiled.effective_config):
         world = StorageWorldModel.compile(compiled.scenario)
@@ -217,7 +255,7 @@ def test_northstar_linux_pack_compiles_cross_platform_storage() -> None:
     }
     assert all(share.system != "NSH-MAIL-01" for share in world.shares)
     samba = world.share("NSH-SAMBA-01.clinical_archive")
-    assert samba.preset == "healthcare:clinical-department"
+    assert samba.preset == "evidenceforge/healthcare:clinical-department"
     assert samba.smb_native_filesystem == "NTFS"
     assert world.server_local_path(samba, "Policies\\care-plan.docx") == (
         "/srv/samba/Departments/ClinicalArchive/Policies/care-plan.docx"
@@ -242,9 +280,9 @@ def test_northstar_linux_pack_compiles_cross_platform_storage() -> None:
 @pytest.mark.parametrize(
     ("industry", "preset"),
     [
-        ("finance", "finance:finance-department"),
-        ("healthcare", "healthcare:clinical-department"),
-        ("technology", "technology:engineering-share"),
+        ("finance", "evidenceforge/finance:finance-department"),
+        ("healthcare", "evidenceforge/healthcare:clinical-department"),
+        ("technology", "evidenceforge/technology:engineering-share"),
     ],
 )
 def test_industry_storage_presets_compile_unchanged_on_samba(
@@ -258,7 +296,14 @@ def test_industry_storage_presets_compile_unchanged_on_samba(
     raw.pop("version", None)
     raw["scenario_version"] = "2.0"
     raw["composition"] = {
-        "industries": [{"source": "package", "name": industry, "version": "1.0.0"}]
+        "industries": [
+            {
+                "source": "package",
+                "publisher": "evidenceforge",
+                "name": industry,
+                "version": "1.0.0",
+            }
+        ]
     }
     raw["environment"]["domain"] = "example.test"
     raw["environment"]["systems"].append(
@@ -312,7 +357,14 @@ def test_industry_storage_preset_compiles_for_an_ordinary_host_file_set(
     raw.pop("version", None)
     raw["scenario_version"] = "2.0"
     raw["composition"] = {
-        "industries": [{"source": "package", "name": "finance", "version": "1.0.0"}]
+        "industries": [
+            {
+                "source": "package",
+                "publisher": "evidenceforge",
+                "name": "finance",
+                "version": "1.0.0",
+            }
+        ]
     }
     raw["environment"]["storage"] = {
         "file_sets": [
@@ -320,7 +372,7 @@ def test_industry_storage_preset_compiles_for_an_ordinary_host_file_set(
                 "id": "analyst-finance-files",
                 "system": "TEST-01",
                 "root": r"C:\Users\test_user",
-                "preset": "finance:finance-department",
+                "preset": "evidenceforge/finance:finance-department",
                 "population": "small",
             }
         ]
@@ -332,7 +384,7 @@ def test_industry_storage_preset_compiles_for_an_ordinary_host_file_set(
         world = StorageWorldModel.compile(compiled.scenario)
 
     file_set = world.file_set("analyst-finance-files")
-    assert file_set.preset == "finance:finance-department"
+    assert file_set.preset == "evidenceforge/finance:finance-department"
     assert file_set.files
     assert not any(share.system == "TEST-01" for share in world.shares)
 
@@ -348,6 +400,7 @@ def test_all_packaged_samples_have_the_fixed_catalog_contract() -> None:
         "healthcare",
         "technology",
         "northstar-health",
+        "metrolink-specialty-care",
     }
     expected_catalogs = {name for name, _path, _model in CATALOG_FILES}
     assert all(set(pack.catalogs) == expected_catalogs for pack in packs)
@@ -360,7 +413,7 @@ def test_direct_industry_sample_compiles_with_qualified_catalog_references() -> 
 
     assert [pack.name for pack in compiled.selected_packs] == ["finance"]
     assert {user.persona for user in compiled.scenario.environment.users} == {
-        "finance:finance_operations"
+        "evidenceforge/finance:finance_operations"
     }
 
 
@@ -371,9 +424,17 @@ def test_v2_rejects_mixed_industry_and_organization_modes(tmp_path: Path) -> Non
     raw.pop("version", None)
     raw["scenario_version"] = "2.0"
     raw["composition"] = {
-        "industries": [{"source": "package", "name": "finance", "version": "1.0.0"}],
+        "industries": [
+            {
+                "source": "package",
+                "publisher": "evidenceforge",
+                "name": "finance",
+                "version": "1.0.0",
+            }
+        ],
         "organization": {
             "source": "package",
+            "publisher": "evidenceforge",
             "name": "northstar-health",
             "version": "1.0.0",
         },
@@ -384,14 +445,15 @@ def test_v2_rejects_mixed_industry_and_organization_modes(tmp_path: Path) -> Non
         compile_scenario(path)
 
 
-def test_peer_industry_namespace_collision_is_not_order_resolved(tmp_path: Path) -> None:
-    """Two sources exporting one qualified identity fail instead of using list order."""
+def test_peer_industry_publishers_keep_same_named_packs_distinct(tmp_path: Path) -> None:
+    """Publisher qualification keeps same-named packs in distinct public namespaces."""
 
     repository = PackRepository(tmp_path)
-    root = repository.create_skeleton("industry", "healthcare", "1.0.0")
+    root = _create_pack(repository, "industry", "healthcare", "1.0.0")
     packaged_persona = load_yaml(
         Path(
-            "src/evidenceforge/config/packs/industry/healthcare/1.0.0/catalogs/persona_catalog.yaml"
+            "src/evidenceforge/config/packs/evidenceforge/industry/healthcare/1.0.0/"
+            "catalogs/persona_catalog.yaml"
         )
     )
     _write_yaml(root / "catalogs" / "persona_catalog.yaml", packaged_persona)
@@ -400,14 +462,27 @@ def test_peer_industry_namespace_collision_is_not_order_resolved(tmp_path: Path)
     raw["scenario_version"] = "2.0"
     raw["composition"] = {
         "industries": [
-            {"source": "package", "name": "healthcare", "version": "1.0.0"},
-            {"source": "project", "name": "healthcare", "version": "1.0.0"},
+            {
+                "source": "package",
+                "publisher": "evidenceforge",
+                "name": "healthcare",
+                "version": "1.0.0",
+            },
+            {
+                "source": "project",
+                "publisher": "test-publisher",
+                "name": "healthcare",
+                "version": "1.0.0",
+            },
         ]
     }
     path = _write_yaml(tmp_path / "scenario.yaml", raw)
 
-    with pytest.raises(PackError, match="share namespace 'healthcare'.*different exact identities"):
-        compile_scenario(path, project_root=tmp_path)
+    compiled = compile_scenario(path, project_root=tmp_path)
+    assert {pack.publisher for pack in compiled.selected_packs} == {
+        "evidenceforge",
+        "test-publisher",
+    }
 
 
 def test_project_overlay_precedes_pack_adapter(tmp_path: Path) -> None:
@@ -436,8 +511,8 @@ def test_project_overlay_precedes_pack_adapter(tmp_path: Path) -> None:
         traffic = load_traffic_profiles()["pack_persona_traffic"]
         application_connection = next(
             connection
-            for connection in traffic["healthcare:clinical_coordinator"][
-                "healthcare:clinical-shift"
+            for connection in traffic["evidenceforge/healthcare:clinical_coordinator"][
+                "evidenceforge/healthcare:clinical-shift"
             ]["outbound"]
             if connection.get("pack_application")
         )
@@ -463,13 +538,13 @@ def test_pack_init_creates_complete_non_overwriting_skeleton(tmp_path: Path) -> 
     """Pack init creates every fixed section and refuses an existing destination."""
 
     repository = PackRepository(tmp_path)
-    destination = repository.create_skeleton("organization", "example-org", "1.2.3")
+    destination = _create_pack(repository, "organization", "example-org", "1.2.3")
 
     assert all((destination / relative_path).is_file() for _, relative_path, _ in CATALOG_FILES)
     assert (destination / "model/environment.yaml").is_file()
     assert (destination / "model/baseline_activity.yaml").is_file()
     with pytest.raises(Exception, match="already exists"):
-        repository.create_skeleton("organization", "example-org", "1.2.3")
+        _create_pack(repository, "organization", "example-org", "1.2.3")
 
 
 def test_effective_config_scopes_do_not_leak_sequentially_or_concurrently() -> None:
@@ -551,7 +626,7 @@ def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) ->
     """A contained include is accepted as pack content rather than rejected as an orphan."""
 
     repository = PackRepository(tmp_path)
-    root = repository.create_skeleton("industry", "included", "1.0.0")
+    root = _create_pack(repository, "industry", "included", "1.0.0")
     _write_yaml(root / "catalogs" / "storage_catalog.yaml", {"includes": ["storage.yaml"]})
     _write_yaml(
         root / "catalogs" / "storage.yaml",
@@ -570,11 +645,13 @@ def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) ->
     )
 
     pack = repository.resolve(
-        reference=PackReference(source="project", name="included", version="1.0.0"),
+        reference=PackReference(
+            source="project", publisher="test-publisher", name="included", version="1.0.0"
+        ),
         expected_type="industry",
     )
 
-    assert "included:records" in pack.catalogs["storage_catalog"]
+    assert "test-publisher/included:records" in pack.catalogs["storage_catalog"]
     assert "catalogs/storage.yaml" in pack.assets
 
     scenario_document = load_yaml(_MINIMAL)
@@ -584,6 +661,7 @@ def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) ->
         "industries": [
             {
                 "source": "project",
+                "publisher": "test-publisher",
                 "name": "included",
                 "version": "1.0.0",
             }
@@ -594,7 +672,7 @@ def test_pack_internal_include_is_semantic_and_digest_tracked(tmp_path: Path) ->
 
     assert (
         compiled.provenance["catalog_field_origins"][
-            "storage_catalog.included:records.data.files.0.mime"
+            "storage_catalog.test-publisher/included:records.data.files.0.mime"
         ]
         == "catalogs/storage.yaml"
     )
@@ -605,10 +683,12 @@ def test_organization_model_origins_retain_included_pack_paths(tmp_path: Path) -
 
     repository = PackRepository(tmp_path)
     packaged = repository.resolve(
-        PackReference(source="package", name="northstar-health", version="1.0.0"),
+        PackReference(
+            source="package", publisher="evidenceforge", name="northstar-health", version="1.0.0"
+        ),
         expected_type="organization",
     )
-    root = repository.copy(packaged, name="included-northstar", version="1.0.0")
+    root = _copy_pack(repository, packaged, name="included-northstar", version="1.0.0")
     fragments = root / "model" / "fragments"
     fragments.mkdir()
 
@@ -632,6 +712,7 @@ def test_organization_model_origins_retain_included_pack_paths(tmp_path: Path) -
     scenario_document = load_yaml(_NORTHSTAR)
     scenario_document["composition"]["organization"] = {
         "source": "project",
+        "publisher": "test-publisher",
         "name": "included-northstar",
         "version": "1.0.0",
     }
@@ -651,12 +732,14 @@ def test_pack_rejects_unconstrained_assets(tmp_path: Path) -> None:
     """Data-only packs cannot smuggle arbitrary files or executable hooks."""
 
     repository = PackRepository(tmp_path)
-    root = repository.create_skeleton("industry", "unsafe", "1.0.0")
+    root = _create_pack(repository, "industry", "unsafe", "1.0.0")
     (root / "hook.py").write_text("raise SystemExit\n", encoding="utf-8")
 
     with pytest.raises(PackError, match="forbidden unconstrained asset"):
         repository.resolve(
-            PackReference(source="project", name="unsafe", version="1.0.0"),
+            PackReference(
+                source="project", publisher="test-publisher", name="unsafe", version="1.0.0"
+            ),
             expected_type="industry",
         )
 
@@ -665,7 +748,7 @@ def test_path_pack_reference_uses_declaring_include_origin(monkeypatch, tmp_path
     """A path pack in an include is independent of both root YAML location and CWD."""
 
     repository = PackRepository(tmp_path)
-    pack_root = repository.create_skeleton("industry", "local-industry", "1.0.0")
+    pack_root = _create_pack(repository, "industry", "local-industry", "1.0.0")
     fragments = tmp_path / "fragments"
     fragments.mkdir()
     _write_yaml(
@@ -675,7 +758,8 @@ def test_path_pack_reference_uses_declaring_include_origin(monkeypatch, tmp_path
                 "industries": [
                     {
                         "source": "path",
-                        "path": "../.eforge/packs/industry/local-industry/1.0.0",
+                        "path": ("../.eforge/packs/test-publisher/industry/local-industry/1.0.0"),
+                        "publisher": "test-publisher",
                         "name": "local-industry",
                         "version": "1.0.0",
                     }

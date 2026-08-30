@@ -93,12 +93,28 @@ def test_no_flag_cli_commands_use_only_current_working_directory(
     parent = tmp_path / "project"
     child = parent / "empty-work"
     child.mkdir(parents=True)
+    configured = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "evidenceforge",
+            "--display-name",
+            "EvidenceForge Test",
+            "--scope",
+            "project",
+            "--project-root",
+            str(parent),
+        ],
+    )
+    assert configured.exit_code == 0, configured.stdout
     copied = runner.invoke(
         app,
         [
             "pack",
             "copy",
-            "package:organization:northstar-health@1.0.0",
+            "package:evidenceforge:organization:northstar-health@1.0.0",
             "--name",
             "parent-only-org",
             "--version",
@@ -136,12 +152,28 @@ def test_project_pack_requires_explicit_override_when_scenario_is_elsewhere(
     working_directory = tmp_path / "work"
     project.mkdir()
     working_directory.mkdir()
+    configured = runner.invoke(
+        app,
+        [
+            "pack",
+            "publisher",
+            "set",
+            "evidenceforge",
+            "--display-name",
+            "EvidenceForge Test",
+            "--scope",
+            "project",
+            "--project-root",
+            str(project),
+        ],
+    )
+    assert configured.exit_code == 0, configured.stdout
     copied = runner.invoke(
         app,
         [
             "pack",
             "copy",
-            "package:organization:northstar-health@1.0.0",
+            "package:evidenceforge:organization:northstar-health@1.0.0",
             "--name",
             "explicit-org",
             "--version",

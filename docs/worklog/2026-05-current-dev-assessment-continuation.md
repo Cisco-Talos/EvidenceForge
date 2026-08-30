@@ -1871,7 +1871,7 @@ historical generated evidence itself was not rewritten.
 Future assessment runs use the Scenario 2.0 wrapper at `scenarios/iteration-test/scenario.yaml`.
 It selects exact project organization pack
 `project:organization:meridian-healthcare-solutions@1.0.0`, which pins
-`package:industry:technology@1.0.0`. The organization pack owns reusable Meridian environment and
+`package:evidenceforge:industry:technology@1.0.0`. The organization pack owns reusable Meridian environment and
 baseline configuration. The scenario continues to own the attack narrative, red herrings,
 assessment-only external identities, output selection, and email corpus.
 Pack validation and both scenario validations pass with the pre-existing advisories. The resolved

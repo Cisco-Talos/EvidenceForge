@@ -446,10 +446,13 @@ def _merge_catalogs(
                     raise PackError(
                         f"peer industry pack collision at {origin_key}: "
                         f"{origins[origin_key]} and "
-                        f"{pack.manifest.name}@{pack.manifest.version}"
+                        f"{pack.manifest.publisher}/{pack.manifest.name}@"
+                        f"{pack.manifest.version}"
                     )
                 catalogs[catalog_name][name] = copy.deepcopy(value)
-                origins[origin_key] = f"{pack.manifest.name}@{pack.manifest.version}"
+                origins[origin_key] = (
+                    f"{pack.manifest.publisher}/{pack.manifest.name}@{pack.manifest.version}"
+                )
     return catalogs, origins
 
 
@@ -502,14 +505,7 @@ def _resolve_composition(
         expected_type="organization",
         declaring_file=organization_declaring_file,
     )
-    for index, dependency in enumerate(organization.manifest.industry_dependencies):
-        selected.append(
-            repository.resolve(
-                dependency,
-                expected_type="industry",
-                declaring_file=organization.industry_dependency_declaring_files[index],
-            )
-        )
+    selected.extend(repository.validate_semantics(organization))
     selected.append(organization)
     return selected, len(selected) - 1
 
@@ -689,7 +685,7 @@ def compile_scenario(
     for pack in selected:
         for relative_path, content in pack.assets.items():
             assets[
-                f"packs/{pack.manifest.type}/{pack.manifest.name}/"
+                f"packs/{pack.manifest.publisher}/{pack.manifest.type}/{pack.manifest.name}/"
                 f"{pack.manifest.version}/{relative_path}"
             ] = content
 

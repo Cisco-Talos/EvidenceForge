@@ -268,7 +268,7 @@ class PackReference(BaseModel):
     """An exact, persisted reference to one whole pack."""
 
     source: PackSource
-    publisher: str = Field(default="evidenceforge", pattern=PUBLISHER_ID_PATTERN)
+    publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     version: str = Field(pattern=SEMVER_PATTERN)
     path: str | None = None
@@ -286,14 +286,29 @@ class PackReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class IndustryDependency(PackReference):
-    """An organization pack's exact industry dependency."""
+class IndustryDependency(BaseModel):
+    """An organization pack's publisher-qualified industry dependency constraint."""
 
+    source: PackSource
+    publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
     type: Literal["industry"] = "industry"
-    version_constraint: str | None = Field(
-        default=None,
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version_constraint: str = Field(
         pattern=r"^(?:[<>=]{1,2}\d+\.\d+\.\d+)(?:\s*,\s*[<>=]{1,2}\d+\.\d+\.\d+)*$",
     )
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source_path(self) -> IndustryDependency:
+        """Require a path only for an explicit path dependency."""
+
+        if self.source == "path" and not self.path:
+            raise ValueError("path pack dependency requires 'path'")
+        if self.source != "path" and self.path is not None:
+            raise ValueError("only source: path may define 'path'")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class LockedPack(BaseModel):
@@ -317,11 +332,11 @@ class PackLock(BaseModel):
     @model_validator(mode="after")
     def validate_unique_dependencies(self) -> PackLock:
         identities = [
-            (dependency.publisher, dependency.type, dependency.name, dependency.version)
+            (dependency.publisher, dependency.type, dependency.name)
             for dependency in self.dependencies
         ]
         if len(identities) != len(set(identities)):
-            raise ValueError("dependencies contains duplicate locked releases")
+            raise ValueError("dependencies contains duplicate dependency identities")
         return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -339,7 +354,9 @@ class CompositionSpec(BaseModel):
 
         if self.industries and self.organization is not None:
             raise ValueError("composition may define industries or organization, not both")
-        identities = [(ref.source, ref.name, ref.version, ref.path) for ref in self.industries]
+        identities = [
+            (ref.source, ref.publisher, ref.name, ref.version, ref.path) for ref in self.industries
+        ]
         if len(identities) != len(set(identities)):
             raise ValueError("composition.industries contains a duplicate exact reference")
         return self
@@ -350,10 +367,10 @@ class CompositionSpec(BaseModel):
 class PackManifest(BaseModel):
     """Stable manifest shared by industry and organization packs."""
 
-    pack_schema_version: Literal["1.0", "2.0"]
+    pack_schema_version: Literal["2.0"]
     type: PackType
-    publisher: str = Field(default="evidenceforge", pattern=PUBLISHER_ID_PATTERN)
-    publisher_display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
+    publisher_display_name: str = Field(min_length=1, max_length=120)
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     version: str = Field(pattern=SEMVER_PATTERN)
     requires_evidenceforge: str = Field(default=">=2.0.0,<3.0.0")
@@ -371,7 +388,7 @@ class PackManifest(BaseModel):
             (
                 dependency.publisher,
                 dependency.name,
-                dependency.version_constraint or dependency.version,
+                dependency.version_constraint,
             )
             for dependency in self.industry_dependencies
         ]
@@ -1285,6 +1302,7 @@ class SelectedPack(BaseModel):
     """Resolved pack identity and integrity metadata."""
 
     source: PackSource
+    publisher: str
     type: PackType
     name: str
     version: str

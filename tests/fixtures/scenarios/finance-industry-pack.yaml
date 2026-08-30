@@ -2,6 +2,7 @@ scenario_version: "2.0"
 composition:
   industries:
     - source: package
+      publisher: evidenceforge
       name: finance
       version: "1.0.0"
 name: finance-industry-baseline
@@ -18,7 +19,7 @@ environment:
     - username: jordan.lee
       full_name: "Jordan Lee"
       email: jordan.lee@finance.example
-      persona: finance:finance_operations
+      persona: evidenceforge/finance:finance_operations
       primary_system: FIN-OPS-01
   systems:
     - hostname: FIN-OPS-01
