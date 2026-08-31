@@ -258,10 +258,11 @@ class SourceClockRegistry:
             with self._lock:
                 self._lookup_count += 1
                 self._mutation_version += 1
-                if cached is not None:
+                current = self._states.get(cache_key) if self._max_cache_entries else None
+                if current is not None:
                     self._cache_hit_count += 1
                     self._states.move_to_end(cache_key)
-                    return cached
+                    return current
                 self._cache_miss_count += 1
                 if self._max_cache_entries:
                     self._states[cache_key] = state
