@@ -204,6 +204,19 @@ class SourceTimingPlan:
     finalized_times: dict[str, datetime] = field(default_factory=dict)
     finalized_flags: dict[str, bool] = field(default_factory=dict)
 
+    def _clone(self) -> SourceTimingPlan:
+        """Copy one trusted plan without recursive generic object traversal."""
+
+        return SourceTimingPlan(
+            canonical_timestamp=self.canonical_timestamp,
+            clock_profile_name=self.clock_profile_name,
+            compatibility_mode=self.compatibility_mode,
+            observation_delays=self.observation_delays.copy(),
+            source_times=self.source_times.copy(),
+            finalized_times=self.finalized_times.copy(),
+            finalized_flags=self.finalized_flags.copy(),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SourceTimingIndexCensus:

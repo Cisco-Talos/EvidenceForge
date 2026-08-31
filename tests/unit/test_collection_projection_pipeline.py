@@ -32,7 +32,7 @@ from evidenceforge.generation.collection_deployment import (
 )
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
-from evidenceforge.generation.source_timing import ecar_flow_render_key
+from evidenceforge.generation.source_timing import SourceTimingPlan, ecar_flow_render_key
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import NetworkConfig, NetworkSegment, NetworkSensor, System
 from tests.network_factories import network_plan
@@ -249,7 +249,26 @@ def test_ecar_endpoint_targets_receive_isolated_finalized_plans() -> None:
         collection_deployment=deployment,
     )
 
-    dispatcher.dispatch_builder(_connection(src, dst))
+    canonical_plan = SourceTimingPlan(
+        canonical_timestamp=_TIME,
+        observation_delays={"canonical.delay": timedelta(milliseconds=3)},
+        source_times={"canonical.source": _TIME + timedelta(milliseconds=4)},
+        finalized_times={"canonical.finalized": _TIME + timedelta(milliseconds=5)},
+        finalized_flags={"canonical.flag": True},
+    )
+    builder = _connection(src, dst)
+    builder.source_timing = canonical_plan
+    canonical_dicts = {
+        field_name: dict(getattr(canonical_plan, field_name))
+        for field_name in (
+            "observation_delays",
+            "source_times",
+            "finalized_times",
+            "finalized_flags",
+        )
+    }
+
+    dispatcher.dispatch_builder(builder)
 
     projected = [call.args[0] for call in emitter.emit.call_args_list]
     assert len(projected) == 2
@@ -267,6 +286,19 @@ def test_ecar_endpoint_targets_receive_isolated_finalized_plans() -> None:
             for candidate in event.source_timing.finalized_times
             if candidate.startswith("ecar.flow.")
         } == {key}
+    mutations = {
+        "observation_delays": timedelta(seconds=1),
+        "source_times": _TIME + timedelta(seconds=1),
+        "finalized_times": _TIME + timedelta(seconds=2),
+        "finalized_flags": False,
+    }
+    for field_name, mutation in mutations.items():
+        first = getattr(projected[0].source_timing, field_name)
+        second = getattr(projected[1].source_timing, field_name)
+        assert first is not second
+        first["projection.mutation"] = mutation
+        assert "projection.mutation" not in second
+        assert getattr(canonical_plan, field_name) == canonical_dicts[field_name]
 
 
 def test_migrated_process_observation_delay_changes_visibility_not_canonical_time(

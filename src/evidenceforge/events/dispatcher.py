@@ -37,7 +37,6 @@ import sys
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -15202,7 +15201,7 @@ class EventDispatcher:
                 continue
             planning_event = replace(
                 event,
-                source_timing=deepcopy(base_source_timing),
+                source_timing=(None if base_source_timing is None else base_source_timing._clone()),
             )
             planned_event = self.source_timing_planner.plan_event(
                 planning_event,
@@ -15217,7 +15216,11 @@ class EventDispatcher:
                 replace(
                     target,
                     projected_timestamp=planned_event.timestamp,
-                    source_timing=deepcopy(planned_event.source_timing),
+                    source_timing=(
+                        None
+                        if planned_event.source_timing is None
+                        else planned_event.source_timing._clone()
+                    ),
                 )
             )
 
