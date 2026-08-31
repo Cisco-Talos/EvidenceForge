@@ -869,6 +869,7 @@ class _OpenPreparationCapability:
     crypto: CryptographicMaterialPreparation
     crypto_owner: object
     crypto_view_identity: int
+    identity_bound: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1304,6 +1305,12 @@ class NetworkTransactionPreparation:
 
         self._require_open()
         return self._owner._reserve_physical_identity(self)
+
+    def bind_transaction_identity(self, stable_id: str) -> None:
+        """Bind the open preparation to its finalized canonical transaction ID."""
+
+        self._require_open()
+        self._owner._bind_transaction_identity(self, stable_id)
 
     def reserve_smb_connection_pin(self) -> SmbConnectionPin:
         """Reserve the future persistent-SMB pin through the owned State cursor."""
@@ -2798,6 +2805,26 @@ class NetworkTransactionRuntime:
         ):
             raise StateError("Network transaction preparation is stale or foreign")
         return capability
+
+    def _bind_transaction_identity(
+        self,
+        preparation: NetworkTransactionPreparation,
+        stable_id: str,
+    ) -> None:
+        """Atomically replace one provisional preparation ID with its final ID."""
+
+        if type(stable_id) is not str or not stable_id.strip():
+            raise ValueError("Final network transaction stable_id must not be empty")
+        with self._lock:
+            capability = self._active_open_preparation_locked(preparation)
+            if preparation._stable_id != capability.stable_id:
+                raise StateError("Network transaction preparation identity is inconsistent")
+            if capability.identity_bound:
+                raise StateError("Network transaction preparation identity is already finalized")
+            rebound = replace(capability, stable_id=stable_id, identity_bound=True)
+            preparation._stable_id = stable_id
+            self._open_preparations[capability.preparation_id] = rebound
+            self._open_capabilities_by_identity[id(preparation)] = rebound
 
     def _active_point_batch_capability_locked(
         self,

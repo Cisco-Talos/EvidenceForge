@@ -127,6 +127,37 @@ def _physical_transaction(
     )
 
 
+def test_open_preparation_binds_one_final_transaction_identity() -> None:
+    """One provisional runtime owner can adopt exactly one finalized identity."""
+
+    runtime, _state, _crypto = _runtime()
+    rng = random.Random(7)
+    preparation = runtime.begin(
+        owner_rng=rng,
+        stable_id="network-intent-provisional",
+        linearization_time=_START,
+    )
+    identity = preparation.reserve_physical_identity()
+    final_stable_id = "network-connection-final"
+
+    preparation.bind_transaction_identity(final_stable_id)
+
+    with pytest.raises(StateError, match="identity is already finalized"):
+        preparation.bind_transaction_identity("network-connection-other")
+    transaction = _physical_transaction(
+        identity,
+        stable_id=final_stable_id,
+        started_at=_START,
+    )
+    root = preparation.seal(
+        transaction=transaction,
+        lifecycle_mode="network",
+        materialization_mode=ConnectionMaterializationMode.PHYSICAL,
+    )
+    assert root.transaction.stable_id == final_stable_id
+    assert root.runtime_token.transaction_id == final_stable_id
+
+
 def _commit_runtime(runtime: NetworkTransactionRuntime, root: object) -> object:
     token = root.runtime_token
     with runtime.claimed_preparation(token) as prepared:

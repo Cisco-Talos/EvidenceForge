@@ -173,6 +173,50 @@ def test_activity_generator_injects_one_registry_into_protocol_managers() -> Non
     assert shared.window_end == _END
 
 
+def test_identical_auto_port_http_intents_receive_distinct_transport_identities() -> None:
+    """Resolved source ports distinguish repeated physical HTTP occurrences."""
+
+    generator, _state, emitters = _generator()
+
+    first_uid = _emit_http(
+        generator,
+        timestamp=_START,
+        trans_depth=1,
+        uri="/repeat",
+    )
+    second_uid = _emit_http(
+        generator,
+        timestamp=_START,
+        trans_depth=1,
+        uri="/repeat",
+    )
+
+    physical_events = [
+        event
+        for event in emitters["zeek_http"].events
+        if event.network is not None and not event.network.application_layer_only
+    ]
+    assert len(physical_events) == 2
+    assert first_uid != second_uid
+    assert physical_events[0].network.src_port != physical_events[1].network.src_port
+    assert physical_events[0].network.stable_id != physical_events[1].network.stable_id
+    channel_ids = {
+        generator._http_channel_manager._channel_id(
+            HttpChannelAffinity.from_request(
+                src_ip=event.network.src_ip,
+                dst_ip=event.network.dst_ip,
+                dst_port=event.network.dst_port,
+                http_host=event.protocol.http.host,
+                user_agent=event.protocol.http.user_agent,
+                transport_security="cleartext",
+            ),
+            event.network.stable_id,
+        )
+        for event in physical_events
+    }
+    assert len(channel_ids) == 2
+
+
 def _manager_snapshot(
     generator: ActivityGenerator,
     parent: CanonicalOccurrence,

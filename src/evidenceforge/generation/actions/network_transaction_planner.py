@@ -33,7 +33,10 @@ from threading import Lock
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from evidenceforge.generation.actions.network_identity import _trusted_network_request_stable_id
+from evidenceforge.generation.actions.network_identity import (
+    _network_transport_occurrence_stable_id,
+    _trusted_network_request_stable_id,
+)
 from evidenceforge.generation.http_channels import HttpChannelAffinity
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
@@ -3693,6 +3696,19 @@ class NetworkTransactionPlanner:
                         sample_key="selected_midstream",
                     )
 
+        # The request identity remains the deterministic planning/timing scope. Bind
+        # canonical transport and application lifecycle ownership only after the
+        # allocator has resolved the complete transport tuple.
+        transport_stable_id = _network_transport_occurrence_stable_id(
+            stable_id,
+            src_ip=src_ip,
+            src_port=src_port,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            protocol=proto,
+        )
+        network_preparation.bind_transaction_identity(transport_stable_id)
+
         if (
             not suppress_application_side_effects
             and not http_application_layer_only
@@ -5108,7 +5124,7 @@ class NetworkTransactionPlanner:
         else:
             transaction_outcome = "failure"
         event.network.finalize_transaction(
-            stable_id,
+            transport_stable_id,
             hostname=hostname or event.network.dst_ip,
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),

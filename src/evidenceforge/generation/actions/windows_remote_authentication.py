@@ -95,7 +95,6 @@ class WindowsRemoteAuthenticationPlanner:
             return self.without_transport(request)
 
         network_request = self._network_request(request)
-        transaction_id = network_request.stable_id
         uid = NetworkConnectionActionBundle(self._executor, network_request).execute()
         connection = self._executor.state_manager.get_connection_by_zeek_uid(uid)
         if connection is None:
@@ -104,7 +103,7 @@ class WindowsRemoteAuthenticationPlanner:
             )
         transport = RemoteAuthenticationTransportPlan(
             role=request.transport_role,
-            transaction_id=transaction_id,
+            transaction_id=connection.transaction_id,
             tuple=NetworkTuple(
                 src_ip=connection.src_ip,
                 src_port=connection.src_port,

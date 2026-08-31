@@ -234,6 +234,44 @@ _TRUSTED_SCALAR_DIGEST_CACHE_CAPACITY = 8_192
 _TRUSTED_SCALAR_DIGESTS: dict[tuple[type[object], object], bytes] = {}
 
 
+def _network_transport_occurrence_stable_id(
+    intent_stable_id: str,
+    *,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+    protocol: str,
+) -> str:
+    """Return the finalized identity for one resolved transport occurrence."""
+
+    if type(intent_stable_id) is not str or not intent_stable_id.strip():
+        raise ValueError("Network transport occurrence requires a non-empty intent identity")
+    if type(src_ip) is not str or not src_ip.strip():
+        raise ValueError("Network transport occurrence requires a non-empty source IP")
+    if type(dst_ip) is not str or not dst_ip.strip():
+        raise ValueError("Network transport occurrence requires a non-empty destination IP")
+    if type(src_port) is not int or src_port < 0 or src_port > 65_535:
+        raise ValueError("Network transport occurrence source port must be between 0 and 65535")
+    if type(dst_port) is not int or dst_port < 0 or dst_port > 65_535:
+        raise ValueError(
+            "Network transport occurrence destination port must be between 0 and 65535"
+        )
+    if type(protocol) is not str or not protocol.strip():
+        raise ValueError("Network transport occurrence requires a non-empty protocol")
+    occurrence_uuid = stable_uuid(
+        "network-transport-occurrence",
+        "v1",
+        intent_stable_id,
+        src_ip,
+        src_port,
+        dst_ip,
+        dst_port,
+        protocol,
+    )
+    return f"network-connection-{occurrence_uuid}"
+
+
 def _identity_import_raw_attribute(value_type: type[object], name: str) -> object:
     """Read one trusted class attribute without a caller-controlled keyed lookup."""
 
