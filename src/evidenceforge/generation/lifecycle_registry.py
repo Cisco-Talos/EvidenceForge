@@ -12188,7 +12188,12 @@ class LifecycleRegistry:
     ) -> LifecycleClosedTransportAdmissionToken:
         """Validate and reserve one all-or-none closed transport without rows."""
 
-        public_request = deepcopy(request)
+        if type(request) is not LifecycleClosedTransportPublicationRequest:
+            raise TypeError("Closed-transport publication requires its exact frozen request")
+        # Production adapters construct this recursively frozen request and transfer it
+        # directly into the one-shot registry capability. Rebuilding the full dataclass
+        # graph adds no isolation at this trusted ownership boundary.
+        public_request = request
         reservation_keys = self._closed_transport_reservation_keys(public_request)
         route_keys = self._closed_transport_route_keys(public_request)
         with self._gate.mutation(), self._closed_transport_preparation_lock:

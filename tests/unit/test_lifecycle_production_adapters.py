@@ -20,6 +20,7 @@ from evidenceforge.events.lifecycle import (
     SessionLifecycleIdentity,
 )
 from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
+from evidenceforge.generation import lifecycle_registry as lifecycle_registry_module
 from evidenceforge.generation.lifecycle_production_adapters import (
     LifecycleProductionAdapter,
     TransportLifecyclePublicationPlan,
@@ -532,6 +533,37 @@ def test_prepared_closed_transport_copy_is_not_the_one_shot_capability() -> None
     adapter.cancel_closed_transport_publication(token)
     assert registry.census().transport_entries == 0
     assert adapter.closed_transport_preparation_census().reservations == 0
+
+
+def test_prepared_closed_transport_adopts_exact_frozen_request_without_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private adapter request transfers directly into registry ownership."""
+
+    registry = LifecycleRegistry(shard_count=8)
+    adapter = LifecycleProductionAdapter(registry)
+    plan = closed_transport_publication_plan(
+        transaction=_transaction(stable_id="frozen-request", zeek_uid="CfrozenRequest"),
+        authority_hostname="CLIENT-01",
+        src_hostname="CLIENT-01",
+        dst_hostname="SERVER-01",
+        action_id="frozen-request-action",
+    )
+    request = adapter._closed_transport_request(
+        plan,
+        start_members=(),
+        process_holds=(),
+    )
+
+    def fail_copy(_value: object) -> object:
+        raise AssertionError("trusted frozen request was copied")
+
+    monkeypatch.setattr(lifecycle_registry_module, "deepcopy", fail_copy)
+
+    token = registry.prepare_closed_transport_publication(request)
+
+    assert token.request is request
+    registry.cancel_closed_transport_publication(token)
 
 
 def test_prepared_closed_transport_cancel_and_rejection_leave_zero_rows() -> None:
