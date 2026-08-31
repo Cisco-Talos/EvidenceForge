@@ -256,7 +256,7 @@ def test_retained_runtime_capabilities_reject_mutation_after_plan_freeze() -> No
         claimed.commit_no_fail()
 
     assert runtime_owner_ref() is None
-    assert retained_audit.operations == ()
+    assert retained_audit.operation_count == 0
     assert retained_clocks.cache_size == 0
     committed_digest = planner.state_digest()
     with pytest.raises(TimingDistributionError, match="not open for staging"):
@@ -762,7 +762,7 @@ def test_large_prewarmed_claim_and_commit_plan_are_operation_native() -> None:
         runtime_preparation = claimed._runtime_preparation
         assert runtime_plan is not None
         assert runtime_preparation is not None
-        assert len(runtime_plan.audit_operations) == claimed.staged_audit_operations
+        assert runtime_plan.audit_delta.operation_count == claimed.staged_audit_operations
         assert runtime_plan.clock_states is runtime_preparation.clocks._states
         assert record.retained_plan_operations < 512
         claimed.certify_composite_commit(claimed.expected_receipt)

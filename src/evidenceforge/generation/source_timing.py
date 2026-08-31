@@ -661,7 +661,7 @@ class _SourceTimingRuntimeCommitPlan:
 
     preparation: TimingRuntimePreparation
     audit_target: Any
-    audit_operations: tuple[tuple[str, str, str], ...]
+    audit_delta: Any
     clocks_target: Any
     clock_states: Any
     discarded_clock_states: Any
@@ -7750,6 +7750,11 @@ class SourceTimingPreparation:
         self._composite_certified_receipt: SourceTimingPreparationReceipt | None = None
         self._claim_thread_id: int | None = None
         runtime_preparation._source_timing_owner = self
+        runtime_preparation._activate_source_timing_staging(
+            self,
+            lane_marker,
+            self._planning_thread_id,
+        )
 
     @property
     def owner(self) -> SourceTimingPlanner:
@@ -7822,7 +7827,7 @@ class SourceTimingPreparation:
         """Return staged audit mutations."""
 
         runtime_preparation = self._runtime_preparation
-        return 0 if runtime_preparation is None else len(runtime_preparation.audit.operations)
+        return 0 if runtime_preparation is None else runtime_preparation.audit.operation_count
 
     @property
     def overlay_digest(self) -> str:
@@ -7921,6 +7926,10 @@ class SourceTimingPreparation:
             self,
             overlay_digest,
         )
+        runtime_preparation = self._runtime_preparation
+        if runtime_preparation is None:
+            raise StateError("Source timing preparation lost its runtime staging lease")
+        runtime_preparation._close_source_timing_staging(self, self._lane_marker)
         self._binding_token = binding_token
         self._sealed_overlay_digest = overlay_digest
         self._seal_integrity = seal_integrity
@@ -7965,15 +7974,13 @@ class SourceTimingPreparation:
 
         runtime_base = runtime_preparation._base
         audit_target = runtime_base.audit
-        audit_operations = tuple(
-            tuple(operation) for operation in runtime_preparation.audit.operations
-        )
+        audit_delta = runtime_preparation.audit.freeze_delta()
         clocks_target = runtime_base.clocks
         prepared_clocks = runtime_preparation.clocks
         runtime_plan = _SourceTimingRuntimeCommitPlan(
             preparation=runtime_preparation,
             audit_target=audit_target,
-            audit_operations=audit_operations,
+            audit_delta=audit_delta,
             clocks_target=clocks_target,
             clock_states=prepared_clocks._states,
             discarded_clock_states=prepared_clocks._states.__class__(),
@@ -8026,7 +8033,7 @@ class SourceTimingPreparation:
             runtime_plan=runtime_plan,
             retained_plan_operations=(
                 sum(len(plan.operations) for plan in cache_plans)
-                + len(audit_operations)
+                + audit_delta.operation_count
                 + len(prepared_clocks._operations)
             ),
         )
@@ -8048,7 +8055,7 @@ class SourceTimingPreparation:
         runtime_preparation = self._runtime_preparation
         if runtime_preparation is not None:
             runtime_preparation._source_timing_owner = None
-            runtime_preparation.audit._operations.clear()
+            runtime_preparation.audit.clear()
             runtime_preparation.clocks._states.clear()
             runtime_preparation.clocks._operations.clear()
             runtime_preparation.clocks._cache_entry_estimated_bytes = 0
@@ -8275,7 +8282,7 @@ class SourceTimingPreparation:
                 version_delta=cache_plan.version_delta,
             )
         audit_target = runtime_plan.audit_target
-        audit_target._apply_prepared_operations_locked(runtime_plan.audit_operations)
+        audit_target._apply_prepared_delta_locked(runtime_plan.audit_delta)
         clocks_target = runtime_plan.clocks_target
         clocks_target._states = runtime_plan.clock_states
         clocks_target._high_water_mark = runtime_plan.clock_high_water_mark
@@ -8290,7 +8297,7 @@ class SourceTimingPreparation:
         for _name, _cache, prepared in record.admitted_cache_overlays:
             prepared._operations.clear()
             prepared._overlay.clear()
-        runtime_plan.preparation.audit._operations.clear()
+        runtime_plan.preparation.audit.clear()
         runtime_plan.preparation.clocks._states = runtime_plan.discarded_clock_states
         runtime_plan.preparation.clocks._operations.clear()
         runtime_plan.preparation.clocks._cache_entry_estimated_bytes = 0
