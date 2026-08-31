@@ -991,6 +991,7 @@ def test_prepared_network_issuance_tail_rejects_altered_arguments_before_sidecar
 
     assert authority._state_manager.materialization_version == 1
     assert result.receipt is receipt
+    assert sidecar.detached_proof == object.__getattribute__(receipt, "_integrity_token")
     binding = authority.detach_prepared_network_receipt(result.receipt)
     assert binding.transaction_id == root.transaction.stable_id
     assert authority.authenticates_detached_network_receipt_binding(binding)

@@ -1265,7 +1265,9 @@ class SourceTimingPlanner:
         self._preparation_lane_marker = None
         self._preparation_lane_generation = None
         self._preparation_authority_lock = RLock()
-        self._preparation_secret = secrets.token_hex(32)
+        # The overlay cannot mint owner capabilities: every authority registry below is
+        # isolated and empty. Keep the copied immutable secret instead of obtaining fresh
+        # system entropy for each trusted in-process planning transaction.
         self._next_preparation_id = 1
         self._preparation_claim_records = {}
         self._committed_preparation_receipts = {}

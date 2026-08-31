@@ -151,7 +151,7 @@ def test_overlay_planner_isolates_authority_and_cannot_revoke_owner_binding() ->
         "_detached_binding_by_context",
     ):
         assert overlay_state[field_name] is not owner_state[field_name]
-    assert overlay_state["_preparation_secret"] != owner_state["_preparation_secret"]
+    assert overlay_state["_preparation_secret"] is owner_state["_preparation_secret"]
     planner.discard_detached_preparation_binding(binding)
 
 

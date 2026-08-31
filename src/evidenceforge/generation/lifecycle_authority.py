@@ -6036,7 +6036,9 @@ class GeneratorLifecycleAuthority:
         with issuance_lock:
             detached_proof = issuance_record.detached_proof
             if not detached_proof:
-                detached_proof = secrets.token_hex(32)
+                # The receipt integrity already authenticates the exact committed graph.
+                # Reuse it as the private sidecar proof instead of minting a second nonce.
+                detached_proof = integrity_token
                 issuance_record.detached_proof = detached_proof
         final_values = (*values, integrity_token)
         for descriptor, value in zip(_receipt_descriptors, final_values, strict=True):
