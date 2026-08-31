@@ -763,6 +763,7 @@ def test_large_prewarmed_claim_and_commit_plan_are_operation_native() -> None:
         assert runtime_plan is not None
         assert runtime_preparation is not None
         assert runtime_plan.audit_delta.operation_count == claimed.staged_audit_operations
+        assert runtime_preparation.clocks.operation_count == 1
         assert runtime_plan.clock_states is runtime_preparation.clocks._states
         assert record.retained_plan_operations < 512
         claimed.certify_composite_commit(claimed.expected_receipt)

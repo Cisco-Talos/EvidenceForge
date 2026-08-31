@@ -8034,7 +8034,7 @@ class SourceTimingPreparation:
             retained_plan_operations=(
                 sum(len(plan.operations) for plan in cache_plans)
                 + audit_delta.operation_count
-                + len(prepared_clocks._operations)
+                + prepared_clocks.operation_count
             ),
         )
 
@@ -8057,7 +8057,7 @@ class SourceTimingPreparation:
             runtime_preparation._source_timing_owner = None
             runtime_preparation.audit.clear()
             runtime_preparation.clocks._states.clear()
-            runtime_preparation.clocks._operations.clear()
+            runtime_preparation.clocks.clear_staged_operations()
             runtime_preparation.clocks._cache_entry_estimated_bytes = 0
         self._cache_overlays = ()
         self._runtime_preparation = None
@@ -8299,7 +8299,7 @@ class SourceTimingPreparation:
             prepared._overlay.clear()
         runtime_plan.preparation.audit.clear()
         runtime_plan.preparation.clocks._states = runtime_plan.discarded_clock_states
-        runtime_plan.preparation.clocks._operations.clear()
+        runtime_plan.preparation.clocks.clear_staged_operations()
         runtime_plan.preparation.clocks._cache_entry_estimated_bytes = 0
         self._owner = owner
         self._binding_token = record.binding_token

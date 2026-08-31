@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import sys
 from collections import OrderedDict
@@ -449,7 +448,7 @@ class SourceClockRegistryPreparation:
         "_eviction_count",
         "_high_water_mark",
         "_lookup_count",
-        "_operations",
+        "_operation_count",
         "_owner_preparation",
         "_sampler",
         "_states",
@@ -487,7 +486,7 @@ class SourceClockRegistryPreparation:
         self._cache_miss_count = cache_miss_count
         self._eviction_count = eviction_count
         self._version_delta = 0
-        self._operations: list[tuple[str, str]] = []
+        self._operation_count = 0
 
     def _require_public_staging(self) -> None:
         """Reject mutation through a retained closed clock capability."""
@@ -533,7 +532,18 @@ class SourceClockRegistryPreparation:
         self._states.clear()
         self._cache_entry_estimated_bytes = 0
         self._version_delta += 1
-        self._operations.append(("clear", ""))
+        self._operation_count += 1
+
+    @property
+    def operation_count(self) -> int:
+        """Return the exact number of staged clock-cache mutations."""
+
+        return self._operation_count
+
+    def clear_staged_operations(self) -> None:
+        """Release staged operation accounting after terminal cleanup."""
+
+        self._operation_count = 0
 
     def census(self, *, estimate_bytes: bool = False) -> SourceClockRegistryCensus:
         """Return canonical plus staged source-clock diagnostics."""
@@ -594,8 +604,9 @@ class SourceClockRegistryPreparation:
         self._version_delta += 1
         if cached is not None:
             self._cache_hit_count += 1
-            self._states.move_to_end(cache_key)
-            self._operations.append(("hit", repr(cache_key)))
+            if next(reversed(self._states), None) != cache_key:
+                self._states.move_to_end(cache_key)
+            self._operation_count += 1
             return cached
         self._cache_miss_count += 1
 
@@ -612,7 +623,7 @@ class SourceClockRegistryPreparation:
                 )
                 self._eviction_count += 1
             self._high_water_mark = max(self._high_water_mark, len(self._states))
-        self._operations.append(("miss", repr(cache_key)))
+        self._operation_count += 1
         return state
 
     def adjustment_microseconds(
@@ -692,10 +703,24 @@ class SourceClockRegistryPreparation:
         )
 
     def overlay_digest(self) -> str:
-        """Return a stable digest of clock-cache operations."""
+        """Return a stable digest of compact clock-cache state and counters."""
 
-        payload = json.dumps(self._operations, separators=(",", ":"), ensure_ascii=True)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        state_digest = hashlib.sha256()
+        for cache_key, state in self._states.items():
+            state_digest.update(repr((cache_key, state)).encode("utf-8"))
+            state_digest.update(b"\0")
+        payload = (
+            self._base_version,
+            self._version_delta,
+            self._operation_count,
+            self._high_water_mark,
+            self._lookup_count,
+            self._cache_hit_count,
+            self._cache_miss_count,
+            self._eviction_count,
+            state_digest.hexdigest(),
+        )
+        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
     def _commit_locked(self) -> None:
         """Replace canonical cache state after version validation under ``_lock``."""
