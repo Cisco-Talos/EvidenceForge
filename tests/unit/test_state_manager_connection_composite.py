@@ -54,12 +54,32 @@ from evidenceforge.generation.state_manager import (
     ProcessMaterializationPlan,
     SessionActivityPatch,
     StateManager,
+    _random_from_state,
 )
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_zeek_uid_from_rng
 
 _START = datetime(2026, 8, 16, 13, 0, tzinfo=UTC)
+
+
+def test_random_state_clone_does_not_seed_replaced_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact RNG cloning must not seed an instance before restoring its trusted state."""
+
+    source = random.Random(42)
+    state = source.getstate()
+    expected = source.random()
+
+    def fail_seed(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("RNG clone seeded a state that should be restored directly")
+
+    monkeypatch.setattr(random.Random, "seed", fail_seed)
+
+    clone = _random_from_state(state)
+
+    assert clone.random() == expected
 
 
 def _traffic(*, orig: int = 120, resp: int = 480) -> NetworkTrafficLedger:

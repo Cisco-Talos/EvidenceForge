@@ -95,6 +95,14 @@ def _trusted_capability_digest(authority_secret: bytes, *parts: object) -> str:
     return digest.hexdigest()
 
 
+def _random_from_state(state: object) -> random.Random:
+    """Build an exact RNG clone without seeding a state that is immediately replaced."""
+
+    rng = random.Random.__new__(random.Random)
+    random.Random.setstate(rng, state)
+    return rng
+
+
 _MIN_GENERATED_LOGON_LUID = 0x10000
 _MAX_GENERATED_LOGON_LUID = 0xFFFFFFFF
 _GENERATED_LOGON_LUID_SPAN = _MAX_GENERATED_LOGON_LUID - _MIN_GENERATED_LOGON_LUID + 1
@@ -780,9 +788,7 @@ class ConnectionIdentityPlan:
     def continuation_rng(self) -> random.Random:
         """Return an isolated RNG positioned immediately after UID allocation."""
 
-        rng = random.Random()
-        rng.setstate(self._rng_state_after_identity)
-        return rng
+        return _random_from_state(self._rng_state_after_identity)
 
 
 class _ConnectionPlanningRandom:
@@ -856,8 +862,7 @@ class ConnectionPlanningCursor:
         self._owner_rng = owner_rng
         self._owner_identity = id(owner_rng)
         self._rng_state_entry = rng_state_entry
-        preview_rng = random.Random()
-        preview_rng.setstate(self._rng_state_entry)
+        preview_rng = _random_from_state(self._rng_state_entry)
         self._preview_rng: random.Random | None = preview_rng
         self._proxy = _ConnectionPlanningRandom(self)
         self._identity: ConnectionIdentityPlan | None = None
@@ -8707,8 +8712,7 @@ class StateManager:
     ) -> tuple[int, _LinuxLogindAllocatorPatch]:
         """Preview one logind ID and its exact allocator patch without mutation."""
 
-        preview_rng = random.Random()
-        preview_rng.setstate(rng_state)
+        preview_rng = _random_from_state(rng_state)
         sampled_initial = preview_rng.randint(20, 250)
         normalized_time = ensure_utc(event_time).replace(microsecond=0)
         current_initial = self._linux_logind_session_initials.get(system)
@@ -8899,8 +8903,7 @@ class StateManager:
             )
         retained_rng = self._pid_rngs.get(system)
         if retained_rng is not None:
-            rng = random.Random()
-            rng.setstate(retained_rng.getstate())
+            rng = _random_from_state(retained_rng.getstate())
             return self._pid_counters[system], rng, False
         rng = random.Random(_stable_seed(f"pid_alloc_{system}"))
         if system in self._pid_counters:
@@ -9138,8 +9141,7 @@ class StateManager:
             else counter_override
         )
         retained_rng = self._thread_id_rngs.get(system)
-        rng = random.Random()
-        rng.setstate(
+        rng = _random_from_state(
             rng_state_override
             if rng_state_override is not None
             else retained_rng.getstate()
@@ -9623,8 +9625,7 @@ class StateManager:
                     f"PID namespace for {system}"
                 )
             counter = builder._pid_counters[system]
-            pid_rng = random.Random()
-            pid_rng.setstate(builder._pid_rng_states[system])
+            pid_rng = _random_from_state(builder._pid_rng_states[system])
             planned_pids = builder._planned_pids.setdefault(system, set())
 
             pid_epoch_patch: tuple[str, datetime] | None = None
@@ -10826,12 +10827,10 @@ class StateManager:
         patch = plan._allocator_patch
         pid_rng: random.Random | None = None
         if patch.pid_rng_state is not None:
-            pid_rng = random.Random()
-            pid_rng.setstate(patch.pid_rng_state[1])
+            pid_rng = _random_from_state(patch.pid_rng_state[1])
         thread_rng: random.Random | None = None
         if patch.thread_rng_state is not None:
-            thread_rng = random.Random()
-            thread_rng.setstate(patch.thread_rng_state[1])
+            thread_rng = _random_from_state(patch.thread_rng_state[1])
         return _PreparedActionCohortProcessStart(
             plan=plan,
             process=process,
@@ -20084,8 +20083,7 @@ class StateManager:
             times.extend(patch.activity_time for patch in normalized_session_activity)
             final_state_time = max(times)
             rng_state_final = cursor._seal()
-            validated_rng = random.Random()
-            validated_rng.setstate(rng_state_final)
+            _random_from_state(rng_state_final)
             publication_token = _trusted_capability_digest(
                 self._materialization_secret,
                 "connection-composite-publication",
@@ -20143,8 +20141,7 @@ class StateManager:
             raise StateError("Connection composite belongs to another RNG owner")
         if owner_rng.getstate() != plan._rng_state_entry:
             raise StateError("Connection composite RNG owner changed before commit")
-        validated_rng = random.Random()
-        validated_rng.setstate(plan._rng_state_final)
+        _random_from_state(plan._rng_state_final)
 
         if plan.materializes_connection:
             identity = plan._identity
@@ -20560,8 +20557,7 @@ class StateManager:
             counter_after = self._connection_id_counter + 1
             conn_id = f"conn-{self._connection_id_counter}"
             rng_state_before = rng.getstate()
-            preview_rng = random.Random()
-            preview_rng.setstate(rng_state_before)
+            preview_rng = _random_from_state(rng_state_before)
             zeek_uid = generate_zeek_uid_from_rng(preview_rng, "C")
             rng_state_after_identity = preview_rng.getstate()
             return ConnectionIdentityPlan(
@@ -20607,8 +20603,7 @@ class StateManager:
                     "New connection transaction must use its reserved connection and UID"
                 )
             final_rng_state = continuation_rng.getstate()
-            validated_rng = random.Random()
-            validated_rng.setstate(final_rng_state)
+            _random_from_state(final_rng_state)
             payload = _ConnectionMaterializationPayload(
                 transaction=transaction,
                 source_system=source_system,
