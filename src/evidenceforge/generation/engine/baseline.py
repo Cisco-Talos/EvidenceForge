@@ -11529,7 +11529,7 @@ class BaselineMixin:
                                 else None
                             ),
                         )
-                        if end_ts is not None:
+                        if gpupdate_pid and end_ts is not None:
                             self.state_manager.set_current_time(end_ts)
                             self.activity_generator.generate_system_process_termination(
                                 system=system,

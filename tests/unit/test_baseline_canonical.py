@@ -26,6 +26,7 @@ Verifies that baseline activities dispatch through OccurrenceBuilder to
 multiple emitters, producing correlated cross-source records.
 """
 
+import inspect
 import random
 import re
 from datetime import UTC, datetime, timedelta
@@ -145,6 +146,14 @@ def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
     assert len(set(commands)) == 4
     assert commands.count("gpupdate.exe") > 300
     assert sum("/force" in command for command in commands) < 80
+
+
+def test_gpo_refresh_termination_requires_admitted_process() -> None:
+    """A source-timing-rejected gpupdate process must not receive a termination."""
+
+    source = inspect.getsource(BaselineMixin._generate_system_traffic)
+
+    assert "if gpupdate_pid and end_ts is not None:" in source
 
 
 def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
