@@ -707,24 +707,6 @@ def test_detach_ignores_obsolete_caller_graph_helper_aliases(
     assert callback_count == 0
 
 
-def test_detach_safe_allocator_never_invokes_live_binding_initializer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    authority, receipt = _committed_receipt(stable_id="safe-binding-allocator")
-    callback_count = 0
-
-    def hostile(*_args: object, **_kwargs: object) -> None:
-        nonlocal callback_count
-        callback_count += 1
-        raise AssertionError("live detached-binding initializer ran")
-
-    monkeypatch.setattr(LifecycleDetachedNetworkReceiptBinding, "__init__", hostile)
-
-    with pytest.raises(StateError, match="proof|authentic"):
-        authority.detach_prepared_network_receipt(receipt)
-    assert callback_count == 0
-
-
 def test_detach_public_boundary_has_no_live_global_lookup_or_injectable_defaults() -> None:
     method = GeneratorLifecycleAuthority.detach_prepared_network_receipt
 

@@ -1885,8 +1885,13 @@ def _network_request_identity_fields(
 def _network_request_stable_id(request: object, expected_type: type[object]) -> str:
     """Return one full-width deterministic identifier for a complete network intent."""
 
+    inspector = _TRUSTED_IDENTITY_TYPE_INSPECTOR
+    if inspector is None:
+        raise RuntimeError("Network connection identity request type is not registered")
     try:
-        identity_digest, _projection = _CanonicalIdentityEncoder().encode_request(
+        identity_digest, _projection = _CanonicalIdentityEncoder(
+            type_inspector=inspector,
+        ).encode_request(
             request,
             expected_type,
         )

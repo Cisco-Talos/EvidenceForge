@@ -23,7 +23,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
-from types import FunctionType, MemberDescriptorType
+from types import MemberDescriptorType
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
 from weakref import ReferenceType, ref
 
@@ -1185,43 +1185,15 @@ _DETACHED_NETWORK_BINDING_MIN_DATETIME_US = -62_135_596_800_000_000
 _DETACHED_NETWORK_BINDING_MAX_DATETIME_US = 253_402_300_799_999_999
 
 
-# A sealed capability stores one private Python handler beside inert structural
-# contract data.  Security boundaries create their attester locally, validate
-# the handler immediately before and after invocation, and never execute an
-# externally reachable Python attester.  Replacing both the handler reference
-# and its separate immutable contract (or rewriting the boundary method itself)
-# is arbitrary in-process code execution and is outside the receipt-tampering
-# model; every single handler/code/default/closure-cell mutation remains in
-# scope and fails before the changed handler can run.
-_DetachedNetworkSealedCapability = tuple[object, ...]
+_DetachedNetworkSealedCapability = Callable[[int, tuple[object, ...]], object]
 
 
 def _freeze_detached_network_sealed_capability(
     handler: Callable[[int, tuple[object, ...]], object],
 ) -> _DetachedNetworkSealedCapability:
-    """Freeze inert function-state data for one closure-private handler."""
+    """Retain one trusted engine handler."""
 
-    frozen_getattribute = object.__getattribute__
-    closure = frozen_getattribute(handler, "__closure__")
-    if closure is None:
-        closure_state: tuple[tuple[object, object], ...] = ()
-        cell_type = type((lambda retained: lambda: retained)(None).__closure__[0])
-    else:
-        cell_type = type(closure[0])
-        closure_state = tuple((cell, cell.cell_contents) for cell in closure)
-    cell_contents_get = cell_type.cell_contents.__get__
-    return (
-        handler,
-        frozen_getattribute(handler, "__code__"),
-        frozen_getattribute(handler, "__defaults__"),
-        frozen_getattribute(handler, "__kwdefaults__"),
-        closure,
-        closure_state,
-        frozen_getattribute,
-        FunctionType,
-        cell_type,
-        cell_contents_get,
-    )
+    return handler
 
 
 def _detached_network_binding_datetime_us(value: object, field_name: str) -> int:
@@ -1348,20 +1320,12 @@ _DETACHED_NETWORK_BINDING_DESCRIPTORS = tuple(
     vars(LifecycleDetachedNetworkReceiptBinding)[field_name]
     for field_name in _DETACHED_NETWORK_BINDING_FIELD_NAMES
 )
-_DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE = tuple(
-    vars(LifecycleDetachedNetworkReceiptBinding).items()
-)
-_DETACHED_NETWORK_BINDING_TRUSTED_METADATA = tuple(
-    vars(LifecycleDetachedNetworkReceiptBinding)["__dataclass_fields__"].items()
-)
 
 
 def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSealedCapability:
     """Seal binding capture, framing, signing, allocation, and verification."""
 
     frozen_class = LifecycleDetachedNetworkReceiptBinding
-    frozen_namespace = _DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE
-    frozen_metadata = _DETACHED_NETWORK_BINDING_TRUSTED_METADATA
     frozen_descriptors = _DETACHED_NETWORK_BINDING_DESCRIPTORS
     frozen_field_count = len(_DETACHED_NETWORK_BINDING_FIELD_NAMES)
     frozen_text_limit = _MAX_DETACHED_NETWORK_BINDING_TEXT_BYTES
@@ -1377,20 +1341,13 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     frozen_bool_type = bool
     frozen_bytes_type = bytes
     frozen_bytearray_type = bytearray
-    frozen_dict_type = dict
-    frozen_function_type = FunctionType
     frozen_int_type = int
-    frozen_mapping_type = type(vars(frozen_class))
     frozen_member_descriptor_type = MemberDescriptorType
     frozen_str_type = str
     frozen_tuple_type = tuple
     frozen_type = type
     frozen_len = len
     frozen_zip = zip
-    frozen_object_getattribute = object.__getattribute__
-    frozen_type_getattribute = type.__getattribute__
-    frozen_mapping_get = frozen_mapping_type.get
-    frozen_dict_get = dict.get
     frozen_member_get = MemberDescriptorType.__get__
     frozen_member_set = MemberDescriptorType.__set__
     frozen_object_new = object.__new__
@@ -1406,170 +1363,8 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     frozen_hmac_hexdigest = frozen_hmac_type.hexdigest
     frozen_value_error = ValueError
     frozen_unicode_encode_error = UnicodeEncodeError
-    frozen_sentinel = object()
-
-    pending_functions: list[FunctionType] = []
-    for _name, namespace_value in frozen_namespace:
-        if type(namespace_value) is FunctionType:
-            pending_functions.append(namespace_value)
-        elif type(namespace_value) is property:
-            for accessor in (
-                namespace_value.fget,
-                namespace_value.fset,
-                namespace_value.fdel,
-            ):
-                if type(accessor) is FunctionType:
-                    pending_functions.append(accessor)
-    observed_functions: list[FunctionType] = []
-    function_contracts: list[tuple[object, ...]] = []
-    while pending_functions:
-        trusted_function = pending_functions.pop()
-        if any(retained is trusted_function for retained in observed_functions):
-            continue
-        observed_functions.append(trusted_function)
-        closure = frozen_object_getattribute(trusted_function, "__closure__")
-        closure_state = (
-            () if closure is None else tuple((cell, cell.cell_contents) for cell in closure)
-        )
-        kwdefaults = frozen_object_getattribute(trusted_function, "__kwdefaults__")
-        kwdefault_state = () if kwdefaults is None else tuple(kwdefaults.items())
-        function_contracts.append(
-            (
-                trusted_function,
-                frozen_object_getattribute(trusted_function, "__code__"),
-                frozen_object_getattribute(trusted_function, "__defaults__"),
-                kwdefaults,
-                kwdefault_state,
-                closure,
-                closure_state,
-            )
-        )
-        for _cell, captured in closure_state:
-            if type(captured) is FunctionType:
-                pending_functions.append(captured)
-    frozen_function_contracts = tuple(function_contracts)
-
-    annotations = vars(frozen_class)["__annotations__"]
-    frozen_annotations = tuple(annotations.items())
-    frozen_field_type = type(frozen_metadata[0][1])
-    frozen_field_slots = tuple(frozen_field_type.__slots__)
-    frozen_field_states = tuple(
-        (
-            trusted_field,
-            tuple(
-                (slot_name, frozen_object_getattribute(trusted_field, slot_name))
-                for slot_name in frozen_field_slots
-            ),
-        )
-        for _field_name, trusted_field in frozen_metadata
-    )
-    dataclass_params = vars(frozen_class)["__dataclass_params__"]
-    frozen_params_type = type(dataclass_params)
-    frozen_params_slots = tuple(frozen_params_type.__slots__)
-    frozen_params_state = tuple(
-        (
-            slot_name,
-            frozen_object_getattribute(dataclass_params, slot_name),
-        )
-        for slot_name in frozen_params_slots
-    )
 
     def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-        def validates_function_contract(contract: tuple[object, ...]) -> bool:
-            (
-                trusted_function,
-                expected_code,
-                expected_defaults,
-                expected_kwdefaults,
-                expected_kwdefault_state,
-                expected_closure,
-                expected_closure_state,
-            ) = contract
-            if frozen_type(trusted_function) is not frozen_function_type:
-                return False
-            if (
-                frozen_object_getattribute(trusted_function, "__code__") is not expected_code
-                or frozen_object_getattribute(trusted_function, "__defaults__")
-                is not expected_defaults
-                or frozen_object_getattribute(trusted_function, "__kwdefaults__")
-                is not expected_kwdefaults
-                or frozen_object_getattribute(trusted_function, "__closure__")
-                is not expected_closure
-            ):
-                return False
-            if expected_kwdefaults is not None:
-                if frozen_type(expected_kwdefaults) is not frozen_dict_type or frozen_len(
-                    expected_kwdefaults
-                ) != frozen_len(expected_kwdefault_state):
-                    return False
-                for name, expected in expected_kwdefault_state:
-                    if frozen_dict_get(expected_kwdefaults, name, frozen_sentinel) is not expected:
-                        return False
-            if expected_closure is not None:
-                if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                    return False
-                for observed, expected in frozen_zip(
-                    expected_closure,
-                    expected_closure_state,
-                    strict=True,
-                ):
-                    expected_cell, expected_value = expected
-                    if (
-                        observed is not expected_cell
-                        or observed.cell_contents is not expected_value
-                    ):
-                        return False
-            return True
-
-        def class_authenticates() -> bool:
-            namespace = frozen_type_getattribute(frozen_class, "__dict__")
-            if frozen_type(namespace) is not frozen_mapping_type or frozen_len(
-                namespace
-            ) != frozen_len(frozen_namespace):
-                return False
-            for name, trusted in frozen_namespace:
-                if frozen_mapping_get(namespace, name, frozen_sentinel) is not trusted:
-                    return False
-            metadata = frozen_mapping_get(
-                namespace,
-                "__dataclass_fields__",
-                frozen_sentinel,
-            )
-            if frozen_type(metadata) is not frozen_dict_type or frozen_len(metadata) != frozen_len(
-                frozen_metadata
-            ):
-                return False
-            for name, trusted in frozen_metadata:
-                if frozen_dict_get(metadata, name, frozen_sentinel) is not trusted:
-                    return False
-            retained_annotations = frozen_mapping_get(
-                namespace,
-                "__annotations__",
-                frozen_sentinel,
-            )
-            if frozen_type(retained_annotations) is not frozen_dict_type or frozen_len(
-                retained_annotations
-            ) != frozen_len(frozen_annotations):
-                return False
-            for name, trusted in frozen_annotations:
-                if frozen_dict_get(retained_annotations, name, frozen_sentinel) is not trusted:
-                    return False
-            for trusted_field, expected_state in frozen_field_states:
-                if frozen_type(trusted_field) is not frozen_field_type:
-                    return False
-                for slot_name, expected in expected_state:
-                    if frozen_object_getattribute(trusted_field, slot_name) is not expected:
-                        return False
-            if frozen_type(dataclass_params) is not frozen_params_type:
-                return False
-            for slot_name, expected in frozen_params_state:
-                if frozen_object_getattribute(dataclass_params, slot_name) is not expected:
-                    return False
-            for contract in frozen_function_contracts:
-                if not validates_function_contract(contract):
-                    return False
-            return True
-
         def digest(value: object) -> str:
             if frozen_type(value) is not frozen_str_type or frozen_len(value) != 64:
                 raise frozen_value_error("detached binding digest is malformed")
@@ -1597,15 +1392,13 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             return frozen_pack(">I", frozen_len(encoded)) + encoded
 
         def capture(binding: object) -> tuple[object, ...]:
-            if frozen_type(binding) is not frozen_class or not class_authenticates():
+            if frozen_type(binding) is not frozen_class:
                 raise frozen_value_error("detached binding class is not authentic")
             captured: list[object] = []
             for descriptor in frozen_descriptors:
                 if frozen_type(descriptor) is not frozen_member_descriptor_type:
                     raise frozen_value_error("detached binding descriptor is not authentic")
                 captured.append(frozen_member_get(descriptor, binding, frozen_class))
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return frozen_tuple_type(captured)
 
         def payload(values: object) -> bytes:
@@ -1722,11 +1515,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             if frozen_len(arguments) != 2:
                 raise frozen_value_error("detached binding signing request is malformed")
             values, secret = arguments
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             proof = sign(secret, payload(values))
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return proof
         if operation == 1:
             if frozen_len(arguments) != 2:
@@ -1734,8 +1523,6 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             values, proof = arguments
             payload(values)
             digest(proof)
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             binding = frozen_object_new(frozen_class)
             field_values = (*values, proof)
             for descriptor, value in frozen_zip(
@@ -1744,8 +1531,6 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
                 strict=True,
             ):
                 frozen_member_set(descriptor, binding, value)
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return binding
         if operation == 2:
             if frozen_len(arguments) != 2:
@@ -1755,7 +1540,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             retained = digest(captured[-1])
             expected = sign(secret, payload(captured[:-1]))
             matches = frozen_compare_digest(retained, expected)
-            if frozen_type(matches) is not frozen_bool_type or not class_authenticates():
+            if frozen_type(matches) is not frozen_bool_type:
                 raise frozen_value_error("detached binding verification result is malformed")
             return matches
         if operation == 3:
@@ -1773,7 +1558,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             for observed, retained in frozen_zip(captured, expected, strict=True):
                 if frozen_type(observed) is not frozen_type(retained) or observed != retained:
                     return False
-            return class_authenticates()
+            return True
         raise frozen_value_error("detached binding operation is unknown")
 
     return _freeze_detached_network_sealed_capability(invoke)
@@ -1793,27 +1578,11 @@ def _freeze_detached_network_binding_boundary_methods(
 ) -> tuple[Callable[..., object], Callable[..., object], Callable[..., object]]:
     """Create non-injectable authority methods around one sealed capability.
 
-    The trusted handler and its structural contract occupy distinct closure
-    cells.  Single-cell mutation therefore fails before handler execution.
-    Coordinated replacement of both cells, or rewriting these boundary methods,
-    is arbitrary in-process code execution outside the receipt-tampering model.
+    Internal handler code is trusted under the engine threat model.
     """
 
-    (
-        trusted_call,
-        expected_function,
-        expected_code,
-        expected_defaults,
-        expected_kwdefaults,
-        expected_closure,
-        expected_closure_state,
-        frozen_getattribute,
-        frozen_function_type,
-        frozen_cell_type,
-        frozen_cell_contents_get,
-    ) = (capability[0], *capability)
+    trusted_call = capability
     frozen_type = type
-    frozen_len = len
     frozen_bool_type = bool
     frozen_str_type = str
     frozen_value_error = ValueError
@@ -1837,7 +1606,6 @@ def _freeze_detached_network_binding_boundary_methods(
     frozen_member_get = MemberDescriptorType.__get__
     frozen_lock_type = type(RLock())
     frozen_id = id
-    frozen_zip = zip
     frozen_issuance_record_type = issuance_record_type
     frozen_issuance_claim_type = issuance_claim_type
     frozen_receipt_type = receipt_type
@@ -1848,45 +1616,8 @@ def _freeze_detached_network_binding_boundary_methods(
         values: tuple[object, ...],
         proof: str,
     ) -> LifecycleDetachedNetworkReceiptBinding:
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_value_error("detached binding capability is not authentic")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_value_error("detached binding capability is not authentic")
-            return result
+            return trusted_call(operation, arguments)
 
         del self
         allocated = invoke(1, (values, proof))
@@ -1965,45 +1696,8 @@ def _freeze_detached_network_binding_boundary_methods(
                     and frozen_dict_get(receipts, frozen_id(receipt)) == key
                 )
 
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_state_error("Detached binding capability is not trusted")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_state_error("Detached binding capability is not trusted")
-            return result
+            return trusted_call(operation, arguments)
 
         try:
             instance_namespace = frozen_object_getattribute(self, "__dict__")
@@ -2040,45 +1734,8 @@ def _freeze_detached_network_binding_boundary_methods(
         return binding  # type: ignore[return-value]
 
     def authenticates(self: object, binding: object) -> bool:
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_value_error("detached binding capability is not authentic")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_value_error("detached binding capability is not authentic")
-            return result
+            return trusted_call(operation, arguments)
 
         try:
             instance_namespace = frozen_object_getattribute(self, "__dict__")
