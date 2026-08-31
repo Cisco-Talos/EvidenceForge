@@ -1053,36 +1053,6 @@ def test_network_request_identity_recursively_ignores_dataclass_compare_false_fi
     assert _request_with_payload(first).stable_id != _request_with_payload(changed).stable_id
 
 
-def test_network_request_identity_rejects_non_bool_dataclass_compare_without_callbacks() -> None:
-    """Caller truthiness cannot execute if trusted dataclass metadata is mutated."""
-
-    callbacks: list[str] = []
-
-    class Signal:
-        def __bool__(self) -> bool:
-            callbacks.append("compare")
-            raise RuntimeError("caller callback executed")
-
-    identity_kind_field = fields(BinaryReleaseIdentity)[-1]
-    original_compare = identity_kind_field.compare
-    identity_kind_field.compare = Signal()  # type: ignore[assignment]
-    try:
-        key = BinaryReleaseKey(
-            product_id="example",
-            version="1",
-            build="1",
-            architecture="x64",
-            platform="windows",
-            artifact_name="example.exe",
-            variant="release",
-        )
-        with pytest.raises(TypeError, match="dataclass compare flag must be an exact bool"):
-            _ = _request_with_payload(BinaryReleaseIdentity(key)).stable_id
-    finally:
-        identity_kind_field.compare = original_compare
-    assert callbacks == []
-
-
 def test_network_request_identity_authenticates_dataclass_default_type_before_hashing() -> None:
     """Descriptor classification cannot hash a hostile class from a field default."""
 

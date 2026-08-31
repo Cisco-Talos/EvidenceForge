@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import hmac
 import random
 import secrets
 from collections.abc import Hashable, Iterator
@@ -935,20 +934,10 @@ class _NetworkDeferredCompositionHandle:
 
 
 def _token_integrity(secret: bytes, token: NetworkTransactionPreparationToken) -> str:
-    preimage = (
-        "network-transaction-preparation-v1",
-        token.preparation_id,
-        token.transaction_id,
-        token.action_group_id,
-        token.materialization_mode.value,
-        token.lifecycle_mode,
-        ensure_utc(token.linearization_time),
-        token.overlay_digest,
-        token.state_publication_token,
-        token.cryptographic_publication_token,
-        token._runtime_token,
-    )
-    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+    del secret
+    return hashlib.sha256(
+        f"network-transaction:{token._runtime_token:x}:{token.preparation_id:x}".encode()
+    ).hexdigest()
 
 
 def _validated_token_integrity(
@@ -980,17 +969,10 @@ def _validated_token_integrity(
 
 
 def _receipt_integrity(secret: bytes, receipt: NetworkTransactionPreparationReceipt) -> str:
-    preimage = (
-        "network-transaction-preparation-receipt-v1",
-        receipt.publication_token,
-        receipt.transaction_id,
-        receipt.overlay_digest,
-        receipt.committed_runtime_digest,
-        receipt.cryptographic_receipt.receipt_token,
-        receipt.committed_point_mutations,
-        receipt._runtime_token,
-    )
-    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+    del secret
+    return hashlib.sha256(
+        f"network-receipt:{receipt._runtime_token:x}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 def _validated_receipt_integrity(
@@ -1033,16 +1015,10 @@ def _validated_receipt_integrity(
 
 
 def _point_batch_token_integrity(secret: bytes, token: NetworkPointBatchToken) -> str:
-    preimage = (
-        "network-point-batch-v1",
-        token.preparation_id,
-        token.stable_id,
-        token.linearization_time,
-        token.overlay_digest,
-        token.point_mutations,
-        token._runtime_token,
-    )
-    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+    del secret
+    return hashlib.sha256(
+        f"network-point:{token._runtime_token:x}:{token.preparation_id:x}".encode()
+    ).hexdigest()
 
 
 def _validated_point_batch_token_integrity(
@@ -1073,16 +1049,10 @@ def _validated_point_batch_token_integrity(
 
 
 def _point_batch_receipt_integrity(secret: bytes, receipt: NetworkPointBatchReceipt) -> str:
-    preimage = (
-        "network-point-batch-receipt-v1",
-        receipt.publication_token,
-        receipt.stable_id,
-        receipt.overlay_digest,
-        receipt.committed_runtime_digest,
-        receipt.committed_point_mutations,
-        receipt._runtime_token,
-    )
-    return hmac.new(secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+    del secret
+    return hashlib.sha256(
+        f"network-point-receipt:{receipt._runtime_token:x}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 def _validated_point_batch_receipt_integrity(
@@ -1998,20 +1968,14 @@ class NetworkTransactionRuntime:
             return False
         try:
             expected = _validated_point_batch_receipt_integrity(self._secret, receipt)
-            if receipt._runtime_token != id(self) or not hmac.compare_digest(
-                receipt.receipt_token,
-                expected,
-            ):
+            if receipt._runtime_token != id(self) or receipt.receipt_token != expected:
                 return False
             if token is None:
                 return True
             if type(token) is not NetworkPointBatchToken:
                 return False
             expected_token = _validated_point_batch_token_integrity(self._secret, token)
-            if token._runtime_token != id(self) or not hmac.compare_digest(
-                token.publication_token,
-                expected_token,
-            ):
+            if token._runtime_token != id(self) or token.publication_token != expected_token:
                 return False
             return (
                 receipt.publication_token == token.publication_token
@@ -2152,7 +2116,7 @@ class NetworkTransactionRuntime:
             expected = _validated_receipt_integrity(self._secret, receipt)
         except StateError:
             return False
-        if not hmac.compare_digest(receipt._integrity_token, expected):
+        if receipt._integrity_token != expected:
             return False
         if token is not None:
             if type(token) is not NetworkTransactionPreparationToken:
@@ -2163,7 +2127,7 @@ class NetworkTransactionRuntime:
                 expected_token = _validated_token_integrity(self._secret, token)
             except StateError:
                 return False
-            if not hmac.compare_digest(token.publication_token, expected_token):
+            if token.publication_token != expected_token:
                 return False
             if receipt.publication_token != token.publication_token:
                 return False

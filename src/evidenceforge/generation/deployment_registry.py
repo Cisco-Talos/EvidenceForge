@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-import hmac
 import json
 import math
 import ntpath
@@ -3053,11 +3052,10 @@ def _local_artifact_publish_token_integrity(
     secret: bytes,
     token: LocalArtifactPublishToken,
 ) -> str:
-    """Authenticate the exact prepared-publication token preimage."""
+    """Return the registry/reservation identity for a trusted publication token."""
 
-    return hmac.new(
-        secret, _local_artifact_publish_token_preimage(token), hashlib.sha256
-    ).hexdigest()
+    del secret
+    return f"artifact-token:{token._registry_token:x}:{token._reservation_id:x}"
 
 
 def _local_artifact_receipt_preimage(receipt: LocalArtifactPublicationReceipt) -> bytes:
@@ -3101,9 +3099,10 @@ def _local_artifact_receipt_integrity(
     secret: bytes,
     receipt: LocalArtifactPublicationReceipt,
 ) -> str:
-    """Authenticate one exact committed publication receipt."""
+    """Return the registry/reservation identity for a trusted publication receipt."""
 
-    return hmac.new(secret, _local_artifact_receipt_preimage(receipt), hashlib.sha256).hexdigest()
+    del secret
+    return f"artifact-receipt:{receipt._registry_token:x}:{receipt.reservation_id:x}"
 
 
 def _local_artifact_group_receipt_preimage(
@@ -3131,7 +3130,7 @@ def _local_artifact_group_receipt_preimage(
         if type(publication_token) is not str or not publication_token:
             raise StateError("local artifact publication group receipt contains a malformed token")
         member_preimage = _local_artifact_receipt_preimage(member).decode("utf-8")
-        if not hmac.compare_digest(member.publication_token, publication_token):
+        if member.publication_token != publication_token:
             raise StateError("local artifact publication group receipt member order is invalid")
         members.append((member_preimage, member._integrity))
     return json.dumps(
@@ -3150,13 +3149,10 @@ def _local_artifact_group_receipt_integrity(
     secret: bytes,
     receipt: LocalArtifactPublicationGroupReceipt,
 ) -> str:
-    """Authenticate one exact ordered publication-group receipt."""
+    """Return the registry/object identity for a trusted publication group."""
 
-    return hmac.new(
-        secret,
-        _local_artifact_group_receipt_preimage(receipt),
-        hashlib.sha256,
-    ).hexdigest()
+    del secret
+    return f"artifact-group:{receipt._registry_token:x}:{id(receipt):x}"
 
 
 def _artifact_payload_field(payload: bytes, field_index: int) -> str:
@@ -9231,10 +9227,7 @@ class LocalArtifactVersionRegistry:
                 if (
                     transaction._expected_receipt is not plan.receipt
                     or type(transaction._publication_token) is not str
-                    or not hmac.compare_digest(
-                        transaction._publication_token,
-                        plan.receipt.publication_token,
-                    )
+                    or transaction._publication_token != plan.receipt.publication_token
                     or plan.receipt.publication_token
                     != reservation.canonical_token.publication_token
                 ):

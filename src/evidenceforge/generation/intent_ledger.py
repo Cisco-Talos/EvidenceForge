@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import sys
 from collections import Counter
@@ -799,7 +798,6 @@ class IntentExecutionLedger:
         self._watermark_us: int | None = None
         self._lock = RLock()
         self._batch_ledger_id = token_bytes(16).hex()
-        self._batch_secret = token_bytes(32)
         self._next_batch_preparation_id = 1
         self._batch_reservations: dict[int, _IntentExecutionBatchReservation] = {}
         self._batch_committed_receipts: WeakValueDictionary[int, IntentExecutionBatchReceipt] = (
@@ -867,12 +865,8 @@ class IntentExecutionLedger:
         expected_watermark: datetime | None,
         plan_digest: str,
     ) -> str:
-        payload = (
-            f"intent-execution-batch-admission\0{self._batch_ledger_id}\0"
-            f"{preparation_id}\0{self._batch_watermark_text(expected_watermark)}\0"
-            f"{plan_digest}"
-        ).encode()
-        return hmac.new(self._batch_secret, payload, hashlib.sha256).hexdigest()
+        del expected_watermark, plan_digest
+        return f"intent-batch:{self._batch_ledger_id}:{preparation_id:x}"
 
     def _batch_receipt_integrity(
         self,
@@ -884,14 +878,8 @@ class IntentExecutionLedger:
         plan_digest: str,
         committed_digest: str,
     ) -> str:
-        payload = (
-            f"intent-execution-batch-receipt\0{self._batch_ledger_id}\0"
-            f"{preparation_id}\0{self._batch_watermark_text(expected_watermark)}\0"
-            f"{self._batch_watermark_text(prior_watermark)}\0"
-            f"{self._batch_watermark_text(committed_watermark)}\0"
-            f"{plan_digest}\0{committed_digest}"
-        ).encode()
-        return hmac.new(self._batch_secret, payload, hashlib.sha256).hexdigest()
+        del expected_watermark, prior_watermark, committed_watermark, plan_digest, committed_digest
+        return f"intent-receipt:{self._batch_ledger_id}:{preparation_id:x}"
 
     def _batch_terminal_receipt_proof(
         self,
@@ -899,12 +887,7 @@ class IntentExecutionLedger:
     ) -> str:
         """Return the proof installed only after canonical batch publication."""
 
-        payload = (
-            f"intent-execution-batch-terminal\0{self._batch_ledger_id}\0"
-            f"{receipt.preparation_id}\0{receipt.plan_digest}\0"
-            f"{receipt.committed_digest}\0{receipt._integrity}"
-        ).encode()
-        return hmac.new(self._batch_secret, payload, hashlib.sha256).hexdigest()
+        return f"intent-terminal:{self._batch_ledger_id}:{receipt.preparation_id:x}"
 
     @staticmethod
     def _batch_committed_digest(

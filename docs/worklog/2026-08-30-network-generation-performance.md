@@ -24,15 +24,27 @@ attacker boundary.
   draw, and connection cursor/identity tokens no longer encode those large states.
 - Network request identity is captured once at planner entry and reused by timing and transaction
   helpers without changing the public seed-scoped `stable_id` property.
-- Planner execution reuses an import-precompiled, read-only snapshot of approved identity type
-  metadata. The public `stable_id` property retains its fresh adversarial metadata validation, and
-  both paths share the exact same canonical value encoder and digest framing.
+- Planner execution and the public `stable_id` property share the same canonical value encoder and
+  digest framing without authenticating Python class, function, closure, or descriptor metadata.
 - Frozen engine-owned commit results and transactions are reused through sealing rather than
   repeatedly deep-copied and revalidated.
 - Connection composite plans carry an opaque manager-owner token plus their existing semantic
   fences; full graph HMAC recomputation was removed from the connection hot path.
 - Tests whose sole contract was surviving `object.__setattr__`, callback traps, or copied internal
   capabilities were removed or rewritten around normal immutable and ownership contracts.
+
+The remaining trusted-engine migration was split into four routine-suite-gated commits:
+
+- `388b1d7d` removed hostile-runtime identity and binding defenses.
+- `ee0f3072` replaced shared lifecycle, runtime, timing, registry, ledger, and preparation graph
+  authentication with constant-time owner-issued authority state.
+- `fd8d3590` simplified protocol, application-channel, observation, and continuation authorities.
+- Stage 4 simplifies StateManager and emitter recovery authorities while retaining ownership,
+  lifecycle/version fences, atomic publication, retry, rollback, and filesystem descriptor safety.
+
+The dispatcher owner token used by a few compatibility carriers is a constant per-dispatcher
+opaque marker, not a secret or security proof. Exact retained-carrier identity and explicit
+lifecycle state remain authoritative.
 
 ## Measurements and Verification
 
@@ -64,3 +76,9 @@ instead of the prior 9.94% aggregate hotspot.
 The routine suite passed with 8,157 tests and 27 skips. The slow network-identity suite passed all
 83 cases, including fresh-process determinism and trusted/public byte parity, and the focused
 once-per-transaction identity test passed. Ruff check and format verification also passed.
+
+After Stage 4, its focused exact-publication and service-logon recovery suite passed all 86 cases,
+and the complete routine checkpoint passed 7,939 tests with 27 skips and 1,990 slow/soak cases
+deselected. The reduced routine count reflects retirement of tests whose only contract was
+resistance to hostile same-process mutation; ownership, stale-capability, duplicate-finalization,
+rollback, interrupted-publication, and retry coverage remains.

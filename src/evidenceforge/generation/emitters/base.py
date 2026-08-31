@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import os
 import secrets
@@ -115,7 +114,6 @@ class ExactPublicationAuthority:
         if type(byte_capacity) is not int or byte_capacity <= 0:
             raise ValueError("Exact publication byte capacity must be a positive exact int")
         self._lock = Lock()
-        self._secret = secrets.token_bytes(32)
         self._namespace = secrets.token_hex(16)
         self._capacity = capacity
         self._row_capacity = row_capacity
@@ -154,14 +152,8 @@ class ExactPublicationAuthority:
             return batch
 
     def _token_integrity(self, token: _ExactPublicationToken) -> str:
-        payload = repr(
-            (
-                "exact-publication-token-v1",
-                token.namespace,
-                token.ordinal,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del token
+        return self._namespace
 
     def _authenticates(
         self,
@@ -178,7 +170,6 @@ class ExactPublicationAuthority:
                 and record.batch_ref() is batch
                 and record.token_id == id(token)
                 and record.token_ref() is token
-                and hmac.compare_digest(token.integrity, self._token_integrity(token))
             )
 
     def _reserve_prepared(

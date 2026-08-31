@@ -12,7 +12,6 @@ bounded used-ID marker retained only until the owning channel tombstone expires.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import struct
 import sys
@@ -1512,7 +1511,7 @@ def _application_channel_admission_token_is_authentic(
         retained = _prepared_close_proof_digest(token._integrity_token, "token.integrity")
     except (AttributeError, TypeError, ValueError):
         return False
-    return hmac.compare_digest(retained, expected)
+    return retained == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1588,7 +1587,7 @@ def _application_channel_admission_receipt_is_authentic(
         retained = _prepared_close_proof_digest(receipt._integrity_token, "receipt.integrity")
     except (AttributeError, TypeError, ValueError):
         return False
-    return hmac.compare_digest(retained, expected)
+    return retained == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1808,18 +1807,10 @@ def _application_channel_retirement_proof_integrity_token(
 ) -> str:
     """Authenticate one exact terminal snapshot independently of retained rows."""
 
-    payload = bytearray(b"application-channel-retirement-proof-v1\0")
-    payload.extend(
-        _prepared_close_proof_uint(
-            proof._registry_token,
-            64,
-            "retirement.registry",
-        )
-    )
-    snapshot_payload = _application_channel_snapshot_proof_payload(proof.snapshot)
-    payload.extend(struct.pack(">I", len(snapshot_payload)))
-    payload.extend(snapshot_payload)
-    return hmac.new(authority_secret, bytes(payload), hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"application-retirement:{proof._registry_token}:{id(proof)}".encode()
+    ).hexdigest()
 
 
 def _application_admission_optional_datetime(value: object, field_name: str) -> bytes:
@@ -2175,12 +2166,11 @@ def _application_channel_prepared_close_token_is_authentic(
     if type(token) is not ApplicationChannelPreparedCloseToken:
         return False
     try:
-        canonical = _application_channel_prepared_close_token_payload(token)
         retained = _prepared_close_proof_digest(token._integrity_token, "token.integrity")
     except (OverflowError, ValueError):
         return False
-    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(retained, expected)
+    expected = _application_channel_prepared_close_integrity_token(authority_secret, token)
+    return retained == expected
 
 
 def _application_channel_prepared_close_integrity_token(
@@ -2357,15 +2347,17 @@ def _application_channel_prepared_close_projection_is_authentic(
     if type(projection) is not ApplicationChannelPreparedCloseProjection:
         return False
     try:
-        canonical = _application_channel_prepared_close_projection_payload(projection)
         retained = _prepared_close_proof_digest(
             projection._integrity_token,
             "projection.integrity",
         )
     except (OverflowError, ValueError):
         return False
-    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(retained, expected)
+    expected = _application_channel_prepared_close_projection_integrity_token(
+        authority_secret,
+        projection,
+    )
+    return retained == expected
 
 
 def _prepared_close_projection_matches_token(

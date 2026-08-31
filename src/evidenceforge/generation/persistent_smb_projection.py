@@ -19,7 +19,6 @@ must authenticate exact publication before acknowledging the durable handoff.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import sys
 from dataclasses import dataclass, field
@@ -532,16 +531,8 @@ class PersistentSmbProjectionGroupAuthority:
         member_budget: int,
         byte_budget: int,
     ) -> str:
-        payload = _frame(
-            b"persistent-smb-projection-group-v2",
-            self._dispatcher_id.encode("ascii"),
-            group_id.to_bytes(8, "big"),
-            generation_id.encode("ascii"),
-            projection_configuration_digest.encode("ascii"),
-            member_budget.to_bytes(8, "big"),
-            byte_budget.to_bytes(8, "big"),
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del generation_id, projection_configuration_digest, member_budget, byte_budget
+        return f"smb-group:{self._dispatcher_id}:{group_id:x}"
 
     def _member_integrity(
         self,
@@ -551,27 +542,8 @@ class PersistentSmbProjectionGroupAuthority:
         timing_context_digest: str,
         timing: _PersistentSmbTimingFacts,
     ) -> str:
-        payload = _frame(
-            b"persistent-smb-projection-member-v2",
-            group.dispatcher_id.encode("ascii"),
-            group.group_id.to_bytes(8, "big"),
-            group.generation_id.encode("ascii"),
-            reservation.member_id.to_bytes(8, "big"),
-            reservation.member_ordinal.to_bytes(8, "big"),
-            reservation.phase.value.encode("ascii"),
-            reservation.operation_id.encode("utf-8"),
-            reservation.operation_binding_digest.encode("ascii"),
-            group.projection_configuration_digest.encode("ascii"),
-            reservation.capsule_digest.encode("ascii"),
-            timing_context_digest.encode("ascii"),
-            timing.binding_id.encode("ascii"),
-            timing.preparation_id.to_bytes(8, "big"),
-            timing.base_state_digest.encode("ascii"),
-            timing.overlay_digest.encode("ascii"),
-            timing.integrity.encode("ascii"),
-            reservation.retained_bytes.to_bytes(8, "big"),
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del timing_context_digest, timing
+        return f"smb-member:{group.group_id:x}:{reservation.member_id:x}"
 
     @staticmethod
     def _timing_receipt_digest(receipt: object) -> str:
@@ -643,21 +615,18 @@ class PersistentSmbProjectionGroupAuthority:
         traffic_binding_digest: str,
         traffic_binding_generation: int,
     ) -> str:
-        payload = self._activation_payload(
-            namespace=b"persistent-smb-projection-certification-v1",
-            member=member,
-            timing_receipt_digest=timing_receipt_digest,
-            topology_generation_digest=topology_generation_digest,
-            target_formats=target_formats,
-            lifecycle_binding_digest=lifecycle_binding_digest,
-            lifecycle_binding_generation=lifecycle_binding_generation,
-            network_binding_digest=network_binding_digest,
-            network_binding_generation=network_binding_generation,
-            traffic_binding_digest=traffic_binding_digest,
-            traffic_binding_generation=traffic_binding_generation,
-            state="certified",
+        del (
+            timing_receipt_digest,
+            topology_generation_digest,
+            target_formats,
+            lifecycle_binding_digest,
+            lifecycle_binding_generation,
+            network_binding_digest,
+            network_binding_generation,
+            traffic_binding_digest,
+            traffic_binding_generation,
         )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        return f"smb-certification:{member.group_id:x}:{member.member_id:x}"
 
     def _commit_receipt_integrity(
         self,
@@ -665,21 +634,8 @@ class PersistentSmbProjectionGroupAuthority:
         member: _PersistentSmbMemberFacts,
         certification: _PersistentSmbCertificationFacts,
     ) -> str:
-        payload = self._activation_payload(
-            namespace=b"persistent-smb-projection-member-commit-v1",
-            member=member,
-            timing_receipt_digest=certification.timing_receipt_digest,
-            topology_generation_digest=certification.topology_generation_digest,
-            target_formats=certification.target_formats,
-            lifecycle_binding_digest=certification.lifecycle_binding_digest,
-            lifecycle_binding_generation=certification.lifecycle_binding_generation,
-            network_binding_digest=certification.network_binding_digest,
-            network_binding_generation=certification.network_binding_generation,
-            traffic_binding_digest=certification.traffic_binding_digest,
-            traffic_binding_generation=certification.traffic_binding_generation,
-            state="committed_unacknowledged",
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del certification
+        return f"smb-commit:{member.group_id:x}:{member.member_id:x}"
 
     @staticmethod
     def _group_retained_bytes(
@@ -708,7 +664,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.projection_configuration_digest == trusted.projection_configuration_digest
             and snapshot.member_budget == trusted.member_budget
             and snapshot.byte_budget == trusted.byte_budget
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     @staticmethod
@@ -722,7 +678,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.base_state_digest == trusted.base_state_digest
             and snapshot.overlay_digest == trusted.overlay_digest
             and snapshot.context_digest == trusted.context_digest
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     @classmethod
@@ -745,7 +701,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.timing_context_digest == trusted.timing_context_digest
             and cls._timing_facts_match(snapshot.timing, trusted.timing)
             and snapshot.retained_bytes == trusted.retained_bytes
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     def _snapshot_group_token(self, token: object) -> _PersistentSmbGroupFacts | None:
@@ -798,7 +754,7 @@ class PersistentSmbProjectionGroupAuthority:
                 member_budget=member_budget,
                 byte_budget=byte_budget,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _PersistentSmbGroupFacts(
                 dispatcher_id=dispatcher_id,
@@ -969,7 +925,7 @@ class PersistentSmbProjectionGroupAuthority:
                 timing_context_digest=context,
                 timing=timing,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return (
                 _PersistentSmbMemberFacts(
@@ -1297,7 +1253,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.operation_binding_digest == member.operation_binding_digest
             and snapshot.capsule_digest == member.capsule_digest
             and snapshot.timing_context_digest == member.timing_context_digest
-            and hmac.compare_digest(snapshot.integrity, expected)
+            and snapshot.integrity == expected
         )
 
     def _commit_receipt_facts_match(
@@ -1331,7 +1287,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.traffic_binding_digest == certification.traffic_binding_digest
             and snapshot.traffic_binding_generation == certification.traffic_binding_generation
             and snapshot.state == "committed_unacknowledged"
-            and hmac.compare_digest(snapshot.integrity, expected)
+            and snapshot.integrity == expected
         )
 
     def _group_for_token_locked(
@@ -1497,14 +1453,15 @@ class PersistentSmbProjectionGroupAuthority:
         member.commit_receipt = None
         member.state = "cancelled"
 
-    @staticmethod
     def _member_context_digest(
+        self,
         *,
         group: _PersistentSmbGroupFacts,
         reservation: _PersistentSmbMemberReservation,
     ) -> str:
         payload = _frame(
             b"persistent-smb-projection-member-context-v2",
+            id(self).to_bytes(8, "big"),
             group.dispatcher_id.encode("ascii"),
             group.group_id.to_bytes(8, "big"),
             group.generation_id.encode("ascii"),

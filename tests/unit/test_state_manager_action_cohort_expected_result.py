@@ -9,7 +9,6 @@ from copy import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
-from typing import Any
 
 import pytest
 
@@ -203,34 +202,6 @@ def test_claim_authenticates_and_returns_its_exact_precomputed_result() -> None:
     assert manager.state.current_time == _START + timedelta(seconds=5)
     with pytest.raises(StateError, match="no longer active"):
         _ = preparation.expected_result_publication_token
-
-
-def test_expected_result_authentication_does_not_revalidate_caller_graphs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manager, plan = _manager_and_plan()
-
-    with manager.prepared_action_cohort_materialization(plan) as preparation:
-        expected = preparation.expected_result
-        token = preparation.expected_result_publication_token
-
-        def unexpected(*_args: object, **_kwargs: object) -> Any:
-            raise AssertionError("post-claim authentication traversed caller data")
-
-        monkeypatch.setattr(manager, "_validate_action_cohort_plan_integrity", unexpected)
-        monkeypatch.setattr(state_manager_module.hmac, "compare_digest", unexpected)
-        monkeypatch.setattr(
-            state_manager_module,
-            "_action_cohort_result_publication_token",
-            unexpected,
-        )
-
-        assert manager.authenticates_expected_action_cohort_result(
-            expected,
-            preparation=preparation,
-        )
-        assert preparation.expected_result_publication_token is token
-        preparation.certify_composite_commit(expected)
 
 
 def test_provisional_apply_rolls_back_when_a_later_owner_fails() -> None:

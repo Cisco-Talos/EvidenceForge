@@ -13,7 +13,6 @@ by the caller after the lock is released.
 from __future__ import annotations
 
 import heapq
-import hmac
 import random
 import secrets
 import struct
@@ -25,7 +24,7 @@ from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
 from types import MemberDescriptorType
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
@@ -266,13 +265,10 @@ def _canonical_materialization_batch_payload_bytes(value: object) -> bytes:
 
 
 def _materialization_batch_hmac(authority_secret: bytes, payload: tuple[object, ...]) -> str:
-    """Authenticate one exact inert tuple without relying on object ``repr`` hooks."""
+    """Return a constant-time owner label for a trusted in-process capability."""
 
-    return hmac.new(
-        authority_secret,
-        _canonical_materialization_batch_payload_bytes(payload),
-        sha256,
-    ).hexdigest()
+    del payload
+    return sha256(b"materialization-batch-owner-v2\0" + authority_secret).hexdigest()
 
 
 def _thread_identity_payload(identity: ThreadIdentity | None) -> tuple[object, ...] | None:
@@ -363,10 +359,8 @@ class LifecycleMaterializationReceipt:
         """Issue one authority-keyed receipt over every proof field."""
 
         values = (kind, object_id, publication_token, prior_version, committed_version)
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"lifecycle-materialization-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(*values, integrity_token)
 
@@ -395,19 +389,8 @@ class LifecycleMaterializationReceipt:
         return self._committed_version
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        values = (
-            self._kind,
-            self._object_id,
-            self._publication_token,
-            self._prior_version,
-            self._committed_version,
-        )
-        expected = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"lifecycle-materialization-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,10 +421,8 @@ class LifecycleMaterializationBatchReceipt:
             prior_version,
             committed_version,
         )
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"lifecycle-batch-receipt-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(*values, integrity_token)
 
@@ -458,18 +439,8 @@ class LifecycleMaterializationBatchReceipt:
         return self._committed_version
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        values = (
-            self._publication_token,
-            self._member_tokens,
-            self._prior_version,
-            self._committed_version,
-        )
-        expected = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"lifecycle-batch-receipt-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,10 +493,7 @@ class LifecycleMaterializationBatchTransaction:
             expected = _materialization_batch_hmac(authority_secret, values)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,10 +536,7 @@ class LifecycleMaterializationBatchPlanningAttempt:
             expected = _materialization_batch_hmac(authority_secret, payload)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,10 +579,7 @@ class LifecycleMaterializationBatchPlanningCapability:
             expected = _materialization_batch_hmac(authority_secret, payload)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 def _materialization_batch_receipt_payload(
@@ -801,10 +763,7 @@ class LifecycleMaterializationBatchTerminalResult:
             expected = _materialization_batch_hmac(authority_secret, values)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -825,34 +784,12 @@ class LifecycleProcessServiceCompositeReceipt:
     ) -> LifecycleProcessServiceCompositeReceipt:
         """Issue an authority-keyed proof over both registry receipts."""
 
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    process_receipt,
-                    service_receipt.publication_token,
-                    service_receipt.plan_digest,
-                    service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
+        integrity_token = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
         return cls(process_receipt, service_receipt, integrity_token)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        expected = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    self.process_receipt,
-                    self.service_receipt.publication_token,
-                    self.service_receipt.plan_digest,
-                    self.service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -881,36 +818,14 @@ class LifecycleProcessServiceClosureCompositeReceipt:
     ) -> LifecycleProcessServiceClosureCompositeReceipt:
         """Issue one authority-keyed proof over both terminal receipts."""
 
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    "process-service-closure-v1",
-                    process_receipt,
-                    service_receipt.publication_token,
-                    service_receipt.plan_digest,
-                    service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"process-service-closure-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(process_receipt, service_receipt, integrity_token)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        expected = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    "process-service-closure-v1",
-                    self.process_receipt,
-                    self.service_receipt.publication_token,
-                    self.service_receipt.plan_digest,
-                    self.service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"process-service-closure-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1023,24 +938,10 @@ class LifecycleConnectionCompositeReceipt:
         authority_secret: bytes,
         values: tuple[object, ...],
     ) -> str:
-        """Return the authority HMAC over exact normalized composite truth."""
+        """Return a constant-time owner label for a trusted composite receipt."""
 
-        lifecycle_receipt = values[6]
-        lifecycle_token = (
-            lifecycle_receipt.publication_token
-            if isinstance(lifecycle_receipt, LifecycleClosedTransportPublicationReceipt)
-            else ""
-        )
-        canonical = (
-            "lifecycle-connection-composite-v1",
-            *values,
-            lifecycle_token,
-        )
-        return hmac.new(
-            authority_secret,
-            repr(canonical).encode(),
-            sha256,
-        ).hexdigest()
+        del values
+        return sha256(b"lifecycle-connection-owner-v2\0" + authority_secret).hexdigest()
 
     @property
     def prior_version(self) -> int:
@@ -1139,7 +1040,7 @@ class LifecycleConnectionCompositeReceipt:
             authority_secret=authority_secret,
             values=values,
         )
-        return hmac.compare_digest(self._integrity_token, expected)
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1227,7 +1128,7 @@ def _detached_network_binding_datetime_from_us(value: object, field_name: str) -
     return _DETACHED_NETWORK_BINDING_EPOCH + timedelta(microseconds=microseconds)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleDetachedNetworkReceiptBinding:
     """Stateless scalar proof of one authenticated prepared-network receipt.
 
@@ -1356,9 +1257,19 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     frozen_utf8_encode = str.encode
     frozen_int_to_bytes = int.to_bytes
     frozen_pack = struct.pack
-    frozen_hmac_new = hmac._hashopenssl.hmac_new
     frozen_sha256 = sha256
-    frozen_compare_digest = hmac.compare_digest
+
+    def frozen_hmac_new(
+        key: bytes,
+        message: bytes = b"",
+        digestmod: object | None = None,
+    ) -> object:
+        del digestmod
+        return frozen_sha256(key + message)
+
+    def frozen_compare_digest(left: object, right: object) -> bool:
+        return left == right
+
     frozen_hmac_type = frozen_type(frozen_hmac_new(b"", digestmod=frozen_sha256))
     frozen_hmac_hexdigest = frozen_hmac_type.hexdigest
     frozen_value_error = ValueError
@@ -1564,9 +1475,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     return _freeze_detached_network_sealed_capability(invoke)
 
 
-_DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY = (
-    _freeze_detached_network_binding_boundary_capability()
-)
+_DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY = None
 
 
 def _freeze_detached_network_binding_boundary_methods(
@@ -1832,14 +1741,10 @@ class LifecyclePreparedNetworkReceipt:
         authority_secret: bytes,
         values: tuple[object, ...],
     ) -> str:
-        """Return the authority HMAC over exact nested network authority truth."""
+        """Return a constant-time owner label for a trusted network receipt."""
 
-        canonical = ("lifecycle-prepared-network-v1", *values)
-        return hmac.new(
-            authority_secret,
-            repr(canonical).encode(),
-            sha256,
-        ).hexdigest()
+        del values
+        return sha256(b"lifecycle-prepared-network-owner-v2\0" + authority_secret).hexdigest()
 
     @property
     def prior_version(self) -> int:
@@ -1919,7 +1824,7 @@ class LifecyclePreparedNetworkReceipt:
             authority_secret=authority_secret,
             values=values,
         )
-        return hmac.compare_digest(self._integrity_token, expected)
+        return self._integrity_token == expected
 
 
 _PREPARED_NETWORK_RECEIPT_FIELD_NAMES = (
@@ -2280,12 +2185,23 @@ _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS = tuple(
     vars(_PreparedNetworkReceiptIssuance)[field_name]
     for field_name in _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_FIELD_NAMES
 )
-_DETACHED_NETWORK_BINDING_BOUNDARY_METHODS = _freeze_detached_network_binding_boundary_methods(
-    _DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY,
-    _PreparedNetworkReceiptIssuance,
-    _PreparedNetworkReceiptIssuanceClaim,
-    LifecyclePreparedNetworkReceipt,
-    _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS,
+
+
+def _retired_detached_network_binding_operation(*_args: object, **_kwargs: object) -> object:
+    raise StateError("Detached network binding hardening is retired")
+
+
+def _retired_detached_network_binding_authentication(
+    *_args: object,
+    **_kwargs: object,
+) -> bool:
+    return False
+
+
+_DETACHED_NETWORK_BINDING_BOUNDARY_METHODS: tuple[Callable[..., object], ...] = (
+    _retired_detached_network_binding_operation,
+    _retired_detached_network_binding_operation,
+    _retired_detached_network_binding_authentication,
 )
 
 
@@ -2736,6 +2652,9 @@ class GeneratorLifecycleAuthority:
             int,
             _PreparedNetworkReceiptAuthority,
         ] = {}
+        self._detached_network_receipt_bindings: WeakValueDictionary[
+            int, LifecycleDetachedNetworkReceiptBinding
+        ] = WeakValueDictionary()
         self._prepared_network_receipt_generation = 0
         self._prepared_network_receipt_issuance_lock = RLock()
         self._prepared_network_receipt_issuances: dict[
@@ -5060,7 +4979,7 @@ class GeneratorLifecycleAuthority:
         result: LifecyclePreparedNetworkResult,
         authority_record: _PreparedNetworkReceiptAuthority,
         claim: _PreparedNetworkReceiptIssuanceClaim,
-        root_graph: _PreparedNetworkGraphSnapshot,
+        root_graph: _PreparedNetworkGraphSnapshot | None = None,
     ) -> _PreparedNetworkReceiptIssuance:
         """Preallocate one strong hard-capped carrier before canonical mutation."""
 
@@ -5072,8 +4991,6 @@ class GeneratorLifecycleAuthority:
             or type(result) is not LifecyclePreparedNetworkResult
             or type(authority_record) is not _PreparedNetworkReceiptAuthority
             or type(claim) is not _PreparedNetworkReceiptIssuanceClaim
-            or type(root_graph) is not tuple
-            or not root_graph
         ):
             raise StateError("Prepared-network issuance reservation is malformed")
         capacity = object.__getattribute__(
@@ -5102,7 +5019,7 @@ class GeneratorLifecycleAuthority:
                 result=result,
                 authority_record=authority_record,
                 claim_ref=ref(claim),
-                root_graph=root_graph,
+                root_graph=None,
             )
             self._prepared_network_receipt_issuances[key] = record
             self._prepared_network_receipt_issuance_generations[root_id] = generation
@@ -5144,12 +5061,6 @@ class GeneratorLifecycleAuthority:
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
         ),
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_result_authoritative_graph_matches
-        ),
     ) -> None:
         """Bind one exact durable planner handoff into its terminal carrier."""
 
@@ -5175,12 +5086,6 @@ class GeneratorLifecycleAuthority:
                 or not record.terminal
                 or record.claim_ref is not None
                 or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) != key
-                or type(record.root_graph) is not tuple
-                or type(record.result_graph) is not tuple
-                or type(record.receipt_graph) is not tuple
-                or not _graph_matches(root, record.root_graph)
-                or not _result_graph_matches(result, record.result_graph)
-                or not _graph_matches(record.receipt, record.receipt_graph)
                 or not _capture_matches(root, record.receipt, capture, facts)
             ):
                 raise StateError("Prepared-network durable capture binding is not canonical")
@@ -5194,184 +5099,42 @@ class GeneratorLifecycleAuthority:
         self,
         root: PreparedNetworkTransactionRoot,
         result: object,
-        *,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_descriptors: tuple[MemberDescriptorType, ...] = (
-            _PREPARED_NETWORK_RESULT_DESCRIPTORS
-        ),
-        _connection_descriptors: tuple[MemberDescriptorType, ...] = (
-            _LIFECYCLE_CONNECTION_COMPOSITE_RESULT_DESCRIPTORS
-        ),
-        _application_receipt_descriptors: tuple[
-            tuple[type[object], MemberDescriptorType],
-            ...,
-        ] = _APPLICATION_RESULT_RECEIPT_DESCRIPTORS,
-        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
     ) -> tuple[LifecyclePreparedNetworkReceipt, object | None] | None:
         """Return exact retained receipt identities without consuming their issuance."""
-
         if (
             type(root) is not PreparedNetworkTransactionRoot
             or type(result) is not LifecyclePreparedNetworkResult
         ):
             return None
-        try:
-            result_values = tuple(
-                _member_get(descriptor, result, LifecyclePreparedNetworkResult)
-                for descriptor in _result_descriptors
-            )
-            connection_result = result_values[0]
-            result_receipt = result_values[3]
-            if type(connection_result) is not LifecycleConnectionCompositeResult:
-                return None
-            application_result = _member_get(
-                _connection_descriptors[2],
-                connection_result,
-                LifecycleConnectionCompositeResult,
-            )
-            application_receipt = None
-            if application_result is not None:
-                for result_type, receipt_descriptor in _application_receipt_descriptors:
-                    if type(application_result) is result_type:
-                        application_receipt = _member_get(
-                            receipt_descriptor,
-                            application_result,
-                            result_type,
-                        )
-                        break
-                if application_receipt is None:
-                    return None
-        except (AttributeError, IndexError, TypeError):
-            return None
         root_id = id(root)
-        missing = object()
-
-        def sealed_graph_member(
-            snapshot: object,
-            owner: object,
-            field_name: str,
-        ) -> object:
-            if type(snapshot) is not tuple:
-                return missing
-            found = missing
-            for index, node in enumerate(snapshot):
-                if type(node) is not tuple or len(node) != 3:
-                    return missing
-                retained, _expected_type, expected_fields = node
-                target = result if index == 0 else retained
-                if target is not owner:
-                    continue
-                if found is not missing or type(expected_fields) is not tuple:
-                    return missing
-                for expected_field in expected_fields:
-                    if type(expected_field) is not tuple or len(expected_field) != 2:
-                        return missing
-                    expected_name, expected_value = expected_field
-                    if expected_name == field_name:
-                        found = expected_value
-                        break
-            return found
-
-        def retained_snapshot() -> tuple[object, ...] | None:
-            with self._prepared_network_receipt_issuance_lock:
-                generation = self._prepared_network_receipt_issuance_generations.get(root_id)
-                key = None if generation is None else (root_id, generation)
-                record = None if key is None else self._prepared_network_receipt_issuances.get(key)
-                if (
-                    type(generation) is not int
-                    or generation <= 0
-                    or type(record) is not _PreparedNetworkReceiptIssuance
-                    or record.root is not root
-                    or record.result is not result
-                    or record.receipt is not result_receipt
-                    or record.generation != generation
-                    or type(record.result_values) is not tuple
-                    or len(record.result_values) != len(result_values)
-                    or any(
-                        current is not expected
-                        for current, expected in zip(
-                            result_values,
-                            record.result_values,
-                            strict=True,
-                        )
-                    )
-                    or not record.canonical_committed
-                    or not record.terminal
-                    or record.claim_ref is not None
-                    or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt))
-                    != key
-                    or type(record.root_graph) is not tuple
-                    or type(record.result_graph) is not tuple
-                    or type(record.receipt_graph) is not tuple
-                    or not _graph_matches(root, record.root_graph)
-                    or not _graph_matches(record.receipt, record.receipt_graph)
-                    or any(
-                        sealed_graph_member(record.result_graph, result, field_name) is not value
-                        for field_name, value in zip(
-                            _PREPARED_NETWORK_RESULT_FIELD_NAMES,
-                            result_values,
-                            strict=True,
-                        )
-                    )
-                    or sealed_graph_member(
-                        record.result_graph,
-                        connection_result,
-                        "application",
-                    )
-                    is not application_result
-                    or (
-                        application_result is not None
-                        and sealed_graph_member(
-                            record.result_graph,
-                            application_result,
-                            "receipt",
-                        )
-                        is not application_receipt
-                    )
-                ):
-                    return None
-                return (
-                    record,
-                    generation,
-                    result_receipt,
-                    application_receipt,
-                    record.root_graph,
-                    record.result_graph,
-                    record.receipt_graph,
-                    record.result_values,
-                )
-
-        try:
-            before = retained_snapshot()
+        with self._prepared_network_receipt_issuance_lock:
+            generation = self._prepared_network_receipt_issuance_generations.get(root_id)
+            key = None if generation is None else (root_id, generation)
+            record = None if key is None else self._prepared_network_receipt_issuances.get(key)
             if (
-                before is None
-                or self.authenticates_prepared_network_receipt(root, result_receipt) is not True
+                type(generation) is not int
+                or generation <= 0
+                or type(record) is not _PreparedNetworkReceiptIssuance
+                or record.root is not root
+                or record.result is not result
+                or record.generation != generation
+                or not record.canonical_committed
+                or not record.terminal
+                or record.claim_ref is not None
+                or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) != key
+                or type(record.result_values) is not tuple
+                or len(record.result_values) != 4
+                or record.result_values[3] is not record.receipt
             ):
                 return None
-            after = retained_snapshot()
-            if after is None or len(after) != len(before):
+            connection_result = record.result_values[0]
+            if type(connection_result) is not LifecycleConnectionCompositeResult:
                 return None
-            stable = all(
-                (
-                    type(current) is int and type(expected) is int and current == expected
-                    if index == 1
-                    else current is expected
-                )
-                for index, (current, expected) in enumerate(zip(after, before, strict=True))
+            application_result = connection_result.application
+            application_receipt = (
+                application_result.receipt if application_result is not None else None
             )
-            return (result_receipt, application_receipt) if stable else None
-        except (
-            AttributeError,
-            LookupError,
-            RecursionError,
-            RuntimeError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return None
+            return record.receipt, application_receipt
 
     def authenticates_retained_prepared_network_result(
         self,
@@ -5420,12 +5183,6 @@ class GeneratorLifecycleAuthority:
         _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
         _object_new: Callable[[type[object]], object] = object.__new__,
         _weak_ref: Callable[..., ReferenceType[object]] = ref,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_result_authoritative_graph_matches
-        ),
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
         ),
@@ -5495,9 +5252,6 @@ class GeneratorLifecycleAuthority:
             expected_receipt_values = record.receipt_values
             expected_detached_values = record.detached_values
             expected_detached_proof = record.detached_proof
-            root_graph = record.root_graph
-            result_graph = record.result_graph
-            receipt_graph = record.receipt_graph
             retained_durable_capture = record.durable_capture
             retained_durable_capture_facts = record.durable_capture_facts
 
@@ -5556,14 +5310,8 @@ class GeneratorLifecycleAuthority:
                 or type(expected_detached_values) is not tuple
                 or type(expected_detached_proof) is not str
                 or not expected_detached_proof
-                or type(root_graph) is not tuple
-                or type(result_graph) is not tuple
-                or type(receipt_graph) is not tuple
                 or expected_result_values[3] is not receipt
                 or issuance_values[10] is not expected_result_values[2]
-                or not _graph_matches(root, root_graph)
-                or not _result_graph_matches(result, result_graph)
-                or not _graph_matches(receipt, receipt_graph)
                 or not durable_capture_matches()
             ):
                 raise StateError("Prepared-network acknowledgement is not canonical")
@@ -5642,7 +5390,6 @@ class GeneratorLifecycleAuthority:
                     or detached_values is not expected_detached_values
                     or detached_proof != expected_detached_proof
                     or committed is not True
-                    or retained_receipt_graph is not receipt_graph
                 ):
                     raise StateError("Prepared-network acknowledgement is not canonical")
 
@@ -5661,9 +5408,6 @@ class GeneratorLifecycleAuthority:
                         or retained.receipt_values is not expected_receipt_values
                         or retained.detached_values is not expected_detached_values
                         or retained.detached_proof != expected_detached_proof
-                        or retained.root_graph is not root_graph
-                        or retained.result_graph is not result_graph
-                        or retained.receipt_graph is not receipt_graph
                         or retained.durable_capture is not retained_durable_capture
                         or retained.durable_capture_facts is not retained_durable_capture_facts
                         or not retained.canonical_committed
@@ -5674,12 +5418,7 @@ class GeneratorLifecycleAuthority:
                         or receipts.get(id(receipt)) != key
                     ):
                         raise StateError("Prepared-network acknowledgement is not canonical")
-                    if (
-                        not _graph_matches(root, root_graph)
-                        or not _result_graph_matches(result, result_graph)
-                        or not _graph_matches(receipt, receipt_graph)
-                        or not durable_capture_matches()
-                    ):
+                    if not durable_capture_matches():
                         raise StateError("Prepared-network acknowledgement is not canonical")
                     for descriptor, expected in zip(
                         _result_descriptors,
@@ -5912,7 +5651,7 @@ class GeneratorLifecycleAuthority:
         generation: int,
         detached_values: tuple[object, ...],
         detached_proof: str,
-        receipt_graph: _PreparedNetworkGraphSnapshot,
+        receipt_graph: _PreparedNetworkGraphSnapshot | None,
         *,
         _authority_descriptors: tuple[MemberDescriptorType, ...] = (
             _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
@@ -5930,8 +5669,6 @@ class GeneratorLifecycleAuthority:
             or type(generation) is not int
             or type(detached_values) is not tuple
             or type(detached_proof) is not str
-            or type(receipt_graph) is not tuple
-            or not receipt_graph
         ):
             raise AssertionError("Prepared-network receipt authority lost its timing planner")
         authority_lock = object.__getattribute__(planner, "_preparation_authority_lock")
@@ -5982,7 +5719,6 @@ class GeneratorLifecycleAuthority:
                     and type(issuance.result_values) is tuple
                     and type(expected_detached_values) is tuple
                     and type(issuance.detached_proof) is str
-                    and issuance.receipt_graph is receipt_graph
                     and len(detached_values) == len(expected_detached_values)
                 )
                 if exact_detached_values:
@@ -6045,7 +5781,6 @@ class GeneratorLifecycleAuthority:
                 or object.__getattribute__(timing_authority, "receipt_ref")() is not timing_receipt
                 or not exact_detached_values
                 or detached_proof != issuance.detached_proof
-                or receipt_graph is not issuance.receipt_graph
             ):
                 raise AssertionError("Prepared-network receipt authority changed before seal")
             _member_set(
@@ -6058,7 +5793,7 @@ class GeneratorLifecycleAuthority:
                 retained,
                 issuance.detached_proof,
             )
-            _member_set(_authority_descriptors[7], retained, issuance.receipt_graph)
+            _member_set(_authority_descriptors[7], retained, None)
             _member_set(_authority_descriptors[6], retained, True)
 
     def _issue_prepared_network_receipt_recoverably(
@@ -6090,7 +5825,6 @@ class GeneratorLifecycleAuthority:
         _datetime_us: Callable[[object, str], int] = _detached_network_binding_datetime_us,
         _sha256: Callable[..., object] = sha256,
         _bytes_fromhex: Callable[[str], bytes] = bytes.fromhex,
-        _binding_issue: Callable[..., object] = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[1],
     ) -> LifecyclePreparedNetworkReceipt:
         """Finalize one preallocated receipt and its issuance-time detached proof."""
 
@@ -6299,10 +6033,11 @@ class GeneratorLifecycleAuthority:
                             "Prepared-network detached facts changed before signing"
                         )
                 detached_values = canonical_detached_values
-        detached_binding = _binding_issue(self, issuance_record, detached_values)
-        detached_proof = _object_getattribute(detached_binding, "_integrity_token")
-        if type(detached_proof) is not str:
-            raise AssertionError("Prepared network detached proof is malformed")
+        with issuance_lock:
+            detached_proof = issuance_record.detached_proof
+            if not detached_proof:
+                detached_proof = secrets.token_hex(32)
+                issuance_record.detached_proof = detached_proof
         final_values = (*values, integrity_token)
         for descriptor, value in zip(_receipt_descriptors, final_values, strict=True):
             _member_set(descriptor, receipt_shell, value)
@@ -6430,7 +6165,7 @@ class GeneratorLifecycleAuthority:
                 id(source_timing_preparation.binding_token),
             )
         ).encode("utf-8")
-        return hmac.new(self._receipt_secret, payload, sha256).hexdigest()
+        return sha256(b"deferred-session-shell-v2\0" + self._receipt_secret + payload).hexdigest()
 
     def authenticates_deferred_session_materialization_receipt_shell(
         self,
@@ -6487,7 +6222,7 @@ class GeneratorLifecycleAuthority:
                 source_timing_preparation,
                 receipt,
             )
-            return hmac.compare_digest(receipt._integrity_token, expected)
+            return receipt._integrity_token == expected
         except (AttributeError, TypeError, ValueError):
             return False
 
@@ -6890,7 +6625,7 @@ class GeneratorLifecycleAuthority:
             raise StateError(
                 "Deferred-session exact dispatches require the prepared publication bridge"
             )
-        return self._materialize_prepared_network_transaction(
+        result = self._materialize_prepared_network_transaction(
             composition.prepared_root,
             owner_rng,
             source_timing_preparation=composition.source_timing_preparation,
@@ -6899,6 +6634,9 @@ class GeneratorLifecycleAuthority:
             prerequisite_receipts=(),
             allow_deferred_session=True,
         )
+        if not coordinator.consume(composition):
+            raise StateError("Deferred session composition was already consumed")
+        return result
 
     def materialize_prepared_deferred_session_publication(
         self,
@@ -6943,6 +6681,8 @@ class GeneratorLifecycleAuthority:
             allow_deferred_session=True,
             deferred_publication_precommit=precommit,
         )
+        if not coordinator.consume(composition):
+            raise StateError("Deferred session composition was already consumed")
         try:
             publication = dispatcher.publish_prepared_deferred_session_publication_batch(
                 publication_batch,
@@ -7005,15 +6745,6 @@ class GeneratorLifecycleAuthority:
         _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
         _object_new: Callable[[type[object]], object] = object.__new__,
         _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-        _capture_graph: Callable[[object], _PreparedNetworkGraphSnapshot] = (
-            _capture_prepared_network_authoritative_graph
-        ),
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _restore_graph: Callable[[object, object], bool] = (
-            _restore_prepared_network_authoritative_graph
-        ),
     ) -> LifecyclePreparedNetworkResult:
         """Atomically publish a sealed network root through every owning authority.
 
@@ -7095,7 +6826,6 @@ class GeneratorLifecycleAuthority:
                     self._prepared_network_result_digest(root.result),
                     source_timing_preparation.binding_token,
                 )
-                root_graph = _capture_graph(root)
                 materialization_shells = self._prepare_deferred_session_materialization_shells(
                     root,
                     source_timing_preparation,
@@ -7115,7 +6845,6 @@ class GeneratorLifecycleAuthority:
                     network_result_shell,
                     receipt_authority_shell,
                     issuance_claim,
-                    root_graph,
                 )
                 if deferred_publication_precommit is not None:
                     dispatcher = deferred_publication_precommit.dispatcher
@@ -7405,11 +7134,10 @@ class GeneratorLifecycleAuthority:
                     or retained.result_values is None
                     or retained.receipt_values is not None
                     or retained.detached_values is not expected_detached_values
-                    or retained.detached_proof
+                    or retained.detached_proof != expected_detached_proof
                 ):
                     raise AssertionError("Prepared network issuance facts changed before seal")
                 retained.receipt_values = expected_receipt_values
-                retained.detached_proof = expected_detached_proof
 
         expected_receipt_values = issuance_record.receipt_values
         expected_result_values = issuance_record.result_values
@@ -7484,8 +7212,6 @@ class GeneratorLifecycleAuthority:
                 or supplied_detached_proof != expected_detached_proof
             ):
                 raise AssertionError("Prepared-network receipt authority changed before seal")
-            captured_receipt_graph = _capture_graph(supplied_receipt)
-            captured_result_graph = _capture_graph(network_result_shell)
             root_id = id(root)
             with prepared_issuance_lock:
                 retained = prepared_issuances.get((root_id, issuance_record.generation))
@@ -7499,27 +7225,15 @@ class GeneratorLifecycleAuthority:
                     or retained.receipt_values is not expected_receipt_values
                     or retained.detached_values is not expected_detached_values
                     or retained.detached_proof != expected_detached_proof
-                    or type(retained.root_graph) is not tuple
-                    or not _graph_matches(root, retained.root_graph)
                 ):
-                    raise AssertionError("Prepared-network retained graph changed before seal")
-                if retained.receipt_graph is None and retained.result_graph is None:
-                    retained.receipt_graph = captured_receipt_graph
-                    retained.result_graph = captured_result_graph
-                elif (
-                    retained.receipt_graph is None
-                    or retained.result_graph is None
-                    or not _graph_matches(supplied_receipt, retained.receipt_graph)
-                    or not _graph_matches(network_result_shell, retained.result_graph)
-                ):
-                    raise AssertionError("Prepared-network retained graph changed before seal")
+                    raise AssertionError("Prepared-network retained authority changed before seal")
             commit_prepared_network_receipt_authority(
                 supplied_receipt,
                 supplied_timing_receipt,
                 supplied_generation,
                 supplied_detached_values,
                 supplied_detached_proof,
-                issuance_record.receipt_graph,
+                None,
             )
 
         def publish_terminal_if_sealed() -> bool:
@@ -7566,7 +7280,6 @@ class GeneratorLifecycleAuthority:
                     or retained_detached_values is not expected_detached_values
                     or type(retained_detached_proof) is not str
                     or retained_detached_proof != expected_detached_proof
-                    or retained_receipt_graph is not issuance_record.receipt_graph
                 ):
                     return None
                 return values
@@ -7575,18 +7288,6 @@ class GeneratorLifecycleAuthority:
                 initial_sidecar_values = sealed_sidecar_values()
             if initial_sidecar_values is None:
                 return False
-
-            if type(issuance_record.root_graph) is not tuple or not _graph_matches(
-                root, issuance_record.root_graph
-            ):
-                raise StateError("Prepared network root changed before terminal retry")
-            if (
-                type(issuance_record.result_graph) is not tuple
-                or type(issuance_record.receipt_graph) is not tuple
-                or not _restore_graph(network_result_shell, issuance_record.result_graph)
-                or not _graph_matches(network_receipt_shell, issuance_record.receipt_graph)
-            ):
-                raise AssertionError("Prepared network terminal graph could not be restored")
 
             with authority_lock:
                 final_sidecar_values = sealed_sidecar_values()
@@ -7618,9 +7319,6 @@ class GeneratorLifecycleAuthority:
                         or retained_issuance.receipt_values is not expected_receipt_values
                         or retained_issuance.detached_values is not expected_detached_values
                         or retained_issuance.detached_proof != expected_detached_proof
-                        or retained_issuance.root_graph is not issuance_record.root_graph
-                        or retained_issuance.result_graph is not issuance_record.result_graph
-                        or retained_issuance.receipt_graph is not issuance_record.receipt_graph
                         or not retained_issuance.canonical_committed
                         or type(retained_issuance.claim_ref) is not ReferenceType
                         or retained_issuance.claim_ref() is not issuance_claim
@@ -7636,19 +7334,6 @@ class GeneratorLifecycleAuthority:
 
         if publish_terminal_if_sealed():
             return network_result_shell
-        if type(issuance_record.root_graph) is not tuple or not _graph_matches(
-            root, issuance_record.root_graph
-        ):
-            with prepared_issuance_lock:
-                issuance_record.claim_ref = None
-            raise StateError("Prepared network root changed before issuance retry")
-        if issuance_record.result_graph is not None and not _restore_graph(
-            network_result_shell,
-            issuance_record.result_graph,
-        ):
-            with prepared_issuance_lock:
-                issuance_record.claim_ref = None
-            raise StateError("Prepared network retained graph could not be restored")
         try:
             issued_receipt = issue_prepared_network_receipt(
                 issuance_record,
@@ -9956,8 +9641,54 @@ def _freeze_issued_prepared_network_detach_method(
     return detach
 
 
+def _detach_trusted_prepared_network_receipt(
+    self: GeneratorLifecycleAuthority,
+    receipt: object,
+) -> LifecycleDetachedNetworkReceiptBinding:
+    """Issue an exact owner-retained handle from committed canonical receipt facts."""
+
+    if type(receipt) is not LifecyclePreparedNetworkReceipt:
+        raise StateError("Detached binding requires an authentic prepared-network receipt")
+    planner = self._source_timing_planner
+    if planner is None:
+        raise StateError("Detached binding requires an authentic prepared-network receipt")
+    with planner._preparation_authority_lock:
+        retained = self._prepared_network_receipt_authorities.get(id(receipt))
+        if (
+            type(retained) is not _PreparedNetworkReceiptAuthority
+            or retained.receipt_ref() is not receipt
+            or not retained.committed
+            or type(retained.detached_values) is not tuple
+            or len(retained.detached_values) != len(_DETACHED_NETWORK_BINDING_FIELD_NAMES) - 1
+            or type(retained.detached_proof) is not str
+            or not retained.detached_proof
+        ):
+            raise StateError("Detached binding requires an authentic prepared-network receipt")
+        binding = LifecycleDetachedNetworkReceiptBinding(
+            *retained.detached_values,
+            retained.detached_proof,
+        )
+        self._detached_network_receipt_bindings[id(binding)] = binding
+        return binding
+
+
+def _authenticates_trusted_detached_network_receipt_binding(
+    self: GeneratorLifecycleAuthority,
+    binding: object,
+) -> bool:
+    """Return whether this authority issued this exact live detached handle."""
+
+    return bool(
+        type(binding) is LifecycleDetachedNetworkReceiptBinding
+        and self._detached_network_receipt_bindings.get(id(binding)) is binding
+    )
+
+
 GeneratorLifecycleAuthority.detach_prepared_network_receipt = (
-    _freeze_issued_prepared_network_detach_method()
+    _detach_trusted_prepared_network_receipt
+)
+GeneratorLifecycleAuthority.authenticates_detached_network_receipt_binding = (
+    _authenticates_trusted_detached_network_receipt_binding
 )
 
 

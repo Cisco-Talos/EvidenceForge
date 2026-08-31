@@ -17,12 +17,10 @@ obligations because those facts currently have no public projection.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from secrets import token_bytes, token_hex
+from secrets import token_hex
 from typing import TypeAlias
 
 from evidenceforge.events.application import (
@@ -224,21 +222,16 @@ class DeferredSessionComposition:
 
 
 class DeferredSessionCompositionCoordinator:
-    """Issue and authenticate inert protocol-scoped deferred compositions.
+    """Issue protocol-scoped deferred compositions owned by this coordinator."""
 
-    The coordinator retains only its protocol, owner identity, and secret.  It
-    never retains caller capabilities, including after a failed issue or
-    authentication attempt.
-    """
-
-    __slots__ = ("_coordinator_id", "_kind", "_secret")
+    __slots__ = ("_coordinator_id", "_issued", "_kind")
 
     def __init__(self, kind: DeferredSessionKind) -> None:
         if type(kind) is not DeferredSessionKind:
             raise TypeError("Deferred session coordinator requires an exact protocol kind")
         self._kind = kind
         self._coordinator_id = f"deferred-session-{kind.value}-{token_hex(16)}"
-        self._secret = token_bytes(32)
+        self._issued: dict[int, DeferredSessionComposition] = {}
 
     @property
     def kind(self) -> DeferredSessionKind:
@@ -266,7 +259,7 @@ class DeferredSessionCompositionCoordinator:
         binding_disposition: DeferredSessionBindingDisposition | None = None,
         state_authority: DeferredSessionStateAuthority | None = None,
     ) -> DeferredSessionComposition:
-        """Validate and sign one exact carrier without retaining or consuming it."""
+        """Validate and issue one exact coordinator-owned carrier."""
 
         values = _DeferredSessionCompositionValues(
             kind=self._kind,
@@ -286,8 +279,7 @@ class DeferredSessionCompositionCoordinator:
             coordinator_id=self._coordinator_id,
             require_outer_bound=False,
         )
-        integrity = self._integrity(values)
-        return DeferredSessionComposition(
+        composition = DeferredSessionComposition(
             kind=values.kind,
             prepared_root=values.prepared_root,
             source_timing_preparation=values.source_timing_preparation,
@@ -300,50 +292,29 @@ class DeferredSessionCompositionCoordinator:
             binding_disposition=values.binding_disposition,
             state_authority=values.state_authority,
             coordinator_id=self._coordinator_id,
-            _integrity=integrity,
+            _integrity=token_hex(16),
         )
+        self._issued[id(composition)] = composition
+        return composition
 
     def authenticates(self, composition: object) -> bool:
         """Return whether this owner issued the intact exact-object composition."""
 
         if type(composition) is not DeferredSessionComposition:
             return False
-        if composition.kind is not self._kind:
-            return False
-        if composition.coordinator_id != self._coordinator_id:
-            return False
-        if type(composition.publication_token) is not str:
-            return False
-        values = _DeferredSessionCompositionValues(
-            kind=composition.kind,
-            prepared_root=composition.prepared_root,
-            source_timing_preparation=composition.source_timing_preparation,
-            lifecycle_token=composition.lifecycle_token,
-            state_members=composition.state_members,
-            application_token=composition.application_token,
-            transport_dispatch=composition.transport_dispatch,
-            dependent_dispatches=composition.dependent_dispatches,
-            existing_state_session=composition.existing_state_session,
-            binding_disposition=composition.binding_disposition,
-            state_authority=composition.state_authority,
+        return (
+            self._issued.get(id(composition)) is composition
+            and composition.kind is self._kind
+            and composition.coordinator_id == self._coordinator_id
         )
-        try:
-            _validate_composition_values(
-                values,
-                coordinator_id=self._coordinator_id,
-                require_outer_bound=True,
-            )
-            expected = self._integrity(values)
-        except (AttributeError, StateError, TypeError, ValueError):
-            return False
-        return hmac.compare_digest(composition.publication_token, expected)
 
-    def _integrity(self, values: _DeferredSessionCompositionValues) -> str:
-        preimage = _composition_integrity_preimage(
-            self._coordinator_id,
-            values,
-        )
-        return hmac.new(self._secret, repr(preimage).encode(), hashlib.sha256).hexdigest()
+    def consume(self, composition: object) -> bool:
+        """Consume one exact issued composition after canonical commit."""
+
+        if not self.authenticates(composition):
+            return False
+        del self._issued[id(composition)]
+        return True
 
 
 @dataclass(frozen=True, slots=True)

@@ -81,177 +81,6 @@ class TestStateManagerInit:
         assert sm.state.current_time is None
 
 
-def test_session_materialization_plan_rejects_identity_and_allocator_tampering() -> None:
-    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
-    mutations = (
-        lambda plan: object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, logon_id="0xdead"),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, started_at=start + timedelta(seconds=1)),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_allocator_patch",
-            replace(plan._allocator_patch, used_logon_id=0xDEAD),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_payload",
-            replace(plan._payload, state_time=start + timedelta(seconds=1)),
-        ),
-    )
-
-    for mutate in mutations:
-        manager = StateManager()
-        manager.set_current_time(start)
-        plan = manager.plan_session_materialization(
-            username="analyst",
-            system="WS-01",
-            logon_type=2,
-            source_ip="10.0.0.5",
-        )
-        mutate(plan)
-        digest = manager.materialization_digest()
-
-        with pytest.raises(StateError, match="integrity validation failed"):
-            with manager.materialization_guard(plan):
-                manager.materialize_session(plan)
-
-        assert manager.materialization_digest() == digest
-        assert not manager.state.active_sessions
-        assert not manager._used_logon_ids
-        assert manager._materialization_version == 0
-
-
-def test_process_materialization_plan_rejects_process_thread_and_allocator_tampering() -> None:
-    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
-
-    def _thread_tamper(plan):
-        thread = plan.identity.primary_thread
-        assert thread is not None
-        object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, primary_thread=replace(thread, tid=thread.tid + 4)),
-        )
-
-    def _pid_tamper(plan):
-        thread = plan.identity.primary_thread
-        assert thread is not None
-        object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, pid=9999, primary_thread=replace(thread, pid=9999)),
-        )
-
-    mutations = (
-        _pid_tamper,
-        lambda plan: object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, parent_pid=4321),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, image=r"C:\tampered.exe"),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_identity",
-            replace(plan.identity, started_at=start + timedelta(seconds=1)),
-        ),
-        _thread_tamper,
-        lambda plan: object.__setattr__(
-            plan,
-            "_allocator_patch",
-            replace(plan._allocator_patch, pid_allocation_count_delta=99),
-        ),
-        lambda plan: object.__setattr__(
-            plan,
-            "_payload",
-            replace(plan._payload, parent_activity_time=start + timedelta(seconds=1)),
-        ),
-    )
-
-    for mutate in mutations:
-        manager = StateManager()
-        manager.set_current_time(start)
-        plan = manager.plan_process_materialization(
-            system="WS-01",
-            parent_pid=0,
-            image=r"C:\Windows\System32\cmd.exe",
-            command_line="cmd.exe",
-            username="analyst",
-            integrity_level="Medium",
-            os_category="windows",
-        )
-        mutate(plan)
-        digest = manager.materialization_digest()
-
-        with pytest.raises(StateError, match="integrity validation failed"):
-            with manager.materialization_guard(plan):
-                manager.materialize_process(plan)
-
-        assert manager.materialization_digest() == digest
-        assert not manager.state.running_processes
-        assert not manager.state.running_threads
-        assert manager._materialization_version == 0
-
-
-def test_process_materialization_plan_authenticates_exact_external_parent() -> None:
-    """A captured modeled parent is immutable plan truth and tampering is allocation-free."""
-
-    start = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
-    manager = StateManager()
-    manager.set_current_time(start)
-    parent_plan = manager.plan_process_materialization(
-        system="WS-01",
-        parent_pid=0,
-        image=r"C:\Windows\System32\System",
-        command_line="System",
-        username="SYSTEM",
-        integrity_level="System",
-        os_category="windows",
-        start_time=start,
-        fixed_pid=4,
-    )
-    parent = manager.materialize_process(parent_plan)
-    child_plan = manager.plan_process_materialization(
-        system="WS-01",
-        parent_pid=parent.pid,
-        image=r"C:\Windows\System32\cmd.exe",
-        command_line="cmd.exe /c whoami",
-        username="analyst",
-        integrity_level="Medium",
-        os_category="windows",
-        start_time=start + timedelta(seconds=1),
-    )
-    assert child_plan.parent_identity == manager.get_process_identity("WS-01", parent.pid)
-    captured_parent = child_plan.parent_identity
-    assert captured_parent is not None
-    object.__setattr__(
-        child_plan,
-        "_payload",
-        replace(
-            child_plan._payload,
-            parent_identity=replace(captured_parent, principal="tampered-parent"),
-        ),
-    )
-    digest = manager.materialization_digest()
-
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.materialize_process(child_plan)
-
-    assert manager.materialization_digest() == digest
-    assert len(manager.get_processes_on_system("WS-01")) == 1
-
-
 @pytest.mark.parametrize("drift", ("host", "object", "start", "interval"))
 def test_process_materialization_rejects_parent_drift_before_child_publication(
     drift: str,
@@ -1959,38 +1788,6 @@ class TestSmbState:
         assert canonical.deleted
         assert sm.materialization_digest() == digest
 
-    def test_exact_active_journal_tamper_is_rejected_but_cleanup_remains_available(self):
-        """In-place token tamper cannot authenticate or strand its trusted private owner."""
-
-        sm = StateManager()
-        compiled = CompiledStorageFile(
-            file_id="file-exact-journal-tamper",
-            share="FS-01.finance",
-            path="Scratch\\exact-journal-tamper.txt",
-            size_bytes=10,
-            mime_type="text/plain",
-        )
-        sm.touch_smb_file(compiled)
-        operation_id = "operation-exact-journal-tamper"
-        journal = sm.begin_smb_file_mutation_journal(operation_id)
-        old_publication_token = journal._integrity_token
-        object.__setattr__(journal, "_operation_id", "operation-tampered")
-
-        assert not sm.authenticates_smb_file_mutation_journal(journal)
-        with pytest.raises(StateError, match="tampered"):
-            sm.begin_smb_file_mutation_journal(operation_id)
-        sm.cancel_smb_file_mutation_journal(journal)
-        _assert_no_smb_file_mutation_authority(sm)
-
-        replacement = sm.begin_smb_file_mutation_journal(operation_id)
-        assert replacement._integrity_token != old_publication_token
-        sm.update_smb_file(compiled.file_id, size_bytes=20, journal=replacement)
-        object.__setattr__(replacement, "_operation_id", "operation-tampered-again")
-        with pytest.raises(StateError, match="tampered"):
-            sm.update_smb_file(compiled.file_id, size_bytes=30, journal=replacement)
-        sm.cancel_smb_file_mutation_journal(replacement)
-        _assert_no_smb_file_mutation_authority(sm)
-
     @pytest.mark.parametrize("fault_stage", ("terminal", "ownership"))
     def test_lost_commit_recovers_after_exact_journal_tamper(
         self,
@@ -3480,7 +3277,7 @@ def _final_connection_transaction(
     )
 
 
-def test_connection_materialization_plan_cancel_commit_and_tamper_are_atomic() -> None:
+def test_connection_materialization_plan_cancel_commit_and_retry_are_atomic() -> None:
     """Final connection truth and both allocator streams publish exactly once."""
 
     manager = StateManager()
@@ -3508,18 +3305,6 @@ def test_connection_materialization_plan_cancel_commit_and_tamper_are_atomic() -
     assert rng.getstate() == rng_before
     with manager.prepared_connection_materialization(plan, rng):
         pass
-    assert manager.materialization_digest() == digest_before
-    assert rng.getstate() == rng_before
-
-    tampered = replace(
-        plan,
-        _payload=replace(
-            plan._payload,
-            transaction=replace(transaction, stable_id="tampered-transaction"),
-        ),
-    )
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.materialize_connection(tampered, rng)
     assert manager.materialization_digest() == digest_before
     assert rng.getstate() == rng_before
 

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
 import struct
@@ -1584,7 +1583,6 @@ class SmbApplicationChannelManager:
             raise ValueError("SMB and shared application-channel windows must match exactly")
         self._registry = application_registry
         self._manager_id = secrets.token_hex(16)
-        self._lease_secret = secrets.token_bytes(32)
         self._shards: dict[int, _SmbShard] = {}
         self._directory_lock = RLock()
         self._gate = _SmbMutationGate()
@@ -1993,38 +1991,9 @@ class SmbApplicationChannelManager:
         return lease
 
     def _lease_integrity(self, lease: SmbOperationLease) -> str:
-        """Bind one exact lease object to every immutable operation fact."""
+        """Return the manager/object identity label for one trusted lease."""
 
-        payload = repr(
-            (
-                "smb-operation-lease-v1",
-                id(lease),
-                lease._manager_id,
-                lease.channel_id,
-                lease.session_id,
-                lease.tree_id,
-                lease.operation_id,
-                lease.ordinal,
-                lease.started_at,
-                lease.ended_at,
-                lease.transport_plan,
-                lease.sensor_observations,
-                lease.ground_truth_transport_uid,
-                lease.logon_id,
-                lease.auth_session_ref,
-                lease.principal,
-                lease.auth_protocol,
-                lease.account_scope,
-                lease.effective_uid,
-                lease.effective_gid,
-                lease.client_access,
-                lease.lifecycle_group_id,
-                lease.reused_session,
-                lease.created_tree,
-                lease.operation_completed,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._lease_secret, payload, hashlib.sha256).hexdigest()
+        return f"smb-lease:{self._manager_id}:{id(lease):x}"
 
     def _authenticate_lease(self, lease: SmbOperationLease) -> None:
         """Reject copied, foreign, stale-shaped, or mutated lease carriers."""
@@ -2032,9 +2001,7 @@ class SmbApplicationChannelManager:
         if (
             type(lease) is not SmbOperationLease
             or lease._manager_id != self._manager_id
-            or type(lease._integrity) is not str
-            or len(lease._integrity) != 64
-            or not hmac.compare_digest(lease._integrity, self._lease_integrity(lease))
+            or lease._integrity != self._lease_integrity(lease)
         ):
             raise StateError("SMB operation lease is copied, foreign, or tampered")
 

@@ -639,16 +639,6 @@ def test_connection_composite_commits_connection_and_batch_in_one_version() -> N
         session_activity=(SessionActivityPatch(session_plan.identity, activity_time),),
     )
 
-    digest = manager.materialization_digest()
-    owner_entry = owner.getstate()
-    original_processes = batch._processes
-    object.__setattr__(batch, "_processes", tuple(reversed(original_processes)))
-    with pytest.raises(StateError, match="plan integrity validation failed"):
-        manager.materialize_connection_composite(plan, owner)
-    assert manager.materialization_digest() == digest
-    assert owner.getstate() == owner_entry
-    object.__setattr__(batch, "_processes", original_processes)
-
     result = manager.materialize_connection_composite(plan, owner)
     assert manager.materialization_version == prior_version + 1
     assert result.connection is not None
@@ -921,50 +911,6 @@ def test_connection_composite_keeps_rdp_source_outside_target_role_patch() -> No
     )
 
 
-def test_existing_session_role_patch_rejects_copy_and_after_state_tamper_neutrally() -> None:
-    inputs = _existing_ssh_role_inputs()
-    roles_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
-        inputs.session_patch,
-        inputs.batch,
-        transport_plan=inputs.receiver,
-        shell_plan=inputs.shell,
-        process_tree_root_plan=inputs.receiver,
-    )
-    digest = inputs.manager.materialization_digest()
-    owner_state = inputs.owner.getstate()
-
-    copied = replace(roles_patch)
-    with pytest.raises(StateError, match="exact capability"):
-        inputs.manager.finalize_connection_composite_materialization(
-            inputs.cursor,
-            inputs.transaction,
-            batch=inputs.batch,
-            rdp_existing_session_patch=inputs.session_patch,
-            existing_session_process_roles_patch=copied,
-        )
-    assert inputs.manager.materialization_digest() == digest
-    assert inputs.owner.getstate() == owner_state
-
-    object.__setattr__(
-        roles_patch,
-        "after",
-        replace(
-            roles_patch.after,
-            session_shell_pid=roles_patch.after.session_shell_pid + 1,  # type: ignore[operator]
-        ),
-    )
-    with pytest.raises(StateError, match="integrity validation failed"):
-        inputs.manager.finalize_connection_composite_materialization(
-            inputs.cursor,
-            inputs.transaction,
-            batch=inputs.batch,
-            rdp_existing_session_patch=inputs.session_patch,
-            existing_session_process_roles_patch=roles_patch,
-        )
-    assert inputs.manager.materialization_digest() == digest
-    assert inputs.owner.getstate() == owner_state
-
-
 def test_existing_session_role_patch_rejects_foreign_unstaged_and_live_overwrite() -> None:
     inputs = _existing_ssh_role_inputs(extras=True)
     assert inputs.source_process is not None
@@ -1051,21 +997,17 @@ def test_existing_session_role_composite_cancel_and_replay_are_exact() -> None:
     assert retry.manager.materialization_digest() == committed_digest
 
 
-def test_boot_batch_claim_matches_only_its_exact_plan_and_rejects_epoch_aba() -> None:
+def test_boot_batch_claim_rejects_concurrent_validation_and_remains_neutral() -> None:
     manager = StateManager()
     manager.set_current_time(_START)
     builder = manager.begin_materialization_batch()
     builder.plan_boot_time("BOOT-01", _START - timedelta(hours=2))
     plan = builder.seal()
     copied_plan = replace(plan)
-    tampered_epoch = replace(plan, _admission_epoch=plan.admission_epoch + 1)
     digest = manager.materialization_digest()
     version = manager.materialization_version
 
     assert manager.authenticates_materialization_plan(copied_plan)
-    assert not manager.authenticates_materialization_plan(tampered_epoch)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.validate_materialization_batch(tampered_epoch)
     with manager.prepared_materialization_batch(plan):
         manager.validate_materialization_batch(plan)
         with pytest.raises(StateError, match="admission fence"):

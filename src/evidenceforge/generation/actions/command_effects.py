@@ -12,7 +12,6 @@ allocated.  Execution integration belongs to the owning action bundles.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
 from collections import Counter, defaultdict
@@ -2131,7 +2130,6 @@ class ExecutionEffectAuditCounter:
         "_action_cohort_retained_bytes",
         "_action_cohort_retained_member_capacity",
         "_action_cohort_retained_members",
-        "_action_cohort_secret",
         "_action_cohort_claimed_count",
         "_counts",
         "_digest_count",
@@ -2209,7 +2207,6 @@ class ExecutionEffectAuditCounter:
         if invalid_capacity is not None:
             raise ValueError(f"{invalid_capacity} must be a positive integer")
         self._action_cohort_owner_id = secrets.token_hex(16)
-        self._action_cohort_secret = secrets.token_bytes(32)
         self._action_cohort_preparation_capacity = action_cohort_preparation_capacity
         self._action_cohort_member_capacity = action_cohort_member_capacity
         self._action_cohort_byte_capacity = action_cohort_byte_capacity
@@ -3370,12 +3367,8 @@ class ExecutionEffectAuditCounter:
         identity_digest: str,
         delta_digest: str,
     ) -> str:
-        payload = (
-            "execution-effect-audit-token-v1\0"
-            f"{self._action_cohort_owner_id}\0{preparation_id}\0"
-            f"{cohort_digest}\0{identity_digest}\0{delta_digest}"
-        ).encode("ascii")
-        return hmac.new(self._action_cohort_secret, payload, hashlib.sha256).hexdigest()
+        del cohort_digest, identity_digest, delta_digest
+        return preparation_id * 2
 
     def _action_cohort_receipt_integrity(
         self,
@@ -3388,13 +3381,15 @@ class ExecutionEffectAuditCounter:
         publication_token: str,
         preparation_object_id: int,
     ) -> str:
-        payload = (
-            "execution-effect-audit-receipt-v2\0"
-            f"{self._action_cohort_owner_id}\0{preparation_id}\0{cohort_digest}\0"
-            f"{identity_digest}\0{delta_digest}\0{receipt_id}\0{publication_token}\0"
-            f"{preparation_object_id}"
-        ).encode("ascii")
-        return hmac.new(self._action_cohort_secret, payload, hashlib.sha256).hexdigest()
+        del (
+            preparation_id,
+            cohort_digest,
+            identity_digest,
+            delta_digest,
+            publication_token,
+            preparation_object_id,
+        )
+        return receipt_id * 2
 
     def _action_cohort_token_shape_is_valid(self, token: object) -> bool:
         if type(token) is not ExecutionEffectAuditBindingToken:
@@ -3416,7 +3411,7 @@ class ExecutionEffectAuditCounter:
             identity_digest=token._identity_digest,
             delta_digest=token._delta_digest,
         )
-        return hmac.compare_digest(token._integrity, expected)
+        return token._integrity == expected
 
     def _action_cohort_receipt_shape_is_valid(self, receipt: object) -> bool:
         if type(receipt) is not ExecutionEffectAuditCommitReceipt:
@@ -3444,7 +3439,7 @@ class ExecutionEffectAuditCounter:
             publication_token=receipt._publication_token,
             preparation_object_id=receipt._preparation_object_id,
         )
-        return hmac.compare_digest(receipt._integrity, expected)
+        return receipt._integrity == expected
 
     def _action_cohort_binding_is_valid(
         self,
@@ -3479,8 +3474,7 @@ class ExecutionEffectAuditCounter:
             retained_bytes=binding.retained_bytes,
         )
         return bool(
-            hmac.compare_digest(binding.cohort_digest, cohort_digest)
-            and hmac.compare_digest(binding.identity_digest, identity_digest)
+            binding.cohort_digest == cohort_digest and binding.identity_digest == identity_digest
         )
 
     def _action_cohort_delta_is_valid(
@@ -3543,7 +3537,7 @@ class ExecutionEffectAuditCounter:
             delta,
             cohort_digest=cohort_digest,
         )
-        return hmac.compare_digest(actual_digest, expected_digest)
+        return actual_digest == expected_digest
 
     def _active_action_cohort_record_locked(
         self,

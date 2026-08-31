@@ -8,7 +8,6 @@ from __future__ import annotations
 import base64
 import fnmatch
 import hashlib
-import hmac
 import random
 import re
 import secrets
@@ -386,7 +385,7 @@ def _validate_tls_material_patch(patch: _TlsMaterialPointPatch) -> None:
         raise StateError(f"TLS material {patch.family} patch contains an invalid value type")
     _validate_tls_material_value_tree(patch.value)
     actual_digest = _tls_material_value_digest(patch.value)
-    if not hmac.compare_digest(actual_digest, patch.value_digest):
+    if actual_digest != patch.value_digest:
         raise StateError("TLS material staged value changed before preparation seal")
 
 
@@ -522,19 +521,8 @@ def _tls_material_preparation_integrity_token(
 ) -> str:
     """Authenticate all public fields and the full private patch preimage."""
 
-    canonical = repr(
-        (
-            "cryptographic-material-tls-preparation-v1",
-            token.preparation_id,
-            token.overlay_digest,
-            token.public_key_writes,
-            token.authority_writes,
-            token.certificate_writes,
-            token._registry_token,
-            token._patches,
-        )
-    ).encode("utf-8")
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return f"tls-material:{token._registry_token:x}:{token.preparation_id:x}"
 
 
 def _validated_tls_material_preparation_integrity_token(
@@ -572,20 +560,8 @@ def _tls_material_receipt_integrity_token(
 ) -> str:
     """Authenticate exact preparation and committed point-version membership."""
 
-    canonical = repr(
-        (
-            "cryptographic-material-tls-preparation-receipt-v1",
-            receipt.preparation_id,
-            receipt.publication_token,
-            receipt.overlay_digest,
-            receipt.committed_digest,
-            receipt.public_key_writes,
-            receipt.authority_writes,
-            receipt.certificate_writes,
-            receipt._registry_token,
-        )
-    ).encode("utf-8")
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return f"tls-material-receipt:{receipt._registry_token:x}:{receipt.preparation_id:x}"
 
 
 def _validated_tls_material_receipt_integrity_token(
@@ -1525,10 +1501,9 @@ class CryptographicMaterialRegistry:
                 raise StateError("TLS material preparation lost an exact point reservation")
             value = self._tls_material_value_locked(patch.family, patch.key)
             digest = "" if value is None else _tls_material_value_digest(value)
-            if self._tls_point_generation_locked(
-                point
-            ) != patch.expected_generation or not hmac.compare_digest(
-                digest, patch.expected_value_digest
+            if (
+                self._tls_point_generation_locked(point) != patch.expected_generation
+                or digest != patch.expected_value_digest
             ):
                 raise StateError("TLS material preparation point generation changed")
 
@@ -1547,13 +1522,10 @@ class CryptographicMaterialRegistry:
                 value = self._tls_material_value_locked(patch.family, patch.key)
                 generation = self._tls_point_generation_locked(point)
                 digest = "" if value is None else _tls_material_value_digest(value)
-                if generation != patch.expected_generation or not hmac.compare_digest(
-                    digest,
-                    patch.expected_value_digest,
-                ):
+                if generation != patch.expected_generation or digest != patch.expected_value_digest:
                     raise StateError("TLS material preparation point changed before seal")
                 if value is not None:
-                    if not hmac.compare_digest(digest, patch.value_digest):
+                    if digest != patch.value_digest:
                         raise StateError("TLS material preparation conflicts with canonical value")
                     continue
                 if point in self._tls_point_reservations:
@@ -2504,10 +2476,7 @@ class CryptographicMaterialPreparation:
                             "TLS material point changed to a conflicting canonical value"
                         )
                     return current
-                if current_generation != generation or not hmac.compare_digest(
-                    current_digest,
-                    digest,
-                ):
+                if current_generation != generation or current_digest != digest:
                     raise StateError("TLS material point generation changed during preparation")
                 if len(self._patches) >= capacity:
                     raise CryptographicMaterialCapacityError(
@@ -2551,7 +2520,7 @@ class CryptographicMaterialPreparation:
             if current != prepared_value:
                 raise StateError("TLS material point changed to a conflicting canonical value")
             return current
-        if current_generation != generation or not hmac.compare_digest(current_digest, digest):
+        if current_generation != generation or current_digest != digest:
             raise StateError("TLS material point generation changed during preparation")
         patch = _TlsMaterialPointPatch(
             family=family,

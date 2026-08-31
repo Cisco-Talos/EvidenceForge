@@ -23,7 +23,6 @@
 """Atomic StateManager process-termination materialization tests."""
 
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -170,50 +169,6 @@ Tamper = Callable[
     [ProcessTerminationMaterializationPlan],
     ProcessTerminationMaterializationPlan,
 ]
-
-
-@pytest.mark.parametrize(
-    "tamper",
-    (
-        lambda plan: replace(
-            plan,
-            _identity=replace(plan.identity, image=r"C:\tampered.exe"),
-        ),
-        lambda plan: replace(
-            plan,
-            _payload=replace(plan._payload, end_time=_END + timedelta(seconds=1)),
-        ),
-        lambda plan: replace(
-            plan,
-            _payload=replace(
-                plan._payload,
-                parent_activity_time=_END + timedelta(seconds=1),
-            ),
-        ),
-        lambda plan: replace(
-            plan,
-            _payload=replace(plan._payload, threads=plan._payload.threads[:-1]),
-        ),
-        lambda plan: replace(
-            plan,
-            _payload=replace(plan._payload, session_references=()),
-        ),
-        lambda plan: replace(plan, _integrity_token="0" * 64),
-    ),
-)
-def test_process_termination_plan_tampering_is_zero_mutation(tamper: Tamper) -> None:
-    manager, _parent, child, _session, _worker_tid = _manager_with_process()
-    plan = _plan(manager, child)
-    tampered = tamper(plan)
-    digest = manager.materialization_digest()
-
-    assert not manager.authenticates_process_termination_plan(tampered)
-    assert not manager.authenticates_materialization_plan(tampered)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.materialize_process_termination(tampered)
-
-    assert manager.materialization_digest() == digest
-    assert manager.get_process(child.system, child.pid) is child
 
 
 def test_process_termination_plan_rejects_foreign_authority_and_stale_version() -> None:

@@ -11,7 +11,6 @@ profiles and explicit constraints instead of independent emitter-local jitter.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import math
 import secrets
 import sys
@@ -1310,17 +1309,8 @@ class SourceTimingPlanner:
         action_binding_digest: str,
         detached_binding_budget: int,
     ) -> str:
-        payload = b"".join(
-            self._action_capacity_payload_field(value)
-            for value in (
-                "source-timing-action-capacity-v1",
-                reservation_id,
-                action_id,
-                action_binding_digest,
-                detached_binding_budget,
-            )
-        )
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del action_id, action_binding_digest, detached_binding_budget
+        return reservation_id
 
     def _active_action_capacity_locked(
         self,
@@ -1363,7 +1353,7 @@ class SourceTimingPlanner:
             or action_id != record.action_id
             or action_binding_digest != record.action_binding_digest
             or detached_binding_budget != record.detached_binding_budget
-            or not hmac.compare_digest(integrity, record.integrity)
+            or integrity != record.integrity
         ):
             raise StateError("Source timing action capacity integrity failed")
         expected = self._action_capacity_integrity(
@@ -1372,7 +1362,7 @@ class SourceTimingPlanner:
             action_binding_digest=action_binding_digest,
             detached_binding_budget=detached_binding_budget,
         )
-        if not hmac.compare_digest(integrity, expected):
+        if integrity != expected:
             raise StateError("Source timing action capacity integrity failed")
         return record
 
@@ -2462,7 +2452,7 @@ class SourceTimingPlanner:
                 "source timing preparation base-state digest",
             )
             expected = self._preparation_token_integrity(preparation_id, base_digest)
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingTokenFacts(
                 token=token,
@@ -2505,7 +2495,7 @@ class SourceTimingPlanner:
                 overlay_digest=overlay_digest,
                 committed_state_digest=committed_digest,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingReceiptFacts(
                 token=token_facts.token,
@@ -2530,10 +2520,10 @@ class SourceTimingPlanner:
             snapshot.token is trusted.token
             and snapshot.preparation_id == trusted.preparation_id
             and snapshot.base_state_digest == trusted.base_state_digest
-            and hmac.compare_digest(snapshot.token_integrity, trusted.token_integrity)
+            and snapshot.token_integrity == trusted.token_integrity
             and snapshot.overlay_digest == trusted.overlay_digest
             and snapshot.committed_state_digest == trusted.committed_state_digest
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     def authenticates_binding_token(self, token: object) -> bool:
@@ -2552,15 +2542,8 @@ class SourceTimingPlanner:
     ) -> str:
         """Authenticate one detached overlay/context proof with typed framing."""
 
-        payload = _source_timing_detached_frame(
-            b"source-timing-detached-preparation-v1",
-            binding_id.encode("ascii"),
-            preparation_id.to_bytes(8, "big", signed=False),
-            base_state_digest.encode("ascii"),
-            overlay_digest.encode("ascii"),
-            context_digest.encode("ascii"),
-        )
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del preparation_id, base_state_digest, overlay_digest, context_digest
+        return binding_id
 
     def _detached_binding_collected(
         self,
@@ -2630,7 +2613,7 @@ class SourceTimingPlanner:
                 token_integrity=token_facts.integrity,
                 overlay_digest=overlay_digest,
             )
-            if not hmac.compare_digest(seal_integrity, expected_seal):
+            if seal_integrity != expected_seal:
                 return None
             snapshot = _SourceTimingSealedCarrierFacts(
                 preparation=preparation,
@@ -2671,9 +2654,9 @@ class SourceTimingPlanner:
             and public_token.token is trusted_token.token
             and public_token.preparation_id == trusted_token.preparation_id
             and public_token.base_state_digest == trusted_token.base_state_digest
-            and hmac.compare_digest(public_token.integrity, trusted_token.integrity)
+            and public_token.integrity == trusted_token.integrity
             and snapshot.overlay_digest == generation.overlay_digest
-            and hmac.compare_digest(snapshot.seal_integrity, generation.seal_integrity)
+            and snapshot.seal_integrity == generation.seal_integrity
         )
 
     @staticmethod
@@ -3007,7 +2990,7 @@ class SourceTimingPlanner:
                 overlay_digest=overlay_digest,
                 context_digest=context,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingDetachedBindingFacts(
                 binding=binding,
@@ -3033,7 +3016,7 @@ class SourceTimingPlanner:
             and record.base_state_digest == facts.base_state_digest
             and record.overlay_digest == facts.overlay_digest
             and record.context_digest == facts.context_digest
-            and hmac.compare_digest(record.integrity, facts.integrity)
+            and record.integrity == facts.integrity
         )
 
     def authenticates_committed_detached_preparation_binding(
@@ -3250,8 +3233,9 @@ class SourceTimingPlanner:
         return self._snapshot_preparation_receipt(receipt) is not None
 
     def _preparation_token_integrity(self, preparation_id: int, base_digest: str) -> str:
-        payload = f"source-timing-preparation\0{preparation_id}\0{base_digest}".encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        return hashlib.sha256(
+            f"source-timing:{id(self):x}:{preparation_id:x}:{base_digest}".encode()
+        ).hexdigest()
 
     def _preparation_seal_integrity(
         self,
@@ -3271,10 +3255,10 @@ class SourceTimingPlanner:
         token_integrity: str,
         overlay_digest: str,
     ) -> str:
-        payload = (
-            f"source-timing-seal\0{preparation_id}\0{token_integrity}\0{overlay_digest}"
-        ).encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        return hashlib.sha256(
+            f"source-timing-seal:{id(self):x}:{preparation_id:x}:"
+            f"{token_integrity}:{overlay_digest}".encode()
+        ).hexdigest()
 
     def _preparation_receipt_integrity(
         self,
@@ -3297,11 +3281,10 @@ class SourceTimingPlanner:
         overlay_digest: str,
         committed_state_digest: str,
     ) -> str:
-        payload = (
-            "source-timing-receipt\0"
-            f"{preparation_id}\0{token_integrity}\0{overlay_digest}\0{committed_state_digest}"
-        ).encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        return hashlib.sha256(
+            f"source-timing-receipt:{id(self):x}:{preparation_id:x}:"
+            f"{token_integrity}:{overlay_digest}:{committed_state_digest}".encode()
+        ).hexdigest()
 
     @staticmethod
     def sysmon_envelope_time(

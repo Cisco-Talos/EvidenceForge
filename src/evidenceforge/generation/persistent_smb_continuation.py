@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import random
 import secrets
 from dataclasses import dataclass, field, replace
@@ -922,7 +921,7 @@ class PersistentSmbTerminalContinuationAuthority:
             raise EventContractError("Persistent SMB activity capture has an invalid exact type")
         snapshot = object.__getattribute__(capture, "snapshot")
         activity_digest = hashlib.sha256(self._activity_snapshot_payload(snapshot)).hexdigest()
-        if not hmac.compare_digest(activity_digest, capture.activity_digest):
+        if activity_digest != capture.activity_digest:
             raise EventContractError("Persistent SMB activity capture changed after admission")
         if application_result is not None or publication_binding_digest is not None:
             manager = self._smb_channel_manager
@@ -942,7 +941,7 @@ class PersistentSmbTerminalContinuationAuthority:
                 application_result=application_result,
                 publication_binding_digest=self._binding_digest(publication_binding_digest),
             )
-            if not hmac.compare_digest(expected_binding, capture.binding_digest):
+            if expected_binding != capture.binding_digest:
                 raise EventContractError(
                     "Persistent SMB activity root binding changed after capture"
                 )
@@ -978,11 +977,7 @@ class PersistentSmbTerminalContinuationAuthority:
         return b"".join(cls._encoded_scalar(part) for part in parts)
 
     def _integrity(self, record: _PersistentSmbTerminalRecord) -> str:
-        return hmac.new(
-            self._secret,
-            self._record_payload_bytes(record),
-            hashlib.sha256,
-        ).hexdigest()
+        return f"smb-continuation:{self._authority_id}:{record.continuation_id}"
 
     def _record_locked(
         self,
@@ -1005,10 +1000,7 @@ class PersistentSmbTerminalContinuationAuthority:
                 "Persistent SMB terminal continuation is copied, foreign, or stale"
             )
         expected = self._integrity(record)
-        if not hmac.compare_digest(record.integrity, expected) or not hmac.compare_digest(
-            continuation._integrity,
-            expected,
-        ):
+        if record.integrity != expected or continuation._integrity != expected:
             raise EventContractError("Persistent SMB terminal continuation integrity failed")
         if require_active and record.active_thread_id != get_ident():
             raise EventContractError("Persistent SMB terminal continuation has no active claim")
@@ -1672,7 +1664,7 @@ class PersistentSmbTerminalContinuationAuthority:
             if record is None:
                 return None
             self._record_locked(record.continuation, require_active=False)
-            if not hmac.compare_digest(record.action_binding_digest, canonical_binding):
+            if record.action_binding_digest != canonical_binding:
                 raise EventContractError(
                     "Persistent SMB terminal retry changed its exact action binding"
                 )

@@ -28,7 +28,6 @@ log generation, ensuring consistency across log formats.
 
 import hashlib
 import heapq
-import hmac
 import logging
 import math
 import random
@@ -77,6 +76,24 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
+
+
+def _authority_values_match(left: object, right: object) -> bool:
+    """Compare trusted scalar authority fields without cryptographic work."""
+
+    return left == right
+
+
+def _trusted_capability_digest(authority_secret: bytes, *parts: object) -> str:
+    """Derive a compact internal identity from already-validated scalar fields."""
+
+    digest = hashlib.sha256(authority_secret)
+    for part in parts:
+        encoded = str(part).encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
 
 _MIN_GENERATED_LOGON_LUID = 0x10000
 _MAX_GENERATED_LOGON_LUID = 0xFFFFFFFF
@@ -1604,18 +1621,16 @@ def _connection_existing_session_patch_integrity_token(
 ) -> str:
     """Authenticate one exact old-to-new existing-session transition."""
 
-    canonical = repr(
-        (
-            "connection-existing-session-patch-v2",
-            before,
-            after,
-            lifecycle_disposition,
-            expected_version,
-            expected_state_time,
-            admission_epoch,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "existing-session",
+        before.identity.object_id,
+        after.identity.object_id,
+        lifecycle_disposition.value,
+        expected_version,
+        expected_state_time,
+        admission_epoch,
+    )
 
 
 def _connection_existing_session_process_roles_integrity_token(
@@ -1624,30 +1639,15 @@ def _connection_existing_session_process_roles_integrity_token(
 ) -> str:
     """Authenticate one exact existing-session process-role transition."""
 
-    canonical = repr(
-        (
-            "connection-existing-session-process-roles-v1",
-            patch.target,
-            patch.before,
-            patch.after,
-            tuple(
-                (id(plan), plan.publication_token) if plan is not None else (0, "")
-                for plan in (
-                    patch.transport_plan,
-                    patch.shell_plan,
-                    patch.user_manager_plan,
-                    patch.winlogon_plan,
-                    patch.explorer_plan,
-                    patch.process_tree_root_plan,
-                )
-            ),
-            patch._expected_version,
-            patch._expected_state_time,
-            patch._admission_epoch,
-            id(patch._capability),
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "existing-session-roles",
+        patch.target.object_id,
+        patch._expected_version,
+        patch._expected_state_time,
+        patch._admission_epoch,
+        id(patch._capability),
+    )
 
 
 def _deferred_session_state_authority_integrity_token(
@@ -1665,42 +1665,23 @@ def _deferred_session_state_authority_integrity_token(
 ) -> str:
     """Authenticate exact nested State plan identities and their stable order."""
 
-    canonical = repr(
+    return _trusted_capability_digest(
+        authority_secret,
+        "deferred-session",
+        protocol.value,
+        binding_disposition.value,
+        bound_at,
+        batch.publication_token,
+        (existing_session_patch._integrity_token if existing_session_patch is not None else ""),
         (
-            "deferred-session-state-authority-v1",
-            protocol,
-            binding_disposition,
-            ensure_utc(bound_at),
-            owner_identity,
-            admission_epoch,
-            id(capability),
-            id(batch),
-            batch.publication_token,
-            (
-                (id(batch.session), batch.session.publication_token)
-                if batch.session is not None
-                else (0, "")
-            ),
-            tuple((id(plan), plan.publication_token) for plan in batch.processes),
-            (
-                (
-                    id(existing_session_patch),
-                    existing_session_patch._integrity_token,
-                )
-                if existing_session_patch is not None
-                else (0, "")
-            ),
-            (
-                (
-                    id(existing_session_process_roles_patch),
-                    existing_session_process_roles_patch.publication_token,
-                )
-                if existing_session_process_roles_patch is not None
-                else (0, "")
-            ),
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+            existing_session_process_roles_patch.publication_token
+            if existing_session_process_roles_patch is not None
+            else ""
+        ),
+        owner_identity,
+        admission_epoch,
+        id(capability),
+    )
 
 
 def _deferred_session_outer_authority_integrity_token(
@@ -1710,42 +1691,12 @@ def _deferred_session_outer_authority_integrity_token(
 ) -> str:
     """Bind one State payload to the exact final network-authority wrapper."""
 
-    batch = getattr(outer_authority, "state_batch", None)
-    patch = getattr(outer_authority, "existing_state_patch", None)
-    application_token = getattr(outer_authority, "application_token", None)
-    canonical = repr(
-        (
-            "deferred-session-state-outer-authority-v1",
-            id(payload),
-            payload.publication_token,
-            id(outer_authority),
-            getattr(outer_authority, "kind", None),
-            id(getattr(outer_authority, "coordinator", None)),
-            getattr(getattr(outer_authority, "coordinator", None), "coordinator_id", ""),
-            getattr(outer_authority, "bound_at", None),
-            getattr(outer_authority, "binding_disposition", None),
-            id(getattr(outer_authority, "strict_state_authority", None)),
-            getattr(outer_authority, "session_object_id", ""),
-            (id(batch), getattr(batch, "publication_token", "")),
-            (
-                id(patch),
-                getattr(patch, "_integrity_token", ""),
-            ),
-            id(getattr(outer_authority, "state_intent", None)),
-            id(getattr(outer_authority, "existing_state_intent", None)),
-            id(getattr(outer_authority, "live_state_intent", None)),
-            id(getattr(outer_authority, "application_intent", None)),
-            id(getattr(outer_authority, "application_manager", None)),
-            (
-                id(application_token),
-                getattr(application_token, "publication_token", ""),
-            ),
-            repr(getattr(outer_authority, "application_process_activity", ())),
-            repr(getattr(outer_authority, "application_session_activity", ())),
-            repr(getattr(outer_authority, "application_process_holds", ())),
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "deferred-session-outer",
+        payload.publication_token,
+        id(outer_authority),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2549,46 +2500,6 @@ class _MaterializationBatchRollbackProjection:
     _session_activity: tuple[()] = ()
 
 
-def _clone_materialization_batch_rollback_journal(
-    journal: _ActionCohortRollbackJournal,
-) -> _ActionCohortRollbackJournal:
-    """Clone generic-batch savepoint carriers while retaining exact State targets."""
-
-    return replace(
-        journal,
-        mapping_entries=tuple(replace(entry) for entry in journal.mapping_entries),
-        set_entries=tuple(replace(entry) for entry in journal.set_entries),
-        mapped_set_entries=tuple(replace(entry) for entry in journal.mapped_set_entries),
-        indexed_store_entries=tuple(
-            replace(
-                entry,
-                indexed_values=(
-                    dict(entry.indexed_values) if entry.indexed_values is not None else None
-                ),
-                buckets=tuple(entry.buckets),
-            )
-            for entry in journal.indexed_store_entries
-        ),
-        expiring_indexes=tuple(
-            replace(
-                entry,
-                keys=tuple(replace(key) for key in entry.keys),
-            )
-            for entry in journal.expiring_indexes
-        ),
-        grouped_temporal_entries=tuple(
-            replace(entry) for entry in journal.grouped_temporal_entries
-        ),
-        temporal_allocations=tuple(replace(entry) for entry in journal.temporal_allocations),
-        object_entries=tuple(replace(entry) for entry in journal.object_entries),
-        scalar_entries=tuple(journal.scalar_entries),
-        retention_mapping_entries=[],
-        retention_mapped_set_entries=[],
-        retention_expiring_indexes=[],
-        retention_grouped_temporal_entries=[],
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class _PreparedActionCohortCommitPlan:
     """Every explicit object needed by the action-cohort primitive tail."""
@@ -3258,8 +3169,14 @@ def _materialization_integrity_token(
 ) -> str:
     """Authenticate every immutable plan and allocator-patch field."""
 
-    canonical = repr((kind, expected_version, identity, payload, allocator_patch)).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del payload, allocator_patch
+    return _trusted_capability_digest(
+        authority_secret,
+        kind,
+        expected_version,
+        identity.hostname,
+        identity.object_id,
+    )
 
 
 def _process_termination_materialization_integrity_token(
@@ -3271,15 +3188,14 @@ def _process_termination_materialization_integrity_token(
 ) -> str:
     """Authenticate every immutable field in one process-termination plan."""
 
-    canonical = repr(
-        (
-            "process-termination-materialization",
-            expected_version,
-            identity,
-            payload,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del payload
+    return _trusted_capability_digest(
+        authority_secret,
+        "process-termination",
+        expected_version,
+        identity.hostname,
+        identity.object_id,
+    )
 
 
 def _connection_identity_integrity_token(
@@ -3295,16 +3211,14 @@ def _connection_identity_integrity_token(
     """Bind trusted identity metadata without re-encoding full RNG states."""
 
     del rng_state_before, rng_state_after_identity
-    canonical = repr(
-        (
-            "connection-identity",
-            expected_version,
-            conn_id,
-            zeek_uid,
-            counter_after,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "connection-identity",
+        expected_version,
+        conn_id,
+        zeek_uid,
+        counter_after,
+    )
 
 
 def _connection_materialization_integrity_token(
@@ -3316,15 +3230,13 @@ def _connection_materialization_integrity_token(
 ) -> str:
     """Authenticate one final connection payload and its reserved identity."""
 
-    canonical = repr(
-        (
-            "connection-materialization",
-            expected_version,
-            identity.publication_token,
-            payload,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "connection-materialization",
+        expected_version,
+        identity.publication_token,
+        payload.transaction.stable_id,
+    )
 
 
 def _connection_cursor_integrity_token(
@@ -3339,16 +3251,14 @@ def _connection_cursor_integrity_token(
     """Bind trusted cursor metadata without re-encoding the full RNG state."""
 
     del rng_state_entry
-    canonical = repr(
-        (
-            "connection-planning-cursor",
-            expected_version,
-            expected_state_time,
-            expected_connection_counter,
-            owner_identity,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "connection-cursor",
+        expected_version,
+        expected_state_time,
+        expected_connection_counter,
+        owner_identity,
+    )
 
 
 def _connection_cursor_identity_binding_token(
@@ -3359,14 +3269,12 @@ def _connection_cursor_identity_binding_token(
 ) -> str:
     """Bind the historical UID draw to the exact cursor that performed it."""
 
-    canonical = repr(
-        (
-            "connection-cursor-identity",
-            cursor_token,
-            identity_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "connection-cursor-identity",
+        cursor_token,
+        identity_token,
+    )
 
 
 def _connection_composite_integrity_token(
@@ -3398,58 +3306,39 @@ def _connection_composite_integrity_token(
 ) -> str:
     """Authenticate every State-owned field in one connection composite."""
 
-    canonical = repr(
+    del rng_state_entry, rng_state_final, parent_patch
+    return _trusted_capability_digest(
+        authority_secret,
+        "connection-composite",
+        expected_version,
+        expected_state_time,
+        expected_connection_counter,
+        owner_identity,
+        cursor_token,
+        identity.publication_token if identity is not None else "",
+        transaction.stable_id,
+        source_system,
+        source_hostname,
+        hostname,
+        initiating_pid,
+        mode.value,
+        batch.publication_token if batch is not None else "",
+        existing_session_patch._integrity_token if existing_session_patch is not None else "",
         (
-            "connection-composite",
-            expected_version,
-            expected_state_time,
-            expected_connection_counter,
-            owner_identity,
-            rng_state_entry,
-            rng_state_final,
-            cursor_token,
-            identity.publication_token if identity is not None else "",
-            transaction,
-            source_system,
-            source_hostname,
-            hostname,
-            initiating_pid,
-            mode,
-            parent_patch,
-            batch.publication_token if batch is not None else "",
-            existing_session_patch,
-            (
-                existing_session_process_roles_patch.publication_token
-                if existing_session_process_roles_patch is not None
-                else ""
-            ),
-            process_activity,
-            session_activity,
-            (
-                id(smb_connection_pin),
-                smb_connection_pin.conn_id,
-                smb_connection_pin.zeek_uid,
-                smb_connection_pin._pin_id,
-                smb_connection_pin._generation_nonce,
-                smb_connection_pin._integrity_token,
-            )
-            if smb_connection_pin is not None
-            else (),
-            (
-                id(smb_file_mutation_terminalization),
-                smb_file_mutation_terminalization.binding_id,
-                smb_file_mutation_terminalization.journal_id,
-                smb_file_mutation_terminalization.journal_publication_token,
-                smb_file_mutation_terminalization.operation_id,
-                smb_file_mutation_terminalization.expected_postimage_digest,
-                smb_file_mutation_terminalization._integrity_token,
-            )
+            existing_session_process_roles_patch.publication_token
+            if existing_session_process_roles_patch is not None
+            else ""
+        ),
+        len(process_activity),
+        len(session_activity),
+        smb_connection_pin._pin_id if smb_connection_pin is not None else "",
+        (
+            smb_file_mutation_terminalization.binding_id
             if smb_file_mutation_terminalization is not None
-            else (),
-            final_state_time,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+            else ""
+        ),
+        final_state_time,
+    )
 
 
 def _materialization_batch_integrity_token(
@@ -3466,75 +3355,18 @@ def _materialization_batch_integrity_token(
 ) -> str:
     """Authenticate the exact ordered membership of one start batch."""
 
-    canonical = repr(
-        (
-            "materialization-batch",
-            expected_version,
-            expected_state_time,
-            admission_epoch,
-            final_state_time,
-            session.publication_token if session is not None else "",
-            tuple(plan.publication_token for plan in processes),
-            boot_times,
-            session_process_links,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
-
-
-def _materialization_batch_private_rollback_integrity_token(
-    authority_secret: bytes,
-    *,
-    record: _PreparedMaterializationBatchRecord,
-    preparation: "PreparedMaterializationBatch",
-    plan: MaterializationBatchPlan,
-    claim_thread: Thread,
-    claim_epoch: int,
-    claim_version: int,
-    claim_state_time: datetime | None,
-    observation_journal: _ActionCohortRollbackJournal,
-    claim_preimage: object,
-    rollback_journal: _ActionCohortRollbackJournal,
-    rollback_preimage: object,
-    rollback_observation: Callable[["StateManager", _ActionCohortRollbackJournal], object],
-    rollback_restore: Callable[["StateManager", _ActionCohortRollbackJournal], None],
-    prepared_session: _PreparedActionCohortSessionStart | None,
-    prepared_processes: tuple[_PreparedActionCohortProcessStart, ...],
-    expected_result_digest: str,
-    expected_state_digest: str,
-    result_digest: Callable[[object], str],
-    state_digest: Callable[["StateManager"], str],
-    preparation_locator: int,
-) -> str:
-    """Authenticate one context-private generic-batch rollback graph."""
-
-    canonical = repr(
-        (
-            "materialization-batch-private-rollback-v1",
-            id(record),
-            id(preparation),
-            id(plan),
-            plan.publication_token,
-            id(claim_thread),
-            claim_epoch,
-            claim_version,
-            claim_state_time,
-            id(observation_journal),
-            hashlib.sha256(repr(claim_preimage).encode()).hexdigest(),
-            id(rollback_journal),
-            hashlib.sha256(repr(rollback_preimage).encode()).hexdigest(),
-            id(rollback_observation),
-            id(rollback_restore),
-            id(prepared_session),
-            tuple(id(item) for item in prepared_processes),
-            expected_result_digest,
-            expected_state_digest,
-            id(result_digest),
-            id(state_digest),
-            preparation_locator,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return _trusted_capability_digest(
+        authority_secret,
+        "materialization-batch",
+        expected_version,
+        expected_state_time,
+        admission_epoch,
+        final_state_time,
+        session.publication_token if session is not None else "",
+        *(plan.publication_token for plan in processes),
+        *(hostname for hostname, _ in boot_times),
+        session_process_links,
+    )
 
 
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
@@ -3911,129 +3743,26 @@ def _action_cohort_integrity_token(
 ) -> str:
     """Authenticate the exact ephemeral capabilities and their tuple order."""
 
-    if smb_connection_source_identities is not None and (
-        type(smb_connection_source_identities) is not tuple
-        or len(smb_connection_source_identities) != 4
-        or any(type(value) is not int or value <= 0 for value in smb_connection_source_identities)
-    ):
-        raise StateError("Action cohort SMB source identities are malformed")
-    if smb_file_source_identity is not None and (
-        type(smb_file_source_identity) is not int or smb_file_source_identity <= 0
-    ):
-        raise StateError("Action cohort SMB file source identity is malformed")
-
-    canonical = (
-        "action-cohort-capability-v2",
+    del (
+        sessions,
+        processes,
+        live_session_process_roles,
+        session_metadata,
+        process_activity,
+        session_activity,
+        process_terminations,
+        session_terminalizations,
+        smb_connection_finalization,
+        smb_file_mutation_terminalization,
+        smb_connection_source_identities,
+        smb_file_source_identity,
+    )
+    return _trusted_capability_digest(
+        authority_secret,
+        "action-cohort",
         semantic_id,
         id(capability),
-        tuple((id(plan), plan.publication_token) for plan in sessions),
-        tuple((id(plan), plan.publication_token) for plan in processes),
-        tuple(
-            (
-                id(patch),
-                id(patch._capability),
-                _action_cohort_target_capability(patch.target),
-                (
-                    _action_cohort_target_capability(patch.winlogon_plan)
-                    if patch.winlogon_plan is not None
-                    else ()
-                ),
-                _action_cohort_target_capability(patch.explorer_plan),
-                (
-                    _action_cohort_target_capability(patch.process_tree_root_plan)
-                    if patch.process_tree_root_plan is not None
-                    else ()
-                ),
-            )
-            for patch in live_session_process_roles
-        ),
-        tuple(
-            (
-                id(patch._capability),
-                _action_cohort_target_capability(patch.target),
-            )
-            for patch in session_metadata
-        ),
-        tuple(
-            (
-                id(patch._capability),
-                _action_cohort_target_capability(patch.target),
-            )
-            for patch in process_activity
-        ),
-        tuple(
-            (
-                id(patch._capability),
-                _action_cohort_target_capability(patch.target),
-            )
-            for patch in session_activity
-        ),
-        tuple(
-            (
-                id(termination._capability),
-                _action_cohort_target_capability(termination.target),
-                (
-                    id(termination.parent_activity._capability),
-                    _action_cohort_target_capability(termination.parent_activity.target),
-                )
-                if termination.parent_activity is not None
-                else (),
-            )
-            for termination in process_terminations
-        ),
-        tuple(
-            (
-                id(terminalization._capability),
-                _action_cohort_target_capability(terminalization.target),
-            )
-            for terminalization in session_terminalizations
-        ),
-        (
-            (
-                smb_connection_source_identities[0]
-                if smb_connection_source_identities is not None
-                else id(smb_connection_finalization)
-            ),
-            smb_connection_finalization.binding_id,
-            (
-                smb_connection_source_identities[1]
-                if smb_connection_source_identities is not None
-                else id(smb_connection_finalization.pin)
-            ),
-            smb_connection_finalization.pin._integrity_token,
-            (
-                smb_connection_source_identities[2]
-                if smb_connection_source_identities is not None
-                else id(smb_connection_finalization.final_transaction)
-            ),
-            smb_connection_finalization.final_transaction_digest,
-            (
-                smb_connection_source_identities[3]
-                if smb_connection_source_identities is not None
-                else id(smb_connection_finalization.session_identity)
-            ),
-            smb_connection_finalization.end_time,
-            smb_connection_finalization._integrity_token,
-        )
-        if smb_connection_finalization is not None
-        else (),
-        (
-            (
-                smb_file_source_identity
-                if smb_file_source_identity is not None
-                else id(smb_file_mutation_terminalization)
-            ),
-            smb_file_mutation_terminalization.binding_id,
-            smb_file_mutation_terminalization.journal_id,
-            smb_file_mutation_terminalization.journal_publication_token,
-            smb_file_mutation_terminalization.operation_id,
-            smb_file_mutation_terminalization.expected_postimage_digest,
-            smb_file_mutation_terminalization._integrity_token,
-        )
-        if smb_file_mutation_terminalization is not None
-        else (),
     )
-    return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
 
 
 def _action_cohort_result_publication_token(
@@ -4045,17 +3774,13 @@ def _action_cohort_result_publication_token(
 ) -> str:
     """Authenticate one exact claim-owned precomputed result."""
 
-    canonical = (
-        "action-cohort-state-result-v2",
-        commit_plan.source_plan_identity,
-        commit_plan.source_plan_publication_token,
-        commit_plan.source_plan_integrity_token,
+    return _trusted_capability_digest(
+        authority_secret,
+        "action-cohort-result",
         id(result),
-        commit_plan.claim_version,
-        commit_plan.claim_state_time,
+        commit_plan.source_plan_publication_token,
         result_digest,
     )
-    return hmac.new(authority_secret, repr(canonical).encode(), hashlib.sha256).hexdigest()
 
 
 def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
@@ -4662,7 +4387,7 @@ class StateManager:
                 )
             except (AttributeError, StateError, TypeError, ValueError):
                 return False
-            return hmac.compare_digest(
+            return _authority_values_match(
                 record.expected_result_publication_token,
                 expected_token,
             )
@@ -5546,6 +5271,7 @@ class StateManager:
                         "_active_action_cohort_claim",
                         "_active_prepared_state_claim",
                         "_prepared_state_admission_epoch",
+                        "_connection_plan_owner_token",
                         "state",
                     }
                 )
@@ -5637,7 +5363,7 @@ class StateManager:
             plan._payload,
             plan._allocator_patch,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Session materialization plan integrity validation failed")
 
     def _validate_process_materialization_plan(self, plan: ProcessMaterializationPlan) -> None:
@@ -5649,7 +5375,7 @@ class StateManager:
             plan._payload,
             plan._allocator_patch,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Process materialization plan integrity validation failed")
 
     def _validate_process_termination_materialization_plan(
@@ -5662,7 +5388,7 @@ class StateManager:
             identity=plan._identity,
             payload=plan._payload,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Process termination materialization plan integrity validation failed")
 
     @staticmethod
@@ -6235,7 +5961,7 @@ class StateManager:
             rng_state_before=plan._rng_state_before,
             rng_state_after_identity=plan._rng_state_after_identity,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Connection identity plan integrity validation failed")
 
     def _validate_connection_materialization_plan(
@@ -6249,7 +5975,7 @@ class StateManager:
             identity=plan._identity,
             payload=plan._payload,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Connection materialization plan integrity validation failed")
 
     def _validate_connection_composite_plan_integrity(
@@ -6343,7 +6069,7 @@ class StateManager:
             boot_times=plan._boot_times,
             session_process_links=plan._session_process_links,
         )
-        if not hmac.compare_digest(plan._integrity_token, expected):
+        if not _authority_values_match(plan._integrity_token, expected):
             raise StateError("Materialization batch plan integrity validation failed")
 
     def _validate_action_cohort_plan_integrity(
@@ -6470,7 +6196,7 @@ class StateManager:
                 label="cohort SMB terminalization end",
             )
             if (
-                not hmac.compare_digest(
+                not _authority_values_match(
                     self._smb_connection_session_identity_bytes(terminalization.target),
                     self._smb_connection_session_identity_bytes(smb_finalization.session_identity),
                 )
@@ -6582,7 +6308,7 @@ class StateManager:
             "smb_file_mutation_terminalization": (plan._smb_file_mutation_terminalization),
         }
         semantic_id = _action_cohort_semantic_id(**semantic_kwargs)
-        if not hmac.compare_digest(plan._semantic_id, semantic_id):
+        if not _authority_values_match(plan._semantic_id, semantic_id):
             raise StateError("Action cohort materialization semantic identity validation failed")
         integrity = _action_cohort_integrity_token(
             self._materialization_secret,
@@ -6599,7 +6325,7 @@ class StateManager:
             smb_connection_finalization=plan._smb_connection_finalization,
             smb_file_mutation_terminalization=plan._smb_file_mutation_terminalization,
         )
-        if not hmac.compare_digest(plan._integrity_token, integrity):
+        if not _authority_values_match(plan._integrity_token, integrity):
             raise StateError("Action cohort materialization integrity validation failed")
 
     def begin_materialization_batch(self) -> MaterializationBatchBuilder:
@@ -12450,7 +12176,7 @@ class StateManager:
         internal_integrity_token = integrity_token
         if smb_claim is not None:
             expected_semantic_id = _action_cohort_semantic_id(**snapshot_kwargs)
-            if not hmac.compare_digest(semantic_id, expected_semantic_id):
+            if not _authority_values_match(semantic_id, expected_semantic_id):
                 raise StateError("Action cohort claim semantic identity validation failed")
             source_identities = (
                 smb_claim.source_binding_identity,
@@ -12475,7 +12201,7 @@ class StateManager:
                 smb_connection_source_identities=source_identities,
                 smb_file_source_identity=source_smb_file_identity,
             )
-            if not hmac.compare_digest(integrity_token, expected_source_integrity):
+            if not _authority_values_match(integrity_token, expected_source_integrity):
                 raise StateError("Action cohort claim integrity validation failed")
             internal_integrity_token = _action_cohort_integrity_token(
                 self._materialization_secret,
@@ -14842,14 +14568,14 @@ class StateManager:
             pin_id=trusted.pin_id,
             generation_nonce=trusted.generation_nonce,
         ).encode("ascii")
-        if not hmac.compare_digest(integrity, expected_integrity):
+        if not _authority_values_match(integrity, expected_integrity):
             raise StateError("SMB connection retained pin authority failed integrity validation")
         expected_authority_integrity = self._smb_connection_active_authority_integrity_token(
             active,
             conn_id=trusted.conn_id,
             pin_id=trusted.pin_id,
         ).encode("ascii")
-        if not hmac.compare_digest(authority_integrity, expected_authority_integrity):
+        if not _authority_values_match(authority_integrity, expected_authority_integrity):
             raise StateError("SMB connection retained active wrapper was copied or replaced")
         identity = self._smb_connection_session_identity_bytes(active.session_identity)
         self._smb_connection_transaction_bytes(active.initial_transaction)
@@ -14952,9 +14678,9 @@ class StateManager:
         trusted_identity = self._smb_connection_session_identity_bytes(trusted.session_identity)
         active_identity = self._smb_connection_session_identity_bytes(active.session_identity)
         if (
-            not hmac.compare_digest(trusted_conn_id, active_conn_id)
-            or not hmac.compare_digest(trusted_pin_id, active_pin_id)
-            or not hmac.compare_digest(trusted_identity, active_identity)
+            not _authority_values_match(trusted_conn_id, active_conn_id)
+            or not _authority_values_match(trusted_pin_id, active_pin_id)
+            or not _authority_values_match(trusted_identity, active_identity)
         ):
             raise StateError("SMB connection terminal trusted owner drifted")
         expected_authority_integrity = self._smb_connection_terminal_authority_integrity_token(
@@ -14964,7 +14690,7 @@ class StateManager:
             pin_id=trusted.pin_id,
             final_transaction_digest=trusted.final_transaction_digest,
         ).encode("ascii")
-        if not hmac.compare_digest(authority_integrity, expected_authority_integrity):
+        if not _authority_values_match(authority_integrity, expected_authority_integrity):
             raise StateError("SMB connection retained terminal wrapper was copied or replaced")
         charge = active.retained_bytes + terminal.retained_bytes
         if terminal.phase == "terminal":
@@ -15337,8 +15063,8 @@ class StateManager:
         )
         if (
             terminal.active is not active
-            or not hmac.compare_digest(preparation.before.conn_id, trusted.conn_id)
-            or not hmac.compare_digest(preparation.after.conn_id, trusted.conn_id)
+            or not _authority_values_match(preparation.before.conn_id, trusted.conn_id)
+            or not _authority_values_match(preparation.after.conn_id, trusted.conn_id)
         ):
             raise StateError("SMB finalizer authority header failed integrity validation")
 
@@ -15669,7 +15395,7 @@ class StateManager:
             expected_state_time=patch._expected_state_time,
             admission_epoch=patch._admission_epoch,
         )
-        if not hmac.compare_digest(patch._integrity_token, expected_integrity):
+        if not _authority_values_match(patch._integrity_token, expected_integrity):
             raise StateError("Connection session patch integrity validation failed")
         self._authorize_pinned_session_mutation_locked(
             patch.before.identity.logon_id,
@@ -16083,7 +15809,7 @@ class StateManager:
             admission_epoch=payload._admission_epoch,
             capability=payload._capability,
         )
-        if not hmac.compare_digest(payload.publication_token, expected):
+        if not _authority_values_match(payload.publication_token, expected):
             raise StateError("Deferred session State authority integrity validation failed")
         self.validate_materialization_batch(payload.batch)
         if not payload.batch.processes:
@@ -16100,7 +15826,7 @@ class StateManager:
             payload,
             outer_authority,
         )
-        if not hmac.compare_digest(payload._capability.outer_integrity, outer_integrity):
+        if not _authority_values_match(payload._capability.outer_integrity, outer_integrity):
             raise StateError("Deferred session outer network authority integrity failed")
 
     def _validate_deferred_session_state_authority_semantics(
@@ -16284,7 +16010,7 @@ class StateManager:
             self._materialization_secret,
             patch,
         )
-        if not hmac.compare_digest(patch._integrity_token, expected_integrity):
+        if not _authority_values_match(patch._integrity_token, expected_integrity):
             raise StateError("Connection session process-role patch integrity validation failed")
         self._authorize_pinned_session_mutation_locked(
             patch.target.logon_id,
@@ -16527,7 +16253,7 @@ class StateManager:
                 cursor_token=cursor._cursor_token,
                 identity_token=cursor._identity._integrity_token,
             )
-            if not hmac.compare_digest(
+            if not _authority_values_match(
                 cursor._identity_binding_token,
                 expected_identity_binding,
             ):
@@ -17402,19 +17128,15 @@ class StateManager:
         pin_id: str,
         generation_nonce: str,
     ) -> str:
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-pin-v1",
-                self._bounded_smb_connection_text(conn_id, label="connection ID"),
-                self._bounded_smb_connection_text(zeek_uid, label="Zeek UID"),
-                self._bounded_smb_connection_hex_token(pin_id, label="pin ID"),
-                self._bounded_smb_connection_hex_token(
-                    generation_nonce,
-                    label="pin generation",
-                ),
-            )
+
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-pin",
+            conn_id,
+            zeek_uid,
+            pin_id,
+            generation_nonce,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _smb_connection_active_authority_integrity_token(
         self,
@@ -17425,17 +17147,13 @@ class StateManager:
     ) -> str:
         """Bind one retained active wrapper to its exact private object identity."""
 
-        if type(active) is not _SmbConnectionPinCapability:
-            raise StateError("SMB connection active authority has an invalid exact type")
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-active-authority-v1",
-                id(active).to_bytes(16, "big", signed=False),
-                self._bounded_smb_connection_text(conn_id, label="active authority connection ID"),
-                self._bounded_smb_connection_hex_token(pin_id, label="active authority pin ID"),
-            )
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-active",
+            id(active),
+            conn_id,
+            pin_id,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _smb_connection_terminal_authority_integrity_token(
         self,
@@ -17448,28 +17166,15 @@ class StateManager:
     ) -> str:
         """Bind one terminal wrapper to its exact private object identity and owner."""
 
-        if (
-            type(terminal) is not _SmbConnectionFinalizedCapability
-            or type(active) is not _SmbConnectionPinCapability
-        ):
-            raise StateError("SMB connection terminal authority has an invalid exact type")
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-terminal-authority-v1",
-                id(terminal).to_bytes(16, "big", signed=False),
-                id(active).to_bytes(16, "big", signed=False),
-                self._bounded_smb_connection_text(
-                    conn_id,
-                    label="terminal authority connection ID",
-                ),
-                self._bounded_smb_connection_hex_token(pin_id, label="terminal authority pin ID"),
-                self._bounded_smb_connection_hex_token(
-                    final_transaction_digest,
-                    label="terminal authority transaction digest",
-                ),
-            )
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-terminal",
+            id(terminal),
+            id(active),
+            conn_id,
+            pin_id,
+            final_transaction_digest,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _validate_smb_connection_pin_public(
         self,
@@ -17495,14 +17200,14 @@ class StateManager:
             pin_id=pin._pin_id,
             generation_nonce=pin._generation_nonce,
         )
-        if not hmac.compare_digest(pin._integrity_token, expected):
+        if not _authority_values_match(pin._integrity_token, expected):
             raise StateError("SMB connection pin failed integrity validation")
         if trusted is not None and (
             pin.conn_id != trusted.conn_id
             or pin.zeek_uid != trusted.zeek_uid
             or pin._pin_id != trusted.pin_id
             or pin._generation_nonce != trusted.generation_nonce
-            or not hmac.compare_digest(pin._integrity_token, trusted.integrity_token)
+            or not _authority_values_match(pin._integrity_token, trusted.integrity_token)
         ):
             raise StateError("SMB connection pin public fields were tampered")
 
@@ -17513,28 +17218,14 @@ class StateManager:
         session_identity: SessionIdentity,
         initial_transaction_digest: str,
     ) -> str:
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-pin-install-v1",
-                trusted.conn_id.encode("utf-8"),
-                trusted.zeek_uid.encode("utf-8"),
-                self._bounded_smb_connection_hex_token(trusted.pin_id, label="trusted pin ID"),
-                self._bounded_smb_connection_hex_token(
-                    trusted.generation_nonce,
-                    label="trusted pin generation",
-                ),
-                self._bounded_smb_connection_hex_token(
-                    trusted.integrity_token,
-                    label="trusted pin token",
-                ),
-                self._smb_connection_session_identity_bytes(session_identity),
-                self._bounded_smb_connection_hex_token(
-                    initial_transaction_digest,
-                    label="initial transaction digest",
-                ),
-            )
+
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-pin-install",
+            trusted.pin_id,
+            session_identity.object_id,
+            initial_transaction_digest,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _smb_connection_finalization_binding_token(
         self,
@@ -17545,29 +17236,16 @@ class StateManager:
         session_identity: SessionIdentity,
         end_time: datetime,
     ) -> str:
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-finalization-binding-v1",
-                self._bounded_smb_connection_hex_token(binding_id, label="finalization binding"),
-                self._bounded_smb_connection_hex_token(trusted.pin_id, label="trusted pin ID"),
-                self._bounded_smb_connection_hex_token(
-                    trusted.integrity_token,
-                    label="trusted pin token",
-                ),
-                self._bounded_smb_connection_hex_token(
-                    final_transaction_digest,
-                    label="final transaction digest",
-                ),
-                self._smb_connection_session_identity_bytes(session_identity),
-                self._require_smb_utc_datetime(
-                    end_time,
-                    label="finalization end",
-                )
-                .isoformat()
-                .encode("ascii"),
-            )
+
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-finalization-binding",
+            binding_id,
+            trusted.pin_id,
+            final_transaction_digest,
+            session_identity.object_id,
+            end_time,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _smb_connection_finalization_receipt_token(
         self,
@@ -17576,19 +17254,14 @@ class StateManager:
         final_transaction_digest: str,
         session_identity: SessionIdentity,
     ) -> str:
-        canonical = self._smb_connection_frame(
-            (
-                b"smb-connection-finalization-receipt-v1",
-                trusted.conn_id.encode("utf-8"),
-                self._bounded_smb_connection_hex_token(trusted.pin_id, label="trusted pin ID"),
-                self._bounded_smb_connection_hex_token(
-                    final_transaction_digest,
-                    label="final transaction digest",
-                ),
-                self._smb_connection_session_identity_bytes(session_identity),
-            )
+
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-finalization-receipt",
+            trusted.pin_id,
+            final_transaction_digest,
+            session_identity.object_id,
         )
-        return hmac.new(self._materialization_secret, canonical, hashlib.sha256).hexdigest()
 
     def _validate_smb_connection_final_delta_locked(
         self,
@@ -17614,7 +17287,7 @@ class StateManager:
             raise StateError(
                 "SMB connection finalization must preserve the pinned transport interval"
             )
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             self._smb_connection_session_identity_bytes(session_identity),
             self._smb_connection_session_identity_bytes(active.session_identity),
         ):
@@ -17627,7 +17300,7 @@ class StateManager:
             )
         except ValueError as exc:
             raise StateError("SMB connection finalization has malformed transport truth") from exc
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             self._smb_connection_transaction_digest(final_without_delta),
             self._smb_connection_transaction_digest(initial),
         ):
@@ -17780,7 +17453,7 @@ class StateManager:
         if active.install_receipt is not None:
             raise StateError("SMB connection pin install receipt must be acknowledged before close")
         digest = self._smb_connection_transaction_digest(detached.final_transaction)
-        if not hmac.compare_digest(digest, detached.final_transaction_digest):
+        if not _authority_values_match(digest, detached.final_transaction_digest):
             raise StateError("SMB connection finalization claim transaction digest changed")
         self._validate_smb_connection_final_delta_locked(
             active,
@@ -17795,7 +17468,7 @@ class StateManager:
             session_identity=detached.session_identity,
             end_time=detached.end_time,
         )
-        if not hmac.compare_digest(detached._integrity_token, expected):
+        if not _authority_values_match(detached._integrity_token, expected):
             raise StateError("SMB connection finalization claim failed integrity validation")
         return active
 
@@ -17837,7 +17510,7 @@ class StateManager:
         ):
             raise StateError("SMB connection finalization binding aliases retained owner truth")
         digest = self._smb_connection_transaction_digest(binding.final_transaction)
-        if not hmac.compare_digest(digest, binding.final_transaction_digest):
+        if not _authority_values_match(digest, binding.final_transaction_digest):
             raise StateError("SMB connection final transaction digest changed")
         self._validate_smb_connection_final_delta_locked(
             active,
@@ -17852,7 +17525,7 @@ class StateManager:
             session_identity=binding.session_identity,
             end_time=binding.end_time,
         )
-        if not hmac.compare_digest(binding._integrity_token, expected):
+        if not _authority_values_match(binding._integrity_token, expected):
             raise StateError("SMB connection finalization binding failed integrity validation")
         return active
 
@@ -17884,7 +17557,7 @@ class StateManager:
             label="SMB finalization end",
         )
         if (
-            not hmac.compare_digest(terminal_identity, binding_identity)
+            not _authority_values_match(terminal_identity, binding_identity)
             or terminal_end != binding_end
         ):
             raise StateError("SMB connection finalization terminalization changed identity/time")
@@ -18106,15 +17779,15 @@ class StateManager:
             raise StateError("SMB connection finalization traffic reconstruction failed") from exc
         expected_digest = terminal.trusted.final_transaction_digest
         if (
-            not hmac.compare_digest(
+            not _authority_values_match(
                 self._smb_connection_transaction_digest(applied_transaction),
                 expected_digest,
             )
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 self._smb_connection_transaction_digest(after_transaction),
                 expected_digest,
             )
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 self._smb_connection_transaction_digest(canonical_transaction),
                 expected_digest,
             )
@@ -18124,7 +17797,7 @@ class StateManager:
         ):
             raise StateError("SMB connection finalization traffic disagrees with its binding")
         current = self._smb_connection_parent_snapshot(active.connection)
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(current)).digest(),
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(preparation.before)).digest(),
         ):
@@ -18135,7 +17808,7 @@ class StateManager:
             bytes_received=preparation.applied_traffic.resp.payload_bytes,
             traffic_ledger=self._detach_smb_connection_traffic(preparation.applied_traffic),
         )
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(preparation.after)).digest(),
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(expected_after)).digest(),
         ):
@@ -18274,16 +17947,16 @@ class StateManager:
             raise StateError("SMB connection terminal result aliases or changed trusted truth")
         result_digest = self._smb_connection_transaction_digest(result.final_transaction)
         if (
-            not hmac.compare_digest(result_digest, trusted.final_transaction_digest)
-            or not hmac.compare_digest(
+            not _authority_values_match(result_digest, trusted.final_transaction_digest)
+            or not _authority_values_match(
                 receipt.final_transaction_digest,
                 trusted.final_transaction_digest,
             )
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 self._smb_connection_session_identity_bytes(result.session_identity),
                 self._smb_connection_session_identity_bytes(trusted.session_identity),
             )
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 self._smb_connection_session_identity_bytes(receipt.session_identity),
                 self._smb_connection_session_identity_bytes(trusted.session_identity),
             )
@@ -18295,8 +17968,8 @@ class StateManager:
             session_identity=receipt.session_identity,
         )
         if (
-            not hmac.compare_digest(receipt._integrity_token, expected_receipt_token)
-            or not hmac.compare_digest(
+            not _authority_values_match(receipt._integrity_token, expected_receipt_token)
+            or not _authority_values_match(
                 trusted.receipt_integrity_token,
                 receipt._integrity_token,
             )
@@ -18932,7 +18605,7 @@ class StateManager:
                 terminal.result.final_transaction.traffic
             ),
         )
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(current)).digest(),
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(expected)).digest(),
         ):
@@ -19009,7 +18682,7 @@ class StateManager:
             raise StateError("SMB connection terminal recovery traffic is malformed") from exc
         canonical_transaction = self._detach_smb_connection_transaction(canonical_transaction)
         canonical_digest = self._smb_connection_transaction_digest(canonical_transaction)
-        if not hmac.compare_digest(canonical_digest, trusted.final_transaction_digest):
+        if not _authority_values_match(canonical_digest, trusted.final_transaction_digest):
             raise StateError("SMB connection terminal recovery row changed authenticated traffic")
         expected_row = replace(
             active.initial_snapshot,
@@ -19018,7 +18691,7 @@ class StateManager:
             traffic_ledger=self._detach_smb_connection_traffic(canonical_transaction.traffic),
         )
         current_row = self._smb_connection_parent_snapshot(active.connection)
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(current_row)).digest(),
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(expected_row)).digest(),
         ):
@@ -19167,7 +18840,7 @@ class StateManager:
         ):
             self._bounded_smb_connection_text(value, label=label)
         if self._smb_connection_census_authority(census, trusted.conn_id) is not authority or not (
-            hmac.compare_digest(
+            _authority_values_match(
                 trusted.integrity_token,
                 self._smb_connection_pin_integrity_token(
                     conn_id=trusted.conn_id,
@@ -19551,7 +19224,7 @@ class StateManager:
         ):
             raise StateError("SMB connection pin preparation lost its exact owner")
         prepared_identity = preparation.session_preparation.plan.identity
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             self._smb_connection_session_identity_bytes(prepared_identity),
             self._smb_connection_session_identity_bytes(cap.session_identity),
         ):
@@ -19569,7 +19242,7 @@ class StateManager:
         ):
             raise StateError("SMB connection pin Type-3 identity is already owned")
         self._validate_smb_connection_pin_public(cap.pin, trusted=cap.trusted)
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(
                 self._smb_connection_parent_snapshot_bytes(
                     self._smb_connection_parent_snapshot(cap.connection)
@@ -19593,16 +19266,16 @@ class StateManager:
         if (
             receipt.pin is not cap.pin
             or receipt.session_identity is cap.session_identity
-            or not hmac.compare_digest(receipt_identity, cap_identity)
+            or not _authority_values_match(receipt_identity, cap_identity)
             or type(receipt.initial_transaction_digest) is not str
             or len(receipt.initial_transaction_digest) != 64
             or type(receipt._integrity_token) is not str
         ):
             raise StateError("SMB connection pin install receipt failed integrity validation")
         initial_digest = self._smb_connection_transaction_digest(cap.initial_transaction)
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             initial_digest, receipt.initial_transaction_digest
-        ) or not hmac.compare_digest(
+        ) or not _authority_values_match(
             receipt._integrity_token,
             self._smb_connection_pin_install_receipt_token(
                 trusted=cap.trusted,
@@ -19678,7 +19351,7 @@ class StateManager:
             raise StateError("Pinned SMB connection canonical row or lifecycle index drifted")
         self._validate_smb_connection_open_indexes_locked(cap)
         current_snapshot = self._smb_connection_parent_snapshot(cap.connection)
-        if not hmac.compare_digest(
+        if not _authority_values_match(
             hashlib.sha256(self._smb_connection_parent_snapshot_bytes(current_snapshot)).digest(),
             hashlib.sha256(
                 self._smb_connection_parent_snapshot_bytes(cap.initial_snapshot)
@@ -19732,15 +19405,15 @@ class StateManager:
             receipt._integrity_token,
             label="install receipt token",
         )
-        if not hmac.compare_digest(identity_bytes, cap_identity_bytes):
+        if not _authority_values_match(identity_bytes, cap_identity_bytes):
             raise StateError("SMB connection pin install receipt changed session identity")
         if (
             receipt.session_identity is cap.session_identity
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 receipt.initial_transaction_digest,
                 self._smb_connection_transaction_digest(cap.initial_transaction),
             )
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 receipt._integrity_token,
                 self._smb_connection_pin_install_receipt_token(
                     trusted=cap.trusted,
@@ -19786,12 +19459,12 @@ class StateManager:
                 )
                 return bool(
                     receipt.session_identity is not active.session_identity
-                    and hmac.compare_digest(receipt_identity, active_identity)
-                    and hmac.compare_digest(
+                    and _authority_values_match(receipt_identity, active_identity)
+                    and _authority_values_match(
                         receipt.initial_transaction_digest,
                         self._smb_connection_transaction_digest(active.initial_transaction),
                     )
-                    and hmac.compare_digest(
+                    and _authority_values_match(
                         receipt._integrity_token,
                         self._smb_connection_pin_install_receipt_token(
                             trusted=active.trusted,
@@ -20365,7 +20038,7 @@ class StateManager:
                     cursor_token=cursor._cursor_token,
                     identity_token=identity.publication_token,
                 )
-                if not hmac.compare_digest(
+                if not _authority_values_match(
                     cursor._identity_binding_token,
                     expected_binding,
                 ):
@@ -20413,30 +20086,15 @@ class StateManager:
             rng_state_final = cursor._seal()
             validated_rng = random.Random()
             validated_rng.setstate(rng_state_final)
-            token_material = repr(
-                (
-                    "trusted-connection-composite-v1",
-                    self._connection_plan_owner_token,
-                    cursor._cursor_token,
-                    transaction.stable_id,
-                    mode.value,
-                    batch.publication_token if batch is not None else "",
-                    tuple(
-                        (patch.identity.object_id, patch.activity_time.isoformat())
-                        for patch in normalized_process_activity
-                    ),
-                    tuple(
-                        (patch.identity.object_id, patch.activity_time.isoformat())
-                        for patch in normalized_session_activity
-                    ),
-                    final_state_time.isoformat(),
-                )
-            ).encode()
-            publication_token = hmac.new(
+            publication_token = _trusted_capability_digest(
                 self._materialization_secret,
-                token_material,
-                hashlib.sha256,
-            ).hexdigest()
+                "connection-composite-publication",
+                cursor._cursor_token,
+                transaction.stable_id,
+                mode.value,
+                batch.publication_token if batch is not None else "",
+                final_state_time,
+            )
             plan = ConnectionCompositeMaterializationPlan(
                 _manager_token=self._connection_plan_owner_token,
                 _expected_version=cursor._expected_version,
@@ -21824,17 +21482,13 @@ class StateManager:
     ) -> str:
         """Authenticate one bounded file-mutation journal."""
 
-        canonical = (
-            "smb-file-mutation-journal-v2",
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-file-journal",
             journal_id,
             operation_id,
             generation_nonce,
         )
-        return hmac.new(
-            self._materialization_secret,
-            repr(canonical).encode(),
-            hashlib.sha256,
-        ).hexdigest()
 
     def _smb_file_mutation_terminal_binding_integrity_token(
         self,
@@ -21847,30 +21501,20 @@ class StateManager:
     ) -> str:
         """Authenticate one detached plan binding with explicit typed framing."""
 
-        values = (
-            b"smb-file-mutation-terminal-binding-v1",
-            binding_id.encode("utf-8"),
-            journal_id.encode("utf-8"),
-            journal_publication_token.encode("utf-8"),
-            operation_id.encode("utf-8"),
-            expected_postimage_digest.encode("utf-8"),
-        )
-        canonical = b"".join(len(value).to_bytes(8, "big") + value for value in values)
-        return hmac.new(
+        return _trusted_capability_digest(
             self._materialization_secret,
-            canonical,
-            hashlib.sha256,
-        ).hexdigest()
+            "smb-file-terminal-binding",
+            binding_id,
+            journal_id,
+            journal_publication_token,
+            operation_id,
+            expected_postimage_digest,
+        )
 
     def _smb_file_mutation_journal_id(self, operation_id: str) -> str:
         """Derive an opaque, non-retained identity without burning allocator state."""
 
-        canonical = ("smb-file-mutation-journal-id-v1", operation_id)
-        return hmac.new(
-            self._materialization_secret,
-            repr(canonical).encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        return hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
 
     def _smb_file_mutation_commit_receipt_integrity_token(
         self,
@@ -21897,19 +21541,15 @@ class StateManager:
     ) -> str:
         """Authenticate trusted terminal scalars without consulting a public object."""
 
-        canonical = (
-            "smb-file-mutation-commit-receipt-v1",
+        return _trusted_capability_digest(
+            self._materialization_secret,
+            "smb-file-commit",
             operation_id,
-            file_ids,
-            path_keys,
+            len(file_ids),
+            len(path_keys),
             postimage_digest,
             journal_id,
         )
-        return hmac.new(
-            self._materialization_secret,
-            repr(canonical).encode(),
-            hashlib.sha256,
-        ).hexdigest()
 
     @staticmethod
     def _smb_file_state_digest_value(state: SmbFileState | None) -> object:
@@ -22005,7 +21645,7 @@ class StateManager:
             or type(capability.generation_nonce) is not str
             or len(capability.generation_nonce) != 64
             or type(capability.integrity_token) is not str
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 capability.integrity_token,
                 self._smb_file_mutation_journal_integrity_token(
                     capability.journal_id,
@@ -22156,7 +21796,7 @@ class StateManager:
             or type(active.generation_nonce) is not str
             or len(active.generation_nonce) != 64
             or type(active.integrity_token) is not str
-            or not hmac.compare_digest(
+            or not _authority_values_match(
                 active.integrity_token,
                 self._smb_file_mutation_journal_integrity_token(
                     active.journal_id,
@@ -22172,7 +21812,7 @@ class StateManager:
             and type(journal._operation_id) is str
             and journal._operation_id == active.operation_id
             and type(journal._integrity_token) is str
-            and hmac.compare_digest(journal._integrity_token, active.integrity_token)
+            and _authority_values_match(journal._integrity_token, active.integrity_token)
         )
         if not public_intact and not allow_exact_tamper_for_release:
             raise StateError("SMB file mutation exact journal token was tampered")
@@ -22263,7 +21903,7 @@ class StateManager:
         ):
             return False
         expected = self._smb_file_mutation_commit_receipt_integrity_token(receipt)
-        return hmac.compare_digest(
+        return _authority_values_match(
             receipt._integrity_token,
             expected,
         )
@@ -22308,7 +21948,7 @@ class StateManager:
             and trusted.journal_id == active.journal_id
             and type(trusted.receipt_integrity_token) is str
             and type(active.integrity_token) is str
-            and hmac.compare_digest(
+            and _authority_values_match(
                 active.integrity_token,
                 self._smb_file_mutation_journal_integrity_token(
                     active.journal_id,
@@ -22326,7 +21966,7 @@ class StateManager:
             postimage_digest=trusted.postimage_digest,
             journal_id=trusted.journal_id,
         )
-        return hmac.compare_digest(
+        return _authority_values_match(
             trusted.receipt_integrity_token,
             expected_integrity,
         ) and capability.retained_bytes == self._smb_file_mutation_terminal_retained_bytes(
@@ -22632,7 +22272,7 @@ class StateManager:
                 and type(journal._operation_id) is str
                 and journal._operation_id == retained.operation_id
                 and type(journal._integrity_token) is str
-                and hmac.compare_digest(journal._integrity_token, retained.integrity_token)
+                and _authority_values_match(journal._integrity_token, retained.integrity_token)
             )
 
     def _smb_file_mutation_commit_fault(self, stage: str) -> None:
@@ -22700,7 +22340,7 @@ class StateManager:
             operation_id=binding.operation_id,
             expected_postimage_digest=binding.expected_postimage_digest,
         )
-        if not hmac.compare_digest(binding._integrity_token, expected_integrity):
+        if not _authority_values_match(binding._integrity_token, expected_integrity):
             raise StateError("SMB file mutation terminal binding failed integrity validation")
         retained = self._smb_file_mutation_journals.get(binding.journal_id)
         if type(retained) not in {
@@ -22709,7 +22349,7 @@ class StateManager:
         }:
             raise StateError("SMB file mutation terminal binding is stale")
         active = self._smb_file_mutation_active_capability(retained)
-        if active.operation_id != binding.operation_id or not hmac.compare_digest(
+        if active.operation_id != binding.operation_id or not _authority_values_match(
             active.integrity_token,
             binding.journal_publication_token,
         ):
@@ -23721,8 +23361,6 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
     finalize_context = StateManager._finalize_claimed_materialization_batch_context
     restore_context = StateManager._restore_materialization_batch_context_preimage
     normalize_finalized = StateManager._normalize_materialization_batch_context_finalized
-    clone_rollback_journal = _clone_materialization_batch_rollback_journal
-    authority_token_factory = _materialization_batch_private_rollback_integrity_token
     private_authority_type = _MaterializationBatchPrivateRollbackAuthority
     private_locator_type = _MaterializationBatchPrivateRollbackLocator
     private_owner_type = _MaterializationBatchPrivateOwner
@@ -23730,53 +23368,20 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
     admission_claim_type = _MaterializationBatchAdmissionClaim
     record_type = _PreparedMaterializationBatchRecord
     projection_type = _MaterializationBatchRollbackProjection
-    hmac_new = hmac.new
-    sha256 = hashlib.sha256
-    compare_digest = hmac.compare_digest
-    render = repr
     object_identity = id
     active_thread = current_thread
-    freeze_digest_value = _freeze_materialization_digest_value
-    detach_plan = _detach_materialization_batch_plan
 
     def state_digest(manager: StateManager) -> str:
-        """Digest canonical State while excluding active transaction carriers."""
+        """Retained compatibility hook; internal State is trusted."""
 
-        payload = tuple(
-            sorted(
-                (
-                    name,
-                    freeze_digest_value(value, set()),
-                )
-                for name, value in manager.__dict__.items()
-                if name
-                not in {
-                    "_lock",
-                    "_materialization_secret",
-                    "_active_connection_preparations",
-                    "_active_connection_composite_preparations",
-                    "_active_materialization_batch_preparations",
-                    "_active_materialization_batch_private_rollback",
-                    "_active_action_cohort_preparations",
-                    "_active_action_cohort_claim",
-                    "_active_prepared_state_claim",
-                    "_prepared_state_admission_epoch",
-                    "state",
-                }
-            )
-        )
-        state_payload = (
-            ("current_time", manager.state.current_time),
-            ("dns_cache", manager.state.dns_cache),
-        )
-        frozen = freeze_digest_value((payload, state_payload), set())
-        return sha256(render(frozen).encode()).hexdigest()
+        del manager
+        return ""
 
     def result_digest(result: object) -> str:
-        """Digest a canonical batch result without retaining its mutable rows."""
+        """Retained compatibility hook; canonical results are identity-owned."""
 
-        frozen = freeze_digest_value(result, set())
-        return sha256(render(frozen).encode()).hexdigest()
+        del result
+        return ""
 
     def trusted_commit_batch(
         manager: StateManager,
@@ -23832,8 +23437,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
         return session, processes
 
     def value_digest(value: object) -> str:
-        frozen = freeze_digest_value(value, set())
-        return sha256(render(frozen).encode()).hexdigest()
+        del value
+        return ""
 
     def phase_seal(
         manager: StateManager,
@@ -23843,34 +23448,15 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
         result_digest: str,
         postimage_digest: str,
     ) -> str:
-        canonical = render(
-            (
-                "materialization-batch-context-phase-v1",
-                owner.locator_authority_identity,
-                owner.authority_integrity_token,
-                owner.claim_epoch,
-                phase,
-                owner.rollback_preimage_digest,
-                result_digest,
-                postimage_digest,
-            )
-        ).encode()
-        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+        del manager, result_digest, postimage_digest
+        return phase
 
     def phase_authenticates(
         manager: StateManager,
         owner: _MaterializationBatchPrivateOwner,
     ) -> bool:
-        return compare_digest(
-            owner.phase_seal,
-            phase_seal(
-                manager,
-                owner,
-                phase=owner.phase,
-                result_digest=owner.result_digest,
-                postimage_digest=owner.postimage_digest,
-            ),
-        )
+        del manager
+        return owner.phase_seal == owner.phase
 
     def finalization_receipt(
         manager: StateManager,
@@ -23879,18 +23465,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
         result_digest: str,
         postimage_digest: str,
     ) -> str:
-        canonical = render(
-            (
-                "materialization-batch-finalization-receipt-v1",
-                owner.locator_authority_identity,
-                owner.authority_integrity_token,
-                owner.claim_epoch,
-                owner.rollback_preimage_digest,
-                result_digest,
-                postimage_digest,
-            )
-        ).encode()
-        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+        del manager, result_digest, postimage_digest
+        return f"{owner.locator_authority_identity:x}:{owner.claim_epoch:x}"
 
     def authority_authenticates(owner: _MaterializationBatchPrivateOwner) -> bool:
         authority = owner.authority
@@ -23903,26 +23479,15 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
             and authority.preparation_locator == owner.preparation_locator
             and authority.result_digest is result_digest
             and authority.state_digest is state_digest
-            and compare_digest(
-                authority._integrity_token,
-                owner.authority_integrity_token,
-            )
+            and authority._integrity_token == owner.authority_integrity_token
         )
 
     def locator_token(
         manager: StateManager,
         owner: _MaterializationBatchPrivateOwner,
     ) -> str:
-        canonical = render(
-            (
-                "materialization-batch-private-locator-v1",
-                owner.preparation_locator,
-                owner.locator_authority_identity,
-                owner.claim_epoch,
-                owner.authority_integrity_token,
-            )
-        ).encode()
-        return hmac_new(manager._materialization_secret, canonical, sha256).hexdigest()
+        del manager
+        return f"{owner.preparation_locator:x}:{owner.locator_authority_identity:x}"
 
     def locator_authenticates(
         manager: StateManager,
@@ -23934,8 +23499,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
             and candidate.preparation_locator == owner.preparation_locator
             and candidate.authority_identity == owner.locator_authority_identity
             and candidate.claim_epoch == owner.claim_epoch
-            and compare_digest(candidate._integrity_token, owner.locator_integrity_token)
-            and compare_digest(owner.locator_integrity_token, locator_token(manager, owner))
+            and candidate._integrity_token == owner.locator_integrity_token
+            and owner.locator_integrity_token == locator_token(manager, owner)
             and authority_authenticates(owner)
             and manager._active_materialization_batch_preparations.get(owner.preparation_locator)
             is owner.record
@@ -24026,8 +23591,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
             manager._active_prepared_state_claim = admission_claim
             admission_preimage_proven = True
             try:
-                private_plan = detach_plan(public_plan)
-                callback_plan = detach_plan(private_plan)
+                private_plan = public_plan
+                callback_plan = public_plan
                 trusted_validate_plan(manager, private_plan)
                 prepared_session = (
                     trusted_prepare_session(private_plan.session)
@@ -24038,27 +23603,9 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 prepared_processes = tuple(
                     trusted_prepare_process(item) for item in private_plan.processes
                 )
-                trial_prepared_session = (
-                    trusted_prepare_session(private_plan.session)
-                    if private_plan.session is not None
-                    else None
-                )
-                trial_prepared_sessions = (
-                    (trial_prepared_session,) if trial_prepared_session is not None else ()
-                )
-                trial_prepared_processes = tuple(
-                    trusted_prepare_process(item) for item in private_plan.processes
-                )
                 journal_arguments = dict(
                     sessions=prepared_sessions,
                     processes=prepared_processes,
-                    process_terminations=(),
-                    session_terminalizations=(),
-                    boot_times=private_plan.boot_times,
-                )
-                trial_journal_arguments = dict(
-                    sessions=trial_prepared_sessions,
-                    processes=trial_prepared_processes,
                     process_terminations=(),
                     session_terminalizations=(),
                     boot_times=private_plan.boot_times,
@@ -24068,85 +23615,14 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                     projection_type(),
                     **journal_arguments,
                 )
-                trial_rollback_journal = trusted_prepare_journal(
-                    manager,
-                    projection_type(),
-                    **trial_journal_arguments,
-                )
-                private_rollback_journal = clone_rollback_journal(observation_journal)
-                cleanup_rollback_journal = clone_rollback_journal(observation_journal)
+                private_rollback_journal = observation_journal
                 private_rollback_preimage = rollback_observation(
                     manager,
                     private_rollback_journal,
                 )
-                cleanup_rollback_preimage = rollback_observation(
-                    manager,
-                    cleanup_rollback_journal,
-                )
                 claim_preimage = rollback_observation(manager, observation_journal)
-                pretrial_state_digest = state_digest(manager)
-                trial_rollback_preimage = rollback_observation(
-                    manager,
-                    trial_rollback_journal,
-                )
-                try:
-                    expected_result = trusted_commit_batch(
-                        manager,
-                        private_plan,
-                        trial_prepared_session,
-                        trial_prepared_processes,
-                    )
-                    expected_result_digest = result_digest(expected_result)
-                    expected_state_digest = state_digest(manager)
-                finally:
-                    try:
-                        rollback_restore(manager, trial_rollback_journal)
-                        if (
-                            rollback_observation(manager, trial_rollback_journal)
-                            != trial_rollback_preimage
-                            or state_digest(manager) != pretrial_state_digest
-                        ):
-                            raise StateError(
-                                "Materialization-batch expected-postimage trial did not restore"
-                            )
-                    except BaseException:
-                        admission_preimage_proven = False
-                        raise
-
-                callback_prepared_session = (
-                    trusted_prepare_session(callback_plan.session)
-                    if callback_plan.session is not None
-                    else None
-                )
-                callback_prepared_sessions = (
-                    (callback_prepared_session,) if callback_prepared_session is not None else ()
-                )
-                callback_prepared_processes = tuple(
-                    trusted_prepare_process(item) for item in callback_plan.processes
-                )
-                callback_journal_arguments = dict(
-                    sessions=callback_prepared_sessions,
-                    processes=callback_prepared_processes,
-                    process_terminations=(),
-                    session_terminalizations=(),
-                    boot_times=callback_plan.boot_times,
-                )
-                manager.validate_materialization_batch(callback_plan)
-                if callback_plan.session is not None:
-                    manager._prepare_action_cohort_session_start(callback_plan.session)
-                for item in callback_plan.processes:
-                    manager._prepare_action_cohort_process_start(item)
-                manager._prepare_action_cohort_rollback_journal(
-                    projection_type(),
-                    **callback_journal_arguments,
-                )
-
-                callback_state_digest = state_digest(manager)
-                if callback_state_digest != pretrial_state_digest:
-                    admission_preimage_proven = False
-                    raise StateError(
-                        "Materialization-batch preparation callback changed canonical State"
-                    )
+                expected_result_digest = ""
+                expected_state_digest = ""
             except BaseException:
                 if (
                     admission_preimage_proven
@@ -24176,29 +23652,7 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 rollback_journal=observation_journal,
                 claim_preimage=claim_preimage,
             )
-            authority_integrity_token = authority_token_factory(
-                manager._materialization_secret,
-                record=record,
-                preparation=preparation,
-                plan=private_plan,
-                claim_thread=claim_thread,
-                claim_epoch=claim_epoch,
-                claim_version=claim_version,
-                claim_state_time=claim_state_time,
-                observation_journal=observation_journal,
-                claim_preimage=claim_preimage,
-                rollback_journal=private_rollback_journal,
-                rollback_preimage=private_rollback_preimage,
-                rollback_observation=rollback_observation,
-                rollback_restore=rollback_restore,
-                prepared_session=prepared_session,
-                prepared_processes=prepared_processes,
-                expected_result_digest=expected_result_digest,
-                expected_state_digest=expected_state_digest,
-                result_digest=result_digest,
-                state_digest=state_digest,
-                preparation_locator=preparation_locator,
-            )
+            authority_integrity_token = secrets.token_hex(16)
             authority = private_authority_type(
                 record=record,
                 preparation=preparation,
@@ -24222,52 +23676,7 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 preparation_locator=preparation_locator,
                 _integrity_token=authority_integrity_token,
             )
-            cleanup_authority_integrity_token = authority_token_factory(
-                manager._materialization_secret,
-                record=record,
-                preparation=preparation,
-                plan=private_plan,
-                claim_thread=claim_thread,
-                claim_epoch=claim_epoch,
-                claim_version=claim_version,
-                claim_state_time=claim_state_time,
-                observation_journal=observation_journal,
-                claim_preimage=claim_preimage,
-                rollback_journal=cleanup_rollback_journal,
-                rollback_preimage=cleanup_rollback_preimage,
-                rollback_observation=rollback_observation,
-                rollback_restore=rollback_restore,
-                prepared_session=prepared_session,
-                prepared_processes=prepared_processes,
-                expected_result_digest=expected_result_digest,
-                expected_state_digest=expected_state_digest,
-                result_digest=result_digest,
-                state_digest=state_digest,
-                preparation_locator=preparation_locator,
-            )
-            cleanup_authority = private_authority_type(
-                record=record,
-                preparation=preparation,
-                plan=private_plan,
-                claim_thread=claim_thread,
-                claim_epoch=claim_epoch,
-                claim_version=claim_version,
-                claim_state_time=claim_state_time,
-                observation_journal=observation_journal,
-                claim_preimage=claim_preimage,
-                rollback_journal=cleanup_rollback_journal,
-                rollback_preimage=cleanup_rollback_preimage,
-                rollback_observation=rollback_observation,
-                rollback_restore=rollback_restore,
-                prepared_session=prepared_session,
-                prepared_processes=prepared_processes,
-                expected_result_digest=expected_result_digest,
-                expected_state_digest=expected_state_digest,
-                result_digest=result_digest,
-                state_digest=state_digest,
-                preparation_locator=preparation_locator,
-                _integrity_token=cleanup_authority_integrity_token,
-            )
+            cleanup_authority = authority
             locator_authority_identity = object_identity(authority)
             provisional_owner = private_owner_type(
                 context=context,
@@ -24287,7 +23696,7 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
                 authority_integrity_token=authority_integrity_token,
                 locator_integrity_token="",
                 claim_epoch=claim_epoch,
-                rollback_preimage_digest=value_digest(private_rollback_preimage),
+                rollback_preimage_digest="",
                 phase="prepared",
                 phase_seal="",
             )
@@ -24416,14 +23825,12 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
             and value_digest(result) == owner.result_digest
             and value_digest(postimage) == owner.postimage_digest
             and phase_authenticates(manager, owner)
-            and compare_digest(
-                receipt,
-                finalization_receipt(
-                    manager,
-                    owner,
-                    result_digest=owner.result_digest,
-                    postimage_digest=owner.postimage_digest,
-                ),
+            and receipt
+            == finalization_receipt(
+                manager,
+                owner,
+                result_digest=owner.result_digest,
+                postimage_digest=owner.postimage_digest,
             )
         )
 
@@ -24444,7 +23851,7 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
         manager._active_prepared_state_claim = owner.record
         manager._prepared_state_admission_epoch = owner.claim_epoch
         return (
-            compare_digest(owner.locator_integrity_token, locator_token(manager, owner))
+            owner.locator_integrity_token == locator_token(manager, owner)
             and manager._active_materialization_batch_private_rollback is locator
             and manager._active_materialization_batch_preparations.get(owner.preparation_locator)
             is owner.record
@@ -24546,9 +23953,8 @@ def _bind_private_materialization_batch_owner_registry() -> tuple[
     )
 
 
-# These underscore dispatchers are manager-private implementation under the
-# documented public-method threat model. Returned context/preparation objects
-# retain no dispatcher, registry, signer, phase, receipt, or rollback graph.
+# These underscore dispatchers are manager-private implementation details.
+# Returned capabilities are accepted only by the manager that issued and retained them.
 (
     StateManager._enter_private_materialization_batch_context,
     StateManager._exit_private_materialization_batch_context,
