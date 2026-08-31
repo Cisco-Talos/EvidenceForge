@@ -41,13 +41,9 @@ jobs:
         run: uv run ruff format --check .
 
   tests:
-    name: Tests (Python ${{ matrix.python-version }})
+    name: Tests (Python 3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Checkout code
@@ -62,7 +58,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install dependencies
         run: uv sync --all-extras

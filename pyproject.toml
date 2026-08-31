@@ -30,7 +30,7 @@ license-files = ["LICENSE"]
 authors = [
     { name = "Cisco Talos" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "click>=8.4.2",
     "pydantic>=2.13.4",

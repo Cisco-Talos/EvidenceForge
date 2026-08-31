@@ -72,7 +72,7 @@ handoff details in `docs/worklog/` until they are no longer useful.
 ## Tech Stack
 
 **Core:**
-- Python 3.11+ (required for latest type hint features including `Self`, `TypedDict` improvements)
+- Python 3.12+ (required for the supported runtime and typing features)
 - uv for package management, virtual environments, and script running
 - Pydantic v2 for all data validation and schema management
 
@@ -304,7 +304,7 @@ The version on `dev` between releases will be ahead of `main` by one unreleased 
 - Import order: stdlib, third-party, local (enforced by ruff's `I` rules)
 
 ### Type Hints
-- Use modern Python 3.11+ built-in types: `list[User]`, `dict[int, str]` — not `typing.List`, `typing.Dict`
+- Use modern Python 3.12+ built-in types: `list[User]`, `dict[int, str]` — not `typing.List`, `typing.Dict`
 - Use `X | None` — not `Optional[X]`
 - Always include return types on function signatures
 - Annotate variables when the type isn't obvious from the assignment
