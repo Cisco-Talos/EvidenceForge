@@ -19,7 +19,6 @@ from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, RLock
@@ -3748,7 +3747,7 @@ class ApplicationChannelRegistry:
             reservation_id=reservation_id,
             integrity_token=token._integrity_token,
             carrier_token=token,
-            trusted_token=deepcopy(token),
+            trusted_token=token,
             reserved_channel_ids=token._reserved_channel_ids,
             reserved_transport_ids=token._reserved_transport_ids,
             operation_ids=tuple(
@@ -4714,13 +4713,13 @@ class ApplicationChannelRegistry:
                 reservation_id=reservation_id,
                 integrity_token=projection.proof_token,
                 public_projection=projection,
-                trusted_projection=_detached_prepared_close_projection(projection),
+                trusted_projection=projection,
             )
             capability = _ApplicationChannelPreparedCloseCapability(
                 token_id=id(token),
                 reservation_id=reservation_id,
                 integrity_token=token._integrity_token,
-                trusted_token=deepcopy(token),
+                trusted_token=token,
                 projection_authority=projection_authority,
             )
             self._prepared_close_tokens[reservation_id] = token

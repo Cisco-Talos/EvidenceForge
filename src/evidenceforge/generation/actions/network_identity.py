@@ -228,6 +228,8 @@ _IDENTITY_ROOT_LABEL = (
 _IDENTITY_ROOT_TYPE: type[object] | None = None
 _IDENTITY_ROOT_POLICY: tuple[object, ...] | None = None
 _TRUSTED_IDENTITY_TYPE_INSPECTOR: _IdentityTypeInspector | None = None
+_TRUSTED_PYDANTIC_DIGEST_CACHE_CAPACITY = 8_192
+_TRUSTED_PYDANTIC_DIGESTS: dict[int, tuple[BaseModel, bytes]] = {}
 
 
 def _identity_import_raw_attribute(value_type: type[object], name: str) -> object:
@@ -1292,8 +1294,14 @@ class _IdentityDigestWriter:
 class _CanonicalIdentityEncoder:
     """Build bounded Merkle-style identity digests without caller dispatch."""
 
-    def __init__(self, *, type_inspector: _IdentityTypeInspector | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        type_inspector: _IdentityTypeInspector | None = None,
+        trusted_cache: bool = False,
+    ) -> None:
         self._types = type_inspector if type_inspector is not None else _IdentityTypeInspector()
+        self._trusted_cache = trusted_cache
         self._active: dict[int, object] = {}
         self._memo: dict[int, tuple[object, bytes]] = {}
         self._nodes = 0
@@ -1643,8 +1651,19 @@ class _CanonicalIdentityEncoder:
                 )
             return self._encode_dataclass(value, value_mro, data_fields, depth, path)
         if self._types.pydantic_policy(value_type) is not None:
+            if self._trusted_cache:
+                shared = _TRUSTED_PYDANTIC_DIGESTS.get(value_id)
+                if shared is not None and shared[0] is value:
+                    digest = shared[1]
+                    self._memoize(value, digest)
+                    return digest
             value_mro = self._types.mro(value_type, path)
-            return self._encode_pydantic(value, value_mro, depth, path)  # type: ignore[arg-type]
+            digest = self._encode_pydantic(value, value_mro, depth, path)  # type: ignore[arg-type]
+            if self._trusted_cache:
+                if len(_TRUSTED_PYDANTIC_DIGESTS) >= _TRUSTED_PYDANTIC_DIGEST_CACHE_CAPACITY:
+                    _TRUSTED_PYDANTIC_DIGESTS.clear()
+                _TRUSTED_PYDANTIC_DIGESTS[value_id] = (value, digest)  # type: ignore[assignment]
+            return digest
 
         if value_type is bool:
             return self._scalar_writer(b"bool", value, b"1" if value else b"0", path)
@@ -1913,6 +1932,7 @@ def _trusted_network_request_stable_id(request: object, expected_type: type[obje
     try:
         identity_digest, _projection = _CanonicalIdentityEncoder(
             type_inspector=inspector,
+            trusted_cache=True,
         ).encode_request(
             request,
             expected_type,

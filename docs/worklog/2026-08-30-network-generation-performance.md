@@ -39,7 +39,7 @@ The remaining trusted-engine migration was split into four routine-suite-gated c
 - `ee0f3072` replaced shared lifecycle, runtime, timing, registry, ledger, and preparation graph
   authentication with constant-time owner-issued authority state.
 - `fd8d3590` simplified protocol, application-channel, observation, and continuation authorities.
-- Stage 4 simplifies StateManager and emitter recovery authorities while retaining ownership,
+- `60ed3a05` simplified StateManager and emitter recovery authorities while retaining ownership,
   lifecycle/version fences, atomic publication, retry, rollback, and filesystem descriptor safety.
 
 The dispatcher owner token used by a few compatibility carriers is a constant per-dispatcher
@@ -82,3 +82,24 @@ and the complete routine checkpoint passed 7,939 tests with 27 skips and 1,990 s
 deselected. The reduced routine count reflects retirement of tests whose only contract was
 resistance to hostile same-process mutation; ownership, stale-capability, duplicate-finalization,
 rollback, interrupted-publication, and retry coverage remains.
+
+The final shortened-scenario parity run completed on both revisions. Commit `2859218b` generated
+the two-hour scenario plus one-hour warm-up in 5:10; Stage 4 completed it in 5:08. The output trees
+were byte-identical except for `GENERATION_MANIFEST.json.created_at`. This matched run therefore did
+not meet the planned two-times end-to-end throughput gate, despite the large isolated cursor gain.
+
+The final 60-second Stage 4 `py-spy` capture contained approximately 5,995 samples. Recursive RNG
+validation and HMAC graph authentication were no longer dominant. The next residual costs were
+trusted request stable-ID encoding (667 samples), prepared source-timing work (612 samples), deep
+copying (roughly 500 samples), and source-timing state digests (216 samples). Inspection localized
+the largest redundant copies to exact frozen application-channel preparation carriers.
+
+A final bounded follow-up removed those application-channel carrier copies, replaced source-timing
+preparation digests with owner-issued constant-time tokens while retaining exact version and lane
+fences, and added trusted reuse of Pydantic identity subgraph digests. Public request identity still
+performs fresh boundary validation and retains seed-scoped behavior. This follow-up is intentionally
+the pause point; another matched profile and scenario benchmark remain future work.
+
+The final slow gate passed 1,760 tests and had one environment-only failure because the referenced
+`meridian-healthcare-solutions` pack was absent from both the worktree and main checkout. No soak
+tests were run.

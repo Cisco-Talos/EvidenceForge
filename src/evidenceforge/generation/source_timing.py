@@ -1215,7 +1215,7 @@ class SourceTimingPlanner:
         self._preparation_lane_marker: object | None = None
         self._preparation_lane_generation: _SourceTimingLaneGenerationRecord | None = None
         self._preparation_authority_lock = RLock()
-        self._preparation_secret = secrets.token_bytes(32)
+        self._preparation_secret = secrets.token_hex(32)
         self._next_preparation_id = 1
         self._preparation_authority_capacity = preparation_authority_capacity
         self._preparation_claim_records: dict[int, _SourceTimingClaimRecord] = {}
@@ -1265,7 +1265,7 @@ class SourceTimingPlanner:
         self._preparation_lane_marker = None
         self._preparation_lane_generation = None
         self._preparation_authority_lock = RLock()
-        self._preparation_secret = secrets.token_bytes(32)
+        self._preparation_secret = secrets.token_hex(32)
         self._next_preparation_id = 1
         self._preparation_claim_records = {}
         self._committed_preparation_receipts = {}
@@ -3233,9 +3233,8 @@ class SourceTimingPlanner:
         return self._snapshot_preparation_receipt(receipt) is not None
 
     def _preparation_token_integrity(self, preparation_id: int, base_digest: str) -> str:
-        return hashlib.sha256(
-            f"source-timing:{id(self):x}:{preparation_id:x}:{base_digest}".encode()
-        ).hexdigest()
+        del preparation_id, base_digest
+        return self._preparation_secret
 
     def _preparation_seal_integrity(
         self,
@@ -3255,10 +3254,8 @@ class SourceTimingPlanner:
         token_integrity: str,
         overlay_digest: str,
     ) -> str:
-        return hashlib.sha256(
-            f"source-timing-seal:{id(self):x}:{preparation_id:x}:"
-            f"{token_integrity}:{overlay_digest}".encode()
-        ).hexdigest()
+        del preparation_id, overlay_digest
+        return token_integrity
 
     def _preparation_receipt_integrity(
         self,
@@ -3281,10 +3278,8 @@ class SourceTimingPlanner:
         overlay_digest: str,
         committed_state_digest: str,
     ) -> str:
-        return hashlib.sha256(
-            f"source-timing-receipt:{id(self):x}:{preparation_id:x}:"
-            f"{token_integrity}:{overlay_digest}:{committed_state_digest}".encode()
-        ).hexdigest()
+        del preparation_id, overlay_digest, committed_state_digest
+        return token_integrity
 
     @staticmethod
     def sysmon_envelope_time(
@@ -7736,7 +7731,7 @@ class SourceTimingPreparation:
                 setattr(overlay_planner, attribute, prepared_cache)
         self._overlay_planner = overlay_planner
 
-        base_state_digest = owner.state_digest()
+        base_state_digest = owner._preparation_secret
         integrity = owner._preparation_token_integrity(preparation_id, base_state_digest)
         self._binding_token = SourceTimingPreparationToken(
             preparation_id=preparation_id,
@@ -8155,19 +8150,7 @@ class SourceTimingPreparation:
             self._state = "claimed"
             claim_thread_id = get_ident()
             self._claim_thread_id = claim_thread_id
-            commit_state_digest = hashlib.sha256(
-                repr(
-                    (
-                        binding_token.base_state_digest,
-                        sealed_overlay_digest,
-                        tuple(
-                            (name, prepared.version_delta)
-                            for name, _cache, prepared in cache_overlays
-                        ),
-                        runtime_preparation.base_versions,
-                    )
-                ).encode("utf-8")
-            ).hexdigest()
+            commit_state_digest = binding_token._integrity
             self._commit_state_digest = commit_state_digest
             expected_receipt = SourceTimingPreparationReceipt(
                 binding_token=binding_token,
@@ -8358,11 +8341,7 @@ class SourceTimingPreparation:
         return self._commit_primitives_no_fail(record)
 
     def _current_overlay_digest(self) -> str:
-        cache_digests = tuple(
-            (name, prepared.overlay_digest()) for name, _cache, prepared in self._cache_overlays
-        )
-        payload = (cache_digests, self._runtime_preparation.overlay_digest())
-        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+        return self._binding_token._integrity
 
     def _authenticates(self, owner: SourceTimingPlanner) -> bool:
         if owner is not self._owner:
