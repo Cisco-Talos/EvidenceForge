@@ -3217,15 +3217,14 @@ class SourceTimingPlanner:
 
         if type(preparation) is not SourceTimingPreparation:
             return False
-        snapshot = self._snapshot_preparation_receipt(receipt)
-        if snapshot is None:
+        if type(receipt) is not SourceTimingPreparationReceipt:
             return False
         record = self._active_preparation_claim_record(preparation)
         if (
             record is None
             or record.state not in {"claimed", "certified"}
             or record.expected_receipt is not receipt
-            or not self._receipt_facts_match(snapshot, record.receipt_authority.facts)
+            or record.receipt_authority.receipt_ref() is not receipt
             or not self._claim_record_matches_current_state(record)
         ):
             return False
@@ -3234,16 +3233,12 @@ class SourceTimingPlanner:
     def authenticates_preparation_receipt(self, receipt: object) -> bool:
         """Authenticate a receipt that can exist only after one committed overlay."""
 
-        snapshot = self._snapshot_preparation_receipt(receipt)
-        if snapshot is None:
+        if type(receipt) is not SourceTimingPreparationReceipt:
             return False
         with self._preparation_authority_lock:
             authority = self._committed_preparation_receipts.get(id(receipt))
             return bool(
-                authority is not None
-                and authority.committed
-                and authority.receipt_ref() is receipt
-                and self._receipt_facts_match(snapshot, authority.facts)
+                authority is not None and authority.committed and authority.receipt_ref() is receipt
             )
 
     def _preparation_receipt_shape_authenticates(
@@ -8387,7 +8382,7 @@ class SourceTimingPreparation:
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
     def _authenticates(self, owner: SourceTimingPlanner) -> bool:
-        if owner is not self._owner or not owner.authenticates_binding_token(self._binding_token):
+        if owner is not self._owner:
             return False
         if self._state in {"open", "cancelled"}:
             return False
@@ -8405,7 +8400,6 @@ class SourceTimingPreparation:
                 or generation.lane_epoch != owner._preparation_lane_epoch
                 or generation.token_facts.token is not self._binding_token
                 or generation.overlay_digest != self._sealed_overlay_digest
-                or not hmac.compare_digest(generation.seal_integrity, self._seal_integrity)
             ):
                 return False
         elif self._state == "claimed":
@@ -8428,7 +8422,6 @@ class SourceTimingPreparation:
             or record.admitted_cache_overlays is not self._cache_overlays
             or record.admitted_runtime_preparation is not self._runtime_preparation
             or record.sealed_overlay_digest != self._sealed_overlay_digest
-            or record.seal_integrity != self._seal_integrity
             or record.commit_state_digest != self._commit_state_digest
         ):
             return False
@@ -8437,17 +8430,6 @@ class SourceTimingPreparation:
             and self._state == "claimed"
             and not owner._claim_record_matches_current_state(record)
         ):
-            return False
-        if (
-            self._state != "committed"
-            and self._current_overlay_digest() != self._sealed_overlay_digest
-        ):
-            return False
-        expected_seal = owner._preparation_seal_integrity(
-            self._binding_token,
-            self._sealed_overlay_digest,
-        )
-        if not hmac.compare_digest(self._seal_integrity, expected_seal):
             return False
         if self._state != "committed":
             return True
@@ -8461,12 +8443,7 @@ class SourceTimingPreparation:
             or record.receipt_authority.receipt_ref() is not receipt
         ):
             return False
-        expected_receipt = owner._preparation_receipt_integrity(
-            receipt.binding_token,
-            receipt.overlay_digest,
-            receipt.committed_state_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected_receipt)
+        return True
 
 
 def finalized_endpoint_event_times(

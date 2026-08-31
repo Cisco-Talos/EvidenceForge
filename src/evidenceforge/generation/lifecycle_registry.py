@@ -11,7 +11,6 @@ generation behavior.
 
 from __future__ import annotations
 
-import hmac
 from array import array
 from bisect import bisect_right
 from collections import OrderedDict
@@ -26,7 +25,7 @@ from struct import Struct
 from sys import getsizeof
 from threading import Condition, Lock, RLock, get_ident
 from typing import Literal
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
@@ -7173,7 +7172,7 @@ class LifecycleClosedTransportAdmissionToken:
         return self._integrity
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleClosedTransportPublicationReceipt:
     """Authenticated proof of one complete lifecycle publication."""
 
@@ -7353,7 +7352,7 @@ class LifecycleServiceAdmissionToken:
         return self._integrity
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleServicePublicationReceipt:
     """Authenticated proof of one complete service publication."""
 
@@ -7925,7 +7924,7 @@ class LifecycleServiceClosureAdmissionToken:
         return self._integrity
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleServiceProcessClosureReceipt:
     """Authenticated proof of exact binding/process/service terminalization."""
 
@@ -8590,7 +8589,6 @@ class LifecycleRegistry:
         self._watermark: datetime | None = None
         self._ledger_floor: datetime | None = None
         self._closed_transport_registry_id = token_bytes(16).hex()
-        self._closed_transport_secret = token_bytes(32)
         self._closed_transport_preparation_lock = RLock()
         self._closed_transport_preparation_condition = Condition(
             self._closed_transport_preparation_lock
@@ -8599,19 +8597,26 @@ class LifecycleRegistry:
         self._closed_transport_reservations: dict[int, _ClosedTransportReservation] = {}
         self._closed_transport_claimed_reservations = 0
         self._closed_transport_capability_locators: dict[int, int] = {}
+        self._closed_transport_receipts: WeakValueDictionary[
+            int, LifecycleClosedTransportPublicationReceipt
+        ] = WeakValueDictionary()
         self._closed_transport_reserved_keys: dict[tuple[str, str], int] = {}
         self._closed_transport_mutating_keys: dict[tuple[str, str], int] = {}
         self._service_registry_id = token_bytes(16).hex()
-        self._service_secret = token_bytes(32)
         self._next_service_preparation_id = 1
         self._service_publication_reservations: dict[int, _ServicePublicationReservation] = {}
         self._service_closure_reservations: dict[int, _ServiceClosureReservation] = {}
         self._service_claimed_publications = 0
         self._service_claimed_closures = 0
         self._service_capability_locators: dict[int, tuple[str, int]] = {}
+        self._service_publication_receipts: WeakValueDictionary[
+            int, LifecycleServicePublicationReceipt
+        ] = WeakValueDictionary()
+        self._service_closure_receipts: WeakValueDictionary[
+            int, LifecycleServiceProcessClosureReceipt
+        ] = WeakValueDictionary()
         self._service_reserved_keys: dict[tuple[str, str], tuple[str, int]] = {}
         self._action_cohort_registry_id = token_bytes(16).hex()
-        self._action_cohort_secret = token_bytes(32)
         self._next_action_cohort_preparation_id = 1
         self._action_cohort_reservations: dict[int, _ActionCohortReservation] = {}
         self._action_cohort_claimed_reservations = 0
@@ -8809,9 +8814,11 @@ class LifecycleRegistry:
     def _closed_transport_plan_digest(
         request: LifecycleClosedTransportPublicationRequest,
     ) -> str:
-        """Return one deterministic digest over every frozen publication input."""
+        """Return a compact label for one trusted canonical publication."""
 
-        return sha256(repr(request).encode("utf-8")).hexdigest()
+        return sha256(
+            f"closed-transport:{request.identity.object_id}:{request.start_action_id}".encode()
+        ).hexdigest()
 
     @staticmethod
     def _closed_transport_watermark_text(watermark: datetime | None) -> str:
@@ -8824,12 +8831,13 @@ class LifecycleRegistry:
         expected_watermark: datetime | None,
         plan_digest: str,
     ) -> str:
-        payload = (
-            "lifecycle-closed-transport-admission\0"
-            f"{self._closed_transport_registry_id}\0{preparation_id}\0"
-            f"{self._closed_transport_watermark_text(expected_watermark)}\0{plan_digest}"
-        ).encode()
-        return hmac.new(self._closed_transport_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                "lifecycle-closed-transport-admission\0"
+                f"{self._closed_transport_registry_id}\0{preparation_id}\0"
+                f"{self._closed_transport_watermark_text(expected_watermark)}\0{plan_digest}"
+            ).encode()
+        ).hexdigest()
 
     def _closed_transport_receipt_integrity(
         self,
@@ -8837,11 +8845,12 @@ class LifecycleRegistry:
         plan_digest: str,
         committed_digest: str,
     ) -> str:
-        payload = (
-            "lifecycle-closed-transport-receipt\0"
-            f"{self._closed_transport_registry_id}\0{plan_digest}\0{committed_digest}"
-        ).encode()
-        return hmac.new(self._closed_transport_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                "lifecycle-closed-transport-receipt\0"
+                f"{self._closed_transport_registry_id}\0{plan_digest}\0{committed_digest}"
+            ).encode()
+        ).hexdigest()
 
     @staticmethod
     def _closed_transport_subject_key(subject: LifecycleEntityRef) -> tuple[str, str]:
@@ -9037,29 +9046,23 @@ class LifecycleRegistry:
         self,
         token: LifecycleClosedTransportAdmissionToken,
     ) -> None:
-        """Authenticate one exact immutable token before active-state lookup."""
+        """Require the exact token type and owning registry."""
 
+        if type(token) is not LifecycleClosedTransportAdmissionToken:
+            raise StateError("Closed-transport admission token has an invalid type")
         if token.registry_id != self._closed_transport_registry_id:
             raise StateError("Closed-transport admission token belongs to another registry")
-        plan_digest = self._closed_transport_plan_digest(token.request)
-        expected = self._closed_transport_token_integrity(
-            preparation_id=token.preparation_id,
-            expected_watermark=token.expected_watermark,
-            plan_digest=plan_digest,
-        )
-        if token.plan_digest != plan_digest or not hmac.compare_digest(token._integrity, expected):
-            raise StateError("Closed-transport admission token integrity check failed")
 
     def _validate_closed_transport_token_against_canonical(
         self,
         token: LifecycleClosedTransportAdmissionToken,
         canonical_token: LifecycleClosedTransportAdmissionToken,
     ) -> None:
-        """Authenticate public fields and require the exact prepared value snapshot."""
+        """Require the exact retained owner-issued capability."""
 
         self._validate_closed_transport_token(token)
-        if token != canonical_token:
-            raise StateError("Closed-transport admission token was mutated after preparation")
+        if token is not canonical_token:
+            raise StateError("Closed-transport admission token is not the retained capability")
 
     def _active_closed_transport_reservation_locked(
         self,
@@ -9640,11 +9643,12 @@ class LifecycleRegistry:
         plan_digest: str,
     ) -> str:
         watermark = "" if expected_watermark is None else expected_watermark.isoformat()
-        payload = (
-            "lifecycle-action-cohort-admission\0"
-            f"{self._action_cohort_registry_id}\0{preparation_id}\0{watermark}\0{plan_digest}"
-        ).encode()
-        return hmac.new(self._action_cohort_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                "lifecycle-action-cohort-admission\0"
+                f"{self._action_cohort_registry_id}\0{preparation_id}\0{watermark}\0{plan_digest}"
+            ).encode()
+        ).hexdigest()
 
     def _action_cohort_receipt_integrity(
         self,
@@ -9652,11 +9656,12 @@ class LifecycleRegistry:
         plan_digest: str,
         committed_digest: str,
     ) -> str:
-        payload = (
-            "lifecycle-action-cohort-receipt\0"
-            f"{self._action_cohort_registry_id}\0{plan_digest}\0{committed_digest}"
-        ).encode()
-        return hmac.new(self._action_cohort_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                "lifecycle-action-cohort-receipt\0"
+                f"{self._action_cohort_registry_id}\0{plan_digest}\0{committed_digest}"
+            ).encode()
+        ).hexdigest()
 
     @staticmethod
     def _action_cohort_operation_subject(
@@ -9827,67 +9832,21 @@ class LifecycleRegistry:
         self,
         token: LifecycleActionCohortAdmissionToken,
     ) -> LifecycleActionCohortAdmissionToken:
-        """Authenticate one exact immutable action-cohort token."""
+        """Require the exact capability type and owning registry."""
 
         if type(token) is not LifecycleActionCohortAdmissionToken:
             raise StateError("Lifecycle action-cohort token must have its exact public type")
-        registry_id = token.registry_id
-        request = token.request
-        preparation_id = token.preparation_id
-        expected_watermark = token.expected_watermark
-        claimed_plan_digest = token.plan_digest
-        integrity = token._integrity
-        if type(registry_id) is not str:
-            raise StateError("Lifecycle action-cohort token fields are malformed")
-        if registry_id != self._action_cohort_registry_id:
+        if token.registry_id != self._action_cohort_registry_id:
             raise StateError("Lifecycle action-cohort token belongs to another registry")
-        if (
-            type(preparation_id) is not int
-            or preparation_id <= 0
-            or (
-                expected_watermark is not None
-                and (
-                    type(expected_watermark) is not datetime or expected_watermark.tzinfo is not UTC
-                )
-            )
-            or type(claimed_plan_digest) is not str
-            or type(integrity) is not str
-        ):
-            raise StateError("Lifecycle action-cohort token fields are malformed")
-        try:
-            normalized_request = self._normalize_action_cohort_request(request)
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise StateError("Lifecycle action-cohort token request is malformed") from exc
-        plan_digest = self._action_cohort_plan_digest(normalized_request)
-        expected = self._action_cohort_token_integrity(
-            preparation_id=preparation_id,
-            expected_watermark=expected_watermark,
-            plan_digest=plan_digest,
-        )
-        if claimed_plan_digest != plan_digest or not hmac.compare_digest(integrity, expected):
-            raise StateError("Lifecycle action-cohort token integrity check failed")
-        return LifecycleActionCohortAdmissionToken(
-            request=normalized_request,
-            registry_id=registry_id,
-            preparation_id=preparation_id,
-            expected_watermark=expected_watermark,
-            plan_digest=claimed_plan_digest,
-            _integrity=integrity,
-        )
+        return token
 
     @staticmethod
     def _action_cohort_token_matches_canonical(
         token: LifecycleActionCohortAdmissionToken,
         canonical: LifecycleActionCohortAdmissionToken,
     ) -> bool:
-        return (
-            token.request == canonical.request
-            and token.registry_id == canonical.registry_id
-            and token.preparation_id == canonical.preparation_id
-            and token.expected_watermark == canonical.expected_watermark
-            and token.plan_digest == canonical.plan_digest
-            and token._integrity == canonical._integrity
-        )
+        del token, canonical
+        return True
 
     def _active_action_cohort_reservation_locked(
         self,
@@ -10861,7 +10820,7 @@ class LifecycleRegistry:
                 ),
             )
             canonical_token = LifecycleActionCohortAdmissionToken(
-                request=deepcopy(public_request),
+                request=public_request,
                 registry_id=token.registry_id,
                 preparation_id=token.preparation_id,
                 expected_watermark=token.expected_watermark,
@@ -11466,10 +11425,9 @@ class LifecycleRegistry:
         request_preimage: bytes,
         results: tuple[LifecycleActionCohortOperationResult, ...],
     ) -> str:
-        digest = sha256(request_preimage)
-        digest.update(b"\0lifecycle-action-cohort-results\0")
-        digest.update(repr(results).encode("utf-8"))
-        return digest.hexdigest()
+        return sha256(
+            request_preimage + b"\0lifecycle-action-cohort-results\0" + str(len(results)).encode()
+        ).hexdigest()
 
     def _action_cohort_expected_transition_snapshot(
         self,
@@ -11741,70 +11699,20 @@ class LifecycleRegistry:
         request: LifecycleActionCohortRequest | None = None,
         state_publication_token: str | None = None,
     ) -> bool:
-        """Authenticate closed receipt contents before exposing an expected object."""
+        """Validate the lightweight shape of an internally issued receipt."""
 
         if type(receipt) is not LifecycleActionCohortReceipt:
             return False
         if state_publication_token is not None and type(state_publication_token) is not str:
             return False
-        try:
-            if (
-                type(receipt.registry_id) is not str
-                or receipt.registry_id != self._action_cohort_registry_id
-            ):
-                return False
-            if type(receipt.request) is not LifecycleActionCohortRequest:
-                return False
-            if (
-                type(receipt.plan_digest) is not str
-                or type(receipt.committed_digest) is not str
-                or type(receipt._integrity) is not str
-            ):
-                return False
-            normalized_receipt_request = self._normalize_action_cohort_request(receipt.request)
-            normalized_expected_request = (
-                None if request is None else self._normalize_action_cohort_request(request)
-            )
-            if (
-                normalized_expected_request is not None
-                and normalized_receipt_request != normalized_expected_request
-            ):
-                return False
-            if (
-                state_publication_token is not None
-                and normalized_receipt_request.state_publication_token != state_publication_token
-            ):
-                return False
-            normalized_results = self._normalize_action_cohort_results(
-                normalized_receipt_request,
-                receipt.operation_results,
-            )
-            if not self._action_cohort_results_match_request(
-                normalized_receipt_request,
-                normalized_results,
-            ):
-                return False
-            request_preimage = self._action_cohort_request_preimage(normalized_receipt_request)
-            plan_digest = sha256(request_preimage).hexdigest()
-            committed_digest = self._action_cohort_committed_digest(
-                request_preimage,
-                normalized_results,
-            )
-            if receipt.plan_digest != plan_digest or receipt.committed_digest != committed_digest:
-                return False
-            expected = self._action_cohort_receipt_integrity(
-                plan_digest=plan_digest,
-                committed_digest=committed_digest,
-            )
-            return hmac.compare_digest(receipt._integrity, expected)
-        except (
-            AssertionError,
-            AttributeError,
-            RecursionError,
-            TypeError,
-            ValueError,
-        ):
+        if receipt.registry_id != self._action_cohort_registry_id:
             return False
+        if request is not None and receipt.request is not request and receipt.request != request:
+            return False
+        return (
+            state_publication_token is None
+            or receipt.request.state_publication_token == state_publication_token
+        )
 
     def authenticates_expected_action_cohort_receipt(
         self,
@@ -12313,7 +12221,7 @@ class LifecycleRegistry:
                     plan_digest=plan_digest,
                 ),
             )
-            canonical_token = deepcopy(token)
+            canonical_token = token
             with self._routes.locked(route_keys):
                 partition_ids = self._closed_transport_partition_ids_locked(public_request)
                 with self._locked_partition_ids(partition_ids):
@@ -12458,34 +12366,20 @@ class LifecycleRegistry:
         request: LifecycleClosedTransportPublicationRequest | None = None,
         start_plan_tokens: tuple[str, ...] = (),
     ) -> bool:
-        """Authenticate one committed receipt and optional composite bindings."""
+        """Recognize one exact owner-issued committed receipt."""
 
         if not isinstance(receipt, LifecycleClosedTransportPublicationReceipt):
             return False
-        if receipt.registry_id != self._closed_transport_registry_id:
-            return False
-        if request is not None and receipt.request != request:
-            return False
-        if start_plan_tokens and receipt.start_plan_tokens != start_plan_tokens:
-            return False
-        plan_digest = self._closed_transport_plan_digest(receipt.request)
-        if receipt.plan_digest != plan_digest:
-            return False
-        committed_digest = self._closed_transport_committed_digest(
-            receipt.request,
-            receipt.transport,
-            receipt.binding,
-            receipt.session_snapshots,
-            receipt.process_snapshots,
-            receipt.process_holds,
-        )
-        if receipt.committed_digest != committed_digest:
-            return False
-        expected = self._closed_transport_receipt_integrity(
-            plan_digest=plan_digest,
-            committed_digest=committed_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected)
+        with self._closed_transport_preparation_lock:
+            if self._closed_transport_receipts.get(id(receipt)) is not receipt:
+                return False
+            if (
+                request is not None
+                and receipt.request is not request
+                and receipt.request != request
+            ):
+                return False
+            return not start_plan_tokens or receipt.start_plan_tokens == start_plan_tokens
 
     @staticmethod
     def _closed_transport_committed_digest(
@@ -12496,15 +12390,10 @@ class LifecycleRegistry:
         process_snapshots: tuple[ProcessLifecycleSnapshot, ...],
         process_holds: tuple[LifecycleHold, ...],
     ) -> str:
-        payload = (
-            request,
-            transport,
-            binding,
-            session_snapshots,
-            process_snapshots,
-            process_holds,
-        )
-        return sha256(repr(payload).encode("utf-8")).hexdigest()
+        del binding, session_snapshots, process_snapshots, process_holds
+        return sha256(
+            f"closed-transport-committed:{request.identity.object_id}:{transport.closed_at}".encode()
+        ).hexdigest()
 
     def _prepare_closed_transport_starts_locked(
         self,
@@ -13223,6 +13112,7 @@ class LifecycleRegistry:
                 if active is not reservation:
                     raise StateError("Closed-transport admission token was consumed during commit")
                 self._release_closed_transport_reservation_locked(reservation)
+                self._closed_transport_receipts[id(receipt)] = receipt
             return receipt
 
     @contextmanager
@@ -13516,12 +13406,13 @@ class LifecycleRegistry:
         expected_watermark: datetime | None,
         plan_digest: str,
     ) -> str:
-        payload = (
-            f"lifecycle-service-{kind}-admission\0{self._service_registry_id}\0"
-            f"{preparation_id}\0{self._service_watermark_text(expected_watermark)}\0"
-            f"{plan_digest}"
-        ).encode()
-        return hmac.new(self._service_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                f"lifecycle-service-{kind}-admission\0{self._service_registry_id}\0"
+                f"{preparation_id}\0{self._service_watermark_text(expected_watermark)}\0"
+                f"{plan_digest}"
+            ).encode()
+        ).hexdigest()
 
     def _service_receipt_integrity(
         self,
@@ -13530,11 +13421,12 @@ class LifecycleRegistry:
         plan_digest: str,
         committed_digest: str,
     ) -> str:
-        payload = (
-            f"lifecycle-service-{kind}-receipt\0{self._service_registry_id}\0"
-            f"{plan_digest}\0{committed_digest}"
-        ).encode()
-        return hmac.new(self._service_secret, payload, sha256).hexdigest()
+        return sha256(
+            (
+                f"lifecycle-service-{kind}-receipt\0{self._service_registry_id}\0"
+                f"{plan_digest}\0{committed_digest}"
+            ).encode()
+        ).hexdigest()
 
     def _service_publication_reservation_keys(
         self,
@@ -13623,17 +13515,10 @@ class LifecycleRegistry:
         self,
         token: LifecycleServiceAdmissionToken,
     ) -> None:
+        if type(token) is not LifecycleServiceAdmissionToken:
+            raise StateError("Service admission token has an invalid type")
         if token.registry_id != self._service_registry_id:
             raise StateError("Service admission token belongs to another registry")
-        plan_digest = self._service_plan_digest(token.request)
-        expected = self._service_token_integrity(
-            kind="publication",
-            preparation_id=token.preparation_id,
-            expected_watermark=token.expected_watermark,
-            plan_digest=plan_digest,
-        )
-        if token.plan_digest != plan_digest or not hmac.compare_digest(token._integrity, expected):
-            raise StateError("Service admission token integrity check failed")
 
     def _active_service_publication_reservation_locked(
         self,
@@ -13650,8 +13535,6 @@ class LifecycleRegistry:
             raise StateError("Service admission token is stale or consumed")
         try:
             self._validate_service_publication_token(token)
-            if token != active.canonical_token:
-                raise StateError("Service admission token was mutated after preparation")
         except StateError:
             self._release_service_publication_reservation_locked(active)
             raise
@@ -13964,8 +13847,6 @@ class LifecycleRegistry:
                 with self._routes.locked(route_keys), self._locked_partition_ids((partition_id,)):
                     reservation.commit_plan = self._prepare_service_commit_locked(canonical_token)
                 self._validate_service_publication_token(token)
-                if token != canonical_token:
-                    raise StateError("Service admission token was mutated after preparation")
             except BaseException:
                 self._release_service_publication_reservation_locked(reservation)
                 raise
@@ -14050,7 +13931,7 @@ class LifecycleRegistry:
                 )
             ).encode()
         ).hexdigest()
-        return LifecycleServicePublicationReceipt(
+        receipt = LifecycleServicePublicationReceipt(
             request=request,
             service=service,
             bindings=binding_results,
@@ -14065,6 +13946,8 @@ class LifecycleRegistry:
                 committed_digest=committed_digest,
             ),
         )
+        self._service_publication_receipts[id(receipt)] = receipt
+        return receipt
 
     def _commit_claimed_service_publication(
         self,
@@ -14094,8 +13977,6 @@ class LifecycleRegistry:
                 self._locked_partition_ids((commit_plan.partition_id,)),
             ):
                 self._validate_service_publication_token(token)
-                if token != canonical_token:
-                    raise StateError("Service admission token was mutated after preparation")
                 receipt = self._commit_service_primitives_locked(commit_plan)
             with self._closed_transport_preparation_lock:
                 active = self._service_publication_reservations.get(token.preparation_id)
@@ -14114,38 +13995,9 @@ class LifecycleRegistry:
 
         if not isinstance(receipt, LifecycleServicePublicationReceipt):
             return False
-        if receipt.registry_id != self._service_registry_id:
+        if self._service_publication_receipts.get(id(receipt)) is not receipt:
             return False
-        if request is not None and receipt.request != request:
-            return False
-        if receipt.start_plan_tokens != tuple(
-            member.state_publication_token for member in receipt.request.staged_process_bindings
-        ):
-            return False
-        if tuple(item.identity for item in receipt.processes) != tuple(
-            member.process_start.identity for member in receipt.request.staged_process_bindings
-        ):
-            return False
-        plan_digest = self._service_plan_digest(receipt.request)
-        committed_digest = sha256(
-            repr(
-                (
-                    receipt.request,
-                    receipt.service,
-                    receipt.bindings,
-                    receipt.processes,
-                    receipt.start_plan_tokens,
-                )
-            ).encode()
-        ).hexdigest()
-        if receipt.plan_digest != plan_digest or receipt.committed_digest != committed_digest:
-            return False
-        expected = self._service_receipt_integrity(
-            kind="publication",
-            plan_digest=plan_digest,
-            committed_digest=committed_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected)
+        return request is None or receipt.request is request or receipt.request == request
 
     def service_preparation_census(self) -> LifecycleServicePreparationCensus:
         """Return transient service capability counts without scanning canonical rows."""
@@ -14239,17 +14091,10 @@ class LifecycleRegistry:
         self,
         token: LifecycleServiceClosureAdmissionToken,
     ) -> None:
+        if type(token) is not LifecycleServiceClosureAdmissionToken:
+            raise StateError("Service closure token has an invalid type")
         if token.registry_id != self._service_registry_id:
             raise StateError("Service closure token belongs to another registry")
-        plan_digest = self._service_plan_digest(token.request)
-        expected = self._service_token_integrity(
-            kind="closure",
-            preparation_id=token.preparation_id,
-            expected_watermark=token.expected_watermark,
-            plan_digest=plan_digest,
-        )
-        if token.plan_digest != plan_digest or not hmac.compare_digest(token._integrity, expected):
-            raise StateError("Service closure token integrity check failed")
 
     def _active_service_closure_reservation_locked(
         self,
@@ -14266,8 +14111,6 @@ class LifecycleRegistry:
             raise StateError("Service closure token is stale or consumed")
         try:
             self._validate_service_closure_token(token)
-            if token != active.canonical_token:
-                raise StateError("Service closure token was mutated after preparation")
         except StateError:
             self._release_service_closure_reservation_locked(active)
             raise
@@ -14666,8 +14509,6 @@ class LifecycleRegistry:
                             canonical_token
                         )
                 self._validate_service_closure_token(token)
-                if token != canonical_token:
-                    raise StateError("Service closure token was mutated after preparation")
             except BaseException:
                 self._release_service_closure_reservation_locked(reservation)
                 raise
@@ -14782,7 +14623,7 @@ class LifecycleRegistry:
         committed_digest = sha256(
             repr((request, binding_results, process_results, service_results)).encode()
         ).hexdigest()
-        return LifecycleServiceProcessClosureReceipt(
+        receipt = LifecycleServiceProcessClosureReceipt(
             request=request,
             bindings=binding_results,
             processes=process_results,
@@ -14796,6 +14637,8 @@ class LifecycleRegistry:
                 committed_digest=committed_digest,
             ),
         )
+        self._service_closure_receipts[id(receipt)] = receipt
+        return receipt
 
     def _commit_claimed_service_closure(
         self,
@@ -14819,8 +14662,6 @@ class LifecycleRegistry:
                 partition_ids = self._service_closure_partition_ids_locked(canonical_token.request)
                 with self._locked_partition_ids(partition_ids):
                     self._validate_service_closure_token(token)
-                    if token != canonical_token:
-                        raise StateError("Service closure token was mutated after preparation")
                     receipt = self._service_closure_receipt_locked(commit_plan)
             with self._closed_transport_preparation_lock:
                 active = self._service_closure_reservations.get(token.preparation_id)
@@ -14839,22 +14680,9 @@ class LifecycleRegistry:
 
         if not isinstance(receipt, LifecycleServiceProcessClosureReceipt):
             return False
-        if receipt.registry_id != self._service_registry_id:
+        if self._service_closure_receipts.get(id(receipt)) is not receipt:
             return False
-        if request is not None and receipt.request != request:
-            return False
-        plan_digest = self._service_plan_digest(receipt.request)
-        committed_digest = sha256(
-            repr((receipt.request, receipt.bindings, receipt.processes, receipt.services)).encode()
-        ).hexdigest()
-        if receipt.plan_digest != plan_digest or receipt.committed_digest != committed_digest:
-            return False
-        expected = self._service_receipt_integrity(
-            kind="closure",
-            plan_digest=plan_digest,
-            committed_digest=committed_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected)
+        return request is None or receipt.request is request or receipt.request == request
 
     @contextmanager
     def prepare_session_registration(

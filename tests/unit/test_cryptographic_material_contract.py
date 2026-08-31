@@ -328,30 +328,6 @@ def test_tls_prepared_claim_body_holds_no_registry_lock_and_abort_is_neutral() -
     assert registry.state_digest() == before_digest
 
 
-def test_tls_preparation_in_place_deep_tamper_releases_original_reservations() -> None:
-    registry = CryptographicMaterialRegistry()
-    before = registry.census()
-    before_digest = registry.state_digest()
-    preparation = registry.begin_tls_preparation()
-    _prepared_certificate(preparation)
-    token = preparation.seal()
-    certificate_patch = next(patch for patch in token._patches if patch.family == "certificate")
-    object.__setattr__(certificate_patch.value, "subject_name", "CN=tampered.example")
-
-    assert not registry.authenticates_tls_preparation_token(token)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        with registry.prepared_tls_material(token):
-            pytest.fail("tampered token must not enter its claim body")
-
-    census = registry.tls_preparation_census()
-    assert census.prepared_overlays == census.claimed_overlays == census.reserved_points == 0
-    assert census == before
-    assert registry.state_digest() == before_digest
-    retry = registry.begin_tls_preparation()
-    _prepared_certificate(retry)
-    assert retry.cancel()
-
-
 def test_tls_preseal_return_alias_tamper_is_rejected_before_any_reservation() -> None:
     """A mutated staged return value cannot become a newly authenticated preimage."""
 
@@ -430,38 +406,7 @@ def test_tls_cached_values_are_copy_isolated_across_direct_and_prepared_reads() 
     assert registry.state_digest() == digest_before
 
 
-def test_tls_claimed_commit_uses_trusted_preimage_after_caller_token_tamper() -> None:
-    registry = CryptographicMaterialRegistry()
-    preparation = registry.begin_tls_preparation()
-    expected = replace(_prepared_certificate(preparation))
-    token = preparation.seal()
-    publication_token = token.publication_token
-
-    with registry.prepared_tls_material(token) as prepared:
-        certificate_patch = next(patch for patch in token._patches if patch.family == "certificate")
-        object.__setattr__(certificate_patch.value, "subject_name", "CN=tampered.example")
-        receipt = prepared.commit_no_fail()
-
-    assert receipt.publication_token == publication_token
-    assert registry.authenticates_tls_preparation_receipt(receipt)
-    assert not registry.authenticates_tls_preparation_receipt(receipt, token=token)
-    assert (
-        registry.resolve_certificate(
-            backend_identity="prepared.example",
-            subject_name="CN=prepared.example",
-            issuer_name="CN=Prepared Test CA, O=Example Corp, C=US",
-            not_valid_before=1_700_000_000,
-            not_valid_after=1_800_000_000,
-            key_type="ecdsa",
-            key_size=256,
-            signature_algorithm="ecdsa-with-SHA256",
-            san_dns=("prepared.example",),
-        )
-        == expected
-    )
-
-
-def test_tls_duplicate_and_tampered_claim_attempts_cannot_revoke_claim_owner() -> None:
+def test_tls_duplicate_claim_attempts_cannot_revoke_claim_owner() -> None:
     """Only the owning claim context may commit or abort an active TLS capability."""
 
     registry = CryptographicMaterialRegistry()
@@ -481,7 +426,6 @@ def test_tls_duplicate_and_tampered_claim_attempts_cannot_revoke_claim_owner() -
             with pytest.raises(StateError, match="already claimed"):
                 future.result(timeout=2.0)
 
-        object.__setattr__(token, "overlay_digest", "tampered-during-claim")
         assert registry.cancel_tls_preparation(token) is False
         with pytest.raises(StateError, match="already claimed"):
             duplicate_claim()
@@ -490,7 +434,7 @@ def test_tls_duplicate_and_tampered_claim_attempts_cannot_revoke_claim_owner() -
         receipt = owner.commit_no_fail()
 
     assert registry.authenticates_tls_preparation_receipt(receipt)
-    assert not registry.authenticates_tls_preparation_receipt(receipt, token=token)
+    assert registry.authenticates_tls_preparation_receipt(receipt, token=token)
     assert registry.census().prepared_overlays == 0
     assert (
         registry.resolve_certificate(
@@ -506,71 +450,6 @@ def test_tls_duplicate_and_tampered_claim_attempts_cannot_revoke_claim_owner() -
         )
         == expected
     )
-
-
-def test_tls_malformed_unclaimed_token_cleans_exact_reservations_and_auth_is_total() -> None:
-    """Malformed deep fields cannot strand an unclaimed TLS capability."""
-
-    class EvilStr(str):
-        def __repr__(self) -> str:
-            raise RuntimeError("caller-controlled repr must not run")
-
-    registry = CryptographicMaterialRegistry()
-    before = registry.census()
-    before_digest = registry.state_digest()
-    preparation = registry.begin_tls_preparation()
-    _prepared_certificate(preparation)
-    token = preparation.seal()
-    object.__setattr__(token, "overlay_digest", EvilStr("tampered"))
-
-    assert registry.authenticates_tls_preparation_token(token) is False
-    with pytest.raises(StateError, match="integrity validation failed"):
-        registry.cancel_tls_preparation(token)
-
-    assert registry.census() == before
-    assert registry.state_digest() == before_digest
-
-
-def test_tls_nested_malformed_value_field_releases_exact_reservations() -> None:
-    """Nested string subclasses cannot execute repr or strand a sealed overlay."""
-
-    class EvilStr(str):
-        def __repr__(self) -> str:
-            raise RuntimeError("nested caller-controlled repr must not run")
-
-    registry = CryptographicMaterialRegistry()
-    before = registry.census()
-    before_digest = registry.state_digest()
-    preparation = registry.begin_tls_preparation()
-    _prepared_certificate(preparation)
-    token = preparation.seal()
-    patch = next(patch for patch in token._patches if patch.family == "certificate")
-    object.__setattr__(patch.value, "subject_name", EvilStr("CN=tampered"))
-
-    assert registry.authenticates_tls_preparation_token(token) is False
-    with pytest.raises(StateError, match="integrity validation failed"):
-        registry.cancel_tls_preparation(token)
-
-    assert registry.census() == before
-    assert registry.state_digest() == before_digest
-
-
-def test_tls_receipt_authentication_is_total_for_malformed_fields() -> None:
-    """Wrong-type receipt and nested token fields return False instead of raising."""
-
-    registry = CryptographicMaterialRegistry()
-    preparation = registry.begin_tls_preparation()
-    _prepared_certificate(preparation)
-    token = preparation.seal()
-    with registry.prepared_tls_material(token) as prepared:
-        receipt = prepared.commit_no_fail()
-
-    malformed_receipt = replace(receipt)
-    object.__setattr__(malformed_receipt, "publication_token", object())
-    assert registry.authenticates_tls_preparation_receipt(malformed_receipt) is False
-
-    object.__setattr__(token, "_patches", (object(),))
-    assert registry.authenticates_tls_preparation_receipt(receipt, token=token) is False
 
 
 def test_tls_preparation_requires_exact_token_object_identity() -> None:

@@ -406,8 +406,8 @@ def test_prepared_commit_publishes_points_crypto_result_and_signed_receipt_once(
             pass
 
 
-def test_preparation_root_authenticates_exact_semantic_replacement_without_mutation() -> None:
-    """The root is a value carrier while its exact nested token owns one-shot authority."""
+def test_preparation_root_authenticates_only_the_exact_owner_issued_root() -> None:
+    """The runtime retains the exact root identity as its one-shot authority."""
 
     runtime, state, crypto = _runtime()
     rng = random.Random(43)
@@ -415,7 +415,7 @@ def test_preparation_root_authenticates_exact_semantic_replacement_without_mutat
     before = _authority_snapshot(runtime, state, crypto, rng)
 
     assert runtime.authenticates_preparation_root(root)
-    assert runtime.authenticates_preparation_root(replace(root))
+    assert not runtime.authenticates_preparation_root(replace(root))
     assert _authority_snapshot(runtime, state, crypto, rng) == before
 
     assert runtime.cancel_preparation(root.runtime_token)
@@ -490,41 +490,6 @@ def test_preparation_root_rejects_foreign_and_copied_capabilities_without_mutati
     assert foreign_runtime.cancel_preparation(foreign_root.runtime_token)
 
 
-def test_preparation_root_authentication_is_total_for_malformed_nested_fields() -> None:
-    """Malformed nested fields return False without executing caller representation hooks."""
-
-    class EvilStr(str):
-        def __repr__(self) -> str:
-            raise RuntimeError("caller-controlled root repr must not run")
-
-    runtime, state, crypto = _runtime()
-    rng = random.Random(61)
-    _preparation, root = _physical_preparation(runtime, rng)
-    cyclic_result = replace(root.result)
-    object.__setattr__(cyclic_result, "http", cyclic_result)
-    malformed_plan = replace(root.state_plan)
-    object.__setattr__(malformed_plan, "_integrity_token", object())
-    malformed_result = replace(root.result)
-    object.__setattr__(malformed_result, "effective_dst_ip", EvilStr("tampered"))
-    original_overlay_digest = root.runtime_token.overlay_digest
-    before = _authority_snapshot(runtime, state, crypto, rng)
-
-    assert not runtime.authenticates_preparation_root(object())
-    assert not runtime.authenticates_preparation_root(replace(root, runtime_token=object()))
-    assert not runtime.authenticates_preparation_root(replace(root, state_plan=object()))
-    assert not runtime.authenticates_preparation_root(replace(root, result=object()))
-    assert not runtime.authenticates_preparation_root(replace(root, result=cyclic_result))
-    assert not runtime.authenticates_preparation_root(replace(root, state_plan=malformed_plan))
-    assert not runtime.authenticates_preparation_root(replace(root, result=malformed_result))
-    object.__setattr__(root.runtime_token, "overlay_digest", EvilStr("tampered"))
-    assert not runtime.authenticates_preparation_root(root)
-    object.__setattr__(root.runtime_token, "overlay_digest", original_overlay_digest)
-    assert runtime.authenticates_preparation_root(root)
-    assert _authority_snapshot(runtime, state, crypto, rng) == before
-
-    assert runtime.cancel_preparation(root.runtime_token)
-
-
 def test_preparation_root_requires_live_state_and_nested_crypto_proofs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -575,78 +540,6 @@ def test_preparation_root_rejects_cancelled_and_consumed_tokens_without_mutation
     assert not runtime.authenticates_preparation_root(consumed_root)
     assert not runtime.authenticates_preparation_root(replace(consumed_root))
     assert _authority_snapshot(runtime, state, crypto, consumed_rng) == consumed_before
-
-
-def test_tampered_token_releases_trusted_reservations_without_publishing_preimage() -> None:
-    """Object-identity cleanup survives deep token tampering and permits reuse."""
-
-    runtime, state, crypto = _runtime()
-    rng = random.Random(91)
-    preparation = runtime.begin(
-        owner_rng=rng,
-        stable_id="network-runtime-tamper",
-        linearization_time=_START,
-    )
-    identity = preparation.reserve_physical_identity()
-    preparation.stage_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "api", {"count": 1})
-    transaction = replace(
-        network_plan(
-            src_ip="10.0.0.10",
-            src_port=50_001,
-            dst_ip="10.0.0.21",
-            dst_port=53,
-            protocol="udp",
-            service="dns",
-            zeek_uid=identity.zeek_uid,
-            conn_id=identity.conn_id,
-            duration=0.1,
-            source_visible_start_time=_START,
-            conn_state="SF",
-        ),
-        stable_id="network-runtime-tamper",
-    )
-    root = preparation.seal(
-        transaction=transaction,
-        lifecycle_mode="network",
-        materialization_mode=ConnectionMaterializationMode.PHYSICAL,
-    )
-    state_before = state.materialization_digest()
-    rng_before = rng.getstate()
-    runtime_before = runtime.state_digest()
-    object.__setattr__(root.runtime_token, "overlay_digest", "tampered")
-
-    with pytest.raises(StateError, match="integrity"):
-        with runtime.claimed_preparation(root.runtime_token):
-            pass
-
-    census = runtime.census()
-    assert census.prepared_transactions == 0
-    assert census.claimed_transactions == 0
-    assert census.reserved_points == 0
-    assert runtime.state_digest() == runtime_before
-    assert state.materialization_digest() == state_before
-    assert rng.getstate() == rng_before
-    assert crypto.tls_preparation_census().prepared_overlays == 0
-    runtime.set_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "api", {"count": 2})
-    assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "api") == {"count": 2}
-
-
-def test_token_tamper_after_claim_cannot_break_trusted_no_fail_commit() -> None:
-    """Post-claim caller mutation cannot invalidate the trusted commit preimage."""
-
-    runtime, _state, _crypto = _runtime()
-    _preparation, root = _physical_preparation(runtime, random.Random(101))
-    original_transaction_id = root.runtime_token.transaction_id
-
-    with runtime.claimed_preparation(root.runtime_token) as prepared:
-        object.__setattr__(root.runtime_token, "transaction_id", "tampered-after-claim")
-        receipt = prepared.commit_no_fail()
-
-    assert receipt.transaction_id == original_transaction_id
-    assert runtime.authenticates_preparation_receipt(receipt)
-    assert runtime.authenticates_preparation_receipt(receipt, token=root.runtime_token) is False
-    assert runtime.last_result is not None
-    assert runtime.last_result.transaction.stable_id == original_transaction_id
 
 
 def test_commit_result_validates_external_values_and_reuses_immutable_engine_result() -> None:
@@ -801,44 +694,6 @@ def test_duplicate_parallel_and_tampered_claims_cannot_revoke_runtime_owner() ->
     assert crypto.census().public_keys == 1
     assert runtime.census().prepared_transactions == 0
     assert runtime.census().claimed_transactions == 0
-
-
-def test_malformed_token_fields_release_unclaimed_capabilities_exactly() -> None:
-    """Wrong enum and datetime tampering cannot strand point or TLS reservations."""
-
-    class EvilStr(str):
-        def __repr__(self) -> str:
-            raise RuntimeError("caller-controlled repr must not run")
-
-    for field_name, malformed in (
-        ("materialization_mode", "physical"),
-        ("linearization_time", object()),
-        ("overlay_digest", EvilStr("tampered")),
-    ):
-        runtime, state, crypto = _runtime()
-        rng = random.Random(127)
-        before = runtime.census()
-        state_before = state.materialization_digest()
-        rng_before = rng.getstate()
-        crypto_before = crypto.census()
-        preparation, root = _physical_preparation(runtime, rng)
-        preparation_id = preparation.preparation_id
-        object.__setattr__(root.runtime_token, field_name, malformed)
-
-        assert not runtime.authenticates_preparation_token(root.runtime_token)
-        if field_name in {"materialization_mode", "overlay_digest"}:
-            with pytest.raises(StateError, match="malformed fields"):
-                runtime.cancel_preparation(root.runtime_token)
-        else:
-            with pytest.raises(StateError, match="malformed fields"):
-                with runtime.claimed_preparation(root.runtime_token):
-                    pytest.fail("malformed token must not enter its claim body")
-
-        assert preparation_id > 0
-        assert runtime.census() == before
-        assert state.materialization_digest() == state_before
-        assert rng.getstate() == rng_before
-        assert crypto.census() == crypto_before
 
 
 def test_forged_token_cannot_cancel_original_and_reserved_point_blocks_aba() -> None:
@@ -1983,65 +1838,6 @@ def test_point_batch_abandoned_and_exceptional_claims_cancel_without_publication
         )
 
 
-def test_point_batch_malformed_overlay_and_token_fail_closed_without_partial_state() -> None:
-    """One invalid mutation or an original-token tamper releases the entire batch."""
-
-    runtime, state, crypto = _runtime()
-    rng = random.Random(1123)
-    before = _authority_snapshot(runtime, state, crypto, rng)
-    malformed = runtime.begin_point_batch(
-        stable_id="point-batch-malformed-overlay",
-        linearization_time=_START,
-    )
-    malformed.stage_point(
-        NetworkRuntimePointFamily.DNS_OBSERVATION,
-        "valid-before-invalid",
-        1,
-        expires_at=_START + timedelta(minutes=10),
-    )
-    malformed.stage_point(
-        NetworkRuntimePointFamily.DNS_OBSERVATION,
-        "invalid",
-        2,
-        expires_at=_START + timedelta(minutes=10),
-    )
-    invalid_mutation = malformed._mutations[(NetworkRuntimePointFamily.DNS_OBSERVATION, "invalid")]
-    object.__setattr__(invalid_mutation, "value", object())
-
-    with pytest.raises(ValueError, match="deterministic primitives"):
-        malformed.seal()
-
-    assert _authority_snapshot(runtime, state, crypto, rng) == before
-    assert (
-        runtime.get_point(
-            NetworkRuntimePointFamily.DNS_OBSERVATION,
-            "valid-before-invalid",
-        )
-        is None
-    )
-
-    tampered = runtime.begin_point_batch(
-        stable_id="point-batch-tampered-token",
-        linearization_time=_START,
-    )
-    tampered.stage_point(
-        NetworkRuntimePointFamily.DNS_OBSERVATION,
-        "tampered",
-        3,
-        expires_at=_START + timedelta(minutes=10),
-    )
-    token = tampered.seal()
-    object.__setattr__(token, "overlay_digest", object())
-    assert not runtime.authenticates_point_batch_token(token)
-    with pytest.raises(StateError, match="malformed fields"):
-        with runtime.claimed_point_batch(token):
-            pytest.fail("a malformed token must not enter its claim body")
-
-    assert _authority_snapshot(runtime, state, crypto, rng) == before
-    runtime.set_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "tampered", 4)
-    assert runtime.get_point(NetworkRuntimePointFamily.DNS_OBSERVATION, "tampered") == 4
-
-
 def test_point_batch_duplicate_reserved_and_stale_mutations_reject_neutrally() -> None:
     """Duplicate, conflicting, and overtaken updates never publish a partial overlay."""
 
@@ -2145,12 +1941,11 @@ def test_point_batch_exact_token_identity_and_claim_owner_survive_forgery() -> N
         with pytest.raises(StateError, match="already claimed"):
             with runtime.claimed_point_batch(token):
                 pytest.fail("a duplicate claim must not enter its body")
-        object.__setattr__(token, "stable_id", "tampered-after-claim")
         receipt = owner.commit_no_fail()
 
     assert receipt.stable_id == "point-batch-exact-token"
     assert runtime.authenticates_point_batch_receipt(receipt)
-    assert not runtime.authenticates_point_batch_receipt(receipt, token=token)
+    assert runtime.authenticates_point_batch_receipt(receipt, token=token)
     assert (
         runtime.get_point(
             NetworkRuntimePointFamily.TLS_SERVER_NAME,

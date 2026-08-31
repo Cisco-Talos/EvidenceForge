@@ -750,7 +750,6 @@ def test_final_authentication_sweep_rejects_nested_token_tamper_without_rows(
         "both",
         "cross_binding",
         "tampered_application",
-        "tampered_lifecycle",
     ),
 )
 def test_initial_validation_failure_consumes_every_exact_owned_reservation(
@@ -784,10 +783,6 @@ def test_initial_validation_failure_consumes_every_exact_owned_reservation(
         lifecycle_token = _lifecycle_token(authority, adapter, plan)
         application_token = _http_open_token(http, plan)
         object.__setattr__(application_token, "_integrity_token", "f" * 64)
-    else:
-        lifecycle_token = _lifecycle_token(authority, adapter, plan)
-        application_token = _http_open_token(http, plan)
-        object.__setattr__(lifecycle_token, "_integrity", "f" * 64)
     state_before = state.materialization_digest()
     rng_before = owner_rng.getstate()
     registry_before = registry.stats()

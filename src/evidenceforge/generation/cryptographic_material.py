@@ -16,10 +16,10 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from threading import RLock
 from typing import Any, Literal, Self
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -135,11 +135,15 @@ class _CryptographicMaterialPreparationCapability:
     token_id: int
     preparation_id: int
     integrity_token: str
-    trusted_token: CryptographicMaterialPreparationToken
+    overlay_digest: str
+    public_key_writes: int
+    authority_writes: int
+    certificate_writes: int
+    patches: tuple[_TlsMaterialPointPatch, ...]
     points: tuple[_TlsMaterialPoint, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class CryptographicMaterialPreparationReceipt:
     """Authenticated proof that one TLS-only overlay committed."""
 
@@ -152,6 +156,11 @@ class CryptographicMaterialPreparationReceipt:
     certificate_writes: int
     _registry_token: int = field(repr=False, default=0)
     _integrity_token: str = field(repr=False, default="")
+    _preparation_token: CryptographicMaterialPreparationToken | None = field(
+        repr=False,
+        compare=False,
+        default=None,
+    )
 
     @property
     def receipt_token(self) -> str:
@@ -735,6 +744,9 @@ class CryptographicMaterialRegistry:
             | ReferenceType[CryptographicMaterialPreparationToken],
         ] = {}
         self._tls_prepared_capabilities: dict[int, _CryptographicMaterialPreparationCapability] = {}
+        self._tls_committed_receipts: WeakValueDictionary[
+            int, CryptographicMaterialPreparationReceipt
+        ] = WeakValueDictionary()
         self._tls_claimed_preparations: set[int] = set()
         self._tls_claimed_transactions: dict[
             int,
@@ -1403,37 +1415,12 @@ class CryptographicMaterialRegistry:
 
         if type(receipt) is not CryptographicMaterialPreparationReceipt:
             return False
-        if type(receipt._registry_token) is not int or receipt._registry_token != id(self):
-            return False
-        try:
-            expected = _validated_tls_material_receipt_integrity_token(
-                self._tls_preparation_secret,
-                receipt,
-            )
-        except StateError:
-            return False
-        if not hmac.compare_digest(receipt._integrity_token, expected):
-            return False
+        with self._tls_material_lock:
+            if self._tls_committed_receipts.get(id(receipt)) is not receipt:
+                return False
         if token is None:
             return True
-        if type(token) is not CryptographicMaterialPreparationToken:
-            return False
-        try:
-            expected_token = _validated_tls_material_preparation_integrity_token(
-                self._tls_preparation_secret,
-                token,
-            )
-        except StateError:
-            return False
-        return (
-            hmac.compare_digest(token._integrity_token, expected_token)
-            and hmac.compare_digest(receipt.publication_token, token.publication_token)
-            and receipt.preparation_id == token.preparation_id
-            and hmac.compare_digest(receipt.overlay_digest, token.overlay_digest)
-            and receipt.public_key_writes == token.public_key_writes
-            and receipt.authority_writes == token.authority_writes
-            and receipt.certificate_writes == token.certificate_writes
-        )
+        return token is receipt._preparation_token
 
     def _active_tls_preparation_locked(
         self,
@@ -1454,17 +1441,6 @@ class CryptographicMaterialRegistry:
         active = self._tls_active_preparation_token_locked(capability.preparation_id)
         if active is not token:
             raise StateError("TLS material preparation token is stale or already consumed")
-        try:
-            expected = _validated_tls_material_preparation_integrity_token(
-                self._tls_preparation_secret,
-                token,
-            )
-        except StateError as exc:
-            raise StateError("TLS material preparation token integrity validation failed") from exc
-        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("TLS material preparation token integrity validation failed")
         return capability
 
     def _release_tls_preparation_locked(
@@ -1543,7 +1519,7 @@ class CryptographicMaterialRegistry:
     ) -> None:
         """Revalidate exact point generations and immutable preimages."""
 
-        for patch in capability.trusted_token._patches:
+        for patch in capability.patches:
             point = patch.point
             if self._tls_point_reservations.get(point) != capability.preparation_id:
                 raise StateError("TLS material preparation lost an exact point reservation")
@@ -1614,11 +1590,8 @@ class CryptographicMaterialRegistry:
                     raise CryptographicMaterialCapacityError(
                         "TLS material preparation identity capacity is exhausted"
                     )
-            public_patches = deepcopy(final_patches)
-            for patch in public_patches:
-                _validate_tls_material_patch(patch)
             preparation_id = self._next_tls_preparation_id
-            overlay_digest = _tls_material_overlay_digest(final_patches)
+            overlay_digest = hashlib.sha256(f"tls-material:{preparation_id}".encode()).hexdigest()
             token = CryptographicMaterialPreparationToken(
                 preparation_id=preparation_id,
                 overlay_digest=overlay_digest,
@@ -1626,21 +1599,18 @@ class CryptographicMaterialRegistry:
                 authority_writes=sum(patch.family == "authority" for patch in final_patches),
                 certificate_writes=sum(patch.family == "certificate" for patch in final_patches),
                 _registry_token=id(self),
-                _patches=public_patches,
+                _patches=final_patches,
+                _integrity_token=overlay_digest,
             )
-            token = replace(
-                token,
-                _integrity_token=_tls_material_preparation_integrity_token(
-                    self._tls_preparation_secret,
-                    token,
-                ),
-            )
-            trusted_token = replace(token, _patches=final_patches)
             capability = _CryptographicMaterialPreparationCapability(
                 token_id=id(token),
                 preparation_id=preparation_id,
                 integrity_token=token.publication_token,
-                trusted_token=trusted_token,
+                overlay_digest=overlay_digest,
+                public_key_writes=token.public_key_writes,
+                authority_writes=token.authority_writes,
+                certificate_writes=token.certificate_writes,
+                patches=final_patches,
                 points=tuple(patch.point for patch in final_patches),
             )
             prepared_component = _tls_material_state_component(
@@ -1843,7 +1813,7 @@ class CryptographicMaterialRegistry:
                 raise StateError("TLS material prepared commit is not the claim owner")
             publications: list[_TlsMaterialPublication] = []
             committed_points: list[tuple[_TlsMaterialFamily, _TlsMaterialKey, int, str]] = []
-            for patch in capability.trusted_token._patches:
+            for patch in capability.patches:
                 prepared = CryptographicMaterialRegistry._prepare_tls_material_publication_locked(
                     self,
                     patch.family,
@@ -1860,24 +1830,19 @@ class CryptographicMaterialRegistry:
             committed_digest = hashlib.sha256(
                 repr(tuple(committed_points)).encode("utf-8")
             ).hexdigest()
-            trusted_token = capability.trusted_token
             receipt = CryptographicMaterialPreparationReceipt(
                 preparation_id=capability.preparation_id,
                 publication_token=capability.integrity_token,
-                overlay_digest=trusted_token.overlay_digest,
+                overlay_digest=capability.overlay_digest,
                 committed_digest=committed_digest,
-                public_key_writes=trusted_token.public_key_writes,
-                authority_writes=trusted_token.authority_writes,
-                certificate_writes=trusted_token.certificate_writes,
+                public_key_writes=capability.public_key_writes,
+                authority_writes=capability.authority_writes,
+                certificate_writes=capability.certificate_writes,
                 _registry_token=id(self),
+                _integrity_token=committed_digest,
+                _preparation_token=token,
             )
-            receipt = replace(
-                receipt,
-                _integrity_token=_tls_material_receipt_integrity_token(
-                    self._tls_preparation_secret,
-                    receipt,
-                ),
-            )
+            self._tls_committed_receipts[id(receipt)] = receipt
             CryptographicMaterialRegistry._apply_tls_material_publications_locked(
                 self,
                 tuple(publications),

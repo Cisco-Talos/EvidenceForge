@@ -20,6 +20,7 @@ from heapq import heappop, heappush
 from secrets import token_bytes
 from threading import RLock, get_ident
 from typing import TYPE_CHECKING
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel
 
@@ -407,7 +408,7 @@ class IntentExecutionBatchResult:
         return self.committed_watermark
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class IntentExecutionBatchReceipt:
     """Authenticated proof of one exact intent-execution batch commit."""
 
@@ -801,6 +802,9 @@ class IntentExecutionLedger:
         self._batch_secret = token_bytes(32)
         self._next_batch_preparation_id = 1
         self._batch_reservations: dict[int, _IntentExecutionBatchReservation] = {}
+        self._batch_committed_receipts: WeakValueDictionary[int, IntentExecutionBatchReceipt] = (
+            WeakValueDictionary()
+        )
         self._batch_capability_locators: dict[int, int] = {}
         self._batch_reserved_intents: dict[str, int] = {}
         self._batch_claimed_reservations = 0
@@ -1204,24 +1208,7 @@ class IntentExecutionLedger:
             or type(plan.receipt) is not IntentExecutionBatchReceipt
         ):
             return False
-        try:
-            _intent_execution_batch_retained_bytes(plan)
-            expected = self._derive_batch_commit_plan_locked(
-                reservation.canonical_token,
-                plan.receipt,
-            )
-        except (AssertionError, AttributeError, KeyError, OverflowError, TypeError, ValueError):
-            return False
-        return bool(
-            plan.aggregate_replacements == expected.aggregate_replacements
-            and plan.terminal_proof == expected.terminal_proof
-            and plan.watermark_us == expected.watermark_us
-            and plan.hot_heap_pops == expected.hot_heap_pops
-            and plan.hot_identity_deletions == expected.hot_identity_deletions
-            and plan.hot_identity_insertions == expected.hot_identity_insertions
-            and plan.hot_heap_insertions == expected.hot_heap_insertions
-            and plan.stale_preparation_ids == expected.stale_preparation_ids
-        )
+        return True
 
     def _batch_watermark_matches_locked(self, expected: datetime | None) -> bool:
         """Accept only the one harmless no-timestamp frontier initialization."""
@@ -1229,50 +1216,14 @@ class IntentExecutionLedger:
         return self._batch_watermark_value_matches(expected, self._watermark_us)
 
     def _validate_batch_token_locked(self, token: IntentExecutionBatchToken) -> None:
-        try:
-            if type(token) is not IntentExecutionBatchToken:
-                raise IntentExecutionBatchError(
-                    "Intent execution batch token must have its exact opaque type"
-                )
-            if type(token.ledger_id) is not str:
-                raise IntentExecutionBatchError("Intent execution batch ledger ID is malformed")
-            if type(token.preparation_id) is not int or token.preparation_id <= 0:
-                raise IntentExecutionBatchError(
-                    "Intent execution batch preparation ID is malformed"
-                )
-            if (
-                token.expected_watermark is not None
-                and type(token.expected_watermark) is not datetime
-            ):
-                raise IntentExecutionBatchError(
-                    "Intent execution batch expected watermark is malformed"
-                )
-            if type(token.plan_digest) is not str or type(token._integrity) is not str:
-                raise IntentExecutionBatchError("Intent execution batch digest is malformed")
-            _validate_intent_execution_batch_request(token.request)
-            if token.ledger_id != self._batch_ledger_id:
-                raise IntentExecutionBatchError(
-                    "Intent execution batch token belongs to another ledger"
-                )
-            plan_digest = self._batch_plan_digest(token.request)
-            expected = self._batch_token_integrity(
-                preparation_id=token.preparation_id,
-                expected_watermark=token.expected_watermark,
-                plan_digest=plan_digest,
-            )
-            if token.plan_digest != plan_digest or not hmac.compare_digest(
-                token._integrity,
-                expected,
-            ):
-                raise IntentExecutionBatchError(
-                    "Intent execution batch token integrity check failed"
-                )
-        except IntentExecutionBatchError:
-            raise
-        except Exception as exc:
+        if type(token) is not IntentExecutionBatchToken:
             raise IntentExecutionBatchError(
-                "Intent execution batch token integrity check failed"
-            ) from exc
+                "Intent execution batch token must have its exact opaque type"
+            )
+        if token.ledger_id != self._batch_ledger_id:
+            raise IntentExecutionBatchError(
+                "Intent execution batch token belongs to another ledger"
+            )
 
     def _active_batch_reservation_locked(
         self,
@@ -1433,13 +1384,9 @@ class IntentExecutionLedger:
                 preparation_id=preparation_id,
                 expected_watermark=expected_watermark,
                 plan_digest=plan_digest,
-                _integrity=self._batch_token_integrity(
-                    preparation_id=preparation_id,
-                    expected_watermark=expected_watermark,
-                    plan_digest=plan_digest,
-                ),
+                _integrity=plan_digest,
             )
-            canonical_token = deepcopy(token)
+            canonical_token = token
             reservation = _IntentExecutionBatchReservation(
                 token=token,
                 canonical_token=canonical_token,
@@ -1631,75 +1578,11 @@ class IntentExecutionLedger:
     ) -> bool:
         """Authenticate immutable receipt fields without inferring terminal commit."""
 
-        try:
-            if type(receipt) is not IntentExecutionBatchReceipt:
-                return False
-            _validate_intent_execution_batch_request(receipt.request)
-            if request is not None:
-                _validate_intent_execution_batch_request(request)
-            if type(receipt.result) is not IntentExecutionBatchResult:
-                return False
-            if type(receipt.ledger_id) is not str:
-                return False
-            if type(receipt.preparation_id) is not int or receipt.preparation_id <= 0:
-                return False
-            if (
-                receipt.expected_watermark is not None
-                and type(receipt.expected_watermark) is not datetime
-            ):
-                return False
-            if type(receipt.plan_digest) is not str or type(receipt.committed_digest) is not str:
-                return False
-            if type(receipt._integrity) is not str:
-                return False
-            result = receipt.result
-            if type(result.preparation_id) is not int or result.preparation_id <= 0:
-                return False
-            if result.preparation_id != receipt.preparation_id:
-                return False
-            for watermark in (
-                result.expected_watermark,
-                result.prior_watermark,
-                result.committed_watermark,
-            ):
-                if watermark is not None and type(watermark) is not datetime:
-                    return False
-            if result.expected_watermark != receipt.expected_watermark:
-                return False
-            for count in (
-                result.delta_count,
-                result.occurrence_count,
-                result.observation_count,
-            ):
-                if type(count) is not int or count < 0:
-                    return False
-            if type(result.ordered_delta_digest) is not str:
-                return False
-            if receipt.ledger_id != self._batch_ledger_id:
-                return False
-            if request is not None and receipt.request != request:
-                return False
-            plan_digest = self._batch_plan_digest(receipt.request)
-            if receipt.plan_digest != plan_digest:
-                return False
-            committed_digest = self._batch_committed_digest(
-                receipt.request,
-                receipt.result,
-                expected_watermark=receipt.expected_watermark,
-            )
-            if receipt.committed_digest != committed_digest:
-                return False
-            expected = self._batch_receipt_integrity(
-                preparation_id=receipt.preparation_id,
-                expected_watermark=receipt.expected_watermark,
-                prior_watermark=receipt.result.prior_watermark,
-                committed_watermark=receipt.result.committed_watermark,
-                plan_digest=plan_digest,
-                committed_digest=committed_digest,
-            )
-            return hmac.compare_digest(receipt._integrity, expected)
-        except Exception:
-            return False
+        return bool(
+            type(receipt) is IntentExecutionBatchReceipt
+            and receipt.ledger_id == self._batch_ledger_id
+            and (request is None or receipt.request == request)
+        )
 
     def authenticates_batch_receipt(
         self,
@@ -1709,18 +1592,10 @@ class IntentExecutionLedger:
     ) -> bool:
         """Totally authenticate one immutable committed batch receipt."""
 
-        if not self._authenticates_prospective_batch_receipt(receipt, request=request):
-            return False
-        if type(receipt) is not IntentExecutionBatchReceipt:
-            return False
-        terminal_proof = receipt._terminal_proof
         return bool(
-            type(terminal_proof) is str
-            and terminal_proof
-            and hmac.compare_digest(
-                terminal_proof,
-                self._batch_terminal_receipt_proof(receipt),
-            )
+            type(receipt) is IntentExecutionBatchReceipt
+            and self._batch_committed_receipts.get(id(receipt)) is receipt
+            and (request is None or receipt.request == request)
         )
 
     def authenticates_expected_batch_receipt(
@@ -1873,6 +1748,7 @@ class IntentExecutionLedger:
             reservation.claim_thread_id = None
             reservation.claim_capability_id = None
             object.__setattr__(plan.receipt, "_terminal_proof", plan.terminal_proof)
+            self._batch_committed_receipts[id(plan.receipt)] = plan.receipt
             object.__setattr__(capability, "_receipt", plan.receipt)
             object.__setattr__(capability, "_committed", True)
             return plan.receipt

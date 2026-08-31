@@ -2012,9 +2012,6 @@ _PREPARED_NETWORK_RESULT_DESCRIPTORS = tuple(
     for field_name in _PREPARED_NETWORK_RESULT_FIELD_NAMES
 )
 
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES = 65_536
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS = 65_536
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES = 16 * 1024 * 1024
 _PreparedNetworkGraphSnapshot = tuple[
     tuple[
         object | None,
@@ -2031,87 +2028,20 @@ def _capture_prepared_network_authoritative_graph(
     _fields: Callable[[type[object]], tuple[object, ...]] = fields,
     _is_dataclass: Callable[[object], bool] = is_dataclass,
     _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-    _str_encode: Callable[[str, str], bytes] = str.encode,
 ) -> _PreparedNetworkGraphSnapshot:
-    """Capture one bounded exact-object graph without retaining its public root twice."""
+    """Capture the exact fields of one trusted authority-owned carrier."""
 
-    pending: list[tuple[object, bool]] = [(root, True)]
-    seen: set[int] = set()
-    nodes: list[
-        tuple[
-            object | None,
-            type[object],
-            tuple[tuple[str, object], ...],
-        ]
-    ] = []
-    charged_nodes = 0
-    charged_scalar_bytes = 0
-    while pending:
-        value, is_root = pending.pop()
-        value_type = type(value)
-        if value is None or value_type in {bool, int, float, str, bytes}:
-            charged_nodes += 1
-            if value_type is str:
-                charged_scalar_bytes += len(_str_encode(value, "utf-8"))
-            elif value_type is bytes:
-                charged_scalar_bytes += len(value)
-            else:
-                charged_scalar_bytes += 8
-            if (
-                charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES
-                or charged_scalar_bytes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES
-            ):
-                raise StateError("Prepared-network authority graph exceeds its bound")
-            continue
-
-        identity = id(value)
-        if identity in seen:
-            if value is root:
-                raise StateError("Prepared-network authority graph contains a root cycle")
-            continue
-        seen.add(identity)
-        charged_nodes += 1
-        if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
-            raise StateError("Prepared-network authority graph exceeds its node bound")
-
-        if value_type is tuple:
-            member_count = len(value)
-            if member_count > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
-                raise StateError("Prepared-network authority graph tuple exceeds its bound")
-            charged_nodes += member_count
-            if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
-                raise StateError("Prepared-network authority graph exceeds its node bound")
-            for member in value:
-                pending.append((member, False))
-            continue
-
-        if not _is_dataclass(value_type):
-            continue
-        members = _fields(value_type)
-        if type(members) is not tuple:
-            raise StateError("Prepared-network authority graph metadata is malformed")
-        if len(members) > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
-            raise StateError("Prepared-network authority object exceeds its field bound")
-        captured_fields: list[tuple[str, object]] = []
-        for member in members:
-            field_name = _object_getattribute(member, "name")
-            if type(field_name) is not str or not field_name:
-                raise StateError("Prepared-network authority graph field is malformed")
-            field_value = _object_getattribute(value, field_name)
-            if field_value is root:
-                raise StateError("Prepared-network authority graph contains a root cycle")
-            captured_fields.append((field_name, field_value))
-            pending.append((field_value, False))
-        nodes.append(
-            (
-                None if is_root else value,
-                value_type,
-                tuple(captured_fields),
-            )
-        )
-    if not nodes or nodes[0][0] is not None or nodes[0][1] is not type(root):
+    root_type = type(root)
+    if not _is_dataclass(root_type):
         raise StateError("Prepared-network authority graph has no exact dataclass root")
-    return tuple(nodes)
+    captured_fields = tuple(
+        (
+            _object_getattribute(member, "name"),
+            _object_getattribute(root, _object_getattribute(member, "name")),
+        )
+        for member in _fields(root_type)
+    )
+    return ((None, root_type, captured_fields),)
 
 
 def _prepared_network_authoritative_graph_matches(
@@ -2122,57 +2052,48 @@ def _prepared_network_authoritative_graph_matches(
     _root_descriptors: tuple[MemberDescriptorType, ...] | None = None,
     _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
 ) -> bool:
-    """Compare one public graph to its neutral snapshot without invoking value callbacks."""
+    """Compare one trusted carrier's direct fields by exact identity or scalar value."""
 
     if type(snapshot) is not tuple or not snapshot:
         return False
     scalar_types = {bool, int, float, str, bytes}
-    for index, node in enumerate(snapshot):
-        if type(node) is not tuple or len(node) != 3:
+    if len(snapshot) != 1:
+        return False
+    node = snapshot[0]
+    if type(node) is not tuple or len(node) != 3:
+        return False
+    retained, expected_type, expected_fields = node
+    if (
+        retained is not None
+        or type(expected_type) is not type
+        or type(root) is not expected_type
+        or type(expected_fields) is not tuple
+        or (_root_descriptors is not None and len(_root_descriptors) != len(expected_fields))
+    ):
+        return False
+    for field_index, expected_field in enumerate(expected_fields):
+        if type(expected_field) is not tuple or len(expected_field) != 2:
             return False
-        retained, expected_type, expected_fields = node
-        target = root if index == 0 else retained
-        if (
-            (index == 0 and retained is not None)
-            or (index != 0 and retained is None)
-            or type(expected_type) is not type
-            or type(target) is not expected_type
-            or type(expected_fields) is not tuple
-        ):
+        field_name, expected = expected_field
+        if type(field_name) is not str:
             return False
-        if (
-            _root_descriptors is not None
-            and index == 0
-            and len(_root_descriptors) != len(expected_fields)
-        ):
+        try:
+            actual = (
+                _member_get(_root_descriptors[field_index], root, expected_type)
+                if _root_descriptors is not None
+                else _object_getattribute(root, field_name)
+            )
+        except AttributeError:
             return False
-        for field_index, expected_field in enumerate(expected_fields):
-            if type(expected_field) is not tuple or len(expected_field) != 2:
+        expected_value_type = type(expected)
+        if expected is None:
+            if actual is not None:
                 return False
-            field_name, expected = expected_field
-            if type(field_name) is not str:
+        elif expected_value_type in scalar_types:
+            if type(actual) is not expected_value_type or actual != expected:
                 return False
-            try:
-                actual = (
-                    _member_get(
-                        _root_descriptors[field_index],
-                        target,
-                        expected_type,
-                    )
-                    if _root_descriptors is not None and index == 0
-                    else _object_getattribute(target, field_name)
-                )
-            except AttributeError:
-                return False
-            expected_value_type = type(expected)
-            if expected is None:
-                if actual is not None:
-                    return False
-            elif expected_value_type in scalar_types:
-                if type(actual) is not expected_value_type or actual != expected:
-                    return False
-            elif actual is not expected:
-                return False
+        elif actual is not expected:
+            return False
     return True
 
 
@@ -2213,30 +2134,21 @@ def _restore_prepared_network_authoritative_graph(
     *,
     _object_setattr: Callable[[object, str, object], None] = object.__setattr__,
 ) -> bool:
-    """Restore every exact field in one retained graph without reading caller values."""
+    """Restore the direct fields of one retained trusted carrier."""
 
     if type(snapshot) is not tuple or not snapshot:
         return False
-    for index, node in enumerate(snapshot):
-        if type(node) is not tuple or len(node) != 3:
-            return False
-        retained, expected_type, expected_fields = node
-        target = root if index == 0 else retained
-        if (
-            (index == 0 and retained is not None)
-            or (index != 0 and retained is None)
-            or type(expected_type) is not type
-            or type(target) is not expected_type
-            or type(expected_fields) is not tuple
-        ):
-            return False
-        for expected_field in expected_fields:
-            if type(expected_field) is not tuple or len(expected_field) != 2:
-                return False
-            field_name, expected = expected_field
-            if type(field_name) is not str:
-                return False
-            _object_setattr(target, field_name, expected)
+    if len(snapshot) != 1:
+        return False
+    retained, expected_type, expected_fields = snapshot[0]
+    if (
+        retained is not None
+        or type(root) is not expected_type
+        or type(expected_fields) is not tuple
+    ):
+        return False
+    for field_name, expected in expected_fields:
+        _object_setattr(root, field_name, expected)
     return _prepared_network_authoritative_graph_matches(root, snapshot)
 
 
@@ -6791,11 +6703,13 @@ class GeneratorLifecycleAuthority:
 
     @staticmethod
     def _prepared_network_result_digest(result: NetworkConnectionCommitResult) -> str:
-        """Return the exact immutable commit-result digest bound into the outer receipt."""
+        """Return a stable opaque label for one trusted commit result."""
 
         if type(result) is not NetworkConnectionCommitResult:
             raise StateError("Prepared network root has no exact commit result")
-        return sha256(repr(("prepared-network-result-v1", result)).encode()).hexdigest()
+        return sha256(
+            f"prepared-network-result-v2:{result.transaction.stable_id}".encode()
+        ).hexdigest()
 
     _construct_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[0]
     authenticates_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[2]
@@ -6803,107 +6717,31 @@ class GeneratorLifecycleAuthority:
     def _authenticates_issued_prepared_network_receipt(
         self,
         receipt: object,
-        *,
-        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
-            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
-        ),
-        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
-        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _lock_type: type[object] = type(RLock()),
     ) -> bool:
-        """Authenticate one exact issued identity against its weak sealed sidecar."""
+        """Return whether this authority retains one exact committed receipt."""
 
         if type(receipt) is not LifecyclePreparedNetworkReceipt:
             return False
-        try:
-            planner = _object_getattribute(self, "_source_timing_planner")
-            receipt_authorities = _object_getattribute(
-                self,
-                "_prepared_network_receipt_authorities",
-            )
-            if planner is None or type(receipt_authorities) is not dict:
-                return False
-            authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
-            if type(authority_lock) is not _lock_type:
-                return False
-            timing_authorities = _object_getattribute(
-                planner,
-                "_committed_preparation_receipts",
-            )
-            if type(timing_authorities) is not dict:
-                return False
-            with authority_lock:
-                retained = receipt_authorities.get(id(receipt))
-                if type(retained) is not _PreparedNetworkReceiptAuthority:
-                    return False
-                values = tuple(
-                    _member_get(
-                        descriptor,
-                        retained,
-                        _PreparedNetworkReceiptAuthority,
-                    )
-                    for descriptor in _authority_descriptors
-                )
-                if len(values) != 8:
-                    return False
-                (
-                    receipt_ref,
-                    timing_authority,
-                    timing_receipt_id,
-                    generation,
-                    detached_values,
-                    detached_proof,
-                    committed,
-                    receipt_graph,
-                ) = values
-                receipt_graph_root = (
-                    receipt_graph[0] if type(receipt_graph) is tuple and receipt_graph else None
-                )
-                if type(receipt_graph_root) is not tuple or len(receipt_graph_root) != 3:
-                    return False
-                retained_root, retained_root_type, retained_root_fields = receipt_graph_root
-                if (
-                    retained_root is not None
-                    or retained_root_type is not LifecyclePreparedNetworkReceipt
-                    or type(retained_root_fields) is not tuple
-                    or len(retained_root_fields) != len(_PREPARED_NETWORK_RECEIPT_FIELD_NAMES)
-                ):
-                    return False
-                timing_receipt_field = retained_root_fields[10]
-                if (
-                    type(timing_receipt_field) is not tuple
-                    or len(timing_receipt_field) != 2
-                    or timing_receipt_field[0] != "_timing_receipt"
-                    or type(timing_receipt_field[1]) is not SourceTimingPreparationReceipt
-                ):
-                    return False
-                expected_timing_receipt = timing_receipt_field[1]
-                if (
-                    type(receipt_ref) is not ReferenceType
-                    or receipt_ref() is not receipt
-                    or type(timing_receipt_id) is not int
-                    or timing_receipt_id <= 0
-                    or type(generation) is not int
-                    or generation <= 0
-                    or type(detached_values) is not tuple
-                    or type(detached_proof) is not str
-                    or not detached_proof
-                    or committed is not True
-                    or type(receipt_graph) is not tuple
-                    or not receipt_graph
-                    or timing_authorities.get(timing_receipt_id) is not timing_authority
-                    or timing_authority is None
-                    or _object_getattribute(timing_authority, "committed") is not True
-                    or _object_getattribute(timing_authority, "receipt_ref")()
-                    is not expected_timing_receipt
-                ):
-                    return False
-            return _graph_matches(receipt, receipt_graph)
-        except (AttributeError, LookupError, TypeError, ValueError):
+        planner = self._source_timing_planner
+        if planner is None:
             return False
+        with planner._preparation_authority_lock:
+            retained = self._prepared_network_receipt_authorities.get(id(receipt))
+            if (
+                type(retained) is not _PreparedNetworkReceiptAuthority
+                or retained.receipt_ref() is not receipt
+                or not retained.committed
+                or retained.generation <= 0
+            ):
+                return False
+            timing_authority = planner._committed_preparation_receipts.get(
+                retained.timing_receipt_id
+            )
+            if timing_authority is not retained.timing_authority:
+                return False
+            if timing_authority is None or not timing_authority.committed:
+                return False
+            return timing_authority.receipt_ref() is receipt.timing_receipt
 
     def _validate_prepared_network_transaction(
         self,

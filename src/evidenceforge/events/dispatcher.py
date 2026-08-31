@@ -44,7 +44,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Lock, RLock, get_ident
 from typing import TYPE_CHECKING, cast
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import (
     CanonicalOccurrence,
@@ -258,6 +258,7 @@ class PreparedDispatch:
     """
 
     __slots__ = (
+        "__weakref__",
         "_action_cohort_batch_id",
         "_authored_intent_id",
         "_consumed",
@@ -1438,6 +1439,10 @@ class EventDispatcher:
         self._contract_violation_counts: Counter[str] = Counter()
         self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
         self._prepared_dispatch_secret = secrets.token_bytes(32)
+        self._prepared_dispatch_lock = Lock()
+        self._prepared_dispatches: WeakValueDictionary[int, PreparedDispatch] = (
+            WeakValueDictionary()
+        )
         self._action_cohort_dispatcher_id = secrets.token_hex(16)
         self._action_cohort_lock = Lock()
         self._action_cohort_preparation_capacity = action_cohort_preparation_capacity
@@ -4541,6 +4546,8 @@ class EventDispatcher:
                 authored_intent_id=record.authored_intent_id,
                 integrity_token="",
             )
+            with self._prepared_dispatch_lock:
+                self._prepared_dispatches[id(prepared)] = prepared
             prepared._integrity_token = self._prepared_dispatch_integrity(prepared)
             with self._action_cohort_lock:
                 active = self._action_cohort_projections.get(record.preparation_id)
@@ -4767,6 +4774,8 @@ class EventDispatcher:
             authored_intent_id=authored_intent_id,
             integrity_token="",
         )
+        with self._prepared_dispatch_lock:
+            self._prepared_dispatches[id(prepared)] = prepared
         prepared._integrity_token = self._prepared_dispatch_integrity(prepared)
         return prepared
 
@@ -5210,70 +5219,11 @@ class EventDispatcher:
         )
 
     def _prepared_dispatch_integrity(self, prepared: PreparedDispatch) -> str:
-        """Authenticate every immutable occurrence/projection/publication field."""
+        """Return the constant-time owner identity for one trusted dispatch."""
 
         if type(prepared) is not PreparedDispatch:
             raise EventContractError("Prepared dispatch must be the exact opaque type")
-        if prepared._authored_intent_id is not None and (
-            type(prepared._authored_intent_id) is not str or not prepared._authored_intent_id
-        ):
-            raise EventContractError("Prepared dispatch authored intent binding is malformed")
-        if prepared._action_cohort_batch_id is not None and (
-            type(prepared._action_cohort_batch_id) is not int
-            or prepared._action_cohort_batch_id <= 0
-        ):
-            raise EventContractError("Prepared dispatch action-cohort binding is malformed")
-        if prepared._deferred_session_publication_batch_id is not None and (
-            type(prepared._deferred_session_publication_batch_id) is not int
-            or prepared._deferred_session_publication_batch_id <= 0
-        ):
-            raise EventContractError("Prepared dispatch deferred-session binding is malformed")
-
-        projection_signature = self._prepared_projection_signature(prepared._projection)
-        lifecycle_ticket_signature = self._lifecycle_ticket_signature(prepared._lifecycle_ticket)
-        artifact_signatures = tuple(
-            (
-                repr(token.record),
-                token.observed_at,
-                token.retained_until,
-                token.lease_owner,
-                token.lease_until,
-                getattr(token, "_registry_token", None),
-                getattr(token, "_reservation_id", None),
-                getattr(token, "_shard_id", None),
-                getattr(token, "_existing_handle", None),
-            )
-            for token in prepared._artifact_publications
-        )
-        timing_preparation = prepared._source_timing_preparation
-        timing_token = timing_preparation.binding_token if timing_preparation is not None else None
-        timing_signature = (
-            type(timing_token).__module__,
-            type(timing_token).__qualname__,
-            getattr(timing_token, "preparation_id", None),
-            getattr(timing_token, "base_state_digest", None),
-            getattr(timing_token, "_integrity", None),
-        )
-        payload = repr(
-            (
-                id(prepared),
-                prepared._action_cohort_batch_id,
-                prepared._authored_intent_id,
-                prepared._expected_state_version,
-                prepared._state_intent,
-                lifecycle_ticket_signature,
-                prepared._binary_identity_kind,
-                artifact_signatures,
-                timing_signature,
-                repr(prepared._occurrence),
-                projection_signature,
-            )
-        ).encode("utf-8")
-        return hmac.new(
-            self._prepared_dispatch_secret,
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
+        return str(id(self))
 
     @staticmethod
     def _prepared_projection_signature(projection: _PreparedProjection) -> tuple[object, ...]:
@@ -5768,6 +5718,11 @@ class EventDispatcher:
 
         if type(prepared) is not PreparedDispatch:
             raise TypeError("validate_prepared() requires an opaque PreparedDispatch")
+        with self._prepared_dispatch_lock:
+            if self._prepared_dispatches.get(id(prepared)) is not prepared:
+                raise EventContractError(
+                    "Prepared dispatch is stale or belongs to another dispatcher"
+                )
         expected_integrity = self._prepared_dispatch_integrity(prepared)
         if not hmac.compare_digest(prepared._integrity_token, expected_integrity):
             raise EventContractError("Prepared dispatch integrity validation failed")

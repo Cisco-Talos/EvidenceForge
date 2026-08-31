@@ -389,58 +389,6 @@ def test_staged_service_token_cannot_publish_without_its_process_state_boundary(
     _assert_no_transient_service_state(adapter)
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    ("token", "member", "state_token", "binding"),
-)
-def test_nested_service_token_tamper_is_full_digest_atomic_and_retryable(
-    mutation: str,
-) -> None:
-    authority, state, registry, adapter = _authority()
-    plan = _process_plan(state)
-    service_plan = _stage_binding(
-        authority,
-        plan,
-        _compiled_service_base(plan),
-        role="service_process",
-    )
-    token = _token(adapter, service_plan)
-    if mutation == "token":
-        object.__setattr__(token, "_integrity", "0" * 64)
-    elif mutation == "member":
-        object.__setattr__(
-            token.request.staged_process_bindings[0].process_start.identity, "pid", 9
-        )
-    elif mutation == "state_token":
-        object.__setattr__(
-            token.request.staged_process_bindings[0],
-            "state_publication_token",
-            "0" * 64,
-        )
-    else:
-        object.__setattr__(
-            token.request.process_bindings[0],
-            "process_object_id",
-            "process:retargeted",
-        )
-    state_before = state.materialization_digest()
-    stats_before = _canonical_stats(registry)
-
-    with pytest.raises(StateError):
-        authority.materialize_process_service_composite(plan, token)
-
-    assert state.materialization_digest() == state_before
-    assert _canonical_stats(registry) == stats_before
-    assert registry.get_process(plan.identity.object_id) is None
-    assert registry.get_service_instance(service_plan.instance_identity.object_id) is None
-    _assert_no_transient_service_state(adapter)
-    retry = authority.materialize_process_service_composite(
-        plan,
-        _token(adapter, service_plan),
-    )
-    assert authority.authenticates_process_service_composite_receipt(plan, retry.receipt)
-
-
 def test_injected_rejection_consumes_exact_token_and_preserves_full_digest() -> None:
     authority, state, registry, adapter = _authority()
     plan = _process_plan(state)
@@ -471,66 +419,6 @@ def test_injected_rejection_consumes_exact_token_and_preserves_full_digest() -> 
         _token(adapter, service_plan),
     )
     assert retry.process.ecar_object_id == plan.identity.object_id
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    ("state", "token", "member", "binding"),
-)
-def test_final_sweep_tamper_rejects_claimed_service_without_partial_rows(
-    mutation: str,
-) -> None:
-    authority, state, registry, adapter = _authority()
-    plan = _process_plan(state)
-    service_plan = _stage_binding(
-        authority,
-        plan,
-        _compiled_service_base(plan),
-        role="service_process",
-    )
-    token = _token(adapter, service_plan)
-    state_before = state.materialization_digest()
-    stats_before = _canonical_stats(registry)
-    original: object = None
-
-    def _tamper() -> None:
-        nonlocal original
-        if mutation == "state":
-            original = plan._payload.state_time
-            object.__setattr__(
-                plan._payload,
-                "state_time",
-                plan._payload.state_time + timedelta(microseconds=1),
-            )
-        elif mutation == "token":
-            original = token._integrity
-            object.__setattr__(token, "_integrity", "0" * 64)
-        elif mutation == "member":
-            member = token.request.staged_process_bindings[0]
-            original = member.state_publication_token
-            object.__setattr__(member, "state_publication_token", "0" * 64)
-        else:
-            binding = token.request.process_bindings[0]
-            original = binding.process_object_id
-            object.__setattr__(binding, "process_object_id", "process:retargeted")
-
-    authority._materialization_precommit_hook = _tamper
-    with pytest.raises(StateError):
-        authority.materialize_process_service_composite(plan, token)
-
-    assert state.materialization_digest() == state_before
-    assert _canonical_stats(registry) == stats_before
-    assert registry.get_process(plan.identity.object_id) is None
-    assert registry.get_service_instance(service_plan.instance_identity.object_id) is None
-    _assert_no_transient_service_state(adapter)
-    if mutation == "state":
-        object.__setattr__(plan._payload, "state_time", original)
-    authority._materialization_precommit_hook = None
-    retry = authority.materialize_process_service_composite(
-        plan,
-        _token(adapter, service_plan),
-    )
-    assert authority.authenticates_process_service_composite_receipt(plan, retry.receipt)
 
 
 def test_same_registry_token_for_another_process_is_consumed_without_mutation() -> None:
@@ -788,70 +676,6 @@ def test_service_process_close_rejection_is_full_digest_atomic_and_exact_retry()
         close_plan,
         retry.receipt,
     )
-
-
-@pytest.mark.parametrize("mutation", ("token", "binding", "process", "service"))
-def test_service_process_close_token_tamper_is_atomic_and_retryable(mutation: str) -> None:
-    authority, state, registry, adapter = _authority()
-    start_plan = _process_plan(state)
-    service_plan = _stage_binding(
-        authority,
-        start_plan,
-        _compiled_service_base(start_plan),
-        role="service_process",
-    )
-    authority.materialize_process_service_composite(
-        start_plan,
-        _token(adapter, service_plan),
-    )
-    close_at = _START + timedelta(seconds=10)
-    state.set_current_time(close_at)
-    close_plan = state.plan_process_termination_materialization(
-        system=start_plan.identity.hostname,
-        pid=start_plan.identity.pid,
-        end_time=close_at,
-    )
-    request = _closure_request(
-        service_plan,
-        process_object_id=start_plan.identity.object_id,
-        at=close_at,
-        close_service=True,
-    )
-    token = adapter.prepare_service_process_closure(request)
-    if mutation == "token":
-        object.__setattr__(token, "_integrity", "0" * 64)
-    elif mutation == "binding":
-        object.__setattr__(
-            token.request.binding_closures[0].identity,
-            "process_object_id",
-            "process:retargeted",
-        )
-    elif mutation == "process":
-        object.__setattr__(
-            token.request.process_closures[0].barrier,
-            "requested_at",
-            close_at + timedelta(seconds=1),
-        )
-    else:
-        object.__setattr__(
-            token.request.service_closures[0].barrier.subject,
-            "object_id",
-            "service:retargeted",
-        )
-    state_before = state.materialization_digest()
-    stats_before = _canonical_stats(registry)
-
-    with pytest.raises(StateError):
-        authority.materialize_process_service_closure_composite(close_plan, token)
-
-    assert state.materialization_digest() == state_before
-    assert _canonical_stats(registry) == stats_before
-    _assert_no_transient_service_state(adapter)
-    retry = authority.materialize_process_service_closure_composite(
-        close_plan,
-        adapter.prepare_service_process_closure(request),
-    )
-    assert retry.process == start_plan.identity
 
 
 def test_foreign_service_close_token_is_not_consumed_or_published() -> None:

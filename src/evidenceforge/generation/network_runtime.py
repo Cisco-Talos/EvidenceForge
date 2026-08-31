@@ -2113,108 +2113,26 @@ class NetworkTransactionRuntime:
         ) and self.state_manager.authenticates_materialization_plan(root.state_plan)
 
     def authenticates_preparation_root(self, root: object) -> bool:
-        """Authenticate one exact active root against its runtime-owned snapshot.
-
-        The root is a frozen value carrier rather than a second identity
-        capability. An exact semantic replacement may therefore authenticate,
-        but it must retain the original one-shot runtime token. Caller-visible
-        transaction and result values are compared with the private trusted copy
-        retained at seal time before an outer coordinator may consume them.
-        """
+        """Return whether this runtime owns one exact active preparation root."""
 
         if type(root) is not PreparedNetworkTransactionRoot:
             return False
         token = root.runtime_token
-        state_plan = root.state_plan
-        transaction = root.transaction
-        result = root.result
-        if (
-            type(token) is not NetworkTransactionPreparationToken
-            or type(state_plan) is not ConnectionCompositeMaterializationPlan
-            or type(transaction) is not NetworkTransactionPlan
-            or type(result) is not NetworkConnectionCommitResult
-        ):
+        if type(token) is not NetworkTransactionPreparationToken:
             return False
 
         with self._lock:
             try:
                 capability = self._active_capability_locked(token)
-            except (AttributeError, StateError, TypeError, ValueError):
+            except StateError:
                 return False
-            trusted_root = capability.trusted_root
+            if root is not capability.trusted_root:
+                return False
             crypto_token = capability.crypto_token
-
-        try:
-            transaction_digest = _value_digest(transaction)
-            result_digest = _value_digest(result)
-            state_transaction_digest = _value_digest(state_plan.transaction)
-            result_transaction_digest = _value_digest(result.transaction)
-            trusted_transaction_digest = _value_digest(trusted_root.transaction)
-            trusted_result_digest = _value_digest(trusted_root.result)
-            trusted_state_transaction_digest = _value_digest(trusted_root.state_plan.transaction)
-            state_publication_token = state_plan.publication_token
-            trusted_state_publication_token = trusted_root.state_plan.publication_token
-            state_mode = state_plan.mode
-            trusted_state_mode = trusted_root.state_plan.mode
-            crypto_publication_token = crypto_token.publication_token
-        except (
-            AttributeError,
-            LookupError,
-            RecursionError,
-            RuntimeError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return False
-
-        if (
-            type(state_publication_token) is not str
-            or not state_publication_token
-            or type(state_mode) is not ConnectionMaterializationMode
-            or token.transaction_id != transaction.stable_id
-            or token.state_publication_token != state_publication_token
-            or token.cryptographic_publication_token != crypto_publication_token
-            or token.materialization_mode is not state_mode
-            or token.lifecycle_mode != result.lifecycle_mode
-            or transaction_digest != state_transaction_digest
-            or transaction_digest != result_transaction_digest
-            or transaction_digest != trusted_transaction_digest
-            or transaction_digest != trusted_state_transaction_digest
-            or result_digest != trusted_result_digest
-            or state_publication_token != trusted_state_publication_token
-            or state_mode is not trusted_state_mode
-            or token.publication_token != trusted_root.runtime_token.publication_token
-        ):
-            return False
-        if state_mode is ConnectionMaterializationMode.PHYSICAL:
-            if token.lifecycle_mode == "application_child" or transaction.application_layer_only:
-                return False
-        elif state_mode is ConnectionMaterializationMode.APPLICATION_CHILD:
-            if (
-                token.lifecycle_mode != "application_child"
-                or not transaction.application_layer_only
-            ):
-                return False
-        else:
-            return False
-
-        try:
-            state_authentic = self.state_manager.authenticates_materialization_plan(state_plan)
-            crypto_authentic = self.cryptographic_material.authenticates_tls_preparation_token(
-                crypto_token
-            )
-        except (
-            AttributeError,
-            LookupError,
-            RecursionError,
-            RuntimeError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return False
-        return state_authentic and crypto_authentic
+            state_plan = capability.trusted_root.state_plan
+        return self.state_manager.authenticates_materialization_plan(
+            state_plan
+        ) and self.cryptographic_material.authenticates_tls_preparation_token(crypto_token)
 
     def authenticates_preparation_receipt(
         self,
@@ -2696,31 +2614,11 @@ class NetworkTransactionRuntime:
         )
         if not mutations:
             raise StateError("Network point batch must publish at least one mutation")
-        overlay_preimage = (
-            "network-point-batch-overlay-v1",
-            tuple(
-                (
-                    item.family.value,
-                    _freeze_digest_value(item.key),
-                    item.generation,
-                    item.value_digest,
-                )
-                for item in expectations
-            ),
-            tuple(
-                (
-                    item.family.value,
-                    _freeze_digest_value(item.key),
-                    item.kind,
-                    _freeze_digest_value(item.value),
-                    item.expires_at,
-                )
-                for item in mutations
-            ),
-        )
-        overlay_digest = hashlib.sha256(repr(overlay_preimage).encode()).hexdigest()
         with self._lock:
             open_capability = self._active_open_point_batch_locked(preparation)
+            overlay_digest = hashlib.sha256(
+                f"point:{open_capability.preparation_id}:{open_capability.stable_id}".encode()
+            ).hexdigest()
             fence = self._pending_watermark or self._watermark
             if open_capability.linearization_time < fence:
                 raise StateError("Network point batch starts behind the runtime watermark")
@@ -2747,12 +2645,11 @@ class NetworkTransactionRuntime:
                 token,
                 _integrity_token=_point_batch_token_integrity(self._secret, token),
             )
-            trusted_token = replace(token)
             capability = _PreparedPointBatchCapability(
                 token_identity=id(token),
                 preparation_id=open_capability.preparation_id,
                 integrity_token=token.publication_token,
-                trusted_token=trusted_token,
+                trusted_token=token,
                 expectations=expectations,
                 mutations=mutations,
                 reserved_points=reserved_points,
@@ -2805,37 +2702,11 @@ class NetworkTransactionRuntime:
             canonical_mutations[key] for key in sorted(canonical_mutations, key=_point_key_order)
         )
         trusted_result = result
-        overlay_preimage = (
-            tuple(
-                (
-                    item.family.value,
-                    _freeze_digest_value(item.key),
-                    item.generation,
-                    item.value_digest,
-                )
-                for item in expectations
-            ),
-            tuple(
-                (
-                    item.family.value,
-                    _freeze_digest_value(item.key),
-                    item.kind,
-                    _freeze_digest_value(item.value),
-                    item.expires_at,
-                )
-                for item in mutations
-            ),
-            _freeze_digest_value(trusted_result),
-            (
-                crypto_token.overlay_digest,
-                crypto_token.public_key_writes,
-                crypto_token.authority_writes,
-                crypto_token.certificate_writes,
-            ),
-        )
-        overlay_digest = hashlib.sha256(repr(overlay_preimage).encode()).hexdigest()
         with self._lock:
             open_capability = self._active_open_preparation_locked(preparation)
+        overlay_digest = hashlib.sha256(
+            f"network:{open_capability.preparation_id}:{open_capability.stable_id}".encode()
+        ).hexdigest()
         if transaction.stable_id != open_capability.stable_id:
             raise StateError("Network transaction changed its trusted preparation identity")
         transaction_start = _canonical_datetime(
@@ -2892,19 +2763,12 @@ class NetworkTransactionRuntime:
             reserved_points = tuple(
                 (expectation.family, expectation.key) for expectation in expectations
             )
-            trusted_token = replace(token)
-            trusted_root = PreparedNetworkTransactionRoot(
-                transaction=trusted_result.transaction,
-                state_plan=state_plan,
-                runtime_token=trusted_token,
-                result=trusted_result,
-            )
             capability = _PreparedCapability(
                 token_identity=id(token),
                 preparation_id=open_capability.preparation_id,
                 integrity_token=token.publication_token,
-                trusted_token=trusted_token,
-                trusted_root=trusted_root,
+                trusted_token=token,
+                trusted_root=root,
                 expectations=expectations,
                 mutations=mutations,
                 reserved_points=reserved_points,
@@ -2985,11 +2849,6 @@ class NetworkTransactionRuntime:
         active = self._point_batch_tokens.get(capability.preparation_id)
         if active is not token:
             raise StateError("Network point-batch token is stale or already consumed")
-        expected = _validated_point_batch_token_integrity(self._secret, token)
-        if not hmac.compare_digest(token.publication_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("Network point-batch token integrity validation failed")
         return capability
 
     def _claim_point_batch(
@@ -3126,11 +2985,6 @@ class NetworkTransactionRuntime:
         active = self._prepared_tokens.get(capability.preparation_id)
         if active is not token:
             raise StateError("Network transaction token is stale or already consumed")
-        expected = _validated_token_integrity(self._secret, token)
-        if not hmac.compare_digest(token.publication_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("Network transaction token integrity validation failed")
         return capability
 
     def _claim_preparation(

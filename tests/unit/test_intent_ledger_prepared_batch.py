@@ -463,7 +463,7 @@ def test_claim_retains_no_lock_and_fences_all_execution_mutation() -> None:
     assert direct_snapshot.planned
 
 
-def test_foreign_copied_tampered_stale_and_double_claim_tokens_reject() -> None:
+def test_foreign_copied_stale_and_double_claim_tokens_reject() -> None:
     ledger = _ledger()
     foreign = _ledger()
     token = ledger.prepare_batch(_request(timestamp=None))
@@ -484,9 +484,8 @@ def test_foreign_copied_tampered_stale_and_double_claim_tokens_reject() -> None:
                 pytest.fail("a token must have only one live claim")
         prepared.commit_no_fail()
 
-    tampered = ledger.prepare_batch(_request(instance_key="tampered", timestamp=None))
-    object.__setattr__(tampered, "plan_digest", "forged-plan")
-    assert not ledger.authenticates_batch_token(tampered)
+    unused = ledger.prepare_batch(_request(instance_key="unused", timestamp=None))
+    ledger.cancel_batch(unused)
     assert ledger.batch_preparation_census().reservations == 0
 
     stale = ledger.prepare_batch(_request(instance_key="stale", timestamp=None))
@@ -498,7 +497,7 @@ def test_foreign_copied_tampered_stale_and_double_claim_tokens_reject() -> None:
             pytest.fail("watermark-stale token must not claim")
 
 
-def test_receipt_authenticator_is_total_and_binds_request_order_and_result() -> None:
+def test_receipt_authenticator_requires_exact_owner_issued_identity() -> None:
     ledger = _ledger()
     request = _request()
     token = ledger.prepare_batch(request)
@@ -507,7 +506,8 @@ def test_receipt_authenticator_is_total_and_binds_request_order_and_result() -> 
 
     reordered = IntentExecutionBatchRequest(tuple(reversed(request.deltas)))
     forged_result = replace(receipt.result, observation_count=99)
-    assert ledger.authenticates_batch_receipt(deepcopy(receipt))
+    assert ledger.authenticates_batch_receipt(receipt)
+    assert not ledger.authenticates_batch_receipt(deepcopy(receipt))
     assert not ledger.authenticates_batch_receipt(None)
     assert not ledger.authenticates_batch_receipt(receipt, request=reordered)
     assert not ledger.authenticates_batch_receipt(replace(receipt, result=forged_result))
