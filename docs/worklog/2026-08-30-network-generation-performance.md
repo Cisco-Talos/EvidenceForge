@@ -180,3 +180,73 @@ check, and Ruff format check before commit. Routine checkpoints ended at 7,964 p
 the affected slow network-identity suite passed all 82 cases. The final combined slow gate passed
 1,761 tests with 8,198 deselected in 406.85 seconds, including the formerly missing healthcare pack
 test, so no environmental exception was needed. No soak tests were run.
+
+## 2026-08-31 profile-driven optimization Batch 2
+
+Batch 2 started from pushed commit `560d57cb6` and retained the existing 25,915-sample complete-run
+profile rather than repeating the fixture between changes. Each approved hotspot family landed in
+an independent conventional commit:
+
+- `e538921bd` added an owner-issued timing staging lease and compact audit counter deltas. A
+  100,000-sample benchmark improved from 0.089835 to 0.038231 seconds (2.35 times faster).
+- `02a128714` removed rendered cache-key history from prepared source-clock hits and retained exact
+  compact operation facts. A 100,000-hit benchmark improved from 0.391306 to 0.209368 seconds
+  (1.87 times faster).
+- `aed67954b` added the exact-aware-UTC identity fast path. One million calls improved from
+  0.051618 to 0.036082 seconds (1.43 times faster), while naive and non-UTC behavior remained
+  unchanged.
+- `56cd48741` carried precomputed lifecycle-route digests through private transaction paths while
+  retaining canonical-key verification and collision handling. A 200,000-lookup benchmark
+  improved from 0.344957 to 0.164792 seconds (2.09 times faster).
+- `74aac124c` explicitly retired an acknowledged prepared-network receipt authority after exact
+  authentication and generation-CAS checks. Releasing 1,000 acknowledged graphs improved from
+  2.741 to 2.074 milliseconds (32.2% more operations per second); the broader materialize/ack path
+  remained neutral within 0.8%.
+- `fe5f3e07a` replaced the two dispatcher source-timing deep copies with a specialized private
+  snapshot operation that independently copies all four mutable dictionaries. A 50,000-clone
+  benchmark improved from 1.388490 to 0.051646 seconds (26.9 times faster).
+
+Each focused benchmark used one excluded warm-up and seven measured repetitions and retained exact
+result identities. Every commit passed its directly affected timing, lifecycle, authority,
+recovery, dispatcher, ownership, and determinism tests, followed by routine pytest and both Ruff
+checks before commit.
+
+The matched post-batch `ITIMER_PROF` run used the same fixture, seed, empty project root, Python
+3.12.12, and 100 Hz main-planner-thread sampler at code commit `fe5f3e07a`. It collected 25,233
+samples over 274.006730 seconds, compared with 25,915 samples over 283.300141 seconds before the
+batch, a 3.28% reduction in profiled wall time. Stack-level sample-family comparison showed:
+
+- timing staging/authentication: 7.031% to 0.904%;
+- source-clock rendered-key preparation: 0.216% to 0%;
+- the two dispatcher source-plan copies: 2.149% to 0.032%;
+- acknowledged receipt collection callback: 3.014% to 2.723%;
+- queue/notification work: 3.002% to 2.881%.
+
+The exact UTC function remained visible at 4.026% because the optimized identity-return call still
+appears as the sampled leaf, and lifecycle digest-map access measured 3.801% after direct digest
+reuse. Their focused benchmarks provide the attributable before/after measurements. No remaining
+approved removable family met the 5% whole-run threshold.
+
+The first unprofiled completed fixture measured 249.08 seconds, 0.59% above the retained 247.61
+second pre-batch median, so the planned two additional measurements were run. The three Batch 2
+times were 249.08, 231.35, and 233.41 seconds; their median is 233.41 seconds and their
+max-to-min spread is 7.60% of the median. Batch 2 therefore removed 14.20 seconds, or 5.73% of
+wall-clock runtime, and increased completed-fixture throughput by 6.08%. Relative to the retained
+540.06-second `2859218b` baseline, current generation is 2.31 times faster and uses 56.78% less
+wall-clock time.
+
+`compare_generated_outputs` found no missing, extra, byte, or normalized differences between the
+pre-batch and post-batch completed profile artifacts. The complete `data/**` trees and included
+root JSON artifacts are byte-identical. The fixture digest remained
+`a222f484b6c038f4da23b1b4db0315a207c71b15b83aaa38b7a9cf52bb16b700`.
+
+The final routine gate passed 7,967 tests with 5 skipped and 1,990 deselected. One preceding
+routine attempt saw the hash-distribution-sensitive collection-deployment candidate bound at 29
+instead of 24; the isolated test and complete fresh-process rerun both passed without code changes.
+The final slow gate passed all 1,761 selected tests with 8,201 deselected in 416.27 seconds, so no
+environmental exception was needed. Ruff lint and format checks passed; no soak tests were run.
+
+Emitter queue batching remains deferred. Queue/notification work is only 2.881% inclusive, below
+the approved 5% threshold. Even eliminating it completely would cap the Amdahl-law gain near 3%,
+while practical batching would recover less and would introduce ordering, flush, and recovery
+complexity. Reconsider only if a future matched profile places the related family above 5%.
