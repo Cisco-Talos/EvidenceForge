@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Cisco-Talos/EvidenceForge/actions/workflows/ci.yml/badge.svg)](https://github.com/Cisco-Talos/EvidenceForge/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 Generate realistic synthetic security logs for cybersecurity threat hunting training and research.
 
@@ -343,7 +343,7 @@ full-dataset runner command, and failure report details.
 
 ### Tech Stack
 
-- Python 3.11+ with [uv](https://docs.astral.sh/uv/)
+- Python 3.12+ with [uv](https://docs.astral.sh/uv/)
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI

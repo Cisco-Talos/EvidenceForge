@@ -724,7 +724,7 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 ### 6.1 Tech Stack
 
 **Core:**
-- Python 3.11+ (for latest type hint features)
+- Python 3.12+ (for the supported runtime and typing features)
 - uv for package management and script/tool support
 - Pydantic v2 for data validation and schema management
 
