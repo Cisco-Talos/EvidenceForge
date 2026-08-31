@@ -268,6 +268,7 @@ def _committed_receipt(
     stable_id: str = "detached-smb-transport",
     lifecycle_rich: bool = False,
     authenticate: bool = True,
+    acknowledge: bool = True,
 ) -> tuple[GeneratorLifecycleAuthority, LifecyclePreparedNetworkReceipt]:
     authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
         stable_id=stable_id, lifecycle_rich=lifecycle_rich
@@ -280,7 +281,8 @@ def _committed_receipt(
     )
     if authenticate:
         assert authority.authenticates_prepared_network_receipt(root, result.receipt)
-    authority.acknowledge_prepared_network_transaction(root, result)
+    if acknowledge:
+        authority.acknowledge_prepared_network_transaction(root, result)
     return authority, result.receipt
 
 
@@ -697,13 +699,15 @@ def test_detach_lost_return_reconstructs_an_equal_fresh_binding() -> None:
     assert authority.authenticates_detached_network_receipt_binding(observed)
 
 
-def test_weak_issuance_authority_reclaims_without_census_change() -> None:
+def test_acknowledged_receipt_facts_reclaim_without_census_change() -> None:
     authority, receipt = _committed_receipt(stable_id="issuance-authority-gc")
     receipt_reference = weakref.ref(receipt)
     census = authority.census()
     authorities = authority._prepared_network_receipt_authorities
+    acknowledged = authority._acknowledged_prepared_network_receipts
 
-    assert len(authorities) == 1
+    assert authorities == {}
+    assert len(acknowledged) == 1
     authority.detach_prepared_network_receipt(receipt)
     assert authority.census() == census
 
@@ -712,6 +716,11 @@ def test_weak_issuance_authority_reclaims_without_census_change() -> None:
 
     assert receipt_reference() is None
     assert authorities == {}
+    planner = authority._source_timing_planner
+    assert planner is not None
+    with planner._preparation_authority_lock:
+        authority._prune_acknowledged_prepared_network_receipts_locked()
+    assert acknowledged == {}
     assert authority.census() == census
 
 
@@ -759,6 +768,7 @@ def test_issuance_authority_capacity_gc_and_reuse_matrix() -> None:
 
     authority.acknowledge_prepared_network_transaction(first_root, first_result)
     assert issuances == {}
+    assert records == {}
     first_receipt_ref = weakref.ref(first_result.receipt)
     del first_lifecycle, first_result, first_rng, first_root, first_timing
     gc.collect()
@@ -787,7 +797,7 @@ def test_issuance_authority_capacity_gc_and_reuse_matrix() -> None:
 def test_detach_count_does_not_grow_authority_or_public_census() -> None:
     authority, receipt = _committed_receipt(stable_id="bounded-detach-count")
     census = authority.census()
-    records = authority._prepared_network_receipt_authorities
+    records = authority._acknowledged_prepared_network_receipts
     retained_record = next(iter(records.values()))
 
     bindings = tuple(authority.detach_prepared_network_receipt(receipt) for _ in range(1_000))
@@ -825,6 +835,7 @@ def test_acknowledged_issuance_retains_no_root_or_timing_preparation() -> None:
     binding = authority.detach_prepared_network_receipt(result.receipt)
     authority.acknowledge_prepared_network_transaction(root, result)
     assert authority._prepared_network_receipt_issuances == {}
+    assert authority._prepared_network_receipt_authorities == {}
     del lifecycle_token, owner_rng, root, timing
     gc.collect()
 
@@ -833,7 +844,10 @@ def test_acknowledged_issuance_retains_no_root_or_timing_preparation() -> None:
 
 
 def test_uncommitted_or_tampered_private_record_fails_closed() -> None:
-    authority, receipt = _committed_receipt(stable_id="private-record-fail-closed")
+    authority, receipt = _committed_receipt(
+        stable_id="private-record-fail-closed",
+        acknowledge=False,
+    )
     record = next(iter(authority._prepared_network_receipt_authorities.values()))
     object.__setattr__(record, "committed", False)
 
@@ -842,7 +856,10 @@ def test_uncommitted_or_tampered_private_record_fails_closed() -> None:
 
 
 def test_reclaimed_source_authority_is_stale_and_rejected() -> None:
-    authority, receipt = _committed_receipt(stable_id="reclaimed-source-authority")
+    authority, receipt = _committed_receipt(
+        stable_id="reclaimed-source-authority",
+        acknowledge=False,
+    )
     records = authority._prepared_network_receipt_authorities
     records.pop(id(receipt))
 
@@ -1213,6 +1230,7 @@ def test_prepared_network_acknowledgement_is_exact_and_generation_cas() -> None:
     assert authority._prepared_network_receipt_issuances == {}
     assert authority._prepared_network_receipt_issuance_generations == {}
     assert authority._prepared_network_receipt_issuance_receipts == {}
+    assert authority._prepared_network_receipt_authorities == {}
     assert not authority.acknowledge_prepared_network_transaction_if_retained(root, result)
     with pytest.raises(StateError, match="root failed|timing capability"):
         authority.materialize_prepared_network_transaction(

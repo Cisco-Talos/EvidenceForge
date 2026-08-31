@@ -1880,6 +1880,16 @@ class _PreparedNetworkReceiptAuthority:
     receipt_graph: _PreparedNetworkGraphSnapshot | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _AcknowledgedPreparedNetworkReceiptFacts:
+    """Minimal exact identity and scalar facts retained after acknowledgement."""
+
+    receipt_ref: ReferenceType[LifecyclePreparedNetworkReceipt]
+    timing_receipt_id: int
+    detached_values: tuple[object, ...]
+    detached_proof: str
+
+
 _PREPARED_NETWORK_RECEIPT_AUTHORITY_FIELD_NAMES = (
     "receipt_ref",
     "timing_authority",
@@ -2651,6 +2661,10 @@ class GeneratorLifecycleAuthority:
         self._prepared_network_receipt_authorities: dict[
             int,
             _PreparedNetworkReceiptAuthority,
+        ] = {}
+        self._acknowledged_prepared_network_receipts: dict[
+            int,
+            _AcknowledgedPreparedNetworkReceiptFacts,
         ] = {}
         self._detached_network_receipt_bindings: WeakValueDictionary[
             int, LifecycleDetachedNetworkReceiptBinding
@@ -5206,6 +5220,10 @@ class GeneratorLifecycleAuthority:
             self,
             "_prepared_network_receipt_authorities",
         )
+        acknowledged_receipts = _object_getattribute(
+            self,
+            "_acknowledged_prepared_network_receipts",
+        )
         issuance_lock = _object_getattribute(
             self,
             "_prepared_network_receipt_issuance_lock",
@@ -5456,6 +5474,17 @@ class GeneratorLifecycleAuthority:
                             )
                         if not exact:
                             raise StateError("Prepared-network acknowledgement is not canonical")
+                    acknowledged_receipts[id(receipt)] = _AcknowledgedPreparedNetworkReceiptFacts(
+                        receipt_ref=_weak_ref(receipt),
+                        timing_receipt_id=timing_receipt_id,
+                        detached_values=expected_detached_values,
+                        detached_proof=expected_detached_proof,
+                    )
+                    removed_authority = receipt_authorities.pop(id(receipt), None)
+                    if removed_authority is not retained_authority:
+                        raise AssertionError(
+                            "Prepared-network receipt authority changed during acknowledgement CAS"
+                        )
                     retained.claim_ref = None
                     removed_record = issuances.pop(key, None)
                     if removed_record is not record:
@@ -5470,13 +5499,22 @@ class GeneratorLifecycleAuthority:
                         raise AssertionError(
                             "Prepared-network receipt generation changed during CAS"
                         )
-            _ = removed_record
+            # Keep both retired authority records alive until their locks are released.
+            _ = removed_authority, removed_record
             return True
         except BaseException as error:
             release_claim()
             if type(error) is StateError:
                 raise
             raise StateError("Prepared-network acknowledgement is not canonical") from error
+
+    def _prune_acknowledged_prepared_network_receipts_locked(self) -> None:
+        """Drop dead compact acknowledgements while the timing authority lock is held."""
+
+        records = self._acknowledged_prepared_network_receipts
+        for receipt_id, retained in tuple(records.items()):
+            if retained.receipt_ref() is None and records.get(receipt_id) is retained:
+                records.pop(receipt_id, None)
 
     def _reserve_prepared_network_receipt_authority(
         self,
@@ -5518,13 +5556,16 @@ class GeneratorLifecycleAuthority:
         timing_receipt_id = id(timing_receipt)
         owner_ref = _weak_ref(self)
         with authority_lock:
+            acknowledged = self._acknowledged_prepared_network_receipts
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
+                self._prune_acknowledged_prepared_network_receipts_locked()
             timing_authority = timing_authorities.get(timing_receipt_id)
             if (
                 timing_authority is None
                 or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
             ):
                 raise StateError("Prepared-network timing receipt authority is not active")
-            if len(self._prepared_network_receipt_authorities) >= capacity:
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
                 raise StateError("Prepared-network receipt authority capacity is exhausted")
             if receipt_id in self._prepared_network_receipt_authorities:
                 raise StateError("Prepared-network receipt identity is already retained")
@@ -5587,11 +5628,14 @@ class GeneratorLifecycleAuthority:
             _member_set(descriptor, authority_record, value)
 
         with authority_lock:
+            acknowledged = self._acknowledged_prepared_network_receipts
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
+                self._prune_acknowledged_prepared_network_receipts_locked()
             retained_timing_authority = timing_authorities.get(timing_receipt_id)
             if (
                 retained_timing_authority is not timing_authority
                 or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
-                or len(self._prepared_network_receipt_authorities) >= capacity
+                or len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity
                 or receipt_id in self._prepared_network_receipt_authorities
             ):
                 raise StateError("Prepared-network receipt authority reservation changed")
@@ -6464,21 +6508,36 @@ class GeneratorLifecycleAuthority:
             return False
         with planner._preparation_authority_lock:
             retained = self._prepared_network_receipt_authorities.get(id(receipt))
+            if type(retained) is _PreparedNetworkReceiptAuthority:
+                if (
+                    retained.receipt_ref() is not receipt
+                    or not retained.committed
+                    or retained.generation <= 0
+                ):
+                    return False
+                timing_receipt_id = retained.timing_receipt_id
+                timing_authority = planner._committed_preparation_receipts.get(timing_receipt_id)
+                if timing_authority is not retained.timing_authority:
+                    return False
+            else:
+                acknowledged = self._acknowledged_prepared_network_receipts.get(id(receipt))
+                if (
+                    type(acknowledged) is not _AcknowledgedPreparedNetworkReceiptFacts
+                    or acknowledged.receipt_ref() is not receipt
+                    or object.__getattribute__(receipt, "_integrity_token")
+                    != acknowledged.detached_proof
+                ):
+                    return False
+                timing_receipt_id = acknowledged.timing_receipt_id
+                timing_authority = planner._committed_preparation_receipts.get(timing_receipt_id)
+            timing_receipt = object.__getattribute__(receipt, "_timing_receipt")
             if (
-                type(retained) is not _PreparedNetworkReceiptAuthority
-                or retained.receipt_ref() is not receipt
-                or not retained.committed
-                or retained.generation <= 0
+                timing_authority is None
+                or not timing_authority.committed
+                or id(timing_receipt) != timing_receipt_id
             ):
                 return False
-            timing_authority = planner._committed_preparation_receipts.get(
-                retained.timing_receipt_id
-            )
-            if timing_authority is not retained.timing_authority:
-                return False
-            if timing_authority is None or not timing_authority.committed:
-                return False
-            return timing_authority.receipt_ref() is receipt.timing_receipt
+            return timing_authority.receipt_ref() is timing_receipt
 
     def _validate_prepared_network_transaction(
         self,
@@ -9656,19 +9715,31 @@ def _detach_trusted_prepared_network_receipt(
         raise StateError("Detached binding requires an authentic prepared-network receipt")
     with planner._preparation_authority_lock:
         retained = self._prepared_network_receipt_authorities.get(id(receipt))
+        if type(retained) is _PreparedNetworkReceiptAuthority:
+            receipt_ref = retained.receipt_ref
+            detached_values = retained.detached_values
+            detached_proof = retained.detached_proof
+            committed = retained.committed
+        else:
+            acknowledged = self._acknowledged_prepared_network_receipts.get(id(receipt))
+            if type(acknowledged) is not _AcknowledgedPreparedNetworkReceiptFacts:
+                raise StateError("Detached binding requires an authentic prepared-network receipt")
+            receipt_ref = acknowledged.receipt_ref
+            detached_values = acknowledged.detached_values
+            detached_proof = acknowledged.detached_proof
+            committed = True
         if (
-            type(retained) is not _PreparedNetworkReceiptAuthority
-            or retained.receipt_ref() is not receipt
-            or not retained.committed
-            or type(retained.detached_values) is not tuple
-            or len(retained.detached_values) != len(_DETACHED_NETWORK_BINDING_FIELD_NAMES) - 1
-            or type(retained.detached_proof) is not str
-            or not retained.detached_proof
+            receipt_ref() is not receipt
+            or not committed
+            or type(detached_values) is not tuple
+            or len(detached_values) != len(_DETACHED_NETWORK_BINDING_FIELD_NAMES) - 1
+            or type(detached_proof) is not str
+            or not detached_proof
         ):
             raise StateError("Detached binding requires an authentic prepared-network receipt")
         binding = LifecycleDetachedNetworkReceiptBinding(
-            *retained.detached_values,
-            retained.detached_proof,
+            *detached_values,
+            detached_proof,
         )
         self._detached_network_receipt_bindings[id(binding)] = binding
         return binding
