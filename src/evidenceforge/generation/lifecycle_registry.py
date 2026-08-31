@@ -1225,6 +1225,7 @@ class _PreparedTransportPartitionStart:
     existing: _TransportEntry | None
     snapshot: TransportLifecycleSnapshot
     packed_row: bytes | None
+    object_route_digest: int
     committed: bool = False
 
 
@@ -2136,6 +2137,20 @@ class _TransportIndex:
         handle = route.get(semantic_id)
         return self.get_by_handle(handle) if handle is not None else None
 
+    def object_route_digest(self, object_id: str) -> int:
+        """Return the exact digest owned by this transport object route."""
+
+        return self._objects.digest(object_id)
+
+    def get_digest(self, object_id: str, route_digest: int) -> _TransportEntry | None:
+        """Resolve one prehashed object route and verify its canonical identity."""
+
+        handle = self._objects.get_digest(route_digest)
+        entry = self.get_by_handle(handle) if handle is not None else None
+        if entry is not None and entry.identity.object_id != object_id:
+            raise StateError("Lifecycle transport object digest collision")
+        return entry
+
     def get(self, object_id: str) -> _TransportEntry | None:
         entry = self._entry_for_route(self._objects, object_id)
         if entry is None:
@@ -2152,7 +2167,13 @@ class _TransportIndex:
         row = _pack_transport_row(identity, transition)
         return self.add_prepared(identity, row)
 
-    def add_prepared(self, identity: TransportLifecycleIdentity, row: bytes) -> int:
+    def add_prepared(
+        self,
+        identity: TransportLifecycleIdentity,
+        row: bytes,
+        *,
+        object_route_digest: int | None = None,
+    ) -> int:
         """Insert one prevalidated packed transport row using primitive writes only."""
 
         handle = self._rows.insert(row)
@@ -2162,7 +2183,12 @@ class _TransportIndex:
         else:
             self._generations[handle] += 1
             self._active_binding_counts[handle] = 0
-        self._objects[identity.object_id] = handle
+        route_digest = (
+            self.object_route_digest(identity.object_id)
+            if object_route_digest is None
+            else object_route_digest
+        )
+        self._objects.set_digest(route_digest, handle)
         return handle
 
     def remove(self, object_id: str) -> _TransportEntry | None:
@@ -3041,7 +3067,8 @@ class _LifecyclePartition:
     ) -> _PreparedTransportPartitionStart:
         """Validate and pack one transport start without publishing it."""
 
-        existing = self._transports.get(identity.object_id)
+        object_route_digest = self._transports.object_route_digest(identity.object_id)
+        existing = self._transports.get_digest(identity.object_id, object_route_digest)
         if existing is not None:
             if existing.identity == identity and self._entry_has_transition(existing, transition):
                 return _PreparedTransportPartitionStart(
@@ -3050,13 +3077,17 @@ class _LifecyclePartition:
                     existing=existing,
                     snapshot=self._transport_snapshot(existing),
                     packed_row=None,
+                    object_route_digest=object_route_digest,
                 )
             raise StateError(
                 f"Transport lifecycle object {identity.object_id} is already registered"
             )
         self._reject_behind_watermark(identity.opened_at, "transport start")
         self._reject_overlapping_transport_tuple(identity)
-        self._validate_transition_claim(transition)
+        self._validate_transition_claim(
+            transition,
+            subject_route_digest=object_route_digest,
+        )
         digest = _transition_digest_value(transition)
         return _PreparedTransportPartitionStart(
             identity=identity,
@@ -3080,6 +3111,7 @@ class _LifecyclePartition:
                 latest_hold_until=None,
             ),
             packed_row=_pack_transport_row(identity, transition),
+            object_route_digest=object_route_digest,
         )
 
     def _commit_prepared_transport_locked(
@@ -3096,7 +3128,11 @@ class _LifecyclePartition:
         row = prepared.packed_row
         assert row is not None
         identity = prepared.identity
-        handle = self._transports.add_prepared(identity, row)
+        handle = self._transports.add_prepared(
+            identity,
+            row,
+            object_route_digest=prepared.object_route_digest,
+        )
         self._transport_starts.add(
             handle,
             self._transport_group(identity.tuple_key),
@@ -5974,7 +6010,12 @@ class _LifecyclePartition:
             == transition.transition_id
         )
 
-    def _validate_transition_claim(self, transition: LifecycleTransition) -> None:
+    def _validate_transition_claim(
+        self,
+        transition: LifecycleTransition,
+        *,
+        subject_route_digest: int | None = None,
+    ) -> None:
         existing = self._transitions.get(transition.transition_id)
         if existing is not None and existing != transition:
             raise StateError(
@@ -5999,7 +6040,14 @@ class _LifecyclePartition:
                 f"{transition.action_id}[{transition.transition_ordinal}] for "
                 f"{transition.subject.object_id}"
             )
-        entry = self._entry(transition.subject)
+        entry = (
+            self._transports.get_digest(
+                transition.subject.object_id,
+                subject_route_digest,
+            )
+            if transition.subject.kind == "transport" and subject_route_digest is not None
+            else self._entry(transition.subject)
+        )
         committed_id: str | None = None
         if entry is not None:
             commit_key = (transition.action_id, transition.transition_ordinal)
@@ -6732,21 +6780,20 @@ class _LifecycleRoutes:
                 lock.release()
 
     def get_locked(self, kind: str, semantic_id: str) -> object | None:
-        shard = self._shards[self._shard_id(kind, semantic_id)]
+        route_hash = self._route_hash(kind, semantic_id)
+        shard = self._shards[route_hash % self._shard_count]
         if kind in _PACKED_ROUTE_KINDS:
             route_map = shard.packed_maps.get(kind)
-            return None if route_map is None else route_map.get(semantic_id)
+            return None if route_map is None else route_map.get_digest(route_hash)
         if kind == "transition":
             route_map = shard.route_map(kind, create=False)
-            retained = (
-                None if route_map is None else route_map.get(self._route_hash(kind, semantic_id))
-            )
+            retained = None if route_map is None else route_map.get(route_hash)
             if retained is not None:
                 return retained
-            start_locator = shard.start_transitions.get(semantic_id)
+            start_locator = shard.start_transitions.get_digest(route_hash)
             return None if start_locator is None else -(start_locator + 1)
         route_map = shard.route_map(kind, create=False)
-        return None if route_map is None else route_map.get(self._route_hash(kind, semantic_id))
+        return None if route_map is None else route_map.get(route_hash)
 
     def get_entity_with_cached_snapshot(
         self,
@@ -6796,7 +6843,8 @@ class _LifecycleRoutes:
             self.invalidate_snapshot_locked(subject.kind, subject.object_id)
 
     def set_locked(self, kind: str, semantic_id: str, value: object) -> None:
-        shard = self._shards[self._shard_id(kind, semantic_id)]
+        route_hash = self._route_hash(kind, semantic_id)
+        shard = self._shards[route_hash % self._shard_count]
         if kind in _PACKED_ROUTE_KINDS:
             if not isinstance(value, int) or value < 0:
                 raise TypeError(f"Packed lifecycle route {kind!r} requires a locator")
@@ -6804,30 +6852,30 @@ class _LifecycleRoutes:
             if route_map is None:
                 route_map = PackedUniqueDigestMap(b"lc-int-route")
                 shard.packed_maps[kind] = route_map
-            route_map[semantic_id] = value
+            route_map.set_digest(route_hash, value)
             return
         if kind == "transition" and isinstance(value, int) and value < 0:
-            shard.start_transitions[semantic_id] = -value - 1
+            shard.start_transitions.set_digest(route_hash, -value - 1)
             return
         route_map = shard.route_map(kind, create=True)
         assert route_map is not None
-        route_map[self._route_hash(kind, semantic_id)] = value
+        route_map[route_hash] = value
 
     def remove_locked(self, kind: str, semantic_id: str) -> bool:
-        shard = self._shards[self._shard_id(kind, semantic_id)]
+        route_hash = self._route_hash(kind, semantic_id)
+        shard = self._shards[route_hash % self._shard_count]
         if kind in {"service", "transport"}:
             shard.snapshot_cache.pop((kind, semantic_id), None)
         if kind in _PACKED_ROUTE_KINDS:
             route_map = shard.packed_maps.get(kind)
-            if route_map is None or route_map.pop(semantic_id) is None:
+            if route_map is None or route_map.pop_digest(route_hash) is None:
                 return False
             shard.deleted[kind] = shard.deleted.get(kind, 0) + 1
             return True
-        if kind == "transition" and shard.start_transitions.pop(semantic_id) is not None:
+        if kind == "transition" and shard.start_transitions.pop_digest(route_hash) is not None:
             shard.deleted[kind] = shard.deleted.get(kind, 0) + 1
             return True
         route_map = shard.route_map(kind, create=False)
-        route_hash = self._route_hash(kind, semantic_id)
         if route_map is None or route_hash not in route_map:
             return False
         route_map.pop(route_hash)
@@ -6838,7 +6886,18 @@ class _LifecycleRoutes:
         route_hash = self._route_hash(kind, semantic_id)
         shard = self._shards[route_hash % self._shard_count]
         with shard.lock:
-            return self.get_locked(kind, semantic_id)
+            if kind in _PACKED_ROUTE_KINDS:
+                route_map = shard.packed_maps.get(kind)
+                return None if route_map is None else route_map.get_digest(route_hash)
+            if kind == "transition":
+                route_map = shard.route_map(kind, create=False)
+                retained = None if route_map is None else route_map.get(route_hash)
+                if retained is not None:
+                    return retained
+                start_locator = shard.start_transitions.get_digest(route_hash)
+                return None if start_locator is None else -(start_locator + 1)
+            route_map = shard.route_map(kind, create=False)
+            return None if route_map is None else route_map.get(route_hash)
 
     def remove_many(self, removals: tuple[tuple[str, str], ...]) -> None:
         """Remove a deterministic watermark batch without an entry-sized rebuild."""
