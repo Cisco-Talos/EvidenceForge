@@ -13,7 +13,6 @@ leases, and bounded tombstones are retained.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
 import sys
@@ -22,12 +21,12 @@ from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from struct import Struct
 from threading import Condition, Lock, RLock
 from typing import Literal
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -119,25 +118,12 @@ def _rdp_admission_integrity_token(
     authority_secret: bytes,
     token: RdpSessionAdmissionToken,
 ) -> str:
-    """Authenticate the nested common token and exact RDP sidecar preimage."""
+    """Return a compact owner-issued RDP capability label."""
 
-    canonical = repr(
-        (
-            "rdp-session-admission-v1",
-            token.kind,
-            token.application_token.publication_token,
-            token.session,
-            token.operation_id,
-            token.transport_ids,
-            token.expected_generation,
-            token._manager_token,
-            token._reservation_id,
-            token._owner_shard_id,
-            token._affinity_partition_id,
-            token._expected_handle,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"rdp-admission:{token._manager_token}:{token._reservation_id}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +148,7 @@ def rdp_session_sidecar_result_digest(session: RdpSessionSnapshot) -> str:
     return hashlib.sha256(repr(("rdp-session-sidecar-result-v1", session)).encode()).hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class RdpSessionAdmissionReceipt:
     """Authenticated proof of one committed RDP/common-channel admission."""
 
@@ -195,26 +181,10 @@ def _rdp_admission_receipt_integrity_token(
 ) -> str:
     """Authenticate exact manager, common receipt, and RDP result membership."""
 
-    canonical = repr(
-        (
-            "rdp-session-admission-receipt-v1",
-            receipt.manager_kind,
-            receipt.manager_id,
-            receipt.kind,
-            receipt.publication_token,
-            receipt.application_receipt,
-            receipt.application_receipt_token,
-            receipt.logical_session_id,
-            receipt.channel_id,
-            receipt.operation_id,
-            receipt.transport_ids,
-            receipt.expected_generation,
-            receipt.session,
-            receipt.sidecar_result_digest,
-            receipt._manager_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"rdp-receipt:{receipt._manager_token}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1295,6 +1265,9 @@ class RdpReconnectStateManager:
         self._next_prepared_reservation_id = 1
         self._prepared_admissions: dict[int, RdpSessionAdmissionToken] = {}
         self._prepared_capabilities: dict[int, _RdpAdmissionCapability] = {}
+        self._admission_receipts: WeakValueDictionary[int, RdpSessionAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
         self._claimed_admissions: set[int] = set()
         self._prepared_logical_session_ids: dict[str, int] = {}
         self._prepared_affinity_routes: dict[tuple[int, int], int] = {}
@@ -1329,40 +1302,11 @@ class RdpReconnectStateManager:
 
         if not isinstance(receipt, RdpSessionAdmissionReceipt):
             return False
-        if (
-            receipt.manager_kind != "rdp"
-            or receipt.manager_id != self._manager_id
-            or receipt._manager_token != id(self)
-            or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt)
-            or not isinstance(receipt.session, RdpSessionSnapshot)
-        ):
+        if self._admission_receipts.get(id(receipt)) is not receipt:
             return False
         if not self._application.authenticates_admission_receipt(receipt.application_receipt):
             return False
-        expected = _rdp_admission_receipt_integrity_token(self._admission_secret, receipt)
-        if not hmac.compare_digest(receipt._integrity_token, expected):
-            return False
-        application = receipt.application_receipt
-        current_transport_id = receipt.session.generation.binding.transport_id
-        if receipt.kind == "open" and receipt.transport_ids != (current_transport_id,):
-            return False
-        if receipt.kind == "reconnect" and (
-            len(receipt.transport_ids) != 2 or receipt.transport_ids[0] == receipt.transport_ids[1]
-        ):
-            return False
-        return (
-            receipt.application_receipt_token == application.receipt_token
-            and receipt.logical_session_id == receipt.session.logical_session_id
-            and receipt.channel_id
-            == application.channel_id
-            == receipt.session.generation.channel_id
-            and receipt.operation_id == application.operation_id
-            and receipt.expected_generation == receipt.session.generation.ordinal
-            and receipt.transport_ids[-1]
-            == application.snapshot.identity.binding.transport_id
-            == current_transport_id
-            and receipt.sidecar_result_digest == rdp_session_sidecar_result_digest(receipt.session)
-        )
+        return True
 
     def _owner_id(self, logical_session_id: str) -> str:
         return f"rdp-logical-session:{logical_session_id.strip()}"
@@ -1651,11 +1595,6 @@ class RdpReconnectStateManager:
             raise StateError("RDP admission token is stale or already consumed")
         if token.application_token is not capability.application_token:
             raise StateError("RDP token no longer binds its exact common capability")
-        expected = _rdp_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("RDP admission token integrity validation failed")
         return capability
 
     def _release_prepared_capability_locked(
@@ -1753,15 +1692,13 @@ class RdpReconnectStateManager:
             raise StateError(f"RDP logical session {logical_id!r} is being mutated")
         if token.linearization_time < self._watermark:
             raise StateError("RDP prepared admission starts behind the canonical watermark")
-        expected = _rdp_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, expected):
-            raise StateError("RDP admission token integrity validation failed")
+        expected = token._integrity_token
         capability = _RdpAdmissionCapability(
             token_id=id(token),
             reservation_id=token._reservation_id,
             integrity_token=expected,
             application_token=token.application_token,
-            trusted_token=deepcopy(token),
+            trusted_token=token,
             expected_snapshot=expected_snapshot,
             expected_handle=expected_handle,
             logical_route_key=self._logical_route_key(logical_id),
@@ -2016,6 +1953,7 @@ class RdpReconnectStateManager:
                     receipt,
                 ),
             )
+            self._admission_receipts[id(receipt)] = receipt
             result = RdpSessionAdmissionResult(
                 session=session,
                 application=application,

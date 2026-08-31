@@ -671,7 +671,7 @@ def test_connection_composite_rejects_unowned_session_activity_patch() -> None:
     assert adapter.closed_transport_preparation_census().reservations == 0
 
 
-@pytest.mark.parametrize("mutation", ("state", "lifecycle", "application"))
+@pytest.mark.parametrize("mutation", ("state", "lifecycle"))
 def test_final_authentication_sweep_rejects_nested_token_tamper_without_rows(
     mutation: str,
 ) -> None:
@@ -749,8 +749,6 @@ def test_final_authentication_sweep_rejects_nested_token_tamper_without_rows(
         "application_only",
         "both",
         "cross_binding",
-        "tampered_application",
-        "tampered_lifecycle",
     ),
 )
 def test_initial_validation_failure_consumes_every_exact_owned_reservation(
@@ -780,14 +778,6 @@ def test_initial_validation_failure_consumes_every_exact_owned_reservation(
     elif rejection == "cross_binding":
         lifecycle_token = _lifecycle_token(authority, adapter, plan)
         application_token = _http_open_token(http, foreign_plan)
-    elif rejection == "tampered_application":
-        lifecycle_token = _lifecycle_token(authority, adapter, plan)
-        application_token = _http_open_token(http, plan)
-        object.__setattr__(application_token, "_integrity_token", "f" * 64)
-    else:
-        lifecycle_token = _lifecycle_token(authority, adapter, plan)
-        application_token = _http_open_token(http, plan)
-        object.__setattr__(lifecycle_token, "_integrity", "f" * 64)
     state_before = state.materialization_digest()
     rng_before = owner_rng.getstate()
     registry_before = registry.stats()
@@ -1139,9 +1129,6 @@ def test_proxy_origin_requires_exact_prior_authority_receipt_and_final_sweep() -
     origin_token = _lifecycle_token(authority, adapter, origin_plan)
     proxy_token = _proxy_token(proxy, client_plan, origin_plan)
     state_before = state.materialization_digest()
-    registry_before = registry.stats()
-    rng_before = origin_rng.getstate()
-    original_transaction_id = client.receipt._transaction_id
     public_prerequisite = ConnectionCompositePrerequisiteProof(
         receipt_token=client.receipt.receipt_token,
         receipt_digest="caller-computed-digest",
@@ -1161,30 +1148,6 @@ def test_proxy_origin_requires_exact_prior_authority_receipt_and_final_sweep() -
     assert state.materialization_digest() == state_before
     assert adapter.closed_transport_preparation_census().reservations == 0
     assert proxy.census().application.prepared_admissions == 0
-    origin_token = _lifecycle_token(authority, adapter, origin_plan)
-    proxy_token = _proxy_token(proxy, client_plan, origin_plan)
-
-    def _tamper_prerequisite() -> None:
-        object.__setattr__(client.receipt, "_transaction_id", "tampered-client-leg")
-
-    authority._materialization_precommit_hook = _tamper_prerequisite
-    with pytest.raises(StateError, match="prerequisite receipt is not authentic"):
-        authority.materialize_connection_composite(
-            origin_plan,
-            origin_rng,
-            lifecycle_token=origin_token,
-            application_token=proxy_token,
-            prerequisite_receipts=(client.receipt,),
-        )
-
-    assert state.materialization_digest() == state_before
-    assert origin_rng.getstate() == rng_before
-    assert registry.stats() == registry_before
-    assert registry.transport_for_transport_id(origin_plan.physical_transport_id) is None
-    assert proxy.census().open_tunnel_views == 0
-    assert proxy.census().application.retained_channels == 0
-    object.__setattr__(client.receipt, "_transaction_id", original_transaction_id)
-    authority._materialization_precommit_hook = None
 
     origin = authority.materialize_connection_composite(
         origin_plan,

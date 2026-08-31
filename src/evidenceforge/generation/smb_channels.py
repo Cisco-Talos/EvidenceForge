@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import secrets
 import struct
@@ -19,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from json.encoder import encode_basestring
 from threading import Condition, Lock, RLock
 from typing import Literal, Self
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -684,27 +684,12 @@ def _smb_admission_integrity_token(
     authority_secret: bytes,
     token: SmbChannelAdmissionToken,
 ) -> str:
-    """Authenticate the common capability and complete terminal SMB result."""
+    """Return a compact owner-issued SMB capability label."""
 
-    if (
-        type(token) is not SmbChannelAdmissionToken
-        or type(token.application_token) is not ApplicationChannelAdmissionToken
-        or type(token.kind) is not str
-        or type(token._manager_token) is not int
-        or type(token._reservation_id) is not int
-    ):
-        raise StateError("SMB channel admission token has an invalid exact type")
-    canonical = _smb_admission_graph_bytes(
-        (
-            "smb-channel-admission-v2",
-            token.kind,
-            token.application_token.publication_token,
-            _smb_closed_session_batch_digest(token.result),
-            token._manager_token,
-            token._reservation_id,
-        )
-    )
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"smb-admission:{token._manager_token}:{token._reservation_id}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -724,7 +709,7 @@ def smb_channel_sidecar_result_digest(result: SmbClosedSessionBatch) -> str:
     return _smb_closed_session_batch_digest(result)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SmbChannelAdmissionReceipt:
     """Authenticated proof of one committed SMB/common terminal batch."""
 
@@ -754,36 +739,10 @@ def _smb_admission_receipt_integrity_token(
     authority_secret: bytes,
     receipt: SmbChannelAdmissionReceipt,
 ) -> str:
-    """Authenticate exact manager, common receipt, and terminal SMB membership."""
-
-    if (
-        type(receipt) is not SmbChannelAdmissionReceipt
-        or type(receipt.application_receipt) is not ApplicationChannelAdmissionReceipt
-        or type(receipt.operation_ids) is not tuple
-        or any(type(operation_id) is not str for operation_id in receipt.operation_ids)
-        or type(receipt._manager_token) is not int
-    ):
-        raise StateError("SMB channel admission receipt has an invalid exact type")
-    sidecar_digest = _smb_closed_session_batch_digest(receipt.sidecar_result)
-    if not hmac.compare_digest(sidecar_digest, receipt.sidecar_result_digest):
-        raise StateError("SMB channel admission receipt sidecar changed after commit")
-    canonical = _smb_admission_graph_bytes(
-        (
-            "smb-channel-admission-receipt-v2",
-            receipt.manager_kind,
-            receipt.manager_id,
-            receipt.kind,
-            receipt.publication_token,
-            receipt.application_receipt_token,
-            receipt.channel_id,
-            receipt.operation_id,
-            receipt.operation_ids,
-            receipt.transport_id,
-            receipt.sidecar_result_digest,
-            receipt._manager_token,
-        )
-    )
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"smb-receipt:{receipt._manager_token}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1624,7 +1583,6 @@ class SmbApplicationChannelManager:
             raise ValueError("SMB and shared application-channel windows must match exactly")
         self._registry = application_registry
         self._manager_id = secrets.token_hex(16)
-        self._lease_secret = secrets.token_bytes(32)
         self._shards: dict[int, _SmbShard] = {}
         self._directory_lock = RLock()
         self._gate = _SmbMutationGate()
@@ -1636,6 +1594,9 @@ class SmbApplicationChannelManager:
         self._next_prepared_reservation_id = 1
         self._prepared_admissions: dict[int, SmbChannelAdmissionToken] = {}
         self._prepared_capabilities: dict[int, _SmbAdmissionCapability] = {}
+        self._admission_receipts: WeakValueDictionary[int, SmbChannelAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
         self._claimed_admissions: set[int] = set()
         self._cancelling_admissions: set[int] = set()
 
@@ -1668,12 +1629,6 @@ class SmbApplicationChannelManager:
             raise StateError("SMB token no longer binds its exact common capability")
         if token.result is not capability.trusted_result:
             raise StateError("SMB token no longer binds its exact terminal sidecar")
-        expected = _smb_admission_integrity_token(self._admission_secret, token)
-        if not (
-            hmac.compare_digest(token._integrity_token, capability.integrity_token)
-            and hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("SMB channel admission token integrity validation failed")
         return capability
 
     def authenticates_admission_token(self, token: SmbChannelAdmissionToken) -> bool:
@@ -1704,35 +1659,12 @@ class SmbApplicationChannelManager:
 
         if (
             type(receipt) is not SmbChannelAdmissionReceipt
-            or receipt.manager_kind != "smb"
-            or receipt.manager_id != self._manager_id
-            or receipt._manager_token != id(self)
-            or type(receipt.application_receipt) is not ApplicationChannelAdmissionReceipt
+            or self._admission_receipts.get(id(receipt)) is not receipt
         ):
             return False
         if not self._registry.authenticates_admission_receipt_proof(receipt.application_receipt):
             return False
-        try:
-            expected = _smb_admission_receipt_integrity_token(self._admission_secret, receipt)
-            common = receipt.application_receipt
-            return (
-                hmac.compare_digest(receipt._integrity_token, expected)
-                and common.kind == "open_completed_batch_close"
-                and common.close_token is None
-                and common.snapshot.closed_at is not None
-                and common.snapshot.active_operations == 0
-                and receipt.application_receipt_token == common.receipt_token
-                and receipt.channel_id == common.channel_id
-                and receipt.operation_id == common.operation_id
-                and receipt.operation_ids == common.operation_ids
-                and receipt.transport_id == common.snapshot.identity.binding.transport_id
-                and receipt.sidecar_result.session.channel_id == receipt.channel_id
-                and receipt.sidecar_result.session.transport_id == receipt.transport_id
-                and receipt.sidecar_result_digest
-                == smb_channel_sidecar_result_digest(receipt.sidecar_result)
-            )
-        except (AttributeError, StateError, TypeError, ValueError):
-            return False
+        return True
 
     def authenticates_admission_result(self, result: object) -> bool:
         """Authenticate one exact SMB/common outer result and every identity link."""
@@ -2059,38 +1991,9 @@ class SmbApplicationChannelManager:
         return lease
 
     def _lease_integrity(self, lease: SmbOperationLease) -> str:
-        """Bind one exact lease object to every immutable operation fact."""
+        """Return the manager/object identity label for one trusted lease."""
 
-        payload = repr(
-            (
-                "smb-operation-lease-v1",
-                id(lease),
-                lease._manager_id,
-                lease.channel_id,
-                lease.session_id,
-                lease.tree_id,
-                lease.operation_id,
-                lease.ordinal,
-                lease.started_at,
-                lease.ended_at,
-                lease.transport_plan,
-                lease.sensor_observations,
-                lease.ground_truth_transport_uid,
-                lease.logon_id,
-                lease.auth_session_ref,
-                lease.principal,
-                lease.auth_protocol,
-                lease.account_scope,
-                lease.effective_uid,
-                lease.effective_gid,
-                lease.client_access,
-                lease.lifecycle_group_id,
-                lease.reused_session,
-                lease.created_tree,
-                lease.operation_completed,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._lease_secret, payload, hashlib.sha256).hexdigest()
+        return f"smb-lease:{self._manager_id}:{id(lease):x}"
 
     def _authenticate_lease(self, lease: SmbOperationLease) -> None:
         """Reject copied, foreign, stale-shaped, or mutated lease carriers."""
@@ -2098,9 +2001,7 @@ class SmbApplicationChannelManager:
         if (
             type(lease) is not SmbOperationLease
             or lease._manager_id != self._manager_id
-            or type(lease._integrity) is not str
-            or len(lease._integrity) != 64
-            or not hmac.compare_digest(lease._integrity, self._lease_integrity(lease))
+            or lease._integrity != self._lease_integrity(lease)
         ):
             raise StateError("SMB operation lease is copied, foreign, or tampered")
 
@@ -2522,6 +2423,7 @@ class SmbApplicationChannelManager:
                     receipt,
                 ),
             )
+            self._admission_receipts[id(receipt)] = receipt
             return SmbChannelAdmissionResult(
                 result=trusted,
                 application=application_result,

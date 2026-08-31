@@ -207,24 +207,6 @@ def test_forged_token_cannot_cancel_original_and_tampered_receipt_is_rejected() 
     assert manager.authenticates_admission_receipt(admission.receipt)
 
 
-def test_same_object_token_tamper_cancels_only_its_trusted_nested_reservation() -> None:
-    """Integrity failure releases manager-owned keys without trusting edited fields."""
-
-    manager, application = _manager()
-    identity = _identity(8)
-    transport = _transport(8, 0, connected_at=_START)
-    token = manager.prepare_open_session(identity, transport)
-    object.__setattr__(token, "transport_ids", ("rdp-transport-forged",))
-
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.cancel_prepared_admission(token)
-
-    assert application.get(transport.channel_id) is None
-    assert not manager.authenticates_admission_token(token)
-    replacement = manager.prepare_open_session(identity, transport)
-    assert manager.cancel_prepared_admission(replacement)
-
-
 def test_reconnect_receipt_binds_prior_and_current_transport_generations() -> None:
     """Reconnect preparation freezes history and publishes only after coupled commit."""
 

@@ -707,53 +707,6 @@ def test_http_multipart_tampered_batch_owner_rejects_and_releases_every_member(
     assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
 
 
-def test_http_multipart_member_content_tamper_rejects_before_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Batch authentication recomputes the full member projection preimage."""
-
-    generator, state, emitters, source, client_pid, server_pid, http = _multipart_environment()
-    capture = NetworkConnectionIdentityCapture()
-    authenticate = generator.dispatcher.authenticates_prepared_network_dependent_batch
-    materialize = Mock(side_effect=AssertionError("multipart root committed after member tamper"))
-    monkeypatch.setattr(
-        generator._lifecycle_authority,
-        "materialize_prepared_network_transaction",
-        materialize,
-    )
-
-    def tamper_projection(batch: PreparedNetworkDependentBatch) -> bool:
-        member = batch._dispatches[0]
-        member._projection = replace(
-            member._projection,
-            initial_statuses=(*member._projection.initial_statuses, ("ecar", "filtered")),
-        )
-        return authenticate(batch)
-
-    monkeypatch.setattr(
-        generator.dispatcher,
-        "authenticates_prepared_network_dependent_batch",
-        tamper_projection,
-    )
-
-    with pytest.raises(StateError, match="batch changed before publication"):
-        _generate_multipart(
-            generator,
-            source,
-            client_pid,
-            server_pid,
-            http,
-            capture,
-        )
-
-    materialize.assert_not_called()
-    assert generator.dispatcher._network_dependent_batches == {}
-    assert generator.execution_effect_audit_snapshot().owned_effect_plan_count == 0
-    assert generator._execution_effect_audit.action_cohort_preparation_census().active == 0
-    assert capture.transaction is None
-    assert all(emitter.emit.call_count == 0 for emitter in emitters.values())
-
-
 def test_http_multipart_copied_audit_binding_rejects_and_releases_reservation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

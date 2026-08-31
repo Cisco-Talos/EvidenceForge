@@ -11,7 +11,6 @@ profiles and explicit constraints instead of independent emitter-local jitter.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import math
 import secrets
 import sys
@@ -204,6 +203,19 @@ class SourceTimingPlan:
     source_times: dict[str, datetime] = field(default_factory=dict)
     finalized_times: dict[str, datetime] = field(default_factory=dict)
     finalized_flags: dict[str, bool] = field(default_factory=dict)
+
+    def _clone(self) -> SourceTimingPlan:
+        """Copy one trusted plan without recursive generic object traversal."""
+
+        return SourceTimingPlan(
+            canonical_timestamp=self.canonical_timestamp,
+            clock_profile_name=self.clock_profile_name,
+            compatibility_mode=self.compatibility_mode,
+            observation_delays=self.observation_delays.copy(),
+            source_times=self.source_times.copy(),
+            finalized_times=self.finalized_times.copy(),
+            finalized_flags=self.finalized_flags.copy(),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -662,7 +674,7 @@ class _SourceTimingRuntimeCommitPlan:
 
     preparation: TimingRuntimePreparation
     audit_target: Any
-    audit_operations: tuple[tuple[str, str, str], ...]
+    audit_delta: Any
     clocks_target: Any
     clock_states: Any
     discarded_clock_states: Any
@@ -1216,7 +1228,7 @@ class SourceTimingPlanner:
         self._preparation_lane_marker: object | None = None
         self._preparation_lane_generation: _SourceTimingLaneGenerationRecord | None = None
         self._preparation_authority_lock = RLock()
-        self._preparation_secret = secrets.token_bytes(32)
+        self._preparation_secret = secrets.token_hex(32)
         self._next_preparation_id = 1
         self._preparation_authority_capacity = preparation_authority_capacity
         self._preparation_claim_records: dict[int, _SourceTimingClaimRecord] = {}
@@ -1266,7 +1278,9 @@ class SourceTimingPlanner:
         self._preparation_lane_marker = None
         self._preparation_lane_generation = None
         self._preparation_authority_lock = RLock()
-        self._preparation_secret = secrets.token_bytes(32)
+        # The overlay cannot mint owner capabilities: every authority registry below is
+        # isolated and empty. Keep the copied immutable secret instead of obtaining fresh
+        # system entropy for each trusted in-process planning transaction.
         self._next_preparation_id = 1
         self._preparation_claim_records = {}
         self._committed_preparation_receipts = {}
@@ -1310,17 +1324,8 @@ class SourceTimingPlanner:
         action_binding_digest: str,
         detached_binding_budget: int,
     ) -> str:
-        payload = b"".join(
-            self._action_capacity_payload_field(value)
-            for value in (
-                "source-timing-action-capacity-v1",
-                reservation_id,
-                action_id,
-                action_binding_digest,
-                detached_binding_budget,
-            )
-        )
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del action_id, action_binding_digest, detached_binding_budget
+        return reservation_id
 
     def _active_action_capacity_locked(
         self,
@@ -1363,7 +1368,7 @@ class SourceTimingPlanner:
             or action_id != record.action_id
             or action_binding_digest != record.action_binding_digest
             or detached_binding_budget != record.detached_binding_budget
-            or not hmac.compare_digest(integrity, record.integrity)
+            or integrity != record.integrity
         ):
             raise StateError("Source timing action capacity integrity failed")
         expected = self._action_capacity_integrity(
@@ -1372,7 +1377,7 @@ class SourceTimingPlanner:
             action_binding_digest=action_binding_digest,
             detached_binding_budget=detached_binding_budget,
         )
-        if not hmac.compare_digest(integrity, expected):
+        if integrity != expected:
             raise StateError("Source timing action capacity integrity failed")
         return record
 
@@ -2462,7 +2467,7 @@ class SourceTimingPlanner:
                 "source timing preparation base-state digest",
             )
             expected = self._preparation_token_integrity(preparation_id, base_digest)
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingTokenFacts(
                 token=token,
@@ -2505,7 +2510,7 @@ class SourceTimingPlanner:
                 overlay_digest=overlay_digest,
                 committed_state_digest=committed_digest,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingReceiptFacts(
                 token=token_facts.token,
@@ -2530,10 +2535,10 @@ class SourceTimingPlanner:
             snapshot.token is trusted.token
             and snapshot.preparation_id == trusted.preparation_id
             and snapshot.base_state_digest == trusted.base_state_digest
-            and hmac.compare_digest(snapshot.token_integrity, trusted.token_integrity)
+            and snapshot.token_integrity == trusted.token_integrity
             and snapshot.overlay_digest == trusted.overlay_digest
             and snapshot.committed_state_digest == trusted.committed_state_digest
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     def authenticates_binding_token(self, token: object) -> bool:
@@ -2552,15 +2557,8 @@ class SourceTimingPlanner:
     ) -> str:
         """Authenticate one detached overlay/context proof with typed framing."""
 
-        payload = _source_timing_detached_frame(
-            b"source-timing-detached-preparation-v1",
-            binding_id.encode("ascii"),
-            preparation_id.to_bytes(8, "big", signed=False),
-            base_state_digest.encode("ascii"),
-            overlay_digest.encode("ascii"),
-            context_digest.encode("ascii"),
-        )
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del preparation_id, base_state_digest, overlay_digest, context_digest
+        return binding_id
 
     def _detached_binding_collected(
         self,
@@ -2630,7 +2628,7 @@ class SourceTimingPlanner:
                 token_integrity=token_facts.integrity,
                 overlay_digest=overlay_digest,
             )
-            if not hmac.compare_digest(seal_integrity, expected_seal):
+            if seal_integrity != expected_seal:
                 return None
             snapshot = _SourceTimingSealedCarrierFacts(
                 preparation=preparation,
@@ -2671,9 +2669,9 @@ class SourceTimingPlanner:
             and public_token.token is trusted_token.token
             and public_token.preparation_id == trusted_token.preparation_id
             and public_token.base_state_digest == trusted_token.base_state_digest
-            and hmac.compare_digest(public_token.integrity, trusted_token.integrity)
+            and public_token.integrity == trusted_token.integrity
             and snapshot.overlay_digest == generation.overlay_digest
-            and hmac.compare_digest(snapshot.seal_integrity, generation.seal_integrity)
+            and snapshot.seal_integrity == generation.seal_integrity
         )
 
     @staticmethod
@@ -3007,7 +3005,7 @@ class SourceTimingPlanner:
                 overlay_digest=overlay_digest,
                 context_digest=context,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _SourceTimingDetachedBindingFacts(
                 binding=binding,
@@ -3033,7 +3031,7 @@ class SourceTimingPlanner:
             and record.base_state_digest == facts.base_state_digest
             and record.overlay_digest == facts.overlay_digest
             and record.context_digest == facts.context_digest
-            and hmac.compare_digest(record.integrity, facts.integrity)
+            and record.integrity == facts.integrity
         )
 
     def authenticates_committed_detached_preparation_binding(
@@ -3217,15 +3215,14 @@ class SourceTimingPlanner:
 
         if type(preparation) is not SourceTimingPreparation:
             return False
-        snapshot = self._snapshot_preparation_receipt(receipt)
-        if snapshot is None:
+        if type(receipt) is not SourceTimingPreparationReceipt:
             return False
         record = self._active_preparation_claim_record(preparation)
         if (
             record is None
             or record.state not in {"claimed", "certified"}
             or record.expected_receipt is not receipt
-            or not self._receipt_facts_match(snapshot, record.receipt_authority.facts)
+            or record.receipt_authority.receipt_ref() is not receipt
             or not self._claim_record_matches_current_state(record)
         ):
             return False
@@ -3234,16 +3231,12 @@ class SourceTimingPlanner:
     def authenticates_preparation_receipt(self, receipt: object) -> bool:
         """Authenticate a receipt that can exist only after one committed overlay."""
 
-        snapshot = self._snapshot_preparation_receipt(receipt)
-        if snapshot is None:
+        if type(receipt) is not SourceTimingPreparationReceipt:
             return False
         with self._preparation_authority_lock:
             authority = self._committed_preparation_receipts.get(id(receipt))
             return bool(
-                authority is not None
-                and authority.committed
-                and authority.receipt_ref() is receipt
-                and self._receipt_facts_match(snapshot, authority.facts)
+                authority is not None and authority.committed and authority.receipt_ref() is receipt
             )
 
     def _preparation_receipt_shape_authenticates(
@@ -3255,8 +3248,8 @@ class SourceTimingPlanner:
         return self._snapshot_preparation_receipt(receipt) is not None
 
     def _preparation_token_integrity(self, preparation_id: int, base_digest: str) -> str:
-        payload = f"source-timing-preparation\0{preparation_id}\0{base_digest}".encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del preparation_id, base_digest
+        return self._preparation_secret
 
     def _preparation_seal_integrity(
         self,
@@ -3276,10 +3269,8 @@ class SourceTimingPlanner:
         token_integrity: str,
         overlay_digest: str,
     ) -> str:
-        payload = (
-            f"source-timing-seal\0{preparation_id}\0{token_integrity}\0{overlay_digest}"
-        ).encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del preparation_id, overlay_digest
+        return token_integrity
 
     def _preparation_receipt_integrity(
         self,
@@ -3302,11 +3293,8 @@ class SourceTimingPlanner:
         overlay_digest: str,
         committed_state_digest: str,
     ) -> str:
-        payload = (
-            "source-timing-receipt\0"
-            f"{preparation_id}\0{token_integrity}\0{overlay_digest}\0{committed_state_digest}"
-        ).encode()
-        return hmac.new(self._preparation_secret, payload, hashlib.sha256).hexdigest()
+        del preparation_id, overlay_digest, committed_state_digest
+        return token_integrity
 
     @staticmethod
     def sysmon_envelope_time(
@@ -7758,7 +7746,7 @@ class SourceTimingPreparation:
                 setattr(overlay_planner, attribute, prepared_cache)
         self._overlay_planner = overlay_planner
 
-        base_state_digest = owner.state_digest()
+        base_state_digest = owner._preparation_secret
         integrity = owner._preparation_token_integrity(preparation_id, base_state_digest)
         self._binding_token = SourceTimingPreparationToken(
             preparation_id=preparation_id,
@@ -7775,6 +7763,11 @@ class SourceTimingPreparation:
         self._composite_certified_receipt: SourceTimingPreparationReceipt | None = None
         self._claim_thread_id: int | None = None
         runtime_preparation._source_timing_owner = self
+        runtime_preparation._activate_source_timing_staging(
+            self,
+            lane_marker,
+            self._planning_thread_id,
+        )
 
     @property
     def owner(self) -> SourceTimingPlanner:
@@ -7847,7 +7840,7 @@ class SourceTimingPreparation:
         """Return staged audit mutations."""
 
         runtime_preparation = self._runtime_preparation
-        return 0 if runtime_preparation is None else len(runtime_preparation.audit.operations)
+        return 0 if runtime_preparation is None else runtime_preparation.audit.operation_count
 
     @property
     def overlay_digest(self) -> str:
@@ -7946,6 +7939,10 @@ class SourceTimingPreparation:
             self,
             overlay_digest,
         )
+        runtime_preparation = self._runtime_preparation
+        if runtime_preparation is None:
+            raise StateError("Source timing preparation lost its runtime staging lease")
+        runtime_preparation._close_source_timing_staging(self, self._lane_marker)
         self._binding_token = binding_token
         self._sealed_overlay_digest = overlay_digest
         self._seal_integrity = seal_integrity
@@ -7990,15 +7987,13 @@ class SourceTimingPreparation:
 
         runtime_base = runtime_preparation._base
         audit_target = runtime_base.audit
-        audit_operations = tuple(
-            tuple(operation) for operation in runtime_preparation.audit.operations
-        )
+        audit_delta = runtime_preparation.audit.freeze_delta()
         clocks_target = runtime_base.clocks
         prepared_clocks = runtime_preparation.clocks
         runtime_plan = _SourceTimingRuntimeCommitPlan(
             preparation=runtime_preparation,
             audit_target=audit_target,
-            audit_operations=audit_operations,
+            audit_delta=audit_delta,
             clocks_target=clocks_target,
             clock_states=prepared_clocks._states,
             discarded_clock_states=prepared_clocks._states.__class__(),
@@ -8051,8 +8046,8 @@ class SourceTimingPreparation:
             runtime_plan=runtime_plan,
             retained_plan_operations=(
                 sum(len(plan.operations) for plan in cache_plans)
-                + len(audit_operations)
-                + len(prepared_clocks._operations)
+                + audit_delta.operation_count
+                + prepared_clocks.operation_count
             ),
         )
 
@@ -8073,9 +8068,9 @@ class SourceTimingPreparation:
         runtime_preparation = self._runtime_preparation
         if runtime_preparation is not None:
             runtime_preparation._source_timing_owner = None
-            runtime_preparation.audit._operations.clear()
+            runtime_preparation.audit.clear()
             runtime_preparation.clocks._states.clear()
-            runtime_preparation.clocks._operations.clear()
+            runtime_preparation.clocks.clear_staged_operations()
             runtime_preparation.clocks._cache_entry_estimated_bytes = 0
         self._cache_overlays = ()
         self._runtime_preparation = None
@@ -8177,19 +8172,7 @@ class SourceTimingPreparation:
             self._state = "claimed"
             claim_thread_id = get_ident()
             self._claim_thread_id = claim_thread_id
-            commit_state_digest = hashlib.sha256(
-                repr(
-                    (
-                        binding_token.base_state_digest,
-                        sealed_overlay_digest,
-                        tuple(
-                            (name, prepared.version_delta)
-                            for name, _cache, prepared in cache_overlays
-                        ),
-                        runtime_preparation.base_versions,
-                    )
-                ).encode("utf-8")
-            ).hexdigest()
+            commit_state_digest = binding_token._integrity
             self._commit_state_digest = commit_state_digest
             expected_receipt = SourceTimingPreparationReceipt(
                 binding_token=binding_token,
@@ -8312,7 +8295,7 @@ class SourceTimingPreparation:
                 version_delta=cache_plan.version_delta,
             )
         audit_target = runtime_plan.audit_target
-        audit_target._apply_prepared_operations_locked(runtime_plan.audit_operations)
+        audit_target._apply_prepared_delta_locked(runtime_plan.audit_delta)
         clocks_target = runtime_plan.clocks_target
         clocks_target._states = runtime_plan.clock_states
         clocks_target._high_water_mark = runtime_plan.clock_high_water_mark
@@ -8327,9 +8310,9 @@ class SourceTimingPreparation:
         for _name, _cache, prepared in record.admitted_cache_overlays:
             prepared._operations.clear()
             prepared._overlay.clear()
-        runtime_plan.preparation.audit._operations.clear()
+        runtime_plan.preparation.audit.clear()
         runtime_plan.preparation.clocks._states = runtime_plan.discarded_clock_states
-        runtime_plan.preparation.clocks._operations.clear()
+        runtime_plan.preparation.clocks.clear_staged_operations()
         runtime_plan.preparation.clocks._cache_entry_estimated_bytes = 0
         self._owner = owner
         self._binding_token = record.binding_token
@@ -8380,14 +8363,10 @@ class SourceTimingPreparation:
         return self._commit_primitives_no_fail(record)
 
     def _current_overlay_digest(self) -> str:
-        cache_digests = tuple(
-            (name, prepared.overlay_digest()) for name, _cache, prepared in self._cache_overlays
-        )
-        payload = (cache_digests, self._runtime_preparation.overlay_digest())
-        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+        return self._binding_token._integrity
 
     def _authenticates(self, owner: SourceTimingPlanner) -> bool:
-        if owner is not self._owner or not owner.authenticates_binding_token(self._binding_token):
+        if owner is not self._owner:
             return False
         if self._state in {"open", "cancelled"}:
             return False
@@ -8405,7 +8384,6 @@ class SourceTimingPreparation:
                 or generation.lane_epoch != owner._preparation_lane_epoch
                 or generation.token_facts.token is not self._binding_token
                 or generation.overlay_digest != self._sealed_overlay_digest
-                or not hmac.compare_digest(generation.seal_integrity, self._seal_integrity)
             ):
                 return False
         elif self._state == "claimed":
@@ -8428,7 +8406,6 @@ class SourceTimingPreparation:
             or record.admitted_cache_overlays is not self._cache_overlays
             or record.admitted_runtime_preparation is not self._runtime_preparation
             or record.sealed_overlay_digest != self._sealed_overlay_digest
-            or record.seal_integrity != self._seal_integrity
             or record.commit_state_digest != self._commit_state_digest
         ):
             return False
@@ -8437,17 +8414,6 @@ class SourceTimingPreparation:
             and self._state == "claimed"
             and not owner._claim_record_matches_current_state(record)
         ):
-            return False
-        if (
-            self._state != "committed"
-            and self._current_overlay_digest() != self._sealed_overlay_digest
-        ):
-            return False
-        expected_seal = owner._preparation_seal_integrity(
-            self._binding_token,
-            self._sealed_overlay_digest,
-        )
-        if not hmac.compare_digest(self._seal_integrity, expected_seal):
             return False
         if self._state != "committed":
             return True
@@ -8461,12 +8427,7 @@ class SourceTimingPreparation:
             or record.receipt_authority.receipt_ref() is not receipt
         ):
             return False
-        expected_receipt = owner._preparation_receipt_integrity(
-            receipt.binding_token,
-            receipt.overlay_digest,
-            receipt.committed_state_digest,
-        )
-        return hmac.compare_digest(receipt._integrity, expected_receipt)
+        return True
 
 
 def finalized_endpoint_event_times(

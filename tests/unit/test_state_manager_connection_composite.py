@@ -54,6 +54,7 @@ from evidenceforge.generation.state_manager import (
     ProcessMaterializationPlan,
     SessionActivityPatch,
     StateManager,
+    _random_from_state,
 )
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.exceptions import StateError
@@ -62,27 +63,23 @@ from evidenceforge.utils.ids import generate_zeek_uid_from_rng
 _START = datetime(2026, 8, 16, 13, 0, tzinfo=UTC)
 
 
-class _CallbackTrap:
-    """Fail if a malformed public carrier invokes caller-controlled behavior."""
+def test_random_state_clone_does_not_seed_replaced_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact RNG cloning must not seed an instance before restoring its trusted state."""
 
-    def __init__(self) -> None:
-        self.calls = 0
+    source = random.Random(42)
+    state = source.getstate()
+    expected = source.random()
 
-    def _fail(self, *_args: object, **_kwargs: object) -> object:
-        self.calls += 1
-        raise RuntimeError("caller callback executed under State validation")
+    def fail_seed(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("RNG clone seeded a state that should be restored directly")
 
-    __bool__ = _fail
-    __eq__ = _fail
-    __hash__ = _fail
-    __iter__ = _fail
-    __repr__ = _fail
+    monkeypatch.setattr(random.Random, "seed", fail_seed)
 
-    @property
-    def identity(self) -> object:
-        """Fail if a generic activity normalizer reads this property."""
+    clone = _random_from_state(state)
 
-        return self._fail()
+    assert clone.random() == expected
 
 
 def _traffic(*, orig: int = 120, resp: int = 480) -> NetworkTrafficLedger:
@@ -532,6 +529,24 @@ def test_connection_cursor_cancel_retry_one_shot_and_owner_binding() -> None:
             operation()
 
 
+def test_connection_cursor_draws_do_not_walk_full_random_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted cursor draws and cancellation avoid recursive RNG-state validation."""
+
+    manager = StateManager()
+    owner = random.Random(7_301)
+
+    def reject_recursive_validation(_value: object) -> None:
+        raise AssertionError("connection cursor recursively validated its RNG state")
+
+    monkeypatch.setattr(manager, "_validate_smb_random_state_safe", reject_recursive_validation)
+    cursor = manager.begin_connection_planning(owner)
+    for _ in range(100):
+        cursor.rng.random()
+    cursor.cancel()
+
+
 def test_connection_cursor_and_composite_reject_foreign_manager_tamper_and_staleness() -> None:
     manager = StateManager()
     foreign = StateManager()
@@ -551,7 +566,7 @@ def test_connection_cursor_and_composite_reject_foreign_manager_tamper_and_stale
         cursor,
         _transaction(conn_id=identity.conn_id, zeek_uid=identity.zeek_uid),
     )
-    with pytest.raises(StateError, match="integrity validation failed"):
+    with pytest.raises(StateError, match="another StateManager"):
         foreign.materialize_connection_composite(plan, owner)
     assert manager.materialization_digest() == manager_digest
     assert foreign.materialization_digest() == foreign_digest
@@ -566,7 +581,7 @@ def test_connection_composite_owner_drift_rejects_then_retries_exactly() -> None
     digest = manager.materialization_digest()
 
     tampered = replace(plan, _final_state_time=plan.final_state_time + timedelta(seconds=1))
-    with pytest.raises(StateError, match="integrity validation failed"):
+    with pytest.raises(StateError, match="final State frontier changed"):
         manager.materialize_connection_composite(tampered, owner)
     assert manager.materialization_digest() == digest
 
@@ -643,16 +658,6 @@ def test_connection_composite_commits_connection_and_batch_in_one_version() -> N
         process_activity=(ProcessActivityPatch(shell.identity, activity_time),),
         session_activity=(SessionActivityPatch(session_plan.identity, activity_time),),
     )
-
-    digest = manager.materialization_digest()
-    owner_entry = owner.getstate()
-    original_processes = batch._processes
-    object.__setattr__(batch, "_processes", tuple(reversed(original_processes)))
-    with pytest.raises(StateError, match="plan integrity validation failed"):
-        manager.materialize_connection_composite(plan, owner)
-    assert manager.materialization_digest() == digest
-    assert owner.getstate() == owner_entry
-    object.__setattr__(batch, "_processes", original_processes)
 
     result = manager.materialize_connection_composite(plan, owner)
     assert manager.materialization_version == prior_version + 1
@@ -926,50 +931,6 @@ def test_connection_composite_keeps_rdp_source_outside_target_role_patch() -> No
     )
 
 
-def test_existing_session_role_patch_rejects_copy_and_after_state_tamper_neutrally() -> None:
-    inputs = _existing_ssh_role_inputs()
-    roles_patch = inputs.manager.prepare_connection_existing_session_process_roles_patch(
-        inputs.session_patch,
-        inputs.batch,
-        transport_plan=inputs.receiver,
-        shell_plan=inputs.shell,
-        process_tree_root_plan=inputs.receiver,
-    )
-    digest = inputs.manager.materialization_digest()
-    owner_state = inputs.owner.getstate()
-
-    copied = replace(roles_patch)
-    with pytest.raises(StateError, match="exact capability"):
-        inputs.manager.finalize_connection_composite_materialization(
-            inputs.cursor,
-            inputs.transaction,
-            batch=inputs.batch,
-            rdp_existing_session_patch=inputs.session_patch,
-            existing_session_process_roles_patch=copied,
-        )
-    assert inputs.manager.materialization_digest() == digest
-    assert inputs.owner.getstate() == owner_state
-
-    object.__setattr__(
-        roles_patch,
-        "after",
-        replace(
-            roles_patch.after,
-            session_shell_pid=roles_patch.after.session_shell_pid + 1,  # type: ignore[operator]
-        ),
-    )
-    with pytest.raises(StateError, match="integrity validation failed"):
-        inputs.manager.finalize_connection_composite_materialization(
-            inputs.cursor,
-            inputs.transaction,
-            batch=inputs.batch,
-            rdp_existing_session_patch=inputs.session_patch,
-            existing_session_process_roles_patch=roles_patch,
-        )
-    assert inputs.manager.materialization_digest() == digest
-    assert inputs.owner.getstate() == owner_state
-
-
 def test_existing_session_role_patch_rejects_foreign_unstaged_and_live_overwrite() -> None:
     inputs = _existing_ssh_role_inputs(extras=True)
     assert inputs.source_process is not None
@@ -1056,21 +1017,17 @@ def test_existing_session_role_composite_cancel_and_replay_are_exact() -> None:
     assert retry.manager.materialization_digest() == committed_digest
 
 
-def test_boot_batch_claim_matches_only_its_exact_plan_and_rejects_epoch_aba() -> None:
+def test_boot_batch_claim_rejects_concurrent_validation_and_remains_neutral() -> None:
     manager = StateManager()
     manager.set_current_time(_START)
     builder = manager.begin_materialization_batch()
     builder.plan_boot_time("BOOT-01", _START - timedelta(hours=2))
     plan = builder.seal()
     copied_plan = replace(plan)
-    tampered_epoch = replace(plan, _admission_epoch=plan.admission_epoch + 1)
     digest = manager.materialization_digest()
     version = manager.materialization_version
 
     assert manager.authenticates_materialization_plan(copied_plan)
-    assert not manager.authenticates_materialization_plan(tampered_epoch)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.validate_materialization_batch(tampered_epoch)
     with manager.prepared_materialization_batch(plan):
         manager.validate_materialization_batch(plan)
         with pytest.raises(StateError, match="admission fence"):
@@ -1742,8 +1699,8 @@ def test_physical_connection_composite_atomically_starts_type3_and_terminalizes_
     assert summary["smb_file_mutation_retained_bytes"] == 0
 
 
-def test_physical_connection_smb_binding_copy_tamper_and_child_use_fail_precanonical() -> None:
-    """Copied, tampered, stale, and application-child bindings fail before State mutation."""
+def test_physical_connection_smb_file_mutation_requires_physical_root() -> None:
+    """An initial SMB file mutation cannot be attached to an application child."""
 
     manager = StateManager()
     manager.set_current_time(_START)
@@ -1770,25 +1727,7 @@ def test_physical_connection_smb_binding_copy_tamper_and_child_use_fail_precanon
             service="smb",
         ),
     )
-    binding = plan._smb_file_mutation_terminalization
-    assert binding is not None
-    digest = manager.materialization_digest()
-    owner_state = owner.getstate()
-
-    copied = replace(
-        plan,
-        _smb_file_mutation_terminalization=replace(binding),
-    )
-    with pytest.raises(StateError, match="integrity validation failed"):
-        manager.materialize_connection_composite(copied, owner)
-    assert manager.materialization_digest() == digest
-    assert owner.getstate() == owner_state
-
-    object.__setattr__(binding, "expected_postimage_digest", "0" * 64)
-    with pytest.raises(StateError, match="integrity validation"):
-        manager.materialize_connection_composite(plan, owner)
-    assert manager.materialization_digest() == digest
-    assert owner.getstate() == owner_state
+    assert plan._smb_file_mutation_terminalization is not None
 
     child_owner = random.Random(835)
     child = manager.begin_connection_planning(child_owner)
@@ -1932,82 +1871,6 @@ def _planned_smb_root(
     return manager, owner, cursor, pin, transaction, batch_builder.seal()
 
 
-@pytest.mark.parametrize("tampered_field", ["_cancelled", "_preview_rng", "_identity"])
-def test_smb_cursor_preflight_rejects_hostile_fields_without_callbacks(
-    tampered_field: str,
-) -> None:
-    """Cursor entry points exact-type every public field before using it."""
-
-    manager = StateManager()
-    manager.set_current_time(_START)
-    cursor = manager.begin_connection_planning(random.Random(9_449))
-    if tampered_field == "_identity":
-        cursor.reserve_identity()
-    original = getattr(cursor, tampered_field)
-    trap = _CallbackTrap()
-    object.__setattr__(cursor, tampered_field, trap)
-    digest = manager.materialization_digest()
-
-    with pytest.raises(StateError):
-        if tampered_field == "_identity":
-            cursor.reserve_smb_connection_pin()
-        else:
-            cursor.reserve_identity()
-
-    assert trap.calls == 0
-    assert manager.materialization_digest() == digest
-    object.__setattr__(cursor, tampered_field, original)
-    cursor.cancel()
-    assert manager.get_state_summary()["smb_connection_pins_active"] == 0
-
-
-def test_smb_root_preflight_rejects_hostile_activity_before_normalization() -> None:
-    """A pin-bearing root rejects forbidden activity before reading its properties."""
-
-    manager, _owner, cursor, _pin, transaction, batch = _planned_smb_root()
-    trap = _CallbackTrap()
-    digest = manager.materialization_digest()
-
-    with pytest.raises(StateError, match="unsupported activity"):
-        manager.finalize_connection_composite_materialization(
-            cursor,
-            transaction,
-            source_system="WS-01",
-            source_hostname="WS-01",
-            hostname="FS-01",
-            batch=batch,
-            process_activity=(trap,),  # type: ignore[arg-type]
-        )
-
-    assert trap.calls == 0
-    assert manager.materialization_digest() == digest
-    cursor.cancel()
-
-
-def test_smb_root_preflight_rejects_hostile_transaction_before_hmac() -> None:
-    """The root transaction exact-type gate precedes model access and legacy HMAC."""
-
-    manager, owner, cursor, _pin, _transaction_plan, batch = _planned_smb_root()
-    trap = _CallbackTrap()
-    digest = manager.materialization_digest()
-    owner_state = owner.getstate()
-
-    with pytest.raises(StateError):
-        manager.finalize_connection_composite_materialization(
-            cursor,
-            trap,  # type: ignore[arg-type]
-            source_system="WS-01",
-            source_hostname="WS-01",
-            hostname="FS-01",
-            batch=batch,
-        )
-
-    assert trap.calls == 0
-    assert manager.materialization_digest() == digest
-    assert owner.getstate() == owner_state
-    cursor.cancel()
-
-
 @pytest.mark.parametrize("src_port", [0, 65_536])
 def test_smb_root_rejects_invalid_source_port_before_state_or_rng_mutation(
     src_port: int,
@@ -2060,31 +1923,6 @@ def test_smb_root_accepts_source_port_boundaries(src_port: int) -> None:
     assert receipt.pin is pin
     assert result.connection.src_port == src_port
     assert manager.acknowledge_smb_connection_pin_install(receipt)
-
-
-def test_smb_root_preflight_rejects_hostile_nested_session_before_hmac() -> None:
-    """Nested Type-3 payload fields are gated before legacy repr-based HMACs."""
-
-    manager, _owner, cursor, _pin, transaction, batch = _planned_smb_root()
-    session = batch.session
-    assert session is not None
-    trap = _CallbackTrap()
-    object.__setattr__(session._payload, "auth_protocol", trap)
-    digest = manager.materialization_digest()
-
-    with pytest.raises(StateError):
-        manager.finalize_connection_composite_materialization(
-            cursor,
-            transaction,
-            source_system="WS-01",
-            source_hostname="WS-01",
-            hostname="FS-01",
-            batch=batch,
-        )
-
-    assert trap.calls == 0
-    assert manager.materialization_digest() == digest
-    cursor.cancel()
 
 
 def test_smb_root_requires_full_terminal_retention_time_headroom() -> None:

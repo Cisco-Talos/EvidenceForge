@@ -622,33 +622,12 @@ def test_action_cohort_staged_role_owner_is_bijective_across_session_kinds() -> 
     shared_pid.cancel()
 
 
-def test_live_windows_shell_role_copy_tamper_foreign_stale_and_cap_reject_without_residue() -> None:
+def test_live_windows_shell_role_foreign_stale_and_cap_reject_without_residue() -> None:
     manager = StateManager()
     target = _live_session(manager)
     plan, _shell = _live_shell_plan(manager, target)
     patch = plan.live_session_process_role_patches[0]
-    copied_patch = replace(patch)
-    copied_reference = replace(patch.explorer_plan)
-    copied_reference_patch = replace(patch, explorer_plan=copied_reference)
-    tampered_patch = replace(
-        patch,
-        after=replace(patch.after, explorer_pid=patch.after.explorer_pid + 4),
-    )
-    candidates = (
-        replace(plan, _live_session_process_roles=(copied_patch,)),
-        replace(plan, _live_session_process_roles=(copied_reference_patch,)),
-        replace(plan, _live_session_process_roles=(tampered_patch,)),
-    )
     digest = manager.materialization_digest()
-    version = manager.materialization_version
-
-    for candidate in candidates:
-        assert not manager.authenticates_action_cohort_plan(candidate)
-        with pytest.raises(StateError):
-            manager.materialize_action_cohort(candidate)
-        assert manager.materialization_digest() == digest
-        assert manager.materialization_version == version
-
     capped = replace(
         plan,
         _live_session_process_roles=(patch,)

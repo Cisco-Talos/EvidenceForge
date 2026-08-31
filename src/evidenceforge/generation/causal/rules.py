@@ -173,6 +173,8 @@ class DnsBeforeConnection(ExpansionRule):
                     default_position="before",
                 ),
                 description="DNS lookup for connection destination",
+                occurrence_time_kwarg="planned_query_time",
+                trigger_time_kwarg="time",
             )
         ]
 

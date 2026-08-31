@@ -227,6 +227,11 @@ _IDENTITY_ROOT_LABEL = (
 )
 _IDENTITY_ROOT_TYPE: type[object] | None = None
 _IDENTITY_ROOT_POLICY: tuple[object, ...] | None = None
+_TRUSTED_IDENTITY_TYPE_INSPECTOR: _IdentityTypeInspector | None = None
+_TRUSTED_PYDANTIC_DIGEST_CACHE_CAPACITY = 8_192
+_TRUSTED_PYDANTIC_DIGESTS: dict[int, tuple[BaseModel, bytes]] = {}
+_TRUSTED_SCALAR_DIGEST_CACHE_CAPACITY = 8_192
+_TRUSTED_SCALAR_DIGESTS: dict[tuple[type[object], object], bytes] = {}
 
 
 def _identity_import_raw_attribute(value_type: type[object], name: str) -> object:
@@ -382,7 +387,7 @@ del _qualified_name
 def _register_network_request_type(request_type: type[object]) -> None:
     """Register the exact request class once while its defining module imports."""
 
-    global _IDENTITY_ROOT_POLICY, _IDENTITY_ROOT_TYPE
+    global _IDENTITY_ROOT_POLICY, _IDENTITY_ROOT_TYPE, _TRUSTED_IDENTITY_TYPE_INSPECTOR
     if _IDENTITY_ROOT_TYPE is not None:
         if request_type is not _IDENTITY_ROOT_TYPE:
             raise TypeError("Network connection identity request type is already registered")
@@ -394,6 +399,12 @@ def _register_network_request_type(request_type: type[object]) -> None:
         request_type,
         *_IDENTITY_ROOT_LABEL,
     )
+    inspector = _IdentityTypeInspector()
+    for policy in (*_IDENTITY_TRUSTED_DATACLASS_POLICIES, _IDENTITY_ROOT_POLICY):
+        inspector.dataclass_fields(policy[0], ())  # type: ignore[arg-type]
+    for policy in _IDENTITY_TRUSTED_PYDANTIC_POLICIES:
+        inspector.pydantic_fields(policy[0], ())  # type: ignore[arg-type]
+    _TRUSTED_IDENTITY_TYPE_INSPECTOR = inspector
 
 
 def _identity_location(path: tuple[str, ...]) -> str:
@@ -1272,7 +1283,8 @@ class _IdentityDigestWriter:
         """Hash one exact byte atom after charging its full framed size."""
 
         payload_size = bytes.__len__(payload)
-        self._encoder._charge_encoded(_IDENTITY_ATOM_PREFIX_BYTES + payload_size, self._path)
+        if not self._encoder._trusted_engine:
+            self._encoder._charge_encoded(_IDENTITY_ATOM_PREFIX_BYTES + payload_size, self._path)
         self._hasher.update(payload_size.to_bytes(_IDENTITY_ATOM_PREFIX_BYTES, "big"))
         self._hasher.update(payload)
 
@@ -1285,8 +1297,14 @@ class _IdentityDigestWriter:
 class _CanonicalIdentityEncoder:
     """Build bounded Merkle-style identity digests without caller dispatch."""
 
-    def __init__(self) -> None:
-        self._types = _IdentityTypeInspector()
+    def __init__(
+        self,
+        *,
+        type_inspector: _IdentityTypeInspector | None = None,
+        trusted_engine: bool = False,
+    ) -> None:
+        self._types = type_inspector if type_inspector is not None else _IdentityTypeInspector()
+        self._trusted_engine = trusted_engine
         self._active: dict[int, object] = {}
         self._memo: dict[int, tuple[object, bytes]] = {}
         self._nodes = 0
@@ -1295,6 +1313,8 @@ class _CanonicalIdentityEncoder:
     def _visit(self, depth: int, path: tuple[str, ...]) -> None:
         """Charge one occurrence before accessing or copying its value."""
 
+        if self._trusted_engine:
+            return
         if depth > _IDENTITY_MAX_DEPTH:
             raise ValueError(
                 "Network connection identity exceeds the maximum depth of "
@@ -1310,6 +1330,8 @@ class _CanonicalIdentityEncoder:
     def _ensure_members(self, member_count: int, path: tuple[str, ...]) -> None:
         """Reject oversized containers before snapshot allocation."""
 
+        if self._trusted_engine:
+            return
         if member_count > _IDENTITY_MAX_CONTAINER_MEMBERS:
             raise ValueError(
                 "Network connection identity container exceeds the maximum of "
@@ -1319,6 +1341,8 @@ class _CanonicalIdentityEncoder:
     def _ensure_child_nodes(self, child_count: int, path: tuple[str, ...]) -> None:
         """Reject a container that cannot fit its immediate child occurrences."""
 
+        if self._trusted_engine:
+            return
         if self._nodes + child_count > _IDENTITY_MAX_NODES:
             raise ValueError(
                 "Network connection identity exceeds the maximum of "
@@ -1328,6 +1352,8 @@ class _CanonicalIdentityEncoder:
     def _ensure_encoded(self, byte_count: int, path: tuple[str, ...]) -> None:
         """Reject known future frame bytes before container snapshot allocation."""
 
+        if self._trusted_engine:
+            return
         if self._encoded_bytes + byte_count > _IDENTITY_MAX_ENCODED_BYTES:
             raise ValueError(
                 "Network connection identity exceeds the maximum encoded size of "
@@ -1339,6 +1365,29 @@ class _CanonicalIdentityEncoder:
 
         self._ensure_encoded(byte_count, path)
         self._encoded_bytes += byte_count
+
+    def _utf8_bytes(self, value: str, path: tuple[str, ...]) -> bytes:
+        """Encode trusted engine text directly or enforce the public bounded path."""
+
+        if self._trusted_engine:
+            return str.encode(value, "utf-8", "strict")
+        return _identity_utf8_bytes(value, path)
+
+    def _trusted_scalar_digest(self, value: object) -> bytes | None:
+        """Return a shared digest for an exact immutable engine scalar when present."""
+
+        if not self._trusted_engine or type(value) not in {type(None), bool, int, str, bytes}:
+            return None
+        return _TRUSTED_SCALAR_DIGESTS.get((type(value), value))
+
+    def _retain_trusted_scalar_digest(self, value: object, digest: bytes) -> None:
+        """Bound and retain one exact immutable engine scalar digest."""
+
+        if not self._trusted_engine or type(value) not in {type(None), bool, int, str, bytes}:
+            return
+        if len(_TRUSTED_SCALAR_DIGESTS) >= _TRUSTED_SCALAR_DIGEST_CACHE_CAPACITY:
+            _TRUSTED_SCALAR_DIGESTS.clear()
+        _TRUSTED_SCALAR_DIGESTS[(type(value), value)] = digest
 
     def _writer(
         self,
@@ -1352,8 +1401,8 @@ class _CanonicalIdentityEncoder:
         writer = _IdentityDigestWriter(self, path)
         writer.atom(_IDENTITY_SCHEMA)
         writer.atom(tag)
-        writer.atom(_identity_utf8_bytes(module_name, path))
-        writer.atom(_identity_utf8_bytes(qualified_name, path))
+        writer.atom(self._utf8_bytes(module_name, path))
+        writer.atom(self._utf8_bytes(qualified_name, path))
         return writer
 
     def _scalar_writer(
@@ -1369,6 +1418,7 @@ class _CanonicalIdentityEncoder:
         writer.atom(payload)
         digest = writer.finish()
         self._memoize(value, digest)
+        self._retain_trusted_scalar_digest(value, digest)
         return digest
 
     def _memoize(self, value: object, digest: bytes) -> None:
@@ -1430,7 +1480,7 @@ class _CanonicalIdentityEncoder:
             writer.atom(len(semantic_fields).to_bytes(8, "big"))
             for field_name in semantic_fields:
                 field_path = (*path, field_name)
-                writer.atom(_identity_utf8_bytes(field_name, field_path))
+                writer.atom(self._utf8_bytes(field_name, field_path))
                 field_value = _identity_dataclass_field_value(
                     self._types,
                     value,
@@ -1488,7 +1538,7 @@ class _CanonicalIdentityEncoder:
             writer.atom(len(field_names).to_bytes(8, "big"))
             for field_name in field_names:
                 field_path = (*path, field_name)
-                writer.atom(_identity_utf8_bytes(field_name, field_path))
+                writer.atom(self._utf8_bytes(field_name, field_path))
                 field_value = _identity_pydantic_field_value(
                     instance_values,
                     field_name,
@@ -1617,12 +1667,17 @@ class _CanonicalIdentityEncoder:
         cached = self._cached_digest(value)
         if cached is not None:
             return cached
+        shared_scalar = self._trusted_scalar_digest(value)
+        if shared_scalar is not None:
+            self._memoize(value, shared_scalar)
+            return shared_scalar
         if value is None:
             writer = _IdentityDigestWriter(self, path)
             writer.atom(_IDENTITY_SCHEMA)
             writer.atom(b"none")
             digest = writer.finish()
             self._memoize(value, digest)
+            self._retain_trusted_scalar_digest(value, digest)
             return digest
 
         value_type = type(value)
@@ -1636,8 +1691,19 @@ class _CanonicalIdentityEncoder:
                 )
             return self._encode_dataclass(value, value_mro, data_fields, depth, path)
         if self._types.pydantic_policy(value_type) is not None:
+            if self._trusted_engine:
+                shared = _TRUSTED_PYDANTIC_DIGESTS.get(value_id)
+                if shared is not None and shared[0] is value:
+                    digest = shared[1]
+                    self._memoize(value, digest)
+                    return digest
             value_mro = self._types.mro(value_type, path)
-            return self._encode_pydantic(value, value_mro, depth, path)  # type: ignore[arg-type]
+            digest = self._encode_pydantic(value, value_mro, depth, path)  # type: ignore[arg-type]
+            if self._trusted_engine:
+                if len(_TRUSTED_PYDANTIC_DIGESTS) >= _TRUSTED_PYDANTIC_DIGEST_CACHE_CAPACITY:
+                    _TRUSTED_PYDANTIC_DIGESTS.clear()
+                _TRUSTED_PYDANTIC_DIGESTS[value_id] = (value, digest)  # type: ignore[assignment]
+            return digest
 
         if value_type is bool:
             return self._scalar_writer(b"bool", value, b"1" if value else b"0", path)
@@ -1647,8 +1713,8 @@ class _CanonicalIdentityEncoder:
                 path,
             )
             writer = self._writer(b"datetime", value, path)
-            writer.atom(_identity_utf8_bytes(awareness, path))
-            writer.atom(_identity_utf8_bytes(canonical_value, path))
+            writer.atom(self._utf8_bytes(awareness, path))
+            writer.atom(self._utf8_bytes(canonical_value, path))
             digest = writer.finish()
             self._memoize(value, digest)
             return digest
@@ -1656,7 +1722,7 @@ class _CanonicalIdentityEncoder:
             return self._scalar_writer(
                 b"date",
                 value,
-                _identity_utf8_bytes(date.isoformat(value), path),  # type: ignore[arg-type]
+                self._utf8_bytes(date.isoformat(value), path),  # type: ignore[arg-type]
                 path,
             )
         if value_type is timedelta:
@@ -1686,7 +1752,7 @@ class _CanonicalIdentityEncoder:
             return self._scalar_writer(
                 b"str",
                 value,
-                _identity_utf8_bytes(snapshot, path),
+                self._utf8_bytes(snapshot, path),
                 path,
             )
         if value_type is bytes:
@@ -1744,7 +1810,7 @@ class _CanonicalIdentityEncoder:
             return self._scalar_writer(
                 b"float",
                 value,
-                _identity_utf8_bytes(float_value, path),
+                self._utf8_bytes(float_value, path),
                 path,
             )
 
@@ -1835,7 +1901,7 @@ class _CanonicalIdentityEncoder:
             writer.atom(len(semantic_fields).to_bytes(8, "big"))
             for field_name in semantic_fields:
                 field_path = (field_name,)
-                writer.atom(_identity_utf8_bytes(field_name, field_path))
+                writer.atom(self._utf8_bytes(field_name, field_path))
                 field_value = _identity_dataclass_field_value(
                     self._types,
                     request,
@@ -1878,8 +1944,36 @@ def _network_request_identity_fields(
 def _network_request_stable_id(request: object, expected_type: type[object]) -> str:
     """Return one full-width deterministic identifier for a complete network intent."""
 
+    inspector = _TRUSTED_IDENTITY_TYPE_INSPECTOR
+    if inspector is None:
+        raise RuntimeError("Network connection identity request type is not registered")
     try:
-        identity_digest, _projection = _CanonicalIdentityEncoder().encode_request(
+        identity_digest, _projection = _CanonicalIdentityEncoder(
+            type_inspector=inspector,
+        ).encode_request(
+            request,
+            expected_type,
+        )
+    except RecursionError as exc:
+        raise ValueError(
+            f"Network connection identity exceeds the maximum depth of {_IDENTITY_MAX_DEPTH}"
+        ) from exc
+    except OverflowError as exc:
+        raise ValueError("Network connection identity arithmetic exceeds supported bounds") from exc
+    return f"network-connection-{stable_uuid('network-connection', 'v4', identity_digest.hex())}"
+
+
+def _trusted_network_request_stable_id(request: object, expected_type: type[object]) -> str:
+    """Return the same stable ID using import-captured trusted engine metadata."""
+
+    inspector = _TRUSTED_IDENTITY_TYPE_INSPECTOR
+    if inspector is None:
+        raise RuntimeError("Network connection identity request type is not registered")
+    try:
+        identity_digest, _projection = _CanonicalIdentityEncoder(
+            type_inspector=inspector,
+            trusted_engine=True,
+        ).encode_request(
             request,
             expected_type,
         )

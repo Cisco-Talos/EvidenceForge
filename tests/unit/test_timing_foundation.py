@@ -8,6 +8,7 @@ from __future__ import annotations
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event, get_ident
 
 import pytest
 
@@ -427,6 +428,59 @@ def test_source_clock_values_and_audit_are_worker_and_eviction_independent(
         "clock.wander_microseconds": len(operations) * 2,
     }
     assert registry.cache_size <= cache_size
+
+
+def test_source_clock_cache_hit_revalidates_after_concurrent_eviction() -> None:
+    """An intervening LRU eviction must turn a stale hit into a normal miss."""
+
+    armed = Event()
+    stale_hit_observed = Event()
+    eviction_complete = Event()
+    main_thread_id = get_ident()
+    audit = TimingAudit(max_relationship_keys=16)
+
+    class BlockingObserver:
+        """Pause one worker after its first cache lookup and before accounting."""
+
+        def record_sample(self, relationship_key: str, distribution_kind: str) -> None:
+            if (
+                armed.is_set()
+                and get_ident() != main_thread_id
+                and relationship_key == "clock.offset_microseconds"
+                and not stale_hit_observed.is_set()
+            ):
+                stale_hit_observed.set()
+                assert eviction_complete.wait(timeout=5)
+            audit.record_sample(relationship_key, distribution_kind)
+
+    registry = SourceClockRegistry(
+        reference_time=T0,
+        sampler=TimingSampler(namespace="clock-concurrent-eviction", observer=BlockingObserver()),
+        max_cache_entries=1,
+    )
+    spec = SourceClockSpec(
+        offset_microseconds=ConstantDistribution(100_000),
+        drift_ppm=ConstantDistribution(2),
+    )
+    retained_key = SourceClockKey(kind="endpoint", identity="source-a")
+    replacement_key = SourceClockKey(kind="endpoint", identity="source-b")
+    retained_state = registry.state(retained_key, spec)
+    armed.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_hit = executor.submit(registry.state, retained_key, spec)
+        assert stale_hit_observed.wait(timeout=5)
+        try:
+            registry.state(replacement_key, spec)
+        finally:
+            eviction_complete.set()
+        assert stale_hit.result(timeout=5) == retained_state
+
+    census = registry.census()
+    assert census.lookup_count == 3
+    assert census.cache_hit_count == 0
+    assert census.cache_miss_count == 3
+    assert census.eviction_count == 2
 
 
 def test_source_clock_applies_offset_and_epoch_based_drift() -> None:

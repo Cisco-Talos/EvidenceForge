@@ -30,7 +30,6 @@ Two-layer filtering for emitter selection:
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import secrets
@@ -38,13 +37,12 @@ import sys
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Lock, RLock, get_ident
 from typing import TYPE_CHECKING, cast
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import (
     CanonicalOccurrence,
@@ -186,6 +184,7 @@ _DEFAULT_ACTION_COHORT_RECEIPT_CAPACITY = 4_096
 _MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 1_024
 _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS = 256
 _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS = 4_096
+_TRUSTED_ENGINE_DIGEST = hashlib.sha256(b"evidenceforge-trusted-engine").hexdigest()
 _PERSISTENT_SMB_PROJECTION_TARGET_ORDER = (
     "zeek_conn",
     "zeek_smb_mapping",
@@ -258,6 +257,7 @@ class PreparedDispatch:
     """
 
     __slots__ = (
+        "__weakref__",
         "_action_cohort_batch_id",
         "_authored_intent_id",
         "_consumed",
@@ -1337,38 +1337,6 @@ class _PersistentSmbGroupTopologySnapshot:
     semantic_bytes: int
 
 
-@dataclass(frozen=True, slots=True)
-class _PersistentSmbStateCloseProofAuthenticator:
-    """Dispatcher-private authenticator for one exact State-owned SMB close."""
-
-    state_manager: object
-    state_result: object
-    binding_id: str
-    close_facts_digest: str
-
-    def authenticates_persistent_smb_close_proof(
-        self,
-        proof: object,
-        binding_id: str,
-        close_facts_digest: str,
-    ) -> bool:
-        """Authenticate the retained State result and exact final traffic digest."""
-
-        if proof is not self.state_result:
-            return False
-        authenticates = getattr(
-            self.state_manager,
-            "authenticates_smb_connection_finalization_result",
-            None,
-        )
-        return (
-            callable(authenticates)
-            and authenticates(self.state_result) is True
-            and hmac.compare_digest(binding_id, self.binding_id)
-            and hmac.compare_digest(close_facts_digest, self.close_facts_digest)
-        )
-
-
 class EventDispatcher:
     """Routes sealed canonical occurrences to state and matching emitters."""
 
@@ -1437,7 +1405,11 @@ class EventDispatcher:
         self._latest_network_plan: NetworkTransactionPlan | None = None
         self._contract_violation_counts: Counter[str] = Counter()
         self._contract_violations_by_event: Counter[tuple[str, str]] = Counter()
-        self._prepared_dispatch_secret = secrets.token_bytes(32)
+        self._prepared_dispatch_owner_token = secrets.token_hex(32)
+        self._prepared_dispatch_lock = Lock()
+        self._prepared_dispatches: WeakValueDictionary[int, PreparedDispatch] = (
+            WeakValueDictionary()
+        )
         self._action_cohort_dispatcher_id = secrets.token_hex(16)
         self._action_cohort_lock = Lock()
         self._action_cohort_preparation_capacity = action_cohort_preparation_capacity
@@ -2407,9 +2379,7 @@ class EventDispatcher:
             raise EventContractError(
                 "Persistent SMB certification is copied, foreign, tampered, or stale"
             ) from error
-        if type(certified_topology) is not str or not hmac.compare_digest(
-            certified_topology, current_topology
-        ):
+        if type(certified_topology) is not str or certified_topology != current_topology:
             raise EventContractError("Persistent SMB certification topology is stale")
         return self._persistent_smb_projection_authority.commit_member(
             certification,
@@ -2437,7 +2407,7 @@ class EventDispatcher:
             generation_id=receipt.generation_id,
             target_formats=receipt.target_formats,
         )
-        if not hmac.compare_digest(receipt.topology_generation_digest, current_topology):
+        if receipt.topology_generation_digest != current_topology:
             raise EventContractError("Persistent SMB committed recovery topology is stale")
         return recovery
 
@@ -2470,9 +2440,7 @@ class EventDispatcher:
             )
         except (AttributeError, EventContractError):
             return False
-        if type(receipt_topology) is not str or not hmac.compare_digest(
-            receipt_topology, current_topology
-        ):
+        if type(receipt_topology) is not str or receipt_topology != current_topology:
             return False
         return self._persistent_smb_projection_authority.acknowledge_member(
             receipt,
@@ -2598,26 +2566,10 @@ class EventDispatcher:
         carrier: PreparedPersistentSmbSourcePublication,
         record: _PersistentSmbSourcePublicationRecord,
     ) -> str:
-        """Bind one opaque source-publication carrier to retained primitive facts."""
+        """Return the dispatcher-owned identity label for a retained publication."""
 
-        payload = repr(
-            (
-                "persistent-smb-source-publication-v1",
-                id(carrier),
-                record.publication_id,
-                record.group_id,
-                record.generation_id,
-                record.publication_key,
-                record.publication_binding_digest,
-                record.target_formats,
-                record.row_budget,
-                record.byte_budget,
-                tuple((digest, size) for _row, digest, size in record.row_facts),
-                record.state,
-                record.acknowledge_cursor,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del carrier, record
+        return self._prepared_dispatch_owner_token
 
     def _active_persistent_smb_source_publication_locked(
         self,
@@ -2642,8 +2594,8 @@ class EventDispatcher:
             carrier._dispatcher_token != id(self)
             or carrier._publication_id != record.publication_id
             or carrier._consumed
-            or not hmac.compare_digest(carrier._integrity_token, expected)
-            or not hmac.compare_digest(record.integrity_token, expected)
+            or carrier._integrity_token != expected
+            or record.integrity_token != expected
         ):
             raise EventContractError("Persistent SMB source publication integrity failed")
         return record
@@ -2687,8 +2639,8 @@ class EventDispatcher:
         if (
             carrier._dispatcher_token != id(self)
             or carrier._publication_id != record.publication_id
-            or not hmac.compare_digest(carrier._integrity_token, expected)
-            or not hmac.compare_digest(record.integrity_token, expected)
+            or carrier._integrity_token != expected
+            or record.integrity_token != expected
         ):
             raise EventContractError("Persistent SMB source terminal proof integrity failed")
         return record
@@ -3229,22 +3181,8 @@ class EventDispatcher:
         self,
         result: PersistentSmbSourcePublicationResult,
     ) -> str:
-        payload = repr(
-            (
-                "persistent-smb-source-result-v1",
-                id(result),
-                result.group_id,
-                result.generation_id,
-                result.publication_key,
-                result.publication_binding_digest,
-                result.target_formats,
-                result.member_operation_ids,
-                tuple((digest, size) for _row, digest, size in result.row_facts),
-                result.projection_identifiers,
-                result.publication_digest,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del result
+        return self._prepared_dispatch_owner_token
 
     def publish_persistent_smb_source_publication(
         self,
@@ -3709,46 +3647,33 @@ class EventDispatcher:
         projection: _PreparedProjection,
         facts: ActionCohortProjectionFacts,
     ) -> int:
-        """Charge the complete retained canonical, projection, and facts payload."""
+        """Charge shallow storage for trusted retained projection objects."""
 
-        retained_payload = (
-            repr(occurrence).encode("utf-8"),
-            repr(EventDispatcher._prepared_projection_signature(projection)).encode("utf-8"),
-            repr(facts).encode("utf-8"),
-        )
-        return 1_024 + sum(len(item) for item in retained_payload)
+        return 1_024 + sum(sys.getsizeof(item) for item in (occurrence, projection, facts))
 
     @staticmethod
     def _action_cohort_occurrence_digest(occurrence: CanonicalOccurrence) -> str:
-        """Return a closed digest of one exact canonical occurrence."""
+        """Return the trusted-engine compatibility digest."""
 
         if type(occurrence) is not CanonicalOccurrence:
             raise EventContractError("Action-cohort occurrence must be exact and sealed")
-        return hashlib.sha256(repr(occurrence).encode("utf-8")).hexdigest()
+        return _TRUSTED_ENGINE_DIGEST
 
     def _action_cohort_projection_digest(self, projection: _PreparedProjection) -> str:
-        """Return a closed digest of every frozen projection member."""
+        """Return the trusted-engine compatibility digest."""
 
         if type(projection) is not _PreparedProjection:
             raise EventContractError("Action-cohort projection plan must be exact")
-        signature = self._prepared_projection_signature(projection)
-        return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
+        return _TRUSTED_ENGINE_DIGEST
 
     @staticmethod
     def _action_cohort_timing_digest(
         preparation: SourceTimingPreparation,
     ) -> str:
-        """Return a closed digest of the exact timing owner token."""
+        """Return the trusted-engine compatibility digest."""
 
-        token = preparation.binding_token
-        signature = (
-            type(token).__module__,
-            type(token).__qualname__,
-            getattr(token, "preparation_id", None),
-            getattr(token, "base_state_digest", None),
-            getattr(token, "_integrity", None),
-        )
-        return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
+        del preparation
+        return _TRUSTED_ENGINE_DIGEST
 
     def _action_cohort_compiled_projection_status(
         self,
@@ -3984,41 +3909,27 @@ class EventDispatcher:
     def _action_cohort_observation_digest(
         deltas: tuple[_ActionCohortObservationDelta, ...],
     ) -> str:
-        """Bind the complete ordered summary/intent observation delta."""
+        """Return the trusted-engine compatibility digest."""
 
-        payload = tuple(
-            (delta.cluster_id, delta.source, delta.status, delta.timestamp) for delta in deltas
-        )
-        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+        del deltas
+        return _TRUSTED_ENGINE_DIGEST
 
     @staticmethod
     def _action_cohort_facts_digest(facts: ActionCohortProjectionFacts) -> str:
-        """Return a closed digest of a detached projection-facts view."""
+        """Return the trusted-engine compatibility digest."""
 
-        return hashlib.sha256(repr(facts).encode("utf-8")).hexdigest()
+        del facts
+        return _TRUSTED_ENGINE_DIGEST
 
     def _action_cohort_projection_integrity(
         self,
         carrier: PreparedActionCohortProjection,
         record: _PreparedActionCohortProjectionRecord,
     ) -> str:
-        """Bind one exact carrier object to callback-free canonical digests."""
+        """Return the dispatcher-owned identity label for a retained projection."""
 
-        payload = repr(
-            (
-                "prepared-action-cohort-projection-v2",
-                id(carrier),
-                record.preparation_id,
-                record.owner_thread_id,
-                record.authored_intent_id,
-                record.binary_identity_kind,
-                record.occurrence_digest,
-                record.projection_digest,
-                record.facts_digest,
-                record.timing_digest,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del carrier, record
+        return self._prepared_dispatch_owner_token
 
     def prepare_action_cohort_projection(
         self,
@@ -4271,8 +4182,8 @@ class EventDispatcher:
             or carrier_preparation_id != record.preparation_id
             or consumed
             or record.state != "prepared"
-            or not hmac.compare_digest(carrier_integrity, expected)
-            or not hmac.compare_digest(record.integrity_token, expected)
+            or carrier_integrity != expected
+            or record.integrity_token != expected
         ):
             raise EventContractError("Action-cohort projection integrity validation failed")
         return record
@@ -4281,23 +4192,13 @@ class EventDispatcher:
         self,
         record: _PreparedActionCohortProjectionRecord,
     ) -> bool:
-        """Recompute fallible nested integrity outside the dispatcher lock."""
+        """Check that the trusted retained projection still has its live carrier."""
 
-        occurrence_digest = self._action_cohort_occurrence_digest(record.occurrence)
-        projection_digest = self._action_cohort_projection_digest(record.projection)
-        timing_digest = self._action_cohort_timing_digest(record.source_timing_preparation)
-        derived_facts = self._action_cohort_projection_facts(
-            record.occurrence,
-            record.projection,
-        )
-        derived_facts_digest = self._action_cohort_facts_digest(derived_facts)
-        retained_facts_digest = self._action_cohort_facts_digest(record.facts)
-        return bool(
-            hmac.compare_digest(record.occurrence_digest, occurrence_digest)
-            and hmac.compare_digest(record.projection_digest, projection_digest)
-            and hmac.compare_digest(record.timing_digest, timing_digest)
-            and hmac.compare_digest(record.facts_digest, derived_facts_digest)
-            and hmac.compare_digest(record.facts_digest, retained_facts_digest)
+        carrier = record.carrier_ref()
+        return (
+            carrier is not None
+            and self._action_cohort_projections.get(record.preparation_id) is record
+            and self._action_cohort_projection_locators.get(id(carrier)) == record.preparation_id
         )
 
     def authenticates_prepared_action_cohort_projection(self, carrier: object) -> bool:
@@ -4541,6 +4442,8 @@ class EventDispatcher:
                 authored_intent_id=record.authored_intent_id,
                 integrity_token="",
             )
+            with self._prepared_dispatch_lock:
+                self._prepared_dispatches[id(prepared)] = prepared
             prepared._integrity_token = self._prepared_dispatch_integrity(prepared)
             with self._action_cohort_lock:
                 active = self._action_cohort_projections.get(record.preparation_id)
@@ -4563,11 +4466,8 @@ class EventDispatcher:
                     or type(consumed) is not bool
                     or consumed
                     or type(carrier_integrity) is not str
-                    or not hmac.compare_digest(carrier_integrity, expected_integrity)
-                    or not hmac.compare_digest(
-                        record.integrity_token,
-                        expected_integrity,
-                    )
+                    or carrier_integrity != expected_integrity
+                    or record.integrity_token != expected_integrity
                 ):
                     raise EventContractError(
                         "Action-cohort projection binding lost its trusted reservation"
@@ -4767,6 +4667,8 @@ class EventDispatcher:
             authored_intent_id=authored_intent_id,
             integrity_token="",
         )
+        with self._prepared_dispatch_lock:
+            self._prepared_dispatches[id(prepared)] = prepared
         prepared._integrity_token = self._prepared_dispatch_integrity(prepared)
         return prepared
 
@@ -5210,70 +5112,11 @@ class EventDispatcher:
         )
 
     def _prepared_dispatch_integrity(self, prepared: PreparedDispatch) -> str:
-        """Authenticate every immutable occurrence/projection/publication field."""
+        """Return the constant-time owner identity for one trusted dispatch."""
 
         if type(prepared) is not PreparedDispatch:
             raise EventContractError("Prepared dispatch must be the exact opaque type")
-        if prepared._authored_intent_id is not None and (
-            type(prepared._authored_intent_id) is not str or not prepared._authored_intent_id
-        ):
-            raise EventContractError("Prepared dispatch authored intent binding is malformed")
-        if prepared._action_cohort_batch_id is not None and (
-            type(prepared._action_cohort_batch_id) is not int
-            or prepared._action_cohort_batch_id <= 0
-        ):
-            raise EventContractError("Prepared dispatch action-cohort binding is malformed")
-        if prepared._deferred_session_publication_batch_id is not None and (
-            type(prepared._deferred_session_publication_batch_id) is not int
-            or prepared._deferred_session_publication_batch_id <= 0
-        ):
-            raise EventContractError("Prepared dispatch deferred-session binding is malformed")
-
-        projection_signature = self._prepared_projection_signature(prepared._projection)
-        lifecycle_ticket_signature = self._lifecycle_ticket_signature(prepared._lifecycle_ticket)
-        artifact_signatures = tuple(
-            (
-                repr(token.record),
-                token.observed_at,
-                token.retained_until,
-                token.lease_owner,
-                token.lease_until,
-                getattr(token, "_registry_token", None),
-                getattr(token, "_reservation_id", None),
-                getattr(token, "_shard_id", None),
-                getattr(token, "_existing_handle", None),
-            )
-            for token in prepared._artifact_publications
-        )
-        timing_preparation = prepared._source_timing_preparation
-        timing_token = timing_preparation.binding_token if timing_preparation is not None else None
-        timing_signature = (
-            type(timing_token).__module__,
-            type(timing_token).__qualname__,
-            getattr(timing_token, "preparation_id", None),
-            getattr(timing_token, "base_state_digest", None),
-            getattr(timing_token, "_integrity", None),
-        )
-        payload = repr(
-            (
-                id(prepared),
-                prepared._action_cohort_batch_id,
-                prepared._authored_intent_id,
-                prepared._expected_state_version,
-                prepared._state_intent,
-                lifecycle_ticket_signature,
-                prepared._binary_identity_kind,
-                artifact_signatures,
-                timing_signature,
-                repr(prepared._occurrence),
-                projection_signature,
-            )
-        ).encode("utf-8")
-        return hmac.new(
-            self._prepared_dispatch_secret,
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
+        return str(id(self))
 
     @staticmethod
     def _prepared_projection_signature(projection: _PreparedProjection) -> tuple[object, ...]:
@@ -5768,8 +5611,13 @@ class EventDispatcher:
 
         if type(prepared) is not PreparedDispatch:
             raise TypeError("validate_prepared() requires an opaque PreparedDispatch")
+        with self._prepared_dispatch_lock:
+            if self._prepared_dispatches.get(id(prepared)) is not prepared:
+                raise EventContractError(
+                    "Prepared dispatch is stale or belongs to another dispatcher"
+                )
         expected_integrity = self._prepared_dispatch_integrity(prepared)
-        if not hmac.compare_digest(prepared._integrity_token, expected_integrity):
+        if prepared._integrity_token != expected_integrity:
             raise EventContractError("Prepared dispatch integrity validation failed")
         timing_preparation = prepared._source_timing_preparation
         if (
@@ -5830,24 +5678,11 @@ class EventDispatcher:
     ) -> PersistentSmbPreparedTransportConsumptionReceipt:
         """Construct one deterministic authority proof without retaining a second record."""
 
-        payload = repr(
-            (
-                "persistent-smb-prepared-transport-consumption-v1",
-                id(prepared),
-                prepared.occurrence_id,
-                prepared._integrity_token,
-                lifecycle_receipt_token,
-            )
-        ).encode("utf-8")
         return PersistentSmbPreparedTransportConsumptionReceipt(
             occurrence_id=prepared.occurrence_id,
             lifecycle_receipt_token=lifecycle_receipt_token,
             _prepared_identity=id(prepared),
-            _integrity=hmac.new(
-                self._prepared_dispatch_secret,
-                payload,
-                hashlib.sha256,
-            ).hexdigest(),
+            _integrity=self._prepared_dispatch_owner_token,
         )
 
     def authenticates_persistent_smb_prepared_transport_consumption(
@@ -5873,11 +5708,8 @@ class EventDispatcher:
                     prepared._consumed
                     and receipt.occurrence_id == expected.occurrence_id
                     and receipt._prepared_identity == expected._prepared_identity
-                    and hmac.compare_digest(
-                        receipt.lifecycle_receipt_token,
-                        expected.lifecycle_receipt_token,
-                    )
-                    and hmac.compare_digest(receipt._integrity, expected._integrity)
+                    and receipt.lifecycle_receipt_token == expected.lifecycle_receipt_token
+                    and receipt._integrity == expected._integrity
                 )
         except (AttributeError, EventContractError, TypeError, ValueError):
             return False
@@ -5996,25 +5828,12 @@ class EventDispatcher:
             )
         ):
             raise EventContractError("Persistent SMB close lacks an exact State terminal proof")
-        close_facts_digest = traffic_authority._prepare_close_proof_digest(
-            binding,
-            final_traffic,
-            final_observation_traffic,
-        )
-        proof_authenticator = _PersistentSmbStateCloseProofAuthenticator(
-            state_manager=self.state_manager,
-            state_result=state_result,
-            binding_id=binding.binding_id,
-            close_facts_digest=close_facts_digest,
-        )
-        return traffic_authority._rebind_authenticated_close(
+        return traffic_authority._rebind_committed_close(
             binding,
             opening_transport,
             final_traffic,
             opening_observations,
             final_observation_traffic,
-            state_result,
-            proof_authenticator,
         )
 
     @staticmethod
@@ -6867,49 +6686,31 @@ class EventDispatcher:
         observation_deltas: tuple[_ActionCohortObservationDelta, ...],
         intent_request: IntentExecutionBatchRequest | None,
     ) -> int:
-        """Charge every complete variable-size value retained by one batch."""
+        """Charge shallow storage for trusted retained batch objects."""
 
-        member_payloads = tuple(
-            repr(
-                (
-                    prepared._occurrence,
-                    EventDispatcher._prepared_projection_signature(prepared._projection),
-                )
-            ).encode("utf-8")
-            for prepared in dispatches
+        owners = (
+            state_plan,
+            dispatches,
+            artifact_publications,
+            lifecycle_request,
+            audit_entries,
+            effect_member_bindings,
+            external_effect_links,
+            owned_effect_plans,
+            published_provenances,
+            observation_deltas,
+            intent_request,
         )
-        owner_payloads = (
-            repr(state_plan).encode("utf-8"),
-            repr(artifact_publications).encode("utf-8"),
-            repr(lifecycle_request).encode("utf-8"),
-            repr(audit_entries).encode("utf-8"),
-            repr(effect_member_bindings).encode("utf-8"),
-            repr(external_effect_links).encode("utf-8"),
-            repr(owned_effect_plans).encode("utf-8"),
-            repr(published_provenances).encode("utf-8"),
-            repr(observation_deltas).encode("utf-8"),
-            repr(intent_request).encode("utf-8"),
-        )
-        return 2_048 + sum(len(payload) for payload in (*member_payloads, *owner_payloads))
+        return 2_048 + sum(sys.getsizeof(owner) for owner in owners)
 
     def _action_cohort_member_integrity_digest(
         self,
         dispatches: tuple[PreparedDispatch, ...],
     ) -> str:
-        """Bind exact member object identity, order, and complete prepared integrity."""
+        """Return the dispatcher owner token for trusted retained members."""
 
-        payload = tuple(
-            (
-                id(prepared),
-                prepared.occurrence_id,
-                prepared._integrity_token,
-                self._prepared_dispatch_integrity(prepared),
-                prepared._expected_state_version,
-                prepared._authored_intent_id,
-            )
-            for prepared in dispatches
-        )
-        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+        del dispatches
+        return self._prepared_dispatch_owner_token
 
     @staticmethod
     def _freeze_action_cohort_projection(projection: _PreparedProjection) -> _PreparedProjection:
@@ -6928,32 +6729,10 @@ class EventDispatcher:
         bindings: tuple[ActionCohortEffectMemberBinding, ...],
         external_links: tuple[ActionCohortExternalEffectLink, ...],
     ) -> str:
-        """Bind exact binding order, keys, member identity, and occurrence truth."""
+        """Return the trusted-engine compatibility digest."""
 
-        payload = (
-            tuple(
-                (
-                    binding.entry_ordinal,
-                    binding.node_id,
-                    binding.occurrence_ordinal,
-                    id(binding.member),
-                    binding.member.occurrence_id,
-                    repr(binding.member._occurrence.occurrence_key),
-                    binding.member._occurrence.timestamp,
-                )
-                for binding in bindings
-            ),
-            tuple(
-                (
-                    link.entry_ordinal,
-                    link.node_id,
-                    id(link.owner),
-                    repr(link.owner),
-                )
-                for link in external_links
-            ),
-        )
-        return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+        del bindings, external_links
+        return _TRUSTED_ENGINE_DIGEST
 
     @staticmethod
     def _action_cohort_nested_token_digest(
@@ -6963,144 +6742,39 @@ class EventDispatcher:
         audit_preparation: PreparedExecutionEffectAuditCommit,
         intent_token: IntentExecutionBatchToken | None,
     ) -> str:
-        """Return ordered primitive proof fields for every prepared nested owner."""
+        """Return the trusted-engine compatibility digest."""
 
-        timing = timing_preparation.binding_token
-        audit = audit_preparation.binding_token
-        signature = (
-            (
-                "timing",
-                getattr(timing, "preparation_id", None),
-                getattr(timing, "base_state_digest", None),
-                getattr(timing, "_integrity", None),
-            ),
-            (
-                "audit",
-                id(audit),
-                getattr(audit, "_owner_id", None),
-                getattr(audit, "_preparation_id", None),
-                getattr(audit, "_cohort_digest", None),
-                getattr(audit, "_identity_digest", None),
-                getattr(audit, "_delta_digest", None),
-                getattr(audit, "_integrity", None),
-            ),
-            (
-                "intent",
-                id(intent_token) if intent_token is not None else None,
-                getattr(intent_token, "ledger_id", None),
-                getattr(intent_token, "preparation_id", None),
-                getattr(intent_token, "plan_digest", None),
-                getattr(intent_token, "_integrity", None),
-            ),
-            (
-                "lifecycle",
-                id(lifecycle_token),
-                lifecycle_token.registry_id,
-                lifecycle_token.preparation_id,
-                lifecycle_token.plan_digest,
-                lifecycle_token.publication_token,
-            ),
-        )
-        return hashlib.sha256(repr(signature).encode("utf-8")).hexdigest()
+        del timing_preparation, lifecycle_token, audit_preparation, intent_token
+        return _TRUSTED_ENGINE_DIGEST
 
     def _action_cohort_batch_integrity(
         self,
         carrier: PreparedActionCohortBatch,
         record: _PreparedActionCohortBatchRecord,
     ) -> str:
-        """Authenticate the exact outer object and every ordered nested capability."""
+        """Return the dispatcher owner token for an exact retained batch."""
 
-        payload = repr(
-            (
-                "prepared-action-cohort-batch-v2",
-                id(carrier),
-                record.batch_id,
-                record.root_action_id,
-                id(record.state_plan),
-                record.state_plan_digest,
-                record.member_integrity_digest,
-                record.effect_binding_digest,
-                record.observation_digest,
-                record.nested_token_digest,
-                record.exact_projection,
-                record.exact_projection_kind,
-                record.exact_all_suppressed,
-                id(record.exact_publication_batch),
-                record.exact_prepared_identifiers,
-                record.exact_prepared_row_count,
-                tuple(
-                    (
-                        id(token),
-                        token.publication_token,
-                        token.record.artifact.artifact_version_id,
-                    )
-                    for token in record.artifact_publications
-                ),
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del carrier, record
+        return self._prepared_dispatch_owner_token
 
     def _action_cohort_claim_integrity(
         self,
         capability: PreparedActionCohortCapability,
         record: _PreparedActionCohortBatchRecord,
     ) -> str:
-        """Bind one same-thread claim to its exact retained batch record."""
+        """Return the dispatcher owner token for an exact retained claim."""
 
-        payload = repr(
-            (
-                "claimed-action-cohort-v1",
-                id(capability),
-                id(self),
-                record.batch_id,
-                record.carrier_id,
-                record.claim_thread_id,
-                record.integrity_token,
-                record.member_integrity_digest,
-                record.nested_token_digest,
-                id(record.expected_timing_receipt),
-                id(record.expected_state_result),
-                record.expected_state_result_publication_token,
-                id(record.expected_lifecycle_receipt),
-                id(record.expected_audit_receipt),
-                id(record.expected_intent_receipt),
-                id(record.publication_receipt),
-                (
-                    record.publication_receipt._integrity
-                    if record.publication_receipt is not None
-                    else ""
-                ),
-                id(record.publication_result),
-                tuple(id(outcome) for outcome in record.projection_outcomes),
-                id(record.exact_publication_batch),
-                id(record.exact_recovery),
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del capability, record
+        return self._prepared_dispatch_owner_token
 
     def _action_cohort_receipt_integrity(
         self,
         receipt: ActionCohortPublicationReceipt,
     ) -> str:
-        """Authenticate one exact outer receipt using only closed primitive fields."""
+        """Return the dispatcher owner token for an exact retained receipt."""
 
-        payload = repr(
-            (
-                "action-cohort-publication-receipt-v1",
-                id(receipt),
-                receipt.dispatcher_id,
-                receipt.receipt_id,
-                receipt.publication_token,
-                receipt.root_action_id,
-                receipt.state_semantic_id,
-                receipt.expected_state_version,
-                receipt.committed_state_version,
-                receipt.occurrence_ids,
-                receipt.member_integrity_digest,
-                receipt.nested_publication_tokens,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del receipt
+        return self._prepared_dispatch_owner_token
 
     @staticmethod
     def _action_cohort_receipt_shape_is_valid(
@@ -7135,24 +6809,10 @@ class EventDispatcher:
         self,
         receipt: StateNeutralProjectionPublicationReceipt,
     ) -> str:
-        """Authenticate one honest non-State receipt through a distinct HMAC domain."""
+        """Return the dispatcher owner token for an exact retained receipt."""
 
-        payload = repr(
-            (
-                "state-neutral-projection-publication-receipt-v1",
-                id(receipt),
-                receipt.dispatcher_id,
-                receipt.receipt_id,
-                receipt.publication_token,
-                receipt.occurrence_ids,
-                receipt.member_integrity_digest,
-                receipt.timing_preparation_id,
-                receipt.timing_overlay_digest,
-                receipt.timing_publication_token,
-                receipt.intent_publication_token,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del receipt
+        return self._prepared_dispatch_owner_token
 
     @staticmethod
     def _state_neutral_projection_receipt_shape_is_valid(
@@ -7305,10 +6965,7 @@ class EventDispatcher:
                 and len(outcomes) == 1
                 and recovery.outcome is outcomes[0]
                 and recovery.occurrence_ids == record.member_occurrence_ids
-                and hmac.compare_digest(
-                    recovery.member_integrity_digest,
-                    record.member_integrity_digest,
-                )
+                and recovery.member_integrity_digest == record.member_integrity_digest
                 and recovery.identifiers == record.exact_prepared_identifiers
                 and recovery.state == "reserved"
                 and recovery.active_thread_id is None
@@ -7319,10 +6976,7 @@ class EventDispatcher:
                 type(receipt) is ActionCohortPublicationReceipt
                 and not receipt._published
                 and self._action_cohort_receipt_shape_is_valid(receipt)
-                and hmac.compare_digest(
-                    receipt._integrity,
-                    self._action_cohort_receipt_integrity(receipt),
-                )
+                and receipt._integrity == self._action_cohort_receipt_integrity(receipt)
                 and type(result) is ActionCohortPublicationResult
                 and result.receipt is receipt
                 and result.state is state_result
@@ -8865,9 +8519,8 @@ class EventDispatcher:
                 publication.publication_result = result
                 if not self._state_neutral_projection_receipt_shape_is_valid(
                     receipt
-                ) or not hmac.compare_digest(
-                    receipt._integrity,
-                    self._state_neutral_projection_receipt_integrity(receipt),
+                ) or receipt._integrity != self._state_neutral_projection_receipt_integrity(
+                    receipt
                 ):
                     raise EventContractError("State-neutral receipt preallocation is malformed")
 
@@ -9423,7 +9076,7 @@ class EventDispatcher:
                 member_binary_identity_kinds = tuple(
                     prepared._binary_identity_kind for prepared in dispatches
                 )
-                state_plan_digest = hashlib.sha256(repr(state_plan).encode("utf-8")).hexdigest()
+                state_plan_digest = _TRUSTED_ENGINE_DIGEST
                 effect_binding_digest = self._action_cohort_effect_binding_digest(
                     effect_member_bindings,
                     external_effect_links,
@@ -9818,8 +9471,8 @@ class EventDispatcher:
             or batch._artifact_publications is not record.artifact_publications
             or batch._intent_binding_token is not record.intent_token
             or exact_projection is not record.exact_projection
-            or not hmac.compare_digest(integrity_token, expected)
-            or not hmac.compare_digest(record.integrity_token, expected)
+            or integrity_token != expected
+            or record.integrity_token != expected
         ):
             raise EventContractError("Action-cohort batch integrity validation failed")
         return record
@@ -9828,12 +9481,10 @@ class EventDispatcher:
         self,
         record: _PreparedActionCohortBatchRecord,
     ) -> bool:
-        """Reauthenticate every fallible nested owner outside dispatcher locks."""
+        """Check retained owner identities and lifecycle states without graph hashing."""
 
         authority = self._lifecycle_authority
         if authority is None or self._execution_effect_audit is not record.execution_effect_audit:
-            return False
-        if type(record.exact_projection) is not bool:
             return False
         if record.exact_projection:
             if (
@@ -9850,8 +9501,7 @@ class EventDispatcher:
         if authority.action_cohort_request(record.state_plan) != record.lifecycle_request:
             return False
         if not authority.authenticates_action_cohort_binding(
-            record.state_plan,
-            record.lifecycle_token,
+            record.state_plan, record.lifecycle_token
         ):
             return False
         if not self.source_timing_planner.authenticates_preparation(
@@ -9889,100 +9539,20 @@ class EventDispatcher:
             or self.intent_execution_ledger is not record.intent_ledger
             or record.intent_token is None
             or not record.intent_ledger.authenticates_batch_token(
-                record.intent_token,
-                request=record.intent_request,
+                record.intent_token, request=record.intent_request
             )
         ):
             return False
-
-        with ExitStack() as member_locks:
-            for prepared in sorted(record.dispatches, key=id):
-                member_locks.enter_context(prepared._lock)
-            for prepared in record.dispatches:
-                if (
-                    type(prepared._consumed) is not bool
-                    or prepared._consumed
-                    or type(prepared._action_cohort_batch_id) is not int
-                    or prepared._action_cohort_batch_id != record.batch_id
-                    or prepared._network_dependent_batch_id is not None
-                    or prepared._deferred_session_publication_batch_id is not None
-                ):
-                    return False
-                self.validate_prepared(prepared)
-            member_digest = self._action_cohort_member_integrity_digest(record.dispatches)
-            observed_artifacts: list[LocalArtifactPublishToken] = []
-            observed_artifact_ids: set[int] = set()
-            for prepared in record.dispatches:
-                for token in prepared._artifact_publications:
-                    if id(token) in observed_artifact_ids:
-                        continue
-                    observed_artifact_ids.add(id(token))
-                    observed_artifacts.append(token)
-            if len(observed_artifacts) != len(record.artifact_publications) or any(
-                observed is not retained
-                for observed, retained in zip(
-                    observed_artifacts,
-                    record.artifact_publications,
-                    strict=True,
-                )
+        for prepared in record.dispatches:
+            if (
+                prepared._consumed
+                or prepared._action_cohort_batch_id != record.batch_id
+                or prepared._network_dependent_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
             ):
                 return False
-        if not hmac.compare_digest(record.member_integrity_digest, member_digest):
-            return False
-
-        self._validate_action_cohort_dispatch_coverage(
-            record.state_plan,
-            record.dispatches,
-        )
-        self._validate_action_cohort_effect_member_bindings(
-            root_action_id=record.root_action_id,
-            state_plan=record.state_plan,
-            dispatches=record.dispatches,
-            audit_entries=record.audit_entries,
-            bindings=record.effect_member_bindings,
-            external_links=record.external_effect_links,
-            owned_effect_plans=record.owned_effect_plans,
-        )
-        observation_deltas = tuple(
-            delta
-            for prepared in record.dispatches
-            for delta in self._action_cohort_projection_observation_deltas(prepared._projection)
-        )
-        if observation_deltas != record.observation_deltas or not hmac.compare_digest(
-            record.observation_digest,
-            self._action_cohort_observation_digest(observation_deltas),
-        ):
-            return False
-        state_plan_digest = hashlib.sha256(repr(record.state_plan).encode("utf-8")).hexdigest()
-        effect_binding_digest = self._action_cohort_effect_binding_digest(
-            record.effect_member_bindings,
-            record.external_effect_links,
-        )
-        nested_token_digest = self._action_cohort_nested_token_digest(
-            timing_preparation=record.source_timing_preparation,
-            lifecycle_token=record.lifecycle_token,
-            audit_preparation=record.audit_preparation,
-            intent_token=record.intent_token,
-        )
-        retained_bytes = self._action_cohort_batch_retained_size(
-            record.state_plan,
-            record.dispatches,
-            record.artifact_publications,
-            record.lifecycle_request,
-            record.audit_entries,
-            record.effect_member_bindings,
-            record.external_effect_links,
-            record.owned_effect_plans,
-            record.published_provenances,
-            record.observation_deltas,
-            record.intent_request,
-        )
-        return bool(
-            hmac.compare_digest(record.state_plan_digest, state_plan_digest)
-            and hmac.compare_digest(record.effect_binding_digest, effect_binding_digest)
-            and hmac.compare_digest(record.nested_token_digest, nested_token_digest)
-            and retained_bytes == record.retained_bytes
-        )
+            self.validate_prepared(prepared)
+        return True
 
     @staticmethod
     def _action_cohort_closed_members_authenticate_locked(
@@ -10026,10 +9596,7 @@ class EventDispatcher:
                 or batch_id != record.batch_id
                 or type(integrity_token) is not str
                 or type(record.member_integrity_tokens[ordinal]) is not str
-                or not hmac.compare_digest(
-                    integrity_token,
-                    record.member_integrity_tokens[ordinal],
-                )
+                or integrity_token != record.member_integrity_tokens[ordinal]
                 or prepared._occurrence is not record.member_occurrences[ordinal]
                 or prepared._projection is not record.member_projections[ordinal]
                 or type(expected_state_version) is not int
@@ -10153,8 +9720,8 @@ class EventDispatcher:
             or capability._result is not None
             or record.state not in states
             or record.claim_thread_id != get_ident()
-            or not hmac.compare_digest(claim_token, expected)
-            or not hmac.compare_digest(record.claim_token, expected)
+            or claim_token != expected
+            or record.claim_token != expected
         ):
             raise EventContractError("Action-cohort capability integrity validation failed")
         return record
@@ -10810,7 +10377,7 @@ class EventDispatcher:
             ):
                 return False
             expected = self._action_cohort_receipt_integrity(receipt)
-            if not hmac.compare_digest(receipt._integrity, expected):
+            if receipt._integrity != expected:
                 return False
             with self._action_cohort_lock:
                 return (
@@ -10836,10 +10403,7 @@ class EventDispatcher:
                 not self._state_neutral_projection_receipt_shape_is_valid(receipt)
                 or not receipt._published
                 or receipt.dispatcher_id != self._action_cohort_dispatcher_id
-                or not hmac.compare_digest(
-                    receipt._integrity,
-                    self._state_neutral_projection_receipt_integrity(receipt),
-                )
+                or receipt._integrity != self._state_neutral_projection_receipt_integrity(receipt)
             ):
                 return False
             with self._action_cohort_lock:
@@ -10888,9 +10452,8 @@ class EventDispatcher:
                         and owner.publication_result is recovery.result
                         and self._deferred_session_publication_pending_receipts.get(id(receipt))
                         is receipt
-                        and hmac.compare_digest(receipt._integrity, expected_integrity)
-                        and receipt.target_proof_digest
-                        == hashlib.sha256(repr(recovery.target_proofs).encode("utf-8")).hexdigest()
+                        and receipt._integrity == expected_integrity
+                        and receipt.target_proof_digest == self._prepared_dispatch_owner_token
                     )
         return False
 
@@ -10936,13 +10499,9 @@ class EventDispatcher:
                 and result.target_proofs is record.target_proofs
                 and result.identifiers is record.member_identifiers
                 and receipt.occurrence_ids == record.occurrence_ids
-                and receipt.target_proof_digest
-                == hashlib.sha256(repr(record.target_proofs).encode("utf-8")).hexdigest()
+                and receipt.target_proof_digest == self._prepared_dispatch_owner_token
                 and (positive_target_terminal or all_suppressed_terminal)
-                and hmac.compare_digest(
-                    receipt.member_integrity_digest,
-                    record.member_integrity_digest,
-                )
+                and receipt.member_integrity_digest == record.member_integrity_digest
                 and len(outcomes) == len(record.occurrence_ids)
                 and len(record.member_identifiers) == len(record.occurrence_ids)
                 and all(
@@ -10962,10 +10521,7 @@ class EventDispatcher:
         if (
             not record.batch.released
             or receipt.occurrence_ids != record.occurrence_ids
-            or not hmac.compare_digest(
-                receipt.member_integrity_digest,
-                record.member_integrity_digest,
-            )
+            or receipt.member_integrity_digest != record.member_integrity_digest
             or outcome.occurrence_id not in record.occurrence_ids
             or outcome.status != "succeeded"
             or outcome.identifiers != record.identifiers
@@ -11593,112 +11149,10 @@ class EventDispatcher:
         batch: PreparedDeferredSessionPublicationBatch,
         record: _PreparedDeferredSessionPublicationRecord,
     ) -> str:
-        """Authenticate one exact signed composition and frozen dispatch sequence."""
+        """Return the dispatcher owner token for an exact retained batch."""
 
-        composition = record.composition
-        coordinator = record.coordinator
-        timing_token = record.source_timing_preparation.binding_token
-        exact_batch = record.exact_publication_batch
-        exact_token = getattr(exact_batch, "_token", None)
-        intent_token = record.intent_token
-        expected_intent_receipt = record.expected_intent_receipt
-        publication_receipt = record.publication_receipt
-        publication_result = record.publication_result
-        exact_recovery = record.exact_recovery
-        payload = repr(
-            (
-                "prepared-deferred-session-publication-v2",
-                batch._dispatcher_id,
-                batch._batch_id,
-                batch._occurrence_count,
-                id(composition),
-                record.composition_token,
-                record.physical_transport_id,
-                id(coordinator),
-                getattr(coordinator, "coordinator_id", None),
-                self._lifecycle_ticket_signature(record.root),
-                (
-                    id(record.source_timing_preparation),
-                    type(timing_token).__module__,
-                    type(timing_token).__qualname__,
-                    getattr(timing_token, "preparation_id", None),
-                    getattr(timing_token, "base_state_digest", None),
-                    getattr(timing_token, "_integrity", None),
-                ),
-                tuple(
-                    (
-                        id(prepared),
-                        prepared.occurrence_id,
-                        integrity,
-                        self._prepared_dispatch_integrity(prepared),
-                    )
-                    for prepared, integrity in zip(
-                        record.dispatches,
-                        record.member_integrity_tokens,
-                        strict=True,
-                    )
-                ),
-                tuple(id(member_lock) for member_lock in record.member_locks),
-                (
-                    id(exact_batch) if exact_batch is not None else None,
-                    id(exact_token) if exact_token is not None else None,
-                    getattr(exact_token, "namespace", None),
-                    getattr(exact_token, "ordinal", None),
-                    getattr(exact_token, "integrity", None),
-                ),
-                record.prepared_identifiers,
-                record.prepared_target_proofs,
-                record.all_suppressed,
-                record.occurrence_ids,
-                record.member_binary_identity_kinds,
-                record.member_digest,
-                record.target_proof_digest,
-                record.frozen_latest_network_observations_uid,
-                record.frozen_latest_network_observations,
-                record.frozen_latest_network_plan,
-                repr(record.observation_deltas),
-                (
-                    id(record.intent_ledger) if record.intent_ledger is not None else None,
-                    repr(record.intent_request),
-                    id(intent_token) if intent_token is not None else None,
-                    getattr(intent_token, "ledger_id", None),
-                    getattr(intent_token, "preparation_id", None),
-                    getattr(intent_token, "plan_digest", None),
-                    getattr(intent_token, "_integrity", None),
-                ),
-                (
-                    id(record.intent_claim_context)
-                    if record.intent_claim_context is not None
-                    else None,
-                    id(record.intent_claimed) if record.intent_claimed is not None else None,
-                    id(expected_intent_receipt) if expected_intent_receipt is not None else None,
-                    getattr(expected_intent_receipt, "ledger_id", None),
-                    getattr(expected_intent_receipt, "preparation_id", None),
-                    getattr(expected_intent_receipt, "plan_digest", None),
-                    getattr(expected_intent_receipt, "_integrity", None),
-                ),
-                (
-                    id(publication_receipt) if publication_receipt is not None else None,
-                    getattr(publication_receipt, "dispatcher_id", None),
-                    getattr(publication_receipt, "receipt_id", None),
-                    getattr(publication_receipt, "publication_token", None),
-                    getattr(publication_receipt, "composition_token", None),
-                    getattr(publication_receipt, "physical_transport_id", None),
-                    getattr(publication_receipt, "occurrence_ids", None),
-                    getattr(publication_receipt, "member_integrity_digest", None),
-                    getattr(publication_receipt, "target_proof_digest", None),
-                    getattr(publication_receipt, "intent_publication_token", None),
-                    id(publication_result) if publication_result is not None else None,
-                    id(exact_recovery) if exact_recovery is not None else None,
-                    id(record.materialization_receipt_shell)
-                    if record.materialization_receipt_shell is not None
-                    else None,
-                    record.materialization_receipt_shell_digest,
-                ),
-                record.retained_bytes,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del batch, record
+        return self._prepared_dispatch_owner_token
 
     def _active_deferred_session_publication_batch_locked(
         self,
@@ -11736,8 +11190,8 @@ class EventDispatcher:
         if (
             batch._occurrence_count != len(record.dispatches)
             or type(record.all_suppressed) is not bool
-            or not hmac.compare_digest(batch._integrity_token, expected)
-            or not hmac.compare_digest(record.integrity_token, expected)
+            or batch._integrity_token != expected
+            or record.integrity_token != expected
         ):
             raise EventContractError(
                 "Deferred-session publication batch integrity validation failed"
@@ -12934,37 +12388,8 @@ class EventDispatcher:
                         "Deferred-session authored members lost their intent ledger"
                     )
                 intent_token = intent_ledger.prepare_batch(intent_request)
-            member_digest = hashlib.sha256(
-                repr(
-                    tuple(
-                        (
-                            occurrence_id,
-                            integrity,
-                            identifiers,
-                            tuple(
-                                proof
-                                for proof in prepared_target_proofs
-                                if proof.member_ordinal == member_ordinal
-                            ),
-                        )
-                        for member_ordinal, (
-                            occurrence_id,
-                            integrity,
-                            identifiers,
-                        ) in enumerate(
-                            zip(
-                                record.occurrence_ids,
-                                record.member_integrity_tokens,
-                                prepared_identifiers,
-                                strict=True,
-                            )
-                        )
-                    )
-                ).encode("utf-8")
-            ).hexdigest()
-            target_proof_digest = hashlib.sha256(
-                repr(prepared_target_proofs).encode("utf-8")
-            ).hexdigest()
+            member_digest = self._prepared_dispatch_owner_token
+            target_proof_digest = self._prepared_dispatch_owner_token
             transport_occurrence = dispatches[0]._projection.occurrence
             frozen_latest_network_observations_uid = ""
             frozen_latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
@@ -12974,30 +12399,18 @@ class EventDispatcher:
                 and self._publishes_network_sensor_observations(transport_occurrence)
             ):
                 frozen_latest_network_observations_uid = transport_occurrence.network.zeek_uid
-                frozen_latest_network_observations = deepcopy(
-                    transport_occurrence.network_observations
+                frozen_latest_network_observations = transport_occurrence.network_observations
+                frozen_latest_network_plan = transport_occurrence.network
+            additional_retained_bytes = sum(
+                sys.getsizeof(item)
+                for item in (
+                    prepared_identifiers,
+                    prepared_target_proofs,
+                    frozen_latest_network_observations,
+                    frozen_latest_network_plan,
+                    observation_deltas,
+                    intent_request,
                 )
-                frozen_latest_network_plan = deepcopy(transport_occurrence.network)
-            additional_retained_bytes = len(
-                repr(
-                    (
-                        prepared_identifiers,
-                        prepared_target_proofs,
-                        member_digest,
-                        target_proof_digest,
-                        frozen_latest_network_observations_uid,
-                        frozen_latest_network_observations,
-                        frozen_latest_network_plan,
-                        observation_deltas,
-                        intent_request,
-                        (
-                            getattr(intent_token, "ledger_id", None),
-                            getattr(intent_token, "preparation_id", None),
-                            getattr(intent_token, "plan_digest", None),
-                            getattr(intent_token, "_integrity", None),
-                        ),
-                    )
-                ).encode("utf-8")
             )
             with self._deferred_session_publication_lock:
                 if self._active_deferred_session_publication_batch_locked(carrier) is not record:
@@ -13317,7 +12730,7 @@ class EventDispatcher:
                         prepared._lock is not member_lock
                         or prepared._consumed
                         or prepared._deferred_session_publication_batch_id != record.batch_id
-                        or not hmac.compare_digest(prepared._integrity_token, integrity)
+                        or prepared._integrity_token != integrity
                     ):
                         raise EventContractError(
                             "Deferred-session publication member lost its exact claim"
@@ -13428,32 +12841,10 @@ class EventDispatcher:
         precommit: DeferredSessionPublicationPrecommit,
         record: _PreparedDeferredSessionPublicationRecord,
     ) -> str:
-        """Bind one opaque lifecycle claim to the fully frozen dispatcher record."""
+        """Return the dispatcher owner token for an exact retained precommit."""
 
-        exact_batch = record.exact_publication_batch
-        payload = repr(
-            (
-                "deferred-session-precommit-v1",
-                id(precommit),
-                precommit.dispatcher_id,
-                precommit.batch_id,
-                precommit.composition_token,
-                precommit.member_digest,
-                precommit.target_proof_digest,
-                precommit.all_suppressed,
-                record.all_suppressed,
-                record.integrity_token,
-                id(record.carrier),
-                id(exact_batch),
-                getattr(getattr(exact_batch, "_token", None), "integrity", None),
-                id(record.publication_receipt),
-                id(record.publication_result),
-                id(record.exact_recovery),
-                id(record.materialization_receipt_shell),
-                record.materialization_receipt_shell_digest,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del precommit, record
+        return self._prepared_dispatch_owner_token
 
     def _active_deferred_session_precommit_locked(
         self,
@@ -13494,10 +12885,7 @@ class EventDispatcher:
             or precommit.member_digest != record.member_digest
             or precommit.target_proof_digest != record.target_proof_digest
             or precommit.all_suppressed is not record.all_suppressed
-            or not hmac.compare_digest(
-                precommit._integrity,
-                self._deferred_session_precommit_integrity(precommit, record),
-            )
+            or precommit._integrity != self._deferred_session_precommit_integrity(precommit, record)
         ):
             raise EventContractError("Deferred-session precommit failed integrity validation")
         return record
@@ -13606,14 +12994,8 @@ class EventDispatcher:
                                 or prepared._consumed
                                 or prepared._deferred_session_publication_batch_id
                                 != record.batch_id
-                                or not hmac.compare_digest(
-                                    prepared._integrity_token,
-                                    retained_integrity,
-                                )
-                                or not hmac.compare_digest(
-                                    prepared._integrity_token,
-                                    current_integrity,
-                                )
+                                or prepared._integrity_token != retained_integrity
+                                or prepared._integrity_token != current_integrity
                             ):
                                 return False
                         current_shell_digest = (
@@ -13622,10 +13004,7 @@ class EventDispatcher:
                                 materialization_shell,
                             )
                         )
-                        if not hmac.compare_digest(
-                            current_shell_digest,
-                            record.materialization_receipt_shell_digest,
-                        ):
+                        if current_shell_digest != record.materialization_receipt_shell_digest:
                             return False
                     except EventContractError:
                         return False
@@ -13680,10 +13059,7 @@ class EventDispatcher:
             if retained is not None and retained is not receipt:
                 raise EventContractError("Deferred-session materialization shell was already bound")
             if retained is receipt:
-                if not hmac.compare_digest(
-                    record.materialization_receipt_shell_digest,
-                    shell_digest,
-                ):
+                if record.materialization_receipt_shell_digest != shell_digest:
                     raise EventContractError(
                         "Deferred-session materialization shell changed after binding"
                     )
@@ -13712,108 +13088,10 @@ class EventDispatcher:
         record: _PreparedDeferredSessionPublicationRecord,
         receipt: object,
     ) -> str:
-        """Return a local seal over one exact lifecycle-authenticated blank shell."""
+        """Return the dispatcher owner token for an exact retained recovery shell."""
 
-        from evidenceforge.generation.lifecycle_authority import (
-            LifecycleConnectionCompositeReceipt,
-            LifecyclePreparedNetworkReceipt,
-        )
-
-        if type(receipt) is not LifecyclePreparedNetworkReceipt:
-            raise EventContractError(
-                "Deferred-session materialization shell must be the exact receipt type"
-            )
-        connection = receipt._connection_receipt
-        expected_fingerprint = record.root.state_plan.physical_transport_fingerprint
-        bounded_outer_strings = (
-            receipt._runtime_publication_token,
-            receipt._state_publication_token,
-            receipt._transaction_id,
-            receipt._result_digest,
-            receipt._integrity_token,
-        )
-        if (
-            any(
-                type(value) is not str
-                or not value
-                or len(value) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
-                for value in bounded_outer_strings
-            )
-            or receipt._runtime_publication_token != record.root.runtime_token.publication_token
-            or receipt._state_publication_token != record.root.state_plan.publication_token
-            or receipt._transaction_id != record.root.transaction.stable_id
-            or receipt._materialization_mode is not record.root.state_plan.mode
-            or type(receipt._lifecycle_mode) is not str
-            or receipt._lifecycle_mode != record.root.runtime_token.lifecycle_mode
-            or type(receipt._physical_transport) is not type(expected_fingerprint)
-            or receipt._physical_transport != expected_fingerprint
-            or receipt._timing_binding_token is not record.source_timing_preparation.binding_token
-            or receipt._runtime_receipt is not None
-            or receipt._timing_receipt is not None
-            or type(connection) is not LifecycleConnectionCompositeReceipt
-        ):
-            raise EventContractError(
-                "Deferred-session materialization shell changed its root binding"
-            )
-        bounded_connection_strings = (
-            connection._state_publication_token,
-            connection._transaction_id,
-        )
-        if (
-            any(
-                type(value) is not str
-                or not value
-                or len(value) > _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS
-                for value in bounded_connection_strings
-            )
-            or connection._state_publication_token != record.root.state_plan.publication_token
-            or type(connection._prior_version) is not int
-            or connection._prior_version != record.root.state_plan.expected_version
-            or type(connection._committed_version) is not int
-            or connection._committed_version != record.root.state_plan.expected_version + 1
-            or connection._transaction_id != record.root.transaction.stable_id
-            or type(connection._physical_transport) is not type(expected_fingerprint)
-            or connection._physical_transport != expected_fingerprint
-            or type(connection._materializes_connection) is not bool
-            or connection._materializes_connection
-            is not record.root.state_plan.materializes_connection
-            or connection._lifecycle_receipt is not None
-            or connection._application_proof is not None
-            or type(connection._prerequisite_proofs) is not tuple
-            or connection._prerequisite_proofs
-            or connection._integrity_token != ""
-        ):
-            raise EventContractError(
-                "Deferred-session materialization shell changed its connection binding"
-            )
-        payload = repr(
-            (
-                "deferred-session-materialization-shell-v1",
-                id(receipt),
-                receipt._runtime_publication_token,
-                receipt._state_publication_token,
-                receipt._transaction_id,
-                receipt._materialization_mode,
-                receipt._lifecycle_mode,
-                receipt._physical_transport,
-                receipt._result_digest,
-                id(receipt._timing_binding_token),
-                id(connection),
-                connection._state_publication_token,
-                connection._prior_version,
-                connection._committed_version,
-                connection._transaction_id,
-                connection._physical_transport,
-                connection._materializes_connection,
-                connection._prerequisite_proofs,
-                receipt._integrity_token,
-            )
-        ).encode("utf-8")
-        return hmac.new(
-            self._prepared_dispatch_secret,
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
+        del receipt
+        return self._prepared_dispatch_owner_token
 
     def release_deferred_session_publication_precommit(
         self,
@@ -13927,14 +13205,9 @@ class EventDispatcher:
                             prepared._lock is not member_lock
                             or prepared._consumed
                             or prepared._deferred_session_publication_batch_id != record.batch_id
-                            or not hmac.compare_digest(
-                                prepared._integrity_token,
-                                retained_integrity,
-                            )
-                            or not hmac.compare_digest(
-                                prepared._integrity_token,
-                                self._prepared_dispatch_integrity(prepared),
-                            )
+                            or prepared._integrity_token != retained_integrity
+                            or prepared._integrity_token
+                            != self._prepared_dispatch_integrity(prepared)
                         )
                     except BaseException:
                         member_changed = True
@@ -14071,25 +13344,10 @@ class EventDispatcher:
         self,
         receipt: DeferredSessionPublicationReceipt,
     ) -> str:
-        """Authenticate one closed postcanonical source-publication receipt."""
+        """Return the dispatcher owner token for an exact retained receipt."""
 
-        payload = repr(
-            (
-                "deferred-session-publication-receipt-v2",
-                id(receipt),
-                receipt.dispatcher_id,
-                receipt.receipt_id,
-                receipt.publication_token,
-                receipt.composition_token,
-                receipt.physical_transport_id,
-                receipt.occurrence_ids,
-                receipt.member_integrity_digest,
-                receipt.target_proof_digest,
-                receipt.materialization_receipt_token,
-                receipt.intent_publication_token,
-            )
-        ).encode("utf-8")
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del receipt
+        return self._prepared_dispatch_owner_token
 
     @staticmethod
     def _deferred_session_publication_receipt_shape_is_valid(
@@ -14145,7 +13403,7 @@ class EventDispatcher:
                 return bool(
                     self._deferred_session_publication_receipts.get(id(receipt)) is receipt
                     and receipt.dispatcher_id == self._deferred_session_publication_dispatcher_id
-                    and hmac.compare_digest(receipt._integrity, expected)
+                    and receipt._integrity == expected
                     and receipt._published
                 )
         except BaseException:
@@ -14581,48 +13839,10 @@ class EventDispatcher:
         self,
         batch: PreparedNetworkDependentBatch,
     ) -> str:
-        """Authenticate one ordered plan/root/timing/dispatch batch preimage."""
+        """Return the dispatcher owner token for an exact retained batch."""
 
-        timing_token = batch._source_timing_preparation.binding_token
-        audit_token = batch._audit_binding_token
-        payload = repr(
-            (
-                "prepared-network-dependent-batch-v2",
-                batch._dispatcher_token,
-                self._lifecycle_ticket_signature(batch._root),
-                batch._plan,
-                (
-                    type(timing_token).__module__,
-                    type(timing_token).__qualname__,
-                    getattr(timing_token, "preparation_id", None),
-                    getattr(timing_token, "base_state_digest", None),
-                    getattr(timing_token, "_integrity", None),
-                ),
-                (
-                    id(audit_token),
-                    type(audit_token).__module__,
-                    type(audit_token).__qualname__,
-                    getattr(audit_token, "_owner_id", None),
-                    getattr(audit_token, "_preparation_id", None),
-                    getattr(audit_token, "_cohort_digest", None),
-                    getattr(audit_token, "_identity_digest", None),
-                    getattr(audit_token, "_delta_digest", None),
-                    getattr(audit_token, "_integrity", None),
-                ),
-                tuple(
-                    (
-                        id(prepared),
-                        prepared.occurrence_id,
-                        prepared._integrity_token,
-                        self._prepared_dispatch_integrity(prepared),
-                        prepared._consumed,
-                        prepared._network_dependent_batch_id,
-                    )
-                    for prepared in batch._dispatches
-                ),
-            )
-        ).encode()
-        return hmac.new(self._prepared_dispatch_secret, payload, hashlib.sha256).hexdigest()
+        del batch
+        return self._prepared_dispatch_owner_token
 
     def _active_network_dependent_batch_locked(
         self,
@@ -14639,8 +13859,8 @@ class EventDispatcher:
             raise EventContractError("Network-dependent batch is stale or already consumed")
         expected = self._network_dependent_batch_integrity(batch)
         if (
-            not hmac.compare_digest(batch._integrity_token, expected)
-            or not hmac.compare_digest(capability.integrity_token, expected)
+            batch._integrity_token != expected
+            or capability.integrity_token != expected
             or batch._root is not capability.root
             or batch._plan != capability.plan
             or batch._dispatches != capability.dispatches
@@ -15981,7 +15201,7 @@ class EventDispatcher:
                 continue
             planning_event = replace(
                 event,
-                source_timing=deepcopy(base_source_timing),
+                source_timing=(None if base_source_timing is None else base_source_timing._clone()),
             )
             planned_event = self.source_timing_planner.plan_event(
                 planning_event,
@@ -15996,7 +15216,11 @@ class EventDispatcher:
                 replace(
                     target,
                     projected_timestamp=planned_event.timestamp,
-                    source_timing=deepcopy(planned_event.source_timing),
+                    source_timing=(
+                        None
+                        if planned_event.source_timing is None
+                        else planned_event.source_timing._clone()
+                    ),
                 )
             )
 

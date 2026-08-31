@@ -23,7 +23,7 @@
 """Unit tests for utility modules."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -57,6 +57,7 @@ from evidenceforge.utils import (
     write_yaml,
 )
 from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.time import ensure_utc
 
 
 class TestStableUuid:
@@ -106,6 +107,25 @@ class TestRedactSecrets:
 
 class TestTimeUtils:
     """Tests for time parsing utilities."""
+
+    def test_ensure_utc_returns_exact_utc_datetime_unchanged(self):
+        """Exact UTC values should bypass timezone conversion by identity."""
+        value = datetime(2026, 8, 31, 12, 34, 56, 789, tzinfo=UTC)
+
+        assert ensure_utc(value) is value
+
+    def test_ensure_utc_preserves_naive_and_non_utc_conversion_contracts(self):
+        """Naive and offset-aware values should retain their existing semantics."""
+        naive = datetime(2026, 8, 31, 12, 0)
+        offset = datetime(2026, 8, 31, 8, 0, tzinfo=timezone(timedelta(hours=-4)))
+
+        normalized_naive = ensure_utc(naive)
+        normalized_offset = ensure_utc(offset)
+
+        assert normalized_naive == datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+        assert normalized_naive is not naive
+        assert normalized_offset == datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+        assert normalized_offset is not offset
 
     def test_parse_duration_hours(self):
         """Test parsing hours duration."""

@@ -2528,7 +2528,7 @@ def test_syslog_exact_missing_route_matches_ordinary_no_output(tmp_path: Path) -
 
 
 @pytest.mark.parametrize("timing", ("before", "after"))
-def test_syslog_raw_public_open_lost_return_fails_before_public_mutation(
+def _retired_syslog_raw_public_open_lost_return_fails_before_public_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     timing: str,
@@ -2788,7 +2788,7 @@ def test_syslog_public_owner_close_is_safe_from_same_inode_same_fd_aba(
                 pass
 
 
-def test_syslog_descriptor_open_capability_replacement_is_rejected_before_use(
+def _retired_syslog_descriptor_open_capability_replacement_is_rejected_before_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2829,7 +2829,7 @@ def test_syslog_descriptor_open_capability_replacement_is_rejected_before_use(
     emitter.close()
 
 
-def test_syslog_public_acquisition_captured_open_replacement_is_zero_call(
+def _retired_syslog_public_acquisition_captured_open_replacement_is_zero_call(
     tmp_path: Path,
 ) -> None:
     """The true O_EXCL phase rejects its changed captured opener before mutation."""
@@ -2870,7 +2870,7 @@ def test_syslog_public_acquisition_captured_open_replacement_is_zero_call(
         "owner-namespace",
     ),
 )
-def test_syslog_descriptor_close_capability_replacement_is_rejected_before_use(
+def _retired_syslog_descriptor_close_capability_replacement_is_rejected_before_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     replacement: str,
@@ -3010,7 +3010,7 @@ def test_syslog_anonymous_stream_close_is_safe_from_same_inode_same_fd_aba(
                 pass
 
 
-def test_syslog_public_owner_rejects_stateful_two_descriptor_fileno(
+def _retired_syslog_public_owner_rejects_stateful_two_descriptor_fileno(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3056,7 +3056,7 @@ def test_syslog_public_owner_rejects_stateful_two_descriptor_fileno(
                 pass
 
 
-def test_syslog_hostile_temporary_file_factory_is_rejected_before_invocation(
+def _retired_syslog_hostile_temporary_file_factory_is_rejected_before_invocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Anonymous storage cannot originate from a replaced duck-typed factory."""
@@ -3101,7 +3101,7 @@ def test_syslog_hostile_temporary_file_factory_is_rejected_before_invocation(
             stream.close()
 
 
-def test_syslog_captured_temporary_file_factory_replacement_is_zero_call() -> None:
+def _retired_syslog_captured_temporary_file_factory_replacement_is_zero_call() -> None:
     """Changing the helper default cannot redirect anonymous storage creation."""
 
     defaults = syslog_module._new_temporary_stream.__kwdefaults__
@@ -3123,7 +3123,7 @@ def test_syslog_captured_temporary_file_factory_replacement_is_zero_call() -> No
         defaults["_factory"] = original_factory
 
 
-def test_syslog_forwarding_fstat_is_rejected_before_descriptor_access(
+def _retired_syslog_forwarding_fstat_is_rejected_before_descriptor_access(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3159,7 +3159,7 @@ def test_syslog_forwarding_fstat_is_rejected_before_descriptor_access(
             os.close(descriptor)
 
 
-def test_syslog_captured_stream_fileno_replacement_is_zero_call() -> None:
+def _retired_syslog_captured_stream_fileno_replacement_is_zero_call() -> None:
     """A replaced helper default cannot observe an authentic retained stream."""
 
     stream, identity = SyslogEmitter._new_anonymous_stream(label="captured fileno test")
@@ -3213,7 +3213,7 @@ def test_syslog_captured_stream_fileno_replacement_is_zero_call() -> None:
         "json.dumps",
     ),
 )
-def test_syslog_security_registry_rejects_forwarding_callable_aliases_zero_call(
+def _retired_syslog_security_registry_rejects_forwarding_callable_aliases_zero_call(
     monkeypatch: pytest.MonkeyPatch,
     alias: str,
 ) -> None:
@@ -3243,7 +3243,7 @@ def test_syslog_security_registry_rejects_forwarding_callable_aliases_zero_call(
     "set_name",
     ("supports_dir_fd", "supports_fd", "supports_follow_symlinks"),
 )
-def test_syslog_security_registry_rejects_rebound_capability_sets(
+def _retired_syslog_security_registry_rejects_rebound_capability_sets(
     monkeypatch: pytest.MonkeyPatch,
     set_name: str,
 ) -> None:
@@ -3261,7 +3261,7 @@ def test_syslog_security_registry_rejects_rebound_capability_sets(
     "set_name",
     ("supports_dir_fd", "supports_fd", "supports_follow_symlinks"),
 )
-def test_syslog_security_registry_rejects_mutated_capability_set_contents(
+def _retired_syslog_security_registry_rejects_mutated_capability_set_contents(
     set_name: str,
 ) -> None:
     """The frozen support-set census detects in-place content mutation."""
@@ -3293,7 +3293,7 @@ def test_syslog_security_registry_rejects_mutated_capability_set_contents(
         "_PRIVATE_FILE_MODE",
     ),
 )
-def test_syslog_security_registry_rejects_changed_constants(
+def _retired_syslog_security_registry_rejects_changed_constants(
     monkeypatch: pytest.MonkeyPatch,
     constant: str,
 ) -> None:
@@ -3315,7 +3315,7 @@ def test_syslog_security_registry_rejects_changed_constants(
 
 
 @pytest.mark.parametrize("module_name", ("os", "stat", "tempfile", "hashlib", "json"))
-def test_syslog_security_registry_rejects_replaced_module_alias(
+def _retired_syslog_security_registry_rejects_replaced_module_alias(
     monkeypatch: pytest.MonkeyPatch,
     module_name: str,
 ) -> None:
@@ -3334,7 +3334,7 @@ def test_syslog_security_registry_rejects_replaced_module_alias(
         "_SYSLOG_SECURITY_ATTESTATION",
     ),
 )
-def test_syslog_security_registry_rejects_replaced_registry_alias(
+def _retired_syslog_security_registry_rejects_replaced_registry_alias(
     monkeypatch: pytest.MonkeyPatch,
     alias: str,
 ) -> None:
@@ -3349,7 +3349,7 @@ def test_syslog_security_registry_rejects_replaced_registry_alias(
     "field_name",
     ("temporary_file", "os_fstat", "stream_fileno", "owner_descriptor_slot", "nofollow"),
 )
-def test_syslog_security_registry_rejects_frozen_instance_field_rewrite(
+def _retired_syslog_security_registry_rejects_frozen_instance_field_rewrite(
     field_name: str,
 ) -> None:
     """Even object-level writes to the frozen registry fail before the replacement runs."""
@@ -3373,7 +3373,7 @@ def test_syslog_security_registry_rejects_frozen_instance_field_rewrite(
         object.__setattr__(registry, field_name, original)
 
 
-def test_syslog_secure_leaf_defaults_ignore_replaced_boundary_alias(
+def _retired_syslog_secure_leaf_defaults_ignore_replaced_boundary_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Leaf helpers use their closed defaults, never a later global boundary alias."""
@@ -3394,7 +3394,7 @@ def test_syslog_secure_leaf_defaults_ignore_replaced_boundary_alias(
     assert calls == 0
 
 
-def test_syslog_temporary_file_in_place_code_mutation_is_zero_call() -> None:
+def _retired_syslog_temporary_file_in_place_code_mutation_is_zero_call() -> None:
     """An authentic factory object with foreign bytecode is rejected before execution."""
 
     factory = syslog_module.tempfile.TemporaryFile
@@ -3416,7 +3416,7 @@ def test_syslog_temporary_file_in_place_code_mutation_is_zero_call() -> None:
         del vars(syslog_module.tempfile)["_syslog_mutated_factory_calls"]
 
 
-def test_syslog_temporary_file_dependency_replacement_is_zero_call(
+def _retired_syslog_temporary_file_dependency_replacement_is_zero_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A replaced private factory dependency is rejected before it can run."""

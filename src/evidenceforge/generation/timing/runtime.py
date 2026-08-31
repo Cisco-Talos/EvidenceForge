@@ -12,7 +12,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import RLock
+from threading import RLock, get_ident
 from types import MappingProxyType
 from weakref import ReferenceType, ref
 
@@ -65,6 +65,14 @@ class _BoundedRelationshipCounter:
     def increment(self, key: str) -> None:
         """Increment the stable bucket for one relationship name."""
 
+        self.increment_by(key, 1)
+
+    def increment_by(self, key: str, amount: int) -> None:
+        """Increment one relationship bucket by a positive prepared delta."""
+
+        if amount <= 0:
+            raise ValueError("Relationship counter delta must be positive")
+
         digest = hashlib.blake2b(
             key.encode("utf-8"),
             digest_size=8,
@@ -72,15 +80,15 @@ class _BoundedRelationshipCounter:
         ).digest()
         slot_id = int.from_bytes(digest, "big") % self._capacity
         slot = self._slots.get(slot_id)
-        self._total += 1
+        self._total += amount
         if slot is None:
-            slot = _RelationshipCounterSlot(label=key, count=1)
+            slot = _RelationshipCounterSlot(label=key, count=amount)
             self._slots[slot_id] = slot
             self._estimated_slot_bytes += (
                 sys.getsizeof(slot_id) + sys.getsizeof(slot) + sys.getsizeof(key)
             )
             return
-        slot.count += 1
+        slot.count += amount
         if slot.label != key:
             prior_label_size = sys.getsizeof(slot.label)
             slot.label = min(slot.label, key)
@@ -362,23 +370,19 @@ class TimingAudit:
         copied._owner_runtime = None
         return copied
 
-    def _apply_prepared_operations_locked(
-        self,
-        operations: tuple[tuple[str, str, str], ...],
-    ) -> None:
-        """Apply prevalidated bounded counter operations under ``_lock``."""
+    def _apply_prepared_delta_locked(self, delta: _PreparedTimingAuditDelta) -> None:
+        """Apply one prevalidated compact audit delta under ``_lock``."""
 
-        for kind, relationship_key, distribution_kind in operations:
-            if kind == "sample":
-                self._sample_counts.increment(relationship_key)
-                self._distribution_counts[distribution_kind] += 1
-            elif kind == "repair":
-                self._repair_counts.increment(relationship_key)
-            elif kind == "saturation":
-                self._saturation_counts.increment(relationship_key)
-            else:
-                self._fallback_counts.increment(relationship_key)
-            self._mutation_version += 1
+        for relationship_key, distribution_kind, count in delta.samples:
+            self._sample_counts.increment_by(relationship_key, count)
+            self._distribution_counts[distribution_kind] += count
+        for relationship_key, count in delta.repairs:
+            self._repair_counts.increment_by(relationship_key, count)
+        for relationship_key, count in delta.saturations:
+            self._saturation_counts.increment_by(relationship_key, count)
+        for relationship_key, count in delta.fallbacks:
+            self._fallback_counts.increment_by(relationship_key, count)
+        self._mutation_version += delta.operation_count
 
     @staticmethod
     def _freeze(counter: Counter[str]) -> Mapping[str, int]:
@@ -387,15 +391,49 @@ class TimingAudit:
         return MappingProxyType(dict(sorted(counter.items())))
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedTimingAuditDelta:
+    """Immutable compact audit mutations retained across a commit claim."""
+
+    samples: tuple[tuple[str, str, int], ...]
+    repairs: tuple[tuple[str, int], ...]
+    saturations: tuple[tuple[str, int], ...]
+    fallbacks: tuple[tuple[str, int], ...]
+    operation_count: int
+
+
+@dataclass(slots=True)
+class _TimingStagingLease:
+    """Cheap owner-issued proof that trusted timing staging remains active."""
+
+    owner: object
+    generation_marker: object
+    planning_thread_id: int
+    active: bool = True
+
+
 class _PreparedTimingAudit:
     """Copy-on-write audit observer used by one timing preparation."""
 
-    __slots__ = ("_base", "_base_version", "_operations", "_owner_preparation")
+    __slots__ = (
+        "_base",
+        "_base_version",
+        "_fallbacks",
+        "_operation_count",
+        "_owner_preparation",
+        "_repairs",
+        "_samples",
+        "_saturations",
+    )
 
     def __init__(self, base: TimingAudit) -> None:
         self._base = base
         self._base_version = base.mutation_version
-        self._operations: list[tuple[str, str, str]] = []
+        self._samples: Counter[tuple[str, str]] = Counter()
+        self._repairs: Counter[str] = Counter()
+        self._saturations: Counter[str] = Counter()
+        self._fallbacks: Counter[str] = Counter()
+        self._operation_count = 0
         self._owner_preparation: ReferenceType[TimingRuntimePreparation] | None = None
 
     def _require_public_staging(self) -> None:
@@ -416,10 +454,24 @@ class _PreparedTimingAudit:
         return self._base_version
 
     @property
-    def operations(self) -> tuple[tuple[str, str, str], ...]:
-        """Return the immutable staged operation sequence."""
+    def operation_count(self) -> int:
+        """Return the exact number of staged audit mutations."""
 
-        return tuple(self._operations)
+        return self._operation_count
+
+    def freeze_delta(self) -> _PreparedTimingAuditDelta:
+        """Freeze staged counters into one deterministic compact commit delta."""
+
+        return _PreparedTimingAuditDelta(
+            samples=tuple(
+                (relationship_key, distribution_kind, count)
+                for (relationship_key, distribution_kind), count in sorted(self._samples.items())
+            ),
+            repairs=tuple(sorted(self._repairs.items())),
+            saturations=tuple(sorted(self._saturations.items())),
+            fallbacks=tuple(sorted(self._fallbacks.items())),
+            operation_count=self._operation_count,
+        )
 
     def record_sample(self, relationship_key: str, distribution_kind: str) -> None:
         """Stage one sample without touching canonical audit counters."""
@@ -427,28 +479,41 @@ class _PreparedTimingAudit:
         self._require_public_staging()
         TimingAudit._validate_relationship_key(relationship_key)
         TimingAudit._validate_distribution_kind(distribution_kind)
-        self._operations.append(("sample", relationship_key, distribution_kind))
+        self._samples[(relationship_key, distribution_kind)] += 1
+        self._operation_count += 1
 
     def record_repair(self, relationship_key: str) -> None:
         """Stage one repair counter."""
 
         self._require_public_staging()
         TimingAudit._validate_relationship_key(relationship_key)
-        self._operations.append(("repair", relationship_key, ""))
+        self._repairs[relationship_key] += 1
+        self._operation_count += 1
 
     def record_saturation(self, relationship_key: str) -> None:
         """Stage one saturation counter."""
 
         self._require_public_staging()
         TimingAudit._validate_relationship_key(relationship_key)
-        self._operations.append(("saturation", relationship_key, ""))
+        self._saturations[relationship_key] += 1
+        self._operation_count += 1
 
     def record_fallback(self, relationship_key: str) -> None:
         """Stage one fallback counter."""
 
         self._require_public_staging()
         TimingAudit._validate_relationship_key(relationship_key)
-        self._operations.append(("fallback", relationship_key, ""))
+        self._fallbacks[relationship_key] += 1
+        self._operation_count += 1
+
+    def clear(self) -> None:
+        """Release all staged audit deltas after commit or cancellation."""
+
+        self._samples.clear()
+        self._repairs.clear()
+        self._saturations.clear()
+        self._fallbacks.clear()
+        self._operation_count = 0
 
     def _merged(self) -> TimingAudit:
         """Build a bounded read-only merged view for diagnostics."""
@@ -456,7 +521,7 @@ class _PreparedTimingAudit:
         with self._base._lock:
             copied = self._base._clone_locked()
         with copied._lock:
-            copied._apply_prepared_operations_locked(self.operations)
+            copied._apply_prepared_delta_locked(self.freeze_delta())
         return copied
 
     def snapshot(self) -> TimingAuditSummary:
@@ -472,7 +537,18 @@ class _PreparedTimingAudit:
     def overlay_digest(self) -> str:
         """Return a deterministic digest of the staged audit sequence."""
 
-        payload = json.dumps(self._operations, separators=(",", ":"), ensure_ascii=True)
+        delta = self.freeze_delta()
+        payload = json.dumps(
+            (
+                delta.samples,
+                delta.repairs,
+                delta.saturations,
+                delta.fallbacks,
+                delta.operation_count,
+            ),
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -629,6 +705,7 @@ class TimingRuntimePreparation:
         "_base",
         "_claim_held",
         "_source_timing_owner",
+        "_staging_lease",
         "_state",
         "audit",
         "clocks",
@@ -647,6 +724,7 @@ class TimingRuntimePreparation:
         self.clocks = base.clocks._prepare(sampler=self.sampler)
         self._state = "open"
         self._claim_held = False
+        self._staging_lease: _TimingStagingLease | None = None
         owner_ref = ref(self)
         self.audit._owner_preparation = owner_ref
         self.clocks._owner_preparation = owner_ref
@@ -656,13 +734,53 @@ class TimingRuntimePreparation:
 
         if self._state != "open":
             raise TimingDistributionError("Timing runtime preparation is not open for staging")
-        source_timing_owner = self._source_timing_owner
-        if source_timing_owner is not None:
-            planner = source_timing_owner._owner
-            if not planner.is_active_preparation(source_timing_owner):
-                raise TimingDistributionError(
-                    "Timing runtime preparation is outside its active source timing claim"
-                )
+        lease = self._staging_lease
+        if lease is not None and (
+            not lease.active
+            or lease.owner is not self._source_timing_owner
+            or lease.planning_thread_id != get_ident()
+        ):
+            raise TimingDistributionError(
+                "Timing runtime preparation is outside its active source timing claim"
+            )
+
+    def _activate_source_timing_staging(
+        self,
+        owner: object,
+        generation_marker: object,
+        planning_thread_id: int,
+    ) -> None:
+        """Install one exact trusted staging lease after owner authentication."""
+
+        if (
+            self._state != "open"
+            or self._source_timing_owner is not owner
+            or self._staging_lease is not None
+            or planning_thread_id != get_ident()
+        ):
+            raise TimingDistributionError("Timing runtime preparation cannot activate staging")
+        self._staging_lease = _TimingStagingLease(
+            owner=owner,
+            generation_marker=generation_marker,
+            planning_thread_id=planning_thread_id,
+        )
+
+    def _close_source_timing_staging(
+        self,
+        owner: object,
+        generation_marker: object,
+    ) -> None:
+        """Invalidate only the exact active owner-issued staging lease."""
+
+        lease = self._staging_lease
+        if (
+            lease is None
+            or lease.owner is not owner
+            or lease.generation_marker is not generation_marker
+            or lease.planning_thread_id != get_ident()
+        ):
+            raise TimingDistributionError("Timing runtime preparation staging lease is not active")
+        lease.active = False
 
     @property
     def source_clock_registry(self) -> SourceClockRegistryPreparation:
@@ -735,7 +853,7 @@ class TimingRuntimePreparation:
 
         if self._state != "claimed" or not self._claim_held:
             raise TimingDistributionError("Timing runtime preparation is not claimed")
-        self._base.audit._apply_prepared_operations_locked(self.audit.operations)
+        self._base.audit._apply_prepared_delta_locked(self.audit.freeze_delta())
         self.clocks._commit_locked()
         self._state = "committed"
 
@@ -757,4 +875,6 @@ class TimingRuntimePreparation:
             raise TimingDistributionError("Committed timing runtime preparation cannot cancel")
         if self._claim_held:
             self._release_claim()
+        if self._staging_lease is not None:
+            self._staging_lease.active = False
         self._state = "cancelled"

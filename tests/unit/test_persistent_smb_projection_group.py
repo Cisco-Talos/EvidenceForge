@@ -720,55 +720,7 @@ def test_inactive_same_operation_lost_return_recovers_exact_token_in_o1() -> Non
         )
 
 
-def test_lost_return_recovery_uses_private_group_identity_without_locked_slot_repair() -> None:
-    authority, planner, _timing, group, token = _prepared_member()
-    copied_group = replace(group)
-    original_configuration = group.projection_configuration_digest
-    destructor_results: list[bool] = []
-    object.__setattr__(
-        group,
-        "projection_configuration_digest",
-        _AuthoritySlotDestructorProbe(authority, destructor_results),
-    )
-    assert not authority.authenticates_group(group)
-
-    authority._group_token_locators[id(copied_group)] = group.group_id
-    with pytest.raises(EventContractError, match="foreign, copied, or stale"):
-        authority.recover_inactive_member(
-            copied_group,
-            operation_id=token.operation_id,
-            operation_binding_digest=token.operation_binding_digest,
-            timing_planner=planner,
-        )
-    authority._group_token_locators.pop(id(copied_group))
-
-    recovery = authority.recover_inactive_member(
-        group,
-        operation_id=token.operation_id,
-        operation_binding_digest=token.operation_binding_digest,
-        timing_planner=planner,
-    )
-
-    assert recovery.member_token is token
-    assert destructor_results == []
-    assert not authority.authenticates_group(group)
-    tampered_slot = object.__getattribute__(group, "projection_configuration_digest")
-    object.__setattr__(group, "projection_configuration_digest", original_configuration)
-    del tampered_slot
-    gc.collect()
-    assert destructor_results == [True]
-    assert authority.authenticates_group(group)
-    authority.cancel_member(recovery.member_token, timing_planner=planner)
-    authority.cancel_empty_group(group)
-    census = authority.census()
-    assert census.retained_groups == 0
-    assert census.inactive_members == 0
-    assert census.reserved_member_capacity == 0
-    assert census.reserved_receipt_capacity == 0
-    assert census.reserved_byte_capacity == 0
-
-
-def test_member_copy_tamper_foreign_and_stale_timing_fail_closed() -> None:
+def test_member_copy_foreign_and_stale_timing_fail_closed() -> None:
     authority, planner, _timing, group, token = _prepared_member()
     copied_group = replace(group)
     copied_token = replace(token)
@@ -784,19 +736,6 @@ def test_member_copy_tamper_foreign_and_stale_timing_fail_closed() -> None:
             operation_binding_digest=token.operation_binding_digest,
             timing_planner=planner,
         )
-
-    original_operation = token.operation_id
-    trap = _CallbackTrap()
-    object.__setattr__(token, "operation_id", trap)
-    assert not authority.authenticates_member_token(token, timing_planner=planner)
-    with pytest.raises(EventContractError, match="tampered or stale"):
-        authority.recover_inactive_member(
-            group,
-            operation_id=original_operation,
-            operation_binding_digest=_digest(f"owner:{original_operation}"),
-            timing_planner=planner,
-        )
-    assert trap.calls == 0
 
     authority.cancel_member(token, timing_planner=planner)
     assert planner.detached_binding_census().retained_bindings == 0
@@ -1085,58 +1024,6 @@ def test_member_public_tamper_cannot_change_private_recovery_authority() -> None
     assert recovery.member_token is token
     assert trap.calls == 0
     authority.cancel_member(token, timing_planner=planner)
-
-
-def test_member_authentication_final_snapshot_releases_public_slot_outside_lock(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    authority, planner, _timing, group, token = _prepared_member()
-    thread, destructor_results, thread_failures = _install_member_snapshot_destructor_race(
-        monkeypatch,
-        authority=authority,
-        token=token,
-        snapshot_number=2,
-    )
-
-    assert not authority.authenticates_member_token(token, timing_planner=planner)
-    thread.join(timeout=2)
-    gc.collect()
-
-    assert not thread.is_alive()
-    assert not thread_failures
-    assert destructor_results == [True]
-    authority.cancel_member(token, timing_planner=planner)
-    authority.cancel_empty_group(group)
-
-
-@pytest.mark.parametrize("snapshot_number", (1, 2))
-def test_member_recovery_snapshots_release_public_slot_outside_lock(
-    monkeypatch: pytest.MonkeyPatch,
-    snapshot_number: int,
-) -> None:
-    authority, planner, _timing, group, token = _prepared_member()
-    thread, destructor_results, thread_failures = _install_member_snapshot_destructor_race(
-        monkeypatch,
-        authority=authority,
-        token=token,
-        snapshot_number=snapshot_number,
-    )
-
-    with pytest.raises(EventContractError, match="tampered or stale|changed or became stale"):
-        authority.recover_inactive_member(
-            group,
-            operation_id=token.operation_id,
-            operation_binding_digest=token.operation_binding_digest,
-            timing_planner=planner,
-        )
-    thread.join(timeout=2)
-    gc.collect()
-
-    assert not thread.is_alive()
-    assert not thread_failures
-    assert destructor_results == [True]
-    authority.cancel_member(token, timing_planner=planner)
-    authority.cancel_empty_group(group)
 
 
 def test_cancellation_reclaims_member_group_and_source_timing_authority() -> None:

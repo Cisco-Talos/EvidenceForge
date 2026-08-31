@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-import hmac
 import json
 import math
 import ntpath
@@ -52,7 +51,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import islice
 from threading import Condition, Lock, RLock, get_ident
 from typing import Generic, TypeVar, cast
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.content_identity import (
     ApplicationProfileCanonicalKey,
@@ -2424,7 +2423,7 @@ class LocalArtifactPublishToken:
         return self._integrity
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LocalArtifactPublicationReceipt:
     """Authenticated proof binding one preparation to its committed handle."""
 
@@ -2450,7 +2449,7 @@ class LocalArtifactPublicationReceipt:
         return _pack_artifact_locator(self.shard_id, self.handle)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LocalArtifactPublicationGroupReceipt:
     """Authenticated ordered proof for one all-or-zero artifact publication group."""
 
@@ -3053,11 +3052,10 @@ def _local_artifact_publish_token_integrity(
     secret: bytes,
     token: LocalArtifactPublishToken,
 ) -> str:
-    """Authenticate the exact prepared-publication token preimage."""
+    """Return the registry/reservation identity for a trusted publication token."""
 
-    return hmac.new(
-        secret, _local_artifact_publish_token_preimage(token), hashlib.sha256
-    ).hexdigest()
+    del secret
+    return f"artifact-token:{token._registry_token:x}:{token._reservation_id:x}"
 
 
 def _local_artifact_receipt_preimage(receipt: LocalArtifactPublicationReceipt) -> bytes:
@@ -3101,9 +3099,10 @@ def _local_artifact_receipt_integrity(
     secret: bytes,
     receipt: LocalArtifactPublicationReceipt,
 ) -> str:
-    """Authenticate one exact committed publication receipt."""
+    """Return the registry/reservation identity for a trusted publication receipt."""
 
-    return hmac.new(secret, _local_artifact_receipt_preimage(receipt), hashlib.sha256).hexdigest()
+    del secret
+    return f"artifact-receipt:{receipt._registry_token:x}:{receipt.reservation_id:x}"
 
 
 def _local_artifact_group_receipt_preimage(
@@ -3131,7 +3130,7 @@ def _local_artifact_group_receipt_preimage(
         if type(publication_token) is not str or not publication_token:
             raise StateError("local artifact publication group receipt contains a malformed token")
         member_preimage = _local_artifact_receipt_preimage(member).decode("utf-8")
-        if not hmac.compare_digest(member.publication_token, publication_token):
+        if member.publication_token != publication_token:
             raise StateError("local artifact publication group receipt member order is invalid")
         members.append((member_preimage, member._integrity))
     return json.dumps(
@@ -3150,13 +3149,10 @@ def _local_artifact_group_receipt_integrity(
     secret: bytes,
     receipt: LocalArtifactPublicationGroupReceipt,
 ) -> str:
-    """Authenticate one exact ordered publication-group receipt."""
+    """Return the registry/object identity for a trusted publication group."""
 
-    return hmac.new(
-        secret,
-        _local_artifact_group_receipt_preimage(receipt),
-        hashlib.sha256,
-    ).hexdigest()
+    del secret
+    return f"artifact-group:{receipt._registry_token:x}:{id(receipt):x}"
 
 
 def _artifact_payload_field(payload: bytes, field_index: int) -> str:
@@ -7910,6 +7906,10 @@ class LocalArtifactVersionRegistry:
         "_prepared_reservations",
         "_prepared_secret",
         "_prepared_versions",
+        "_publication_group_receipts",
+        "_publication_group_receipt_locators",
+        "_publication_receipts",
+        "_publication_receipt_locators",
         "_retention",
         "_route_compaction_cursor",
         "_routes",
@@ -7968,6 +7968,14 @@ class LocalArtifactVersionRegistry:
         self._prepared_retained_bytes = 0
         self._prepared_secret = secrets.token_bytes(32)
         self._prepared_versions: dict[str, int] = {}
+        self._publication_receipts: WeakValueDictionary[int, LocalArtifactPublicationReceipt] = (
+            WeakValueDictionary()
+        )
+        self._publication_group_receipts: WeakValueDictionary[
+            int, LocalArtifactPublicationGroupReceipt
+        ] = WeakValueDictionary()
+        self._publication_receipt_locators: dict[int, int] = {}
+        self._publication_group_receipt_locators: dict[int, tuple[int, ...]] = {}
         self._eviction_cursor = 0
         self._route_compaction_cursor = 0
         self._watermark: datetime | None = None
@@ -8210,11 +8218,7 @@ class LocalArtifactVersionRegistry:
                 _existing_handle=existing_handle,
             )
             token = replace(
-                token,
-                _integrity=_local_artifact_publish_token_integrity(
-                    self._prepared_secret,
-                    token,
-                ),
+                token, _integrity=hashlib.sha256(f"artifact:{reservation_id}".encode()).hexdigest()
             )
             canonical_token = replace(token, record=canonical_record)
             canonical_preimage = _local_artifact_publish_token_preimage(canonical_token)
@@ -8311,11 +8315,6 @@ class LocalArtifactVersionRegistry:
         if active is None or active.token_ref() is not token:
             self._prepared_capability_locators.pop(id(token), None)
             raise StateError("local artifact publish token is stale or already consumed")
-        expected = _local_artifact_publish_token_integrity(self._prepared_secret, token)
-        if not hmac.compare_digest(token._integrity, active.canonical_token._integrity) or not (
-            hmac.compare_digest(expected, active.canonical_token._integrity)
-        ):
-            raise StateError("local artifact publish token integrity validation failed")
         return active
 
     def _release_prepared_locked(
@@ -8413,6 +8412,10 @@ class LocalArtifactVersionRegistry:
         self._claimed_reservations.discard(reservation.reservation_id)
         self._committing_reservations.discard(reservation.reservation_id)
         self._prepared_capability_locators.pop(reservation.token_id, None)
+        if reservation.commit_plan is not None:
+            self._publication_receipt_locators.pop(id(reservation.commit_plan.receipt), None)
+        if reservation.group_receipt is not None:
+            self._publication_group_receipt_locators.pop(id(reservation.group_receipt), None)
         if reservation.commit_id is not None and not preserve_commit_locator:
             self._prepared_commit_locators.pop(reservation.commit_id, None)
         self._prepared_reservations.pop(reservation.reservation_id, None)
@@ -8513,28 +8516,19 @@ class LocalArtifactVersionRegistry:
 
         if type(receipt) is not LocalArtifactPublicationReceipt:
             return False
-        if publication_token is not None and type(publication_token) is not str:
-            return False
-        try:
-            expected = _local_artifact_receipt_integrity(self._prepared_secret, receipt)
-            return (
-                receipt._registry_token == id(self)
-                and hmac.compare_digest(receipt._integrity, expected)
-                and (
-                    publication_token is None
-                    or hmac.compare_digest(receipt.publication_token, publication_token)
+        return bool(
+            (
+                self._publication_receipts.get(id(receipt)) is receipt
+                or (
+                    (reservation_id := self._publication_receipt_locators.get(id(receipt)))
+                    is not None
+                    and (reservation := self._prepared_reservations.get(reservation_id)) is not None
+                    and reservation.commit_plan is not None
+                    and reservation.commit_plan.receipt is receipt
                 )
             )
-        except (
-            AssertionError,
-            AttributeError,
-            OverflowError,
-            RecursionError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return False
+            and (publication_token is None or receipt.publication_token == publication_token)
+        )
 
     def authenticates_publication_group_receipt(
         self,
@@ -8546,51 +8540,21 @@ class LocalArtifactVersionRegistry:
 
         if type(receipt) is not LocalArtifactPublicationGroupReceipt:
             return False
-        if publication_tokens is not None and (
-            type(publication_tokens) is not tuple
-            or any(type(token) is not str for token in publication_tokens)
-        ):
-            return False
-        try:
-            expected = _local_artifact_group_receipt_integrity(self._prepared_secret, receipt)
-            members_authenticate = all(
-                self.authenticates_publication_receipt(
-                    member,
-                    publication_token=token,
-                )
-                for member, token in zip(
-                    receipt.receipts,
-                    receipt.publication_tokens,
-                    strict=True,
-                )
-            )
-            tokens_match = publication_tokens is None or (
-                len(receipt.publication_tokens) == len(publication_tokens)
-                and all(
-                    hmac.compare_digest(actual, requested)
-                    for actual, requested in zip(
-                        receipt.publication_tokens,
-                        publication_tokens,
-                        strict=True,
+        return bool(
+            (
+                self._publication_group_receipts.get(id(receipt)) is receipt
+                or (
+                    (reservation_ids := self._publication_group_receipt_locators.get(id(receipt)))
+                    is not None
+                    and all(
+                        (reservation := self._prepared_reservations.get(reservation_id)) is not None
+                        and reservation.group_receipt is receipt
+                        for reservation_id in reservation_ids
                     )
                 )
             )
-            return (
-                receipt._registry_token == id(self)
-                and hmac.compare_digest(receipt._integrity, expected)
-                and members_authenticate
-                and tokens_match
-            )
-        except (
-            AssertionError,
-            AttributeError,
-            OverflowError,
-            RecursionError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return False
+            and (publication_tokens is None or receipt.publication_tokens == publication_tokens)
+        )
 
     def cancel_prepared(self, token: object) -> bool:
         """Cancel one uncommitted reservation without publishing any record."""
@@ -8900,11 +8864,11 @@ class LocalArtifactVersionRegistry:
                     )
                     group_receipt = replace(
                         group_receipt,
-                        _integrity=_local_artifact_group_receipt_integrity(
-                            self._prepared_secret,
-                            group_receipt,
-                        ),
+                        _integrity=hashlib.sha256(
+                            "\0".join(publication_tokens).encode()
+                        ).hexdigest(),
                     )
+                    self._publication_group_receipt_locators[id(group_receipt)] = reservation_ids
                     transaction = LocalArtifactPreparedGroupCommit(
                         self,
                         publication_tokens,
@@ -9263,14 +9227,9 @@ class LocalArtifactVersionRegistry:
                 if (
                     transaction._expected_receipt is not plan.receipt
                     or type(transaction._publication_token) is not str
-                    or not hmac.compare_digest(
-                        transaction._publication_token,
-                        plan.receipt.publication_token,
-                    )
-                    or not self.authenticates_publication_receipt(
-                        plan.receipt,
-                        publication_token=reservation.canonical_token.publication_token,
-                    )
+                    or transaction._publication_token != plan.receipt.publication_token
+                    or plan.receipt.publication_token
+                    != reservation.canonical_token.publication_token
                 ):
                     raise StateError("local artifact prepared receipt integrity validation failed")
                 reservation.committing = True
@@ -9314,6 +9273,7 @@ class LocalArtifactVersionRegistry:
                         if pending is not None:
                             self._evict_pending_version(*pending)
                     raise
+                self._publication_receipts[id(receipt)] = receipt
                 return receipt
 
     def _commit_claimed_group(
@@ -9339,10 +9299,6 @@ class LocalArtifactVersionRegistry:
             if (
                 transaction._expected_receipt is not group_receipt
                 or transaction._publication_tokens is not group_receipt.publication_tokens
-                or not self.authenticates_publication_group_receipt(
-                    group_receipt,
-                    publication_tokens=group_receipt.publication_tokens,
-                )
             ):
                 raise StateError(
                     "local artifact prepared publication group receipt integrity validation failed"
@@ -9442,6 +9398,9 @@ class LocalArtifactVersionRegistry:
                                 self._committing_reservations.discard(reservation.reservation_id)
                     raise
                 self._prepared_commit_locators.pop(id(transaction), None)
+                for member in group_receipt.receipts:
+                    self._publication_receipts[id(member)] = member
+                self._publication_group_receipts[id(group_receipt)] = group_receipt
             return group_receipt
 
     def _prepare_claimed_commit_locked(
@@ -9514,10 +9473,8 @@ class LocalArtifactVersionRegistry:
             record_digest=reservation.record_digest,
             _registry_token=id(self),
         )
-        receipt = replace(
-            receipt,
-            _integrity=_local_artifact_receipt_integrity(self._prepared_secret, receipt),
-        )
+        receipt = replace(receipt, _integrity=token.publication_token)
+        self._publication_receipt_locators[id(receipt)] = reservation.reservation_id
         return _LocalArtifactPreparedCommitPlan(
             expected_handle=expected_handle,
             packed_payload=packed_payload,

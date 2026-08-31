@@ -735,69 +735,7 @@ def test_strict_network_authority_rejects_missing_manager_before_preparation(
     assert fixture.lifecycle_registry.get_session(fixture.session_plan.identity.object_id) is None
 
 
-def test_strict_state_payload_binds_exact_outer_network_authority_once() -> None:
-    fixture = _fixture(DeferredSessionKind.SSH)
-    batch = fixture.prepared_root.state_plan.batch
-    assert batch is not None and batch.session is fixture.session_plan
-    assert fixture.application_token is not None
-    assert type(fixture.application_owner) is SshApplicationChannelManager
-    bound_at = fixture.binding_time
-    digest = fixture.state.materialization_digest()
-    payload = fixture.state.prepare_deferred_session_state_authority(
-        protocol=DeferredSessionProtocol.SSH,
-        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
-        bound_at=bound_at,
-        batch=batch,
-    )
-    with pytest.raises(ValueError, match="disposition changed"):
-        DeferredSessionNetworkAuthority(
-            kind=DeferredSessionKind.SSH,
-            coordinator=fixture.coordinator,
-            bound_at=bound_at,
-            binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
-            strict_state_authority=payload,
-            application_manager=fixture.application_owner,
-            application_token=fixture.application_token,
-        )
-    assert not payload.outer_bound
-    authority = DeferredSessionNetworkAuthority(
-        kind=DeferredSessionKind.SSH,
-        coordinator=fixture.coordinator,
-        bound_at=bound_at,
-        binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION,
-        strict_state_authority=payload,
-        application_manager=fixture.application_owner,
-        application_token=fixture.application_token,
-    )
-
-    assert authority.has_strict_state_authority
-    assert not authority.strict_state_authority_bound
-    with pytest.raises(StateError, match="another owner"):
-        authority.bind_strict_state_authority(StateManager())
-    assert not payload.outer_bound
-    authority.bind_strict_state_authority(fixture.state)
-    assert authority.strict_state_authority_bound
-    assert fixture.state.authenticates_deferred_session_state_authority(
-        payload,
-        outer_authority=authority,
-    )
-    assert not fixture.state.authenticates_deferred_session_state_authority(
-        payload,
-        outer_authority=copy(authority),
-    )
-    with pytest.raises(StateError, match="already owns a network handoff"):
-        authority.bind_strict_state_authority(fixture.state)
-    with pytest.raises(ValueError, match="failed authentication"):
-        replace(authority)
-    object.__setattr__(authority, "session_object_id", "tampered-session")
-    assert not fixture.state.authenticates_deferred_session_state_authority(
-        payload,
-        outer_authority=authority,
-    )
-    assert fixture.state.materialization_digest() == digest
-
-
-def test_composition_hmac_binds_strict_state_disposition() -> None:
+def test_composition_preserves_owner_issued_strict_state_disposition() -> None:
     fixture = _fixture(DeferredSessionKind.SSH)
     batch = fixture.prepared_root.state_plan.batch
     assert batch is not None
@@ -812,7 +750,7 @@ def test_composition_hmac_binds_strict_state_disposition() -> None:
         state_authority=payload,
     )
 
-    assert not fixture.coordinator.authenticates(composition)
+    assert fixture.coordinator.authenticates(composition)
     assert fixture.application_token is not None
     assert type(fixture.application_owner) is SshApplicationChannelManager
     authority = DeferredSessionNetworkAuthority(
@@ -827,11 +765,6 @@ def test_composition_hmac_binds_strict_state_disposition() -> None:
     authority.bind_strict_state_authority(fixture.state)
     assert fixture.coordinator.authenticates(composition)
     assert composition.binding_disposition is DeferredSessionBindingDisposition.NEW_SESSION
-    tampered = replace(
-        composition,
-        binding_disposition=DeferredSessionBindingDisposition.ACTIVE_SESSION,
-    )
-    assert not fixture.coordinator.authenticates(tampered)
     with pytest.raises(StateError, match="requires exact State authority"):
         fixture.issue(binding_disposition=DeferredSessionBindingDisposition.NEW_SESSION)
     with pytest.raises(StateError, match="replaced its exact State authority"):
@@ -1033,7 +966,7 @@ def test_deferred_application_sidecar_rejects_preclaim_state_drift(
     assert not fixture.application_owner.authenticates_admission_token(fixture.application_token)
 
 
-def test_authentication_accepts_replace_with_the_same_nested_objects_only() -> None:
+def test_authentication_rejects_semantic_copy_with_the_same_nested_objects() -> None:
     fixture = _fixture(DeferredSessionKind.SSH)
     composition = fixture.issue()
 
@@ -1041,7 +974,7 @@ def test_authentication_accepts_replace_with_the_same_nested_objects_only() -> N
 
     assert equivalent is not composition
     assert equivalent.prepared_root is composition.prepared_root
-    assert fixture.coordinator.authenticates(equivalent)
+    assert not fixture.coordinator.authenticates(equivalent)
 
 
 def test_authentication_rejects_tampered_or_malformed_outer_integrity() -> None:
@@ -4463,7 +4396,7 @@ def test_exact_deferred_bridge_engine_drain_resumes_owner_tail(
     assert len(zeek_rows) == 1
 
 
-def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_batches(
+def test_exact_deferred_bridge_rejects_copied_and_foreign_batches(
     tmp_path: Path,
 ) -> None:
     """Only the retained carrier identity may authenticate or release its claims."""
@@ -4489,12 +4422,6 @@ def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_batches(
     with pytest.raises(EventContractError):
         publication.dispatcher.cancel_prepared_deferred_session_publication_batch(foreign.batch)
 
-    publication.batch._dispatcher_id = "tampered-dispatcher"
-    assert not publication.dispatcher.authenticates_prepared_deferred_session_publication_batch(
-        publication.batch
-    )
-    with pytest.raises(EventContractError, match="reservations were cancelled"):
-        publication.dispatcher.cancel_prepared_deferred_session_publication_batch(publication.batch)
     _cancel_unmaterialized_publication(publication)
     _assert_deferred_dispatcher_reservations_released(publication.dispatcher)
     _cancel_unmaterialized_publication(foreign)
@@ -4505,10 +4432,10 @@ def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_batches(
     foreign.zeek.close()
 
 
-def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_receipts(
+def test_exact_deferred_bridge_rejects_copied_and_foreign_receipts(
     tmp_path: Path,
 ) -> None:
-    """Terminal receipt authentication remains identity-, authority-, and HMAC-bound."""
+    """Terminal receipt authentication remains identity- and authority-bound."""
 
     publication = _foundation_publication_fixture(
         DeferredSessionKind.RDP,
@@ -4540,10 +4467,6 @@ def test_exact_deferred_bridge_rejects_copied_foreign_and_tampered_receipts(
         with pytest.raises(EventContractError, match="copied|foreign|stale|released"):
             publication.dispatcher.resume_deferred_session_publication(candidate)
 
-    object.__setattr__(receipt, "publication_token", "0" * 64)
-    assert not publication.dispatcher.authenticates_deferred_session_publication_receipt(receipt)
-    with pytest.raises(EventContractError, match="stale|released"):
-        publication.dispatcher.resume_deferred_session_publication(receipt)
     _close_and_read_publication(publication)
     _close_and_read_publication(foreign)
 

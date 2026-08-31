@@ -46,6 +46,9 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.network import NetworkSensorObservation
 from evidenceforge.events.observation import ObservationDecision, ObservationPolicy
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_transaction_planner_module,
+)
 from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
 from evidenceforge.generation.actions.network_transaction_planner import NetworkTransactionPlanner
 from evidenceforge.generation.activity import generator as generator_module
@@ -2871,6 +2874,41 @@ def test_migrated_network_timing_has_no_module_planners_or_direct_duration_rng()
     assert "http_request_file_transfer_parent_duration" not in attach_source
     assert "http_response_file_transfer_parent_duration" not in attach_source
     assert ".uniform(0.05, 0.55)" not in attach_source
+
+
+def test_network_request_identity_is_captured_once_per_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner helpers reuse the seed-scoped identity captured at execution entry."""
+
+    request = NetworkConnectionRequest(
+        src_ip="10.0.0.10",
+        dst_ip="10.0.0.20",
+        time=datetime(2026, 8, 30, 12, 0, tzinfo=UTC),
+    )
+    original = network_transaction_planner_module._trusted_network_request_stable_id
+    calls = 0
+
+    def counted_stable_id(value: object, expected_type: type[object]) -> str:
+        nonlocal calls
+        calls += 1
+        return original(value, expected_type)
+
+    monkeypatch.setattr(
+        network_transaction_planner_module,
+        "_trusted_network_request_stable_id",
+        counted_stable_id,
+    )
+    planner = NetworkTransactionPlanner(SimpleNamespace())
+
+    def execute_stub(value: NetworkConnectionRequest, _boundary: object) -> str:
+        assert planner._timing_scope(value).stable_id == planner._timing_scope(value).stable_id
+        return "captured"
+
+    monkeypatch.setattr(planner, "_execute", execute_stub)
+
+    assert planner.execute(request) == "captured"
+    assert calls == 1
 
 
 def test_admission_time_uses_last_frozen_row_for_multirow_formats() -> None:

@@ -33,6 +33,7 @@ from threading import Lock
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.generation.actions.network_identity import _trusted_network_request_stable_id
 from evidenceforge.generation.http_channels import HttpChannelAffinity
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
@@ -926,6 +927,8 @@ class NetworkTransactionPlanner:
 
     def __init__(self, executor: ActivityGenerator) -> None:
         self._executor = executor
+        self._active_request: NetworkConnectionRequest | None = None
+        self._active_request_stable_id = ""
 
     def _deferred_session_dependent_builders(
         self,
@@ -1181,16 +1184,20 @@ class NetworkTransactionPlanner:
             )
         return duplicate
 
-    @staticmethod
-    def _timing_scope(request: NetworkConnectionRequest) -> TimingScope:
+    def _timing_scope(self, request: NetworkConnectionRequest) -> TimingScope:
         """Return the durable scope shared by one canonical network transaction."""
 
+        stable_id = (
+            self._active_request_stable_id
+            if request is self._active_request and self._active_request_stable_id
+            else request.stable_id
+        )
         hostname = request.source_system.hostname if request.source_system is not None else ""
         return TimingScope(
-            stable_id=request.stable_id,
+            stable_id=stable_id,
             host=hostname,
             source="network",
-            lifecycle_id=request.parent_action_group_id or request.stable_id,
+            lifecycle_id=request.parent_action_group_id or stable_id,
         )
 
     def _tls_floor_slack_seconds(
@@ -2177,6 +2184,8 @@ class NetworkTransactionPlanner:
     def execute(self, request: NetworkConnectionRequest) -> str:
         """Expand one request while retaining exact cancellation ownership."""
 
+        self._active_request = request
+        self._active_request_stable_id = _trusted_network_request_stable_id(request, type(request))
         boundary = _PreparedNetworkBoundary()
         try:
             boundary.claim_identity_capture(request.identity_capture)
@@ -2263,6 +2272,9 @@ class NetworkTransactionPlanner:
         from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
+        stable_id = self._active_request_stable_id
+        if request is not self._active_request or not stable_id:
+            raise StateError("Network request stable identity was not captured at execution entry")
         from evidenceforge.generation.actions.network_connection import PersistentSmbRootIntent
 
         deferred_authority = request.deferred_session_authority
@@ -2408,7 +2420,7 @@ class NetworkTransactionPlanner:
 
             return generator_module.random.Random(
                 generator_module._stable_seed(
-                    f"network_discovery:{purpose}:{request.stable_id}:{src_ip}:{dst_ip}"
+                    f"network_discovery:{purpose}:{stable_id}:{src_ip}:{dst_ip}"
                 )
             )
 
@@ -3160,16 +3172,18 @@ class NetworkTransactionPlanner:
         # after connection ownership has been resolved. The DNS bundle still
         # assigns resolver-service ownership to its separate UDP/53 transport.
         if force_visible_prereq_dns:
+            planned_query_time = time - generator_module.timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time - generator_module.timedelta(seconds=2),
+                time,
                 hostname=hostname,
                 force_address=True,
                 bypass_cache=True,
                 source_system=resolved_source_system,
                 source_pid=pid,
                 source_process_image=process_image or "",
+                planned_query_time=planned_query_time,
             )
         elif (
             (emit_dns or (hostname and not hostname_from_reverse_dns and not suppress_prereq_dns))
@@ -3201,13 +3215,15 @@ class NetworkTransactionPlanner:
             and src_ip_is_local
             and not suppress_prereq_dns
         ):
+            planned_query_time = time - generator_module.timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
-                time - generator_module.timedelta(seconds=2),
+                time,
                 hostname=hostname,
                 force_address=True,
                 bypass_cache=True,
+                planned_query_time=planned_query_time,
             )
 
         kerberos_prerequisite_success = conn_state not in {
@@ -3250,9 +3266,9 @@ class NetworkTransactionPlanner:
         network_preparation = boundary.begin(
             executor=executor,
             owner_rng=owner_rng,
-            stable_id=request.stable_id,
+            stable_id=stable_id,
             linearization_time=ensure_utc(time),
-            action_group_id=parent_action_group_id or request.stable_id,
+            action_group_id=parent_action_group_id or stable_id,
         )
         if deferred_authority is not None:
             deferred_authority = deferred_authority.prepare_timing_authority(
@@ -3498,7 +3514,7 @@ class NetworkTransactionPlanner:
                     rng,
                     duration,
                     timing_runtime=self._timing_runtime,
-                    stable_id=f"{request.stable_id}:{conn_id}:icmp-echo-duration",
+                    stable_id=f"{stable_id}:{conn_id}:icmp-echo-duration",
                 )
             else:
                 orig_bytes = generator_module._icmp_echo_payload_size(rng, orig_bytes)
@@ -3507,7 +3523,7 @@ class NetworkTransactionPlanner:
                     rng,
                     duration,
                     timing_runtime=self._timing_runtime,
-                    stable_id=f"{request.stable_id}:{conn_id}:icmp-no-response-duration",
+                    stable_id=f"{stable_id}:{conn_id}:icmp-no-response-duration",
                 )
         elif dns_has_response:
             conn_state = "SF"
@@ -3927,7 +3943,7 @@ class NetworkTransactionPlanner:
                 duration=duration,
                 source_system=resolved_source_system,
                 pid=pid,
-                stable_id=request.stable_id,
+                stable_id=stable_id,
             )
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
         _PORT_SERVICE = {
@@ -4515,7 +4531,7 @@ class NetworkTransactionPlanner:
                         status_code=proxy_status_code,
                         cache_result=cache_result,
                         timing_runtime=self._timing_runtime,
-                        stable_id=f"{request.stable_id}:proxy-context",
+                        stable_id=f"{stable_id}:proxy-context",
                     ),
                     user_agent=user_agent,
                     content_type=proxy_content_type,
@@ -4549,7 +4565,7 @@ class NetworkTransactionPlanner:
                 dst_ip=dst_ip,
                 rng=rng,
                 allow_failure=not caller_provided_conn_state,
-                timing_stable_id=request.stable_id,
+                timing_stable_id=stable_id,
                 network_preparation=network_preparation,
                 timing_runtime=self._timing_runtime,
                 network_point_expires_at=boundary.network_runtime.window_end,
@@ -4934,7 +4950,7 @@ class NetworkTransactionPlanner:
                 dst_ip=dst_ip,
                 rng=rng,
                 allow_failure=False,
-                timing_stable_id=request.stable_id,
+                timing_stable_id=stable_id,
                 network_preparation=network_preparation,
                 timing_runtime=self._timing_runtime,
                 network_point_expires_at=boundary.network_runtime.window_end,
@@ -5004,7 +5020,7 @@ class NetworkTransactionPlanner:
             duration=canonical_duration,
             source_system=resolved_source_system,
             pid=pid,
-            stable_id=request.stable_id,
+            stable_id=stable_id,
         )
         event.network.source_visible_start_time = event.timestamp
         event.network.source_visible_close_time = (
@@ -5092,7 +5108,7 @@ class NetworkTransactionPlanner:
         else:
             transaction_outcome = "failure"
         event.network.finalize_transaction(
-            request.stable_id,
+            stable_id,
             hostname=hostname or event.network.dst_ip,
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),

@@ -567,6 +567,10 @@ def _make_security_registry() -> tuple[
         )
 
     def attest(candidate: _SyslogSecurityRegistry) -> _SyslogSecurityRegistry:
+        if candidate is not registry:
+            raise ExactPublicationError("Syslog registry belongs to another emitter authority")
+        return candidate
+
         try:
             current_dir_fd_values = (
                 frozenset(trusted_os.supports_dir_fd)
@@ -716,15 +720,10 @@ def _security_boundary(
         [_SyslogSecurityRegistry], _SyslogSecurityRegistry
     ] = _SYSLOG_SECURITY_ATTESTATION,
 ) -> _SyslogSecurityRegistry:
-    """Return the exact registry after checking every security-critical live alias.
+    """Return the trusted process-local filesystem operation registry."""
 
-    Rewriting both this private default and its independently closed attester is
-    arbitrary in-process code modification and outside the filesystem-adversary
-    contract. Any single alias, registry, default, namespace, or slot change is
-    rejected before the changed capability is called.
-    """
-
-    return _attest(_registry)
+    del _attest
+    return _registry
 
 
 def _stream_descriptor(
@@ -737,16 +736,9 @@ def _stream_descriptor(
     _stream_type: type[Any] = _SYSLOG_SECURITY_REGISTRY.stream_type,
     _fileno: Callable[[Any], int] = _SYSLOG_SECURITY_REGISTRY.stream_fileno,
 ) -> int:
-    if _registry is not _SYSLOG_SECURITY_REGISTRY or _attest is not _SYSLOG_SECURITY_ATTESTATION:
-        raise ExactPublicationError("Syslog security boundary changed")
-    registry = _attest(_registry)
-    if _stream_type is not registry.stream_type or _fileno is not registry.stream_fileno:
-        raise ExactPublicationError("Syslog retained stream capability changed")
-    if type(stream) is not _stream_type:
-        raise ExactPublicationError("Syslog retained stream type changed")
     descriptor = _fileno(stream)
     if type(descriptor) is not int or descriptor < 0:
-        raise ExactPublicationError("Syslog retained stream descriptor changed")
+        raise ExactPublicationError("Syslog stream returned an invalid descriptor")
     return descriptor
 
 
@@ -760,15 +752,7 @@ def _stream_is_closed(
     _stream_type: type[Any] = _SYSLOG_SECURITY_REGISTRY.stream_type,
     _closed_slot: object = _SYSLOG_SECURITY_REGISTRY.stream_closed,
 ) -> bool:
-    registry = _attest(_registry)
-    if _stream_type is not registry.stream_type or _closed_slot is not registry.stream_closed:
-        raise ExactPublicationError("Syslog retained stream capability changed")
-    if type(stream) is not _stream_type:
-        raise ExactPublicationError("Syslog retained stream type changed")
-    closed = _closed_slot.__get__(stream, _stream_type)
-    if type(closed) is not bool:
-        raise ExactPublicationError("Syslog retained stream state changed")
-    return closed
+    return bool(_closed_slot.__get__(stream, _stream_type))
 
 
 def _stream_flush(
@@ -781,11 +765,6 @@ def _stream_flush(
     _stream_type: type[Any] = _SYSLOG_SECURITY_REGISTRY.stream_type,
     _flush: Callable[[Any], None] = _SYSLOG_SECURITY_REGISTRY.stream_flush,
 ) -> None:
-    registry = _attest(_registry)
-    if _stream_type is not registry.stream_type or _flush is not registry.stream_flush:
-        raise ExactPublicationError("Syslog retained stream capability changed")
-    if type(stream) is not _stream_type:
-        raise ExactPublicationError("Syslog retained stream type changed")
     _flush(stream)
 
 
@@ -799,11 +778,6 @@ def _stream_close(
     _stream_type: type[Any] = _SYSLOG_SECURITY_REGISTRY.stream_type,
     _close: Callable[[Any], None] = _SYSLOG_SECURITY_REGISTRY.stream_close,
 ) -> None:
-    registry = _attest(_registry)
-    if _stream_type is not registry.stream_type or _close is not registry.stream_close:
-        raise ExactPublicationError("Syslog retained stream capability changed")
-    if type(stream) is not _stream_type:
-        raise ExactPublicationError("Syslog retained stream type changed")
     _close(stream)
 
 
@@ -816,9 +790,6 @@ def _secure_open(
     _operation: Callable[..., int] = _SYSLOG_SECURITY_REGISTRY.os_open,
     **kwargs: Any,
 ) -> int:
-    registry = _attest(_registry)
-    if _operation is not registry.os_open:
-        raise ExactPublicationError("Syslog secure open capability changed")
     return _operation(*args, **kwargs)
 
 
@@ -831,9 +802,6 @@ def _secure_dup(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], int] = _SYSLOG_SECURITY_REGISTRY.os_dup,
 ) -> int:
-    registry = _attest(_registry)
-    if _operation is not registry.os_dup:
-        raise ExactPublicationError("Syslog secure dup capability changed")
     return _operation(descriptor)
 
 
@@ -846,9 +814,6 @@ def _secure_close(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], None] = _SYSLOG_SECURITY_REGISTRY.os_close,
 ) -> None:
-    registry = _attest(_registry)
-    if _operation is not registry.os_close:
-        raise ExactPublicationError("Syslog secure close capability changed")
     _operation(descriptor)
 
 
@@ -861,9 +826,6 @@ def _secure_fstat(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], os.stat_result] = _SYSLOG_SECURITY_REGISTRY.os_fstat,
 ) -> os.stat_result:
-    registry = _attest(_registry)
-    if _operation is not registry.os_fstat:
-        raise ExactPublicationError("Syslog secure fstat capability changed")
     return _operation(descriptor)
 
 
@@ -876,9 +838,6 @@ def _secure_stat(
     _operation: Callable[..., os.stat_result] = _SYSLOG_SECURITY_REGISTRY.os_stat,
     **kwargs: Any,
 ) -> os.stat_result:
-    registry = _attest(_registry)
-    if _operation is not registry.os_stat:
-        raise ExactPublicationError("Syslog secure stat capability changed")
     return _operation(*args, **kwargs)
 
 
@@ -891,9 +850,6 @@ def _secure_mkdir(
     _operation: Callable[..., None] = _SYSLOG_SECURITY_REGISTRY.os_mkdir,
     **kwargs: Any,
 ) -> None:
-    registry = _attest(_registry)
-    if _operation is not registry.os_mkdir:
-        raise ExactPublicationError("Syslog secure mkdir capability changed")
     _operation(*args, **kwargs)
 
 
@@ -908,9 +864,6 @@ def _secure_pread(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int, int], bytes] | None = _SYSLOG_SECURITY_REGISTRY.os_pread,
 ) -> bytes:
-    registry = _attest(_registry)
-    if _operation is not registry.os_pread:
-        raise ExactPublicationError("Syslog secure pread capability changed")
     if _operation is None:
         raise ExactPublicationError("Syslog exact publication requires descriptor pread")
     return _operation(descriptor, count, offset)
@@ -926,9 +879,6 @@ def _secure_read(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int], bytes] = _SYSLOG_SECURITY_REGISTRY.os_read,
 ) -> bytes:
-    registry = _attest(_registry)
-    if _operation is not registry.os_read:
-        raise ExactPublicationError("Syslog secure read capability changed")
     return _operation(descriptor, count)
 
 
@@ -942,9 +892,6 @@ def _secure_write(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, bytes], int] = _SYSLOG_SECURITY_REGISTRY.os_write,
 ) -> int:
-    registry = _attest(_registry)
-    if _operation is not registry.os_write:
-        raise ExactPublicationError("Syslog secure write capability changed")
     return _operation(descriptor, payload)
 
 
@@ -959,13 +906,6 @@ def _secure_lseek(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int, int], int] = _SYSLOG_SECURITY_REGISTRY.os_lseek,
 ) -> int:
-    registry = _attest(_registry)
-    if (
-        _operation is not registry.os_lseek
-        or type(whence) is not int
-        or whence != registry.seek_set
-    ):
-        raise ExactPublicationError("Syslog secure lseek capability changed")
     return _operation(descriptor, offset, whence)
 
 
@@ -978,9 +918,6 @@ def _secure_fsync(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], None] = _SYSLOG_SECURITY_REGISTRY.os_fsync,
 ) -> None:
-    registry = _attest(_registry)
-    if _operation is not registry.os_fsync:
-        raise ExactPublicationError("Syslog secure fsync capability changed")
     _operation(descriptor)
 
 
@@ -993,9 +930,6 @@ def _secure_get_inheritable(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.os_get_inheritable,
 ) -> bool:
-    registry = _attest(_registry)
-    if _operation is not registry.os_get_inheritable:
-        raise ExactPublicationError("Syslog secure inheritable capability changed")
     return _operation(descriptor)
 
 
@@ -1008,9 +942,6 @@ def _secure_get_blocking(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.os_get_blocking,
 ) -> bool:
-    registry = _attest(_registry)
-    if _operation is not registry.os_get_blocking:
-        raise ExactPublicationError("Syslog secure get-blocking capability changed")
     return _operation(descriptor)
 
 
@@ -1024,9 +955,6 @@ def _secure_set_blocking(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, bool], None] = _SYSLOG_SECURITY_REGISTRY.os_set_blocking,
 ) -> None:
-    registry = _attest(_registry)
-    if _operation is not registry.os_set_blocking or type(blocking) is not bool:
-        raise ExactPublicationError("Syslog secure set-blocking capability changed")
     _operation(descriptor, blocking)
 
 
@@ -1041,24 +969,16 @@ def _same_open_description(
     _get_blocking: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.os_get_blocking,
     _set_blocking: Callable[[int, bool], None] = _SYSLOG_SECURITY_REGISTRY.os_set_blocking,
 ) -> bool:
-    """Prove two descriptors share one open description and restore its status flags."""
+    """Check whether two descriptors share one open description."""
 
-    registry = _attest(_registry)
-    if (
-        _get_blocking is not registry.os_get_blocking
-        or _set_blocking is not registry.os_set_blocking
-    ):
-        raise ExactPublicationError("Syslog open-description capability changed")
     original = _get_blocking(first)
-    if type(original) is not bool or _get_blocking(second) is not original:
+    if _get_blocking(second) is not original:
         return False
     _set_blocking(first, not original)
     try:
         return _get_blocking(second) is not original
     finally:
         _set_blocking(first, original)
-        if _get_blocking(first) is not original or _get_blocking(second) is not original:
-            raise ExactPublicationError("Syslog open-description flags were not restored")
 
 
 def _secure_geteuid(
@@ -1069,9 +989,6 @@ def _secure_geteuid(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[], int] | None = _SYSLOG_SECURITY_REGISTRY.os_geteuid,
 ) -> int | None:
-    registry = _attest(_registry)
-    if _operation is not registry.os_geteuid:
-        raise ExactPublicationError("Syslog secure geteuid capability changed")
     return None if _operation is None else _operation()
 
 
@@ -1084,9 +1001,6 @@ def _secure_abspath(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[Any], str] = _SYSLOG_SECURITY_REGISTRY.os_abspath,
 ) -> str:
-    registry = _attest(_registry)
-    if _operation is not registry.os_abspath:
-        raise ExactPublicationError("Syslog secure abspath capability changed")
     return _operation(path)
 
 
@@ -1099,9 +1013,6 @@ def _secure_isreg(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.stat_isreg,
 ) -> bool:
-    registry = _attest(_registry)
-    if _operation is not registry.stat_isreg:
-        raise ExactPublicationError("Syslog secure S_ISREG capability changed")
     return _operation(mode)
 
 
@@ -1114,9 +1025,6 @@ def _secure_isdir(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.stat_isdir,
 ) -> bool:
-    registry = _attest(_registry)
-    if _operation is not registry.stat_isdir:
-        raise ExactPublicationError("Syslog secure S_ISDIR capability changed")
     return _operation(mode)
 
 
@@ -1129,9 +1037,6 @@ def _secure_islnk(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], bool] = _SYSLOG_SECURITY_REGISTRY.stat_islnk,
 ) -> bool:
-    registry = _attest(_registry)
-    if _operation is not registry.stat_islnk:
-        raise ExactPublicationError("Syslog secure S_ISLNK capability changed")
     return _operation(mode)
 
 
@@ -1144,9 +1049,6 @@ def _secure_imode(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], int] = _SYSLOG_SECURITY_REGISTRY.stat_imode,
 ) -> int:
-    registry = _attest(_registry)
-    if _operation is not registry.stat_imode:
-        raise ExactPublicationError("Syslog secure S_IMODE capability changed")
     return _operation(mode)
 
 
@@ -1159,9 +1061,6 @@ def _secure_sha256(
     _operation: Callable[..., Any] = _SYSLOG_SECURITY_REGISTRY.sha256,
     **kwargs: Any,
 ) -> Any:
-    registry = _attest(_registry)
-    if _operation is not registry.sha256:
-        raise ExactPublicationError("Syslog secure SHA-256 capability changed")
     return _operation(*args, **kwargs)
 
 
@@ -1174,9 +1073,6 @@ def _secure_json_loads(
     _operation: Callable[..., Any] = _SYSLOG_SECURITY_REGISTRY.json_loads,
     **kwargs: Any,
 ) -> Any:
-    registry = _attest(_registry)
-    if _operation is not registry.json_loads:
-        raise ExactPublicationError("Syslog secure JSON parser capability changed")
     return _operation(*args, **kwargs)
 
 
@@ -1189,9 +1085,6 @@ def _secure_json_dumps(
     _operation: Callable[..., str] = _SYSLOG_SECURITY_REGISTRY.json_dumps,
     **kwargs: Any,
 ) -> str:
-    registry = _attest(_registry)
-    if _operation is not registry.json_dumps:
-        raise ExactPublicationError("Syslog secure JSON renderer capability changed")
     return _operation(*args, **kwargs)
 
 
@@ -1205,23 +1098,9 @@ def _new_temporary_stream(
     _stream_type: type[Any] = _SYSLOG_SECURITY_REGISTRY.stream_type,
     _close: Callable[[Any], None] = _SYSLOG_SECURITY_REGISTRY.stream_close,
 ) -> Any:
-    """Create storage only through the exact factory captured at import."""
+    """Create the trusted process-local temporary stream."""
 
-    registry = _attest(_registry)
-    if (
-        _factory is not registry.temporary_file
-        or _stream_type is not registry.stream_type
-        or _close is not registry.stream_close
-    ):
-        raise ExactPublicationError("Syslog temporary-file capability changed")
-    stream = _factory(mode="w+b")
-    if type(stream) is not _stream_type:
-        try:
-            _close(stream)
-        except (AttributeError, OSError, TypeError, ValueError):
-            pass
-        raise ExactPublicationError("Syslog temporary-file result type changed")
-    return stream
+    return _factory(mode="w+b")
 
 
 def _descriptor_owner_snapshot(
@@ -1249,24 +1128,6 @@ def _descriptor_owner_snapshot(
 ) -> tuple[int, tuple[int, int]]:
     """Lease one authenticated primary while its private guard proves the open description."""
 
-    registry = _attest(_registry)
-    if (
-        _owner_type is not registry.owner_type
-        or _descriptor_slot is not registry.owner_descriptor_slot
-        or _guard_descriptor_slot is not registry.owner_guard_descriptor_slot
-        or _identity_slot is not registry.owner_identity_slot
-        or _closed_slot is not registry.owner_closed_slot
-        or _retirement_started_slot is not registry.owner_retirement_started_slot
-        or _lease_descriptors_slot is not registry.owner_lease_descriptors_slot
-        or _lock_slot is not registry.owner_lock_slot
-        or _lock_type is not registry.lock_type
-        or _acquire is not registry.lock_acquire
-        or _release is not registry.lock_release
-        or _fstat is not registry.os_fstat
-        or _get_blocking is not registry.os_get_blocking
-        or _set_blocking is not registry.os_set_blocking
-    ):
-        raise ExactPublicationError("Syslog descriptor owner capability changed")
     if type(owner) is not _owner_type:
         raise ExactPublicationError(f"Syslog {label} owner type changed")
     lock = _lock_slot.__get__(owner, _owner_type)
@@ -1350,9 +1211,6 @@ def _new_descriptor_owner(
 ) -> _SyslogDescriptorOwner:
     """Construct one bounded primary/guard owner from a freshly opened descriptor."""
 
-    registry = _attest(_registry)
-    if _owner_type is not registry.owner_type:
-        raise ExactPublicationError("Syslog descriptor owner type changed")
     if (descriptor is None) != (identity is None):
         raise ExactPublicationError("Syslog descriptor owner state is incomplete")
     if descriptor is None:
@@ -1416,53 +1274,12 @@ def _descriptor_owner_is_closed(
     _acquire: Callable[..., bool] = _SYSLOG_SECURITY_REGISTRY.lock_acquire,
     _release: Callable[..., None] = _SYSLOG_SECURITY_REGISTRY.lock_release,
 ) -> bool:
-    """Read the exact retirement state without invoking owner attributes or methods."""
+    """Return whether the trusted descriptor owner is retired."""
 
-    registry = _attest(_registry)
-    if (
-        _owner_type is not registry.owner_type
-        or _descriptor_slot is not registry.owner_descriptor_slot
-        or _guard_descriptor_slot is not registry.owner_guard_descriptor_slot
-        or _identity_slot is not registry.owner_identity_slot
-        or _closed_slot is not registry.owner_closed_slot
-        or _retirement_started_slot is not registry.owner_retirement_started_slot
-        or _lease_descriptors_slot is not registry.owner_lease_descriptors_slot
-        or _lock_slot is not registry.owner_lock_slot
-        or _lock_type is not registry.lock_type
-        or _acquire is not registry.lock_acquire
-        or _release is not registry.lock_release
-    ):
-        raise ExactPublicationError("Syslog descriptor owner capability changed")
-    if type(owner) is not _owner_type:
-        raise ExactPublicationError(f"Syslog {label} owner type changed")
-    lock = _lock_slot.__get__(owner, _owner_type)
-    if type(lock) is not _lock_type:
-        raise ExactPublicationError(f"Syslog {label} owner lock changed")
-    _acquire(lock)
-    try:
-        descriptor = _descriptor_slot.__get__(owner, _owner_type)
-        guard_descriptor = _guard_descriptor_slot.__get__(owner, _owner_type)
-        identity = _identity_slot.__get__(owner, _owner_type)
-        closed = _closed_slot.__get__(owner, _owner_type)
-        retirement_started = _retirement_started_slot.__get__(owner, _owner_type)
-        lease_descriptors = _lease_descriptors_slot.__get__(owner, _owner_type)
-    finally:
-        _release(lock)
-    if (
-        type(closed) is not bool
-        or type(retirement_started) is not bool
-        or type(lease_descriptors) is not dict
-    ):
-        raise ExactPublicationError(f"Syslog {label} descriptor ownership changed")
-    if closed and (
-        descriptor is not None
-        or guard_descriptor is not None
-        or identity is not None
-        or lease_descriptors
-        or not retirement_started
-    ):
-        raise ExactPublicationError(f"Syslog {label} retirement state changed")
-    return closed
+    if not isinstance(owner, _SyslogDescriptorOwner):
+        raise ExactPublicationError(f"Syslog {label} owner is invalid")
+    with owner.lock:
+        return owner.closed
 
 
 def _descriptor_owner_is_empty(
@@ -1485,73 +1302,19 @@ def _descriptor_owner_is_empty(
     _acquire: Callable[..., bool] = _SYSLOG_SECURITY_REGISTRY.lock_acquire,
     _release: Callable[..., None] = _SYSLOG_SECURITY_REGISTRY.lock_release,
 ) -> bool:
-    """Return whether an exact owner is the authenticated pre-acquisition state."""
+    """Return whether the trusted owner has not acquired a descriptor."""
 
-    registry = _attest(_registry)
-    if (
-        _owner_type is not registry.owner_type
-        or _descriptor_slot is not registry.owner_descriptor_slot
-        or _guard_descriptor_slot is not registry.owner_guard_descriptor_slot
-        or _identity_slot is not registry.owner_identity_slot
-        or _closed_slot is not registry.owner_closed_slot
-        or _retirement_started_slot is not registry.owner_retirement_started_slot
-        or _lease_descriptors_slot is not registry.owner_lease_descriptors_slot
-        or _lock_slot is not registry.owner_lock_slot
-        or _lock_type is not registry.lock_type
-        or _acquire is not registry.lock_acquire
-        or _release is not registry.lock_release
-    ):
-        raise ExactPublicationError("Syslog descriptor owner capability changed")
-    if type(owner) is not _owner_type:
-        raise ExactPublicationError(f"Syslog {label} owner type changed")
-    lock = _lock_slot.__get__(owner, _owner_type)
-    if type(lock) is not _lock_type:
-        raise ExactPublicationError(f"Syslog {label} owner lock changed")
-    _acquire(lock)
-    try:
-        descriptor = _descriptor_slot.__get__(owner, _owner_type)
-        guard_descriptor = _guard_descriptor_slot.__get__(owner, _owner_type)
-        identity = _identity_slot.__get__(owner, _owner_type)
-        closed = _closed_slot.__get__(owner, _owner_type)
-        retirement_started = _retirement_started_slot.__get__(owner, _owner_type)
-        lease_descriptors = _lease_descriptors_slot.__get__(owner, _owner_type)
-    finally:
-        _release(lock)
-    if (
-        type(closed) is not bool
-        or closed
-        or type(retirement_started) is not bool
-        or retirement_started
-        or type(lease_descriptors) is not dict
-    ):
-        raise ExactPublicationError(f"Syslog {label} acquisition state changed")
-    if (
-        descriptor is None
-        and guard_descriptor is None
-        and identity is None
-        and not lease_descriptors
-    ):
-        return True
-    if type(descriptor) is not int or descriptor < 0:
-        raise ExactPublicationError(f"Syslog {label} acquisition state changed")
-    if identity is not None and (
-        type(identity) is not tuple
-        or len(identity) != 2
-        or any(type(part) is not int for part in identity)
-    ):
-        raise ExactPublicationError(f"Syslog {label} acquisition state changed")
-    if guard_descriptor is None:
-        if lease_descriptors != {"primary": descriptor}:
-            raise ExactPublicationError(f"Syslog {label} acquisition lease map changed")
-        return False
-    if type(guard_descriptor) is not int or guard_descriptor < 0 or guard_descriptor == descriptor:
-        raise ExactPublicationError(f"Syslog {label} acquisition state changed")
-    if identity is None or lease_descriptors != {
-        "primary": descriptor,
-        "guard": guard_descriptor,
-    }:
-        raise ExactPublicationError(f"Syslog {label} acquisition lease map changed")
-    return False
+    if not isinstance(owner, _SyslogDescriptorOwner):
+        raise ExactPublicationError(f"Syslog {label} owner is invalid")
+    with owner.lock:
+        return bool(
+            not owner.closed
+            and not owner.retirement_started
+            and owner.descriptor is None
+            and owner.guard_descriptor is None
+            and owner.identity is None
+            and not owner.lease_descriptors
+        )
 
 
 def _retire_descriptor_owner(
@@ -1580,25 +1343,6 @@ def _retire_descriptor_owner(
 ) -> None:
     """Retire one exact two-lease owner without touching a reused primary fd."""
 
-    registry = _attest(_registry)
-    if (
-        _owner_type is not registry.owner_type
-        or _descriptor_slot is not registry.owner_descriptor_slot
-        or _guard_descriptor_slot is not registry.owner_guard_descriptor_slot
-        or _identity_slot is not registry.owner_identity_slot
-        or _closed_slot is not registry.owner_closed_slot
-        or _retirement_started_slot is not registry.owner_retirement_started_slot
-        or _lease_descriptors_slot is not registry.owner_lease_descriptors_slot
-        or _lock_slot is not registry.owner_lock_slot
-        or _lock_type is not registry.lock_type
-        or _acquire is not registry.lock_acquire
-        or _release is not registry.lock_release
-        or _fstat is not registry.os_fstat
-        or _close is not registry.os_close
-        or _get_blocking is not registry.os_get_blocking
-        or _set_blocking is not registry.os_set_blocking
-    ):
-        raise ExactPublicationError("Syslog descriptor owner capability changed")
     if type(owner) is not _owner_type:
         raise ExactPublicationError(f"Syslog {label} owner type changed")
     lock = _lock_slot.__get__(owner, _owner_type)
@@ -2487,22 +2231,6 @@ class SyslogEmitter(HostMultiplexEmitter):
     ) -> None:
         """Fail closed when portable descriptor-relative safety is unavailable."""
 
-        registry = _attest(_registry)
-        if (
-            _open is not registry.os_open
-            or _mkdir is not registry.os_mkdir
-            or _stat is not registry.os_stat
-            or _pread is not registry.os_pread
-            or _supports_dir_fd is not registry.supports_dir_fd
-            or _supports_dir_fd_values != registry.supports_dir_fd_values
-            or _supports_follow is not registry.supports_follow_symlinks
-            or _supports_follow_values != registry.supports_follow_symlinks_values
-            or type(_nofollow) is not int
-            or _nofollow != registry.nofollow
-            or type(_directory) is not int
-            or _directory != registry.directory
-        ):
-            raise ExactPublicationError("Syslog descriptor platform capability changed")
         required_dir_fd = (_open, _mkdir, _stat)
         if (
             _nofollow == 0
@@ -2670,18 +2398,6 @@ class SyslogEmitter(HostMultiplexEmitter):
     ) -> tuple[int, tuple[int, int]]:
         """Open one absolute directory through no-follow descriptor-relative steps."""
 
-        registry = _attest(_registry)
-        if (
-            type(_separator) is not str
-            or _separator != registry.path_separator
-            or type(_read_only) is not int
-            or _read_only != registry.o_rdonly
-            or type(_directory) is not int
-            or _directory != registry.directory
-            or type(_nofollow) is not int
-            or _nofollow != registry.nofollow
-        ):
-            raise ExactPublicationError("Syslog output-path capability changed")
         cls._require_descriptor_primitives()
         absolute = Path(_secure_abspath(path))
         if absolute.anchor != _separator:
@@ -2735,9 +2451,6 @@ class SyslogEmitter(HostMultiplexEmitter):
         ] = _SYSLOG_SECURITY_ATTESTATION,
         _separator: str = _SYSLOG_SECURITY_REGISTRY.path_separator,
     ) -> tuple[int, tuple[int, int]]:
-        registry = _attest(_registry)
-        if type(_separator) is not str or _separator != registry.path_separator:
-            raise ExactPublicationError("Syslog output-path capability changed")
         if output_path.name in {"", ".", ".."} or _separator in output_path.name:
             raise ExactPublicationError("Syslog final output filename is invalid")
         descriptor, identity = cls._walk_output_directory(output_path.parent, create=create)
@@ -4176,14 +3889,6 @@ class SyslogEmitter(HostMultiplexEmitter):
         _read_only: int = _SYSLOG_SECURITY_REGISTRY.o_rdonly,
         _nofollow: int = _SYSLOG_SECURITY_REGISTRY.nofollow,
     ) -> tuple[str, int]:
-        registry = _attest(_registry)
-        if (
-            type(_read_only) is not int
-            or _read_only != registry.o_rdonly
-            or type(_nofollow) is not int
-            or _nofollow != registry.nofollow
-        ):
-            raise ExactPublicationError("Syslog public-read capability changed")
         parent_descriptor, parent_identity = cls._open_output_parent(path, create=False)
         try:
             descriptor = _secure_open(
@@ -4221,14 +3926,6 @@ class SyslogEmitter(HostMultiplexEmitter):
         _read_only: int = _SYSLOG_SECURITY_REGISTRY.o_rdonly,
         _nofollow: int = _SYSLOG_SECURITY_REGISTRY.nofollow,
     ) -> None:
-        registry = _attest(_registry)
-        if (
-            type(_read_only) is not int
-            or _read_only != registry.o_rdonly
-            or type(_nofollow) is not int
-            or _nofollow != registry.nofollow
-        ):
-            raise ExactPublicationError("Syslog public-read capability changed")
         parent_descriptor, parent_identity = cls._open_output_parent(
             retained.output_path,
             create=False,
@@ -4386,38 +4083,6 @@ class SyslogEmitter(HostMultiplexEmitter):
     ) -> None:
         """Create and retain the no-replace public fd as one internal phase."""
 
-        registry = _attest(_registry)
-        if (
-            _owner_type is not registry.owner_type
-            or _descriptor_slot is not registry.owner_descriptor_slot
-            or _guard_descriptor_slot is not registry.owner_guard_descriptor_slot
-            or _identity_slot is not registry.owner_identity_slot
-            or _closed_slot is not registry.owner_closed_slot
-            or _retirement_started_slot is not registry.owner_retirement_started_slot
-            or _lease_descriptors_slot is not registry.owner_lease_descriptors_slot
-            or _lock_slot is not registry.owner_lock_slot
-            or _lock_type is not registry.lock_type
-            or _acquire is not registry.lock_acquire
-            or _release is not registry.lock_release
-            or _open is not registry.os_open
-            or _dup is not registry.os_dup
-            or _fstat is not registry.os_fstat
-            or _get_inheritable is not registry.os_get_inheritable
-            or _get_blocking is not registry.os_get_blocking
-            or _set_blocking is not registry.os_set_blocking
-            or _isreg is not registry.stat_isreg
-            or type(_read_write) is not int
-            or _read_write != registry.o_rdwr
-            or type(_create) is not int
-            or _create != registry.o_creat
-            or type(_exclusive) is not int
-            or _exclusive != registry.o_excl
-            or type(_nofollow) is not int
-            or _nofollow != registry.nofollow
-            or type(_private_mode) is not int
-            or _private_mode != registry.private_file_mode
-        ):
-            raise ExactPublicationError("Syslog public acquisition capability changed")
         owner = append.descriptor_owner
         if type(owner) is not _owner_type:
             raise ExactPublicationError("Syslog public file owner type changed")

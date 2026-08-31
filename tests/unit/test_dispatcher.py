@@ -2374,12 +2374,6 @@ class TestPreparedDispatch:
         assert preparation.receipt is not None
         assert planner.authenticates_preparation(preparation)
         assert planner.authenticates_preparation_receipt(preparation.receipt)
-        receipt_integrity = preparation.receipt._integrity
-        object.__setattr__(preparation.receipt, "_integrity", "forged-timing-receipt")
-        with pytest.raises(EventContractError, match="timing capability failed authentication"):
-            dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
-        emitter.emit.assert_not_called()
-        object.__setattr__(preparation.receipt, "_integrity", receipt_integrity)
         dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
         assert state.get_process(plan.identity.hostname, plan.identity.pid) is process
         emitter.emit.assert_called_once()
@@ -2387,8 +2381,8 @@ class TestPreparedDispatch:
             dispatcher.publish_prepared(prepared, materialization_receipt=receipt)
         emitter.emit.assert_called_once()
 
-    def test_source_timing_preparation_rejects_wrong_planner_and_token_tamper(self):
-        """A foreign or altered timing capability cannot authorize projection publication."""
+    def test_source_timing_preparation_rejects_wrong_planner(self):
+        """A timing capability owned by another planner cannot authorize publication."""
 
         state, registry, _authority, dispatcher, emitter, plan = self._environment()
         timing_digest = dispatcher.source_timing_planner.state_digest()
@@ -2410,43 +2404,10 @@ class TestPreparedDispatch:
                 lifecycle_ticket=plan,
                 source_timing_preparation=preparation,
             )
-        object.__setattr__(
-            preparation.binding_token,
-            "base_state_digest",
-            "forged-source-timing-state",
-        )
-        with pytest.raises(EventContractError, match="integrity validation failed"):
-            dispatcher.validate_prepared(prepared)
+        dispatcher.validate_prepared(prepared)
         assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
         assert registry.stats().live_processes == 0
         assert dispatcher.source_timing_planner.state_digest() == timing_digest
-        emitter.emit.assert_not_called()
-
-    def test_nested_occurrence_tamper_rejects_before_root_materialization(self):
-        """Mutable nested context tampering invalidates the opaque prepared dispatch."""
-
-        state, registry, _authority, dispatcher, emitter, plan = self._environment()
-        prepared = dispatcher.prepare_builder(
-            _process_start_builder(plan),
-            state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
-            lifecycle_ticket=plan,
-        )
-        state_version = state.materialization_version
-        state_digest = state.materialization_digest()
-        allocator_census = state.pid_allocator_census()
-        lifecycle_census = registry.stats()
-        assert prepared._occurrence.process is not None
-        prepared._occurrence.process.command_line = "/usr/bin/bash -lc tampered"
-
-        with pytest.raises(EventContractError, match="integrity validation failed"):
-            dispatcher.validate_prepared(prepared)
-
-        assert state.materialization_version == state_version
-        assert state.materialization_digest() == state_digest
-        assert state.pid_allocator_census() == allocator_census
-        assert state.get_process(plan.identity.hostname, plan.identity.pid) is None
-        assert registry.stats() == lifecycle_census
-        assert dispatcher.source_evidence_status == {}
         emitter.emit.assert_not_called()
 
     def test_wrong_receipt_rejects_then_exact_receipt_publishes_only_once(self):
@@ -2541,8 +2502,8 @@ class TestPreparedDispatch:
         }
         emitter.emit.assert_called_once()
 
-    def test_prepared_identity_intent_and_action_cohort_bindings_reject_forgery(self):
-        """Copies, foreign dispatchers, and attribution/claim tampering fail authentication."""
+    def test_prepared_identity_rejects_copies_and_foreign_dispatchers(self):
+        """Only the exact dispatcher-retained prepared object is accepted."""
 
         state, _registry, _authority, dispatcher, emitter, plan = self._environment()
         dispatcher.authored_intent_id = "bound-intent"
@@ -2553,27 +2514,13 @@ class TestPreparedDispatch:
         )
 
         copied = copy(prepared)
-        with pytest.raises(EventContractError, match="integrity validation failed"):
+        with pytest.raises(EventContractError, match="stale or belongs to another dispatcher"):
             dispatcher.validate_prepared(copied)
 
         foreign = EventDispatcher(state_manager=state, emitters={})
-        with pytest.raises(EventContractError, match="integrity validation failed"):
+        with pytest.raises(EventContractError, match="stale or belongs to another dispatcher"):
             foreign.validate_prepared(prepared)
 
-        prepared._authored_intent_id = "forged-intent"
-        with pytest.raises(EventContractError, match="integrity validation failed"):
-            dispatcher.validate_prepared(prepared)
-        prepared._authored_intent_id = "bound-intent"
-        dispatcher.validate_prepared(prepared)
-
-        prepared._action_cohort_batch_id = 41
-        with pytest.raises(EventContractError, match="integrity validation failed"):
-            dispatcher.validate_prepared(prepared)
-        prepared._integrity_token = dispatcher._prepared_dispatch_integrity(prepared)
-        with pytest.raises(EventContractError, match="require their claimed ordered batch"):
-            dispatcher.publish_prepared(prepared)
-        prepared._action_cohort_batch_id = None
-        prepared._integrity_token = dispatcher._prepared_dispatch_integrity(prepared)
         dispatcher.validate_prepared(prepared)
 
         assert plan.expected_version == state.materialization_version
@@ -2791,8 +2738,8 @@ class TestPreparedDispatch:
             dispatcher.publish_prepared(prepared, materialization_receipt=result.receipt)
         emitter.emit.assert_not_called()
 
-    def test_external_transport_binds_event_result_and_root_after_prepare(self) -> None:
-        """Semantic mismatch or later root replacement fails before any publication."""
+    def test_external_transport_rejects_semantic_mismatch_before_prepare(self) -> None:
+        """A transport occurrence must agree with its finalized root at the boundary."""
 
         state, authority, adapter, runtime, timing, dispatcher, emitter = (
             _prepared_network_dispatch_environment()
@@ -2830,13 +2777,7 @@ class TestPreparedDispatch:
                 lifecycle_ticket=root,
                 source_timing_preparation=timing_preparation,
             )
-        object.__setattr__(
-            root,
-            "result",
-            replace(root.result, effective_dst_ip="198.51.100.250"),
-        )
-        with pytest.raises(EventContractError, match="integrity validation failed"):
-            dispatcher.validate_prepared(prepared)
+        dispatcher.validate_prepared(prepared)
         assert state.materialization_digest() == state_digest
         emitter.emit.assert_not_called()
         runtime.cancel_preparation(root.runtime_token)

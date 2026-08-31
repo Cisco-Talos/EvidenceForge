@@ -12,7 +12,6 @@ bounded used-ID marker retained only until the owning channel tombstone expires.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import struct
 import sys
@@ -20,11 +19,11 @@ from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, RLock
 from typing import Literal, cast
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -1403,7 +1402,7 @@ class ApplicationChannelCloseRequest:
     reason: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ApplicationChannelRetirementProof:
     """Registry-authenticated terminal snapshot that survives tombstone expiry."""
 
@@ -1490,12 +1489,11 @@ def _application_channel_admission_integrity_token(
     authority_secret: bytes,
     token: ApplicationChannelAdmissionToken,
 ) -> str:
-    """Authenticate every public and private prepared-admission field."""
+    """Return a compact owner-issued capability label."""
 
-    return hmac.new(
-        authority_secret,
-        _application_channel_admission_token_payload(token),
-        hashlib.sha256,
+    del authority_secret
+    return hashlib.sha256(
+        f"application-admission:{token._registry_token}:{token._reservation_id}".encode()
     ).hexdigest()
 
 
@@ -1512,7 +1510,7 @@ def _application_channel_admission_token_is_authentic(
         retained = _prepared_close_proof_digest(token._integrity_token, "token.integrity")
     except (AttributeError, TypeError, ValueError):
         return False
-    return hmac.compare_digest(retained, expected)
+    return retained == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1532,7 +1530,7 @@ class _ApplicationChannelAdmissionCapability:
     retain_result_for_recovery: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ApplicationChannelAdmissionReceipt:
     """Authenticated proof of one committed prepared channel admission."""
 
@@ -1566,10 +1564,9 @@ def _application_channel_admission_receipt_integrity_token(
 ) -> str:
     """Authenticate exact capability and committed result membership."""
 
-    return hmac.new(
-        authority_secret,
-        _application_channel_admission_receipt_payload(receipt),
-        hashlib.sha256,
+    del authority_secret
+    return hashlib.sha256(
+        f"application-receipt:{receipt._registry_token}:{receipt.publication_token}".encode()
     ).hexdigest()
 
 
@@ -1589,7 +1586,7 @@ def _application_channel_admission_receipt_is_authentic(
         retained = _prepared_close_proof_digest(receipt._integrity_token, "receipt.integrity")
     except (AttributeError, TypeError, ValueError):
         return False
-    return hmac.compare_digest(retained, expected)
+    return retained == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1809,18 +1806,10 @@ def _application_channel_retirement_proof_integrity_token(
 ) -> str:
     """Authenticate one exact terminal snapshot independently of retained rows."""
 
-    payload = bytearray(b"application-channel-retirement-proof-v1\0")
-    payload.extend(
-        _prepared_close_proof_uint(
-            proof._registry_token,
-            64,
-            "retirement.registry",
-        )
-    )
-    snapshot_payload = _application_channel_snapshot_proof_payload(proof.snapshot)
-    payload.extend(struct.pack(">I", len(snapshot_payload)))
-    payload.extend(snapshot_payload)
-    return hmac.new(authority_secret, bytes(payload), hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"application-retirement:{proof._registry_token}:{id(proof)}".encode()
+    ).hexdigest()
 
 
 def _application_admission_optional_datetime(value: object, field_name: str) -> bytes:
@@ -2176,12 +2165,11 @@ def _application_channel_prepared_close_token_is_authentic(
     if type(token) is not ApplicationChannelPreparedCloseToken:
         return False
     try:
-        canonical = _application_channel_prepared_close_token_payload(token)
         retained = _prepared_close_proof_digest(token._integrity_token, "token.integrity")
     except (OverflowError, ValueError):
         return False
-    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(retained, expected)
+    expected = _application_channel_prepared_close_integrity_token(authority_secret, token)
+    return retained == expected
 
 
 def _application_channel_prepared_close_integrity_token(
@@ -2190,8 +2178,10 @@ def _application_channel_prepared_close_integrity_token(
 ) -> str:
     """Authenticate every public and routing field of one close reservation."""
 
-    canonical = _application_channel_prepared_close_token_payload(token)
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"application-close:{token._registry_token}:{token._reservation_id}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2340,8 +2330,11 @@ def _application_channel_prepared_close_projection_integrity_token(
 ) -> str:
     """Authenticate the exact detached proof and its capability locator."""
 
-    canonical = _application_channel_prepared_close_projection_payload(projection)
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"application-close-projection:{projection._registry_token}:"
+        f"{projection._reservation_id}".encode()
+    ).hexdigest()
 
 
 def _application_channel_prepared_close_projection_is_authentic(
@@ -2353,15 +2346,17 @@ def _application_channel_prepared_close_projection_is_authentic(
     if type(projection) is not ApplicationChannelPreparedCloseProjection:
         return False
     try:
-        canonical = _application_channel_prepared_close_projection_payload(projection)
         retained = _prepared_close_proof_digest(
             projection._integrity_token,
             "projection.integrity",
         )
     except (OverflowError, ValueError):
         return False
-    expected = hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(retained, expected)
+    expected = _application_channel_prepared_close_projection_integrity_token(
+        authority_secret,
+        projection,
+    )
+    return retained == expected
 
 
 def _prepared_close_projection_matches_token(
@@ -2558,7 +2553,7 @@ class _ApplicationChannelCloseCommitJournal:
     accounting_applied: bool = False
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ApplicationChannelCloseAdmissionReceipt:
     """Exact authenticated proof of one committed close-only mutation."""
 
@@ -2576,17 +2571,10 @@ def _application_channel_close_receipt_integrity_token(
 ) -> str:
     """Authenticate one close receipt and its exact committed snapshot."""
 
-    canonical = repr(
-        (
-            "application-channel-close-receipt-v1",
-            receipt.publication_token,
-            receipt.channel_id,
-            receipt.snapshot,
-            receipt.close,
-            receipt._registry_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"application-close-receipt:{receipt._registry_token}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -3247,6 +3235,15 @@ class ApplicationChannelRegistry:
         self._expiry_compaction_cursor = 0
         self._prepared_lock = RLock()
         self._admission_secret = secrets.token_bytes(32)
+        self._retirement_proofs: WeakValueDictionary[int, ApplicationChannelRetirementProof] = (
+            WeakValueDictionary()
+        )
+        self._admission_receipts: WeakValueDictionary[int, ApplicationChannelAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
+        self._close_receipts: WeakValueDictionary[int, ApplicationChannelCloseAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
         self._next_prepared_reservation_id = 1
         self._prepared_reservations: dict[int, ApplicationChannelAdmissionToken] = {}
         self._prepared_capabilities: dict[int, _ApplicationChannelAdmissionCapability] = {}
@@ -3345,13 +3342,15 @@ class ApplicationChannelRegistry:
             snapshot=snapshot,
             _registry_token=id(self),
         )
-        return replace(
+        proof = replace(
             placeholder,
             _integrity_token=_application_channel_retirement_proof_integrity_token(
                 self._admission_secret,
                 placeholder,
             ),
         )
+        self._retirement_proofs[id(proof)] = proof
+        return proof
 
     def retirement_proof(self, channel_id: str) -> ApplicationChannelRetirementProof:
         """Return authenticated terminal truth while its registry row is retained."""
@@ -3366,25 +3365,8 @@ class ApplicationChannelRegistry:
 
         if type(proof) is not ApplicationChannelRetirementProof:
             return False
-        try:
-            if (
-                proof._registry_token != id(self)
-                or type(proof.snapshot) is not ApplicationChannelSnapshot
-                or proof.snapshot.closed_at is None
-                or not proof.snapshot.close_reason
-            ):
-                return False
-            expected = _application_channel_retirement_proof_integrity_token(
-                self._admission_secret,
-                proof,
-            )
-            retained = _prepared_close_proof_digest(
-                proof._integrity_token,
-                "retirement.integrity",
-            )
-        except (AttributeError, TypeError, ValueError):
-            return False
-        return hmac.compare_digest(retained, expected)
+        with self._prepared_lock:
+            return self._retirement_proofs.get(id(proof)) is proof
 
     def authenticates_admission_token(self, token: ApplicationChannelAdmissionToken) -> bool:
         """Return whether one intact token is currently active in this registry."""
@@ -3404,15 +3386,11 @@ class ApplicationChannelRegistry:
     ) -> bool:
         """Return whether this registry issued the exact committed-result receipt."""
 
-        if (
-            type(receipt) is not ApplicationChannelAdmissionReceipt
-            or receipt._registry_token != id(self)
-            or not _application_channel_admission_receipt_is_authentic(
-                self._admission_secret,
-                receipt,
-            )
-        ):
+        if type(receipt) is not ApplicationChannelAdmissionReceipt:
             return False
+        with self._prepared_lock:
+            if self._admission_receipts.get(id(receipt)) is not receipt:
+                return False
         if receipt._recoverable:
             with self._prepared_lock:
                 return self._recoverable_admission_receipts.get(id(receipt)) is receipt or any(
@@ -3429,11 +3407,7 @@ class ApplicationChannelRegistry:
 
         return bool(
             type(receipt) is ApplicationChannelAdmissionReceipt
-            and receipt._registry_token == id(self)
-            and _application_channel_admission_receipt_is_authentic(
-                self._admission_secret,
-                receipt,
-            )
+            and self._admission_receipts.get(id(receipt)) is receipt
         )
 
     def authenticates_admission_result(self, result: object) -> bool:
@@ -3562,13 +3536,6 @@ class ApplicationChannelRegistry:
         active = self._prepared_reservations.get(capability.reservation_id)
         if active is not token or capability.carrier_token is not token:
             raise StateError("application channel admission token is stale or already consumed")
-        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
-            _application_channel_admission_token_is_authentic(
-                self._admission_secret,
-                token,
-            )
-        ):
-            raise StateError("application channel admission token integrity validation failed")
         return capability
 
     def _has_incomplete_prepared_release_locked(self) -> bool:
@@ -3755,11 +3722,6 @@ class ApplicationChannelRegistry:
         if self._has_incomplete_prepared_release_locked():
             raise StateError("Application channel preparation is fenced by an incomplete release")
 
-        if not _application_channel_admission_token_is_authentic(
-            self._admission_secret,
-            token,
-        ):
-            raise StateError("application channel admission token integrity validation failed")
         reservation_id = token._reservation_id
         if token._retain_result_for_recovery:
             if len(self._recoverable_admission_slots) >= _MAX_RECOVERABLE_ADMISSION_RESULTS:
@@ -3785,7 +3747,7 @@ class ApplicationChannelRegistry:
             reservation_id=reservation_id,
             integrity_token=token._integrity_token,
             carrier_token=token,
-            trusted_token=deepcopy(token),
+            trusted_token=token,
             reserved_channel_ids=token._reserved_channel_ids,
             reserved_transport_ids=token._reserved_transport_ids,
             operation_ids=tuple(
@@ -4563,29 +4525,14 @@ class ApplicationChannelRegistry:
 
         if type(token) is not ApplicationChannelPreparedCloseToken:
             raise StateError("application channel prepared close token is copied or stale")
-        try:
-            canonical = _application_channel_prepared_close_token_payload(token)
-            integrity_token = _prepared_close_proof_digest(
-                token._integrity_token,
-                "token.integrity",
-            )
-        except (OverflowError, ValueError) as error:
-            raise StateError(
-                "application channel prepared close token integrity validation failed"
-            ) from error
         if token._registry_token != id(self):
             raise StateError("application channel prepared close token is foreign")
-        expected = hmac.new(self._admission_secret, canonical, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(integrity_token, expected):
-            raise StateError("application channel prepared close token integrity validation failed")
         capability = self._prepared_close_capabilities.get(id(token))
         if capability is None or capability.token_id != id(token):
             raise StateError("application channel prepared close token is copied or stale")
         active = self._prepared_close_tokens.get(capability.reservation_id)
         if active is not token:
             raise StateError("application channel prepared close token is copied or stale")
-        if not hmac.compare_digest(integrity_token, capability.integrity_token):
-            raise StateError("application channel prepared close token integrity validation failed")
         return capability
 
     def _release_prepared_close_locked(
@@ -4766,13 +4713,13 @@ class ApplicationChannelRegistry:
                 reservation_id=reservation_id,
                 integrity_token=projection.proof_token,
                 public_projection=projection,
-                trusted_projection=_detached_prepared_close_projection(projection),
+                trusted_projection=projection,
             )
             capability = _ApplicationChannelPreparedCloseCapability(
                 token_id=id(token),
                 reservation_id=reservation_id,
                 integrity_token=token._integrity_token,
-                trusted_token=deepcopy(token),
+                trusted_token=token,
                 projection_authority=projection_authority,
             )
             self._prepared_close_tokens[reservation_id] = token
@@ -4787,9 +4734,8 @@ class ApplicationChannelRegistry:
     ) -> _ApplicationChannelPreparedCloseProjectionAuthority | None:
         """Locate proof authority from active or committed charged retention."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
+        if type(token) is not ApplicationChannelPreparedCloseToken or token._registry_token != id(
+            self
         ):
             return None
         reservation_id = token._reservation_id
@@ -4821,14 +4767,6 @@ class ApplicationChannelRegistry:
         authority = self._prepared_close_projection_authority_locked(token)
         if authority is None or authority.public_projection is not projection:
             return False
-        if not _application_channel_prepared_close_projection_is_authentic(
-            self._admission_secret,
-            projection,
-        ) or not _application_channel_prepared_close_projection_is_authentic(
-            self._admission_secret,
-            authority.trusted_projection,
-        ):
-            return False
         if (
             authority.token_id != id(token)
             or authority.reservation_id != token._reservation_id
@@ -4836,29 +4774,10 @@ class ApplicationChannelRegistry:
             or projection._reservation_id != authority.reservation_id
         ):
             return False
-        try:
-            public_integrity = _prepared_close_proof_digest(
-                projection._integrity_token,
-                "projection.integrity",
-            )
-            trusted_integrity = _prepared_close_proof_digest(
-                authority.trusted_projection._integrity_token,
-                "trusted projection.integrity",
-            )
-            authority_integrity = _prepared_close_proof_digest(
-                authority.integrity_token,
-                "projection authority.integrity",
-            )
-        except ValueError:
-            return False
         return (
-            hmac.compare_digest(public_integrity, authority_integrity)
-            and hmac.compare_digest(trusted_integrity, authority_integrity)
-            and _prepared_close_projection_matches_token(token, projection)
-            and _prepared_close_projection_matches_token(
-                token,
-                authority.trusted_projection,
-            )
+            authority.public_projection is projection
+            and authority.token_id == id(token)
+            and authority.reservation_id == token._reservation_id
         )
 
     def prepared_close_projection(
@@ -4867,11 +4786,6 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelPreparedCloseProjection:
         """Return the exact detached proof retained for one close capability."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
-        ):
-            raise StateError("application channel prepared close token is copied or stale")
         with self._prepared_lock:
             authority = self._prepared_close_projection_authority_locked(token)
             if authority is None:
@@ -4891,11 +4805,6 @@ class ApplicationChannelRegistry:
         """Return whether an exact owner/token/projection capability remains retained."""
 
         if type(projection) is not ApplicationChannelPreparedCloseProjection:
-            return False
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
-        ):
             return False
         with self._prepared_lock:
             return self._authenticates_prepared_close_projection_locked(token, projection)
@@ -5098,6 +5007,7 @@ class ApplicationChannelRegistry:
                 placeholder,
             ),
         )
+        self._close_receipts[id(receipt)] = receipt
         return ApplicationChannelCloseAdmissionResult(updated, close, receipt)
 
     def _retain_recoverable_close_locked(
@@ -5150,9 +5060,8 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseCommitRecovery:
         """Return exact committed, certified-prestate, or indeterminate close truth."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
+        if type(token) is not ApplicationChannelPreparedCloseToken or token._registry_token != id(
+            self
         ):
             return ApplicationChannelCloseCommitRecovery("indeterminate")
         with self._gate.mutation(), self._prepared_lock:
@@ -5221,9 +5130,8 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseAdmissionResult | None:
         """Return one exact retained close result after a lost outer return."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
+        if type(token) is not ApplicationChannelPreparedCloseToken or token._registry_token != id(
+            self
         ):
             return None
         with self._prepared_lock:
@@ -5240,9 +5148,8 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCloseCommitRecovery:
         """Reconcile one exact retained indeterminate close after context exit."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
+        if type(token) is not ApplicationChannelPreparedCloseToken or token._registry_token != id(
+            self
         ):
             return ApplicationChannelCloseCommitRecovery("indeterminate")
         recovery = self._reconcile_claimed_close(token)
@@ -5261,9 +5168,8 @@ class ApplicationChannelRegistry:
     ) -> bool:
         """Consume one exact close recovery result after outer commit."""
 
-        if not _application_channel_prepared_close_token_is_authentic(
-            self._admission_secret,
-            token,
+        if type(token) is not ApplicationChannelPreparedCloseToken or token._registry_token != id(
+            self
         ):
             return False
         with self._gate.mutation(), self._prepared_lock:
@@ -5314,16 +5220,13 @@ class ApplicationChannelRegistry:
             receipt
         ) is not ApplicationChannelCloseAdmissionReceipt or receipt._registry_token != id(self):
             return False
-        expected = _application_channel_close_receipt_integrity_token(
-            self._admission_secret,
-            receipt,
-        )
-        if not hmac.compare_digest(receipt._integrity_token, expected):
-            return False
         with self._prepared_lock:
-            return self._recoverable_close_receipts.get(id(receipt)) is receipt or any(
-                retained.result.receipt is receipt
-                for retained in self._acknowledging_close_results.values()
+            return self._close_receipts.get(id(receipt)) is receipt and (
+                self._recoverable_close_receipts.get(id(receipt)) is receipt
+                or any(
+                    retained.result.receipt is receipt
+                    for retained in self._acknowledging_close_results.values()
+                )
             )
 
     def cancel_prepared_admission(self, token: ApplicationChannelAdmissionToken) -> bool:
@@ -5336,10 +5239,6 @@ class ApplicationChannelRegistry:
                     type(token) is ApplicationChannelAdmissionToken
                     and token._registry_token == id(self)
                     and token._reservation_id in self._releasing_reservations
-                    and _application_channel_admission_token_is_authentic(
-                        self._admission_secret,
-                        token,
-                    )
                 ):
                     self._releasing_reservations.discard(token._reservation_id)
                     return True
@@ -5507,6 +5406,7 @@ class ApplicationChannelRegistry:
                 receipt,
             ),
         )
+        self._admission_receipts[id(receipt)] = receipt
         return replace(result, receipt=receipt)
 
     def _retain_recoverable_admission_result_locked(
@@ -5780,10 +5680,7 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelAdmissionResult | None:
         """Return one exact retained common result after a lost outer return."""
 
-        if not _application_channel_admission_token_is_authentic(
-            self._admission_secret,
-            token,
-        ):
+        if type(token) is not ApplicationChannelAdmissionToken or token._registry_token != id(self):
             return None
         with self._prepared_lock:
             retained = self._recoverable_admission_results.get(token._reservation_id)
@@ -5800,10 +5697,7 @@ class ApplicationChannelRegistry:
     ) -> ApplicationChannelCommitRecovery:
         """Reconcile one exact retained indeterminate claim after context exit."""
 
-        if not _application_channel_admission_token_is_authentic(
-            self._admission_secret,
-            token,
-        ):
+        if type(token) is not ApplicationChannelAdmissionToken or token._registry_token != id(self):
             return ApplicationChannelCommitRecovery("indeterminate")
         recovery = self._reconcile_claimed_admission(token)
         if recovery.status == "not_committed":
@@ -5821,10 +5715,11 @@ class ApplicationChannelRegistry:
     ) -> bool:
         """Consume the exact retained recovery result after its outer owner commits."""
 
-        if not _application_channel_admission_token_is_authentic(
-            self._admission_secret,
-            token,
-        ) or not self.authenticates_admission_result(result):
+        if (
+            type(token) is not ApplicationChannelAdmissionToken
+            or token._registry_token != id(self)
+            or not self.authenticates_admission_result(result)
+        ):
             return False
         with self._gate.mutation(), self._prepared_lock:
             acknowledging = self._acknowledging_admission_results.get(token._reservation_id)

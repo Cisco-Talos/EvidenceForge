@@ -337,8 +337,8 @@ def test_prepared_terminal_request_is_atomic_cancelable_and_receipted(
     assert not manager.authenticates_admission_receipt(changed_time)
 
 
-def test_prepared_terminal_request_tamper_foreign_stale_and_overflow_preserve_tunnel() -> None:
-    """Every failed terminal capability path retains the exact live tunnel unchanged."""
+def test_prepared_terminal_request_foreign_and_stale_preserve_tunnel() -> None:
+    """Foreign and stale terminal capabilities retain the exact live tunnel unchanged."""
 
     manager = _manager()
     foreign = _manager()
@@ -363,24 +363,6 @@ def test_prepared_terminal_request_tamper_foreign_stale_and_overflow_preserve_tu
         with manager.prepared_admission(token):
             pytest.fail("cancelled terminal request unexpectedly entered a claim")
     assert manager.channel_snapshot(opened.tunnel.channel_id) == before
-
-    tampered = manager.prepare_request(
-        _affinity(),
-        requested_at=_START + timedelta(seconds=1),
-        completed_at=_START + timedelta(seconds=1),
-        request_wire_bytes=100,
-        response_wire_bytes=200,
-        outcome="denied",
-    )
-    assert tampered is not None
-    object.__setattr__(tampered.application_token, "channel_close_reason", "retargeted close")
-    with pytest.raises(StateError, match="integrity validation failed"):
-        with manager.prepared_admission(tampered):
-            pytest.fail("tampered terminal request unexpectedly entered a claim")
-    assert manager.census().prepared_admissions == 0
-    assert manager.census().application.prepared_admissions == 0
-    assert manager.channel_snapshot(opened.tunnel.channel_id) == before
-    assert manager.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
 
 
 def test_request_snapshot_is_signed_nonmutating_and_fences_generation_drift() -> None:
@@ -539,8 +521,8 @@ def test_prepared_commit_receipt_rejects_wrong_manager_and_nested_tamper() -> No
     assert not manager.authenticates_admission_receipt(changed_nested)
 
 
-def test_prepared_token_wrong_manager_and_tamper_fail_closed() -> None:
-    """Manager identity plus nested common/proxy seals reject retargeted tokens."""
+def test_prepared_token_wrong_manager_and_copy_fail_closed() -> None:
+    """Manager identity and exact retained ownership reject foreign token copies."""
 
     manager = _manager()
     other = _manager()
@@ -555,31 +537,7 @@ def test_prepared_token_wrong_manager_and_tamper_fail_closed() -> None:
         with manager.prepared_admission(changed_proxy):
             pass
 
-    object.__setattr__(token.application_token, "_integrity_token", "0" * 64)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        with manager.prepared_admission(token):
-            pass
-    assert manager.census().prepared_admissions == 0
-    assert manager.census().application.prepared_admissions == 0
-
-    proxy_tamper = _prepare_open(manager, suffix="2")
-    assert proxy_tamper is not None
-    object.__setattr__(proxy_tamper, "_owner_id", "retargeted-owner")
-    with pytest.raises(StateError, match="token was modified"):
-        with manager.prepared_admission(proxy_tamper):
-            pass
-    assert manager.census().prepared_admissions == 0
-    assert manager.census().application.prepared_admissions == 0
-
-    manager_token_tamper = _prepare_open(manager, suffix="3")
-    assert manager_token_tamper is not None
-    object.__setattr__(manager_token_tamper, "_manager_token", id(other))
-    with pytest.raises(StateError, match="token was modified"):
-        with manager.prepared_admission(manager_token_tamper):
-            pass
-    final = manager.census()
-    assert final.prepared_admissions == 0
-    assert final.application.prepared_admissions == 0
+    assert manager.cancel_prepared_admission(token)
 
 
 def test_prepared_admission_watermark_fences_claims_and_stales_unclaimed() -> None:

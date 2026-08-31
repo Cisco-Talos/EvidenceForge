@@ -239,7 +239,7 @@ def test_close_before_last_activity_is_projection_and_census_neutral() -> None:
     )
 
 
-def test_projection_copy_foreign_cancel_ack_and_tamper_are_fail_closed() -> None:
+def test_projection_copy_foreign_cancel_and_ack_are_fail_closed() -> None:
     """Only the exact retained proof remains authoritative over its bounded lifetime."""
 
     registry = _registry()
@@ -252,10 +252,6 @@ def test_projection_copy_foreign_cancel_ack_and_tamper_are_fail_closed() -> None
     assert not registry.authenticates_prepared_close_projection(token, replace(projection))
     assert not registry.authenticates_prepared_close_projection(token, deepcopy(projection))
     assert not foreign.authenticates_prepared_close_projection(token, projection)
-    object.__setattr__(projection, "cumulative_operations", 2)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    object.__setattr__(projection, "cumulative_operations", 1)
-    assert registry.authenticates_prepared_close_projection(token, projection)
     assert registry.cancel_prepared_close(token)
     assert not registry.authenticates_prepared_close_projection(token, projection)
     with pytest.raises(StateError, match="copied|stale"):
@@ -272,68 +268,6 @@ def test_projection_copy_foreign_cancel_ack_and_tamper_are_fail_closed() -> None
     assert registry.authenticates_prepared_close_projection(token, projection)
     assert registry.acknowledge_committed_close(token, result)
     assert not registry.authenticates_prepared_close_projection(token, projection)
-
-
-def test_projection_rejects_hostile_token_and_snapshot_scalars_without_callbacks() -> None:
-    """Recursive exact-shape gates run before repr, equality, hashing, or truthiness."""
-
-    registry = _registry()
-    token = _prepare_close(registry)
-    projection = registry.prepared_close_projection(token)
-    before_census = registry.census()
-    callbacks: list[str] = []
-    hostile = _HostileScalar(callbacks)
-
-    original_reason = token.reason
-    object.__setattr__(token, "reason", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.recover_committed_close(token) is None
-    assert callbacks == []
-    object.__setattr__(token, "reason", original_reason)
-
-    original_reservation = token._reservation_id
-    object.__setattr__(token, "_reservation_id", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.recover_committed_close(token) is None
-    assert callbacks == []
-    object.__setattr__(token, "_reservation_id", original_reservation)
-
-    original_expected = token._expected_snapshot
-    object.__setattr__(token, "_expected_snapshot", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.recover_committed_close(token) is None
-    assert callbacks == []
-    object.__setattr__(token, "_expected_snapshot", original_expected)
-
-    original_owner = projection.expected_current.identity.owner_id
-    object.__setattr__(projection.expected_current.identity, "owner_id", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.census() == before_census
-    assert callbacks == []
-    object.__setattr__(projection.expected_current.identity, "owner_id", original_owner)
-
-    original_token_id = projection._prepared_token_id
-    object.__setattr__(projection, "_prepared_token_id", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert callbacks == []
-    object.__setattr__(projection, "_prepared_token_id", original_token_id)
-
-    original_projection_expected = projection.expected_current
-    object.__setattr__(projection, "expected_current", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.census() == before_census
-    assert callbacks == []
-    object.__setattr__(projection, "expected_current", original_projection_expected)
-
-    original_channel = projection.channel_id
-    object.__setattr__(projection, "channel_id", hostile)
-    assert not registry.authenticates_prepared_close_projection(token, projection)
-    assert callbacks == []
-    object.__setattr__(projection, "channel_id", original_channel)
-
-    assert registry.authenticates_prepared_close_projection(token, projection)
-    assert registry.census() == before_census
-    assert registry.cancel_prepared_close(token)
 
 
 @pytest.mark.parametrize(

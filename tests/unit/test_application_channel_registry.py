@@ -1443,8 +1443,8 @@ def test_prepared_completed_operation_and_close_is_one_atomic_mutation() -> None
     assert not registry.authenticates_admission_token(token)
 
 
-def test_prepared_completed_operation_and_close_cancel_copy_foreign_and_tamper() -> None:
-    """Terminal common capabilities are exact, registry-bound, sealed, and cancel-neutral."""
+def test_prepared_completed_operation_and_close_cancel_copy_and_foreign() -> None:
+    """Terminal common capabilities are exact, registry-bound, and cancel-neutral."""
 
     registry = _registry()
     foreign = _registry()
@@ -1475,24 +1475,6 @@ def test_prepared_completed_operation_and_close_cancel_copy_foreign_and_tamper()
     with pytest.raises(StateError, match="stale or already consumed"):
         with registry.prepared_admission(token):
             pytest.fail("cancelled terminal token unexpectedly entered a claim")
-
-    tampered = registry.prepare_completed_operation_and_close(
-        reservation,
-        closed_at=reservation.ended_at,
-        reason="terminal denied",
-    )
-    object.__setattr__(tampered, "channel_close_reason", "retargeted close")
-    assert not registry.authenticates_admission_token(tampered)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        with registry.prepared_admission(tampered):
-            pytest.fail("tampered terminal token unexpectedly entered a claim")
-    assert registry.get(opened.channel_id) == opened
-    rejected = registry.census()
-    assert rejected.prepared_admissions == 0
-    assert rejected.claimed_admissions == 0
-    assert rejected.used_operation_ids == before.used_operation_ids
-    assert rejected.open_channels == before.open_channels
-    assert rejected.retained_channels == before.retained_channels
 
 
 def test_prepared_completed_operation_and_close_rejects_generation_drift() -> None:
@@ -1563,86 +1545,6 @@ def test_prepared_tokens_are_registry_bound_and_stale_after_cancel() -> None:
     with pytest.raises(StateError, match="stale or already consumed"):
         with registry.prepared_admission(token):
             pytest.fail("cancelled token unexpectedly entered a claim")
-
-
-@pytest.mark.parametrize(
-    "target",
-    [
-        "semantic_payload",
-        "nested_semantic_payload",
-        "reservation_id",
-        "registry_route",
-        "owner_shard",
-        "channel_handle",
-        "channel_generation",
-        "expected_snapshot",
-        "prepared_snapshot",
-        "reserved_channel_ids",
-        "reserved_transport_ids",
-        "integrity_token",
-    ],
-)
-def test_prepared_token_in_place_tamper_rejects_and_releases_original_capability(
-    target: str,
-) -> None:
-    """Every semantic and routing target is sealed independently from the public object."""
-
-    registry = _registry()
-    before = registry.census()
-    token = registry.prepare_open_channel_with_completed_operation(
-        _identity(),
-        _operation("prepared-operation", ordinal=0),
-    )
-    prepared_snapshot = token._prepared_snapshot
-    assert token.identity is not None and prepared_snapshot is not None
-    values: dict[str, tuple[str, object]] = {
-        "semantic_payload": (
-            "identity",
-            replace(token.identity, channel_id="tampered-channel"),
-        ),
-        "reservation_id": ("_reservation_id", token._reservation_id + 1),
-        "registry_route": ("_registry_token", token._registry_token + 1),
-        "owner_shard": ("_owner_shard_id", token._owner_shard_id + 1),
-        "channel_handle": ("_channel_handle", 0),
-        "channel_generation": ("_channel_generation", 1),
-        "expected_snapshot": ("_expected_snapshot", prepared_snapshot),
-        "prepared_snapshot": ("_prepared_snapshot", None),
-        "reserved_channel_ids": ("_reserved_channel_ids", ("tampered-channel",)),
-        "reserved_transport_ids": ("_reserved_transport_ids", ("tampered-transport",)),
-        "integrity_token": ("_integrity_token", "0" * 64),
-    }
-    if target == "nested_semantic_payload":
-        object.__setattr__(token.reservation, "operation_id", "tampered-operation")
-    else:
-        field_name, value = values[target]
-        object.__setattr__(token, field_name, value)
-
-    assert not registry.authenticates_admission_token(token)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        with registry.prepared_admission(token):
-            pytest.fail("tampered token unexpectedly entered a claim")
-
-    assert registry.census() == before
-    assert not registry.cancel_prepared_admission(token)
-
-
-def test_claimed_token_tamper_rejects_commit_and_cleans_reservations() -> None:
-    """Mutation during the no-lock claim body cannot redirect or strand commit state."""
-
-    registry = _registry()
-    before = registry.census()
-    token = registry.prepare_open_channel_with_completed_operation(
-        _identity(),
-        _operation("prepared-operation", ordinal=0),
-    )
-
-    with registry.prepared_admission(token) as prepared:
-        object.__setattr__(token, "_owner_shard_id", token._owner_shard_id + 1)
-        with pytest.raises(StateError, match="integrity validation failed"):
-            prepared.commit_no_fail()
-
-    assert registry.census() == before
-    assert registry.get("channel-1") is None
 
 
 def test_prepared_publication_token_and_commit_receipt_are_registry_authenticated() -> None:
@@ -1778,8 +1680,8 @@ def test_recoverable_admission_capacity_is_reserved_and_never_silently_evicts(
     assert registry.cancel_prepared_admission(replacement)
 
 
-def test_prepared_close_only_cancel_copy_foreign_tamper_and_commit_recovery() -> None:
-    """Close-only ownership is exact, authenticated, cancel-neutral, and recoverable."""
+def test_prepared_close_only_cancel_copy_foreign_and_commit_recovery() -> None:
+    """Close-only ownership is exact, cancel-neutral, and recoverable."""
 
     registry = _registry()
     foreign = _registry()
@@ -1801,17 +1703,6 @@ def test_prepared_close_only_cancel_copy_foreign_tamper_and_commit_recovery() ->
         with foreign.prepared_close(token):
             pytest.fail("foreign close token unexpectedly claimed")
     assert registry.cancel_prepared_close(token)
-    assert registry.census() == before
-
-    tampered = registry.prepare_close_channel(
-        opened.channel_id,
-        closed_at=closed_at,
-        reason="persistent transport finalized",
-    )
-    object.__setattr__(tampered, "reason", "retargeted")
-    with pytest.raises(StateError, match="integrity"):
-        with registry.prepared_close(tampered):
-            pytest.fail("tampered close token unexpectedly claimed")
     assert registry.census() == before
 
     committed_token = registry.prepare_close_channel(

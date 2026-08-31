@@ -392,5 +392,6 @@ def test_icmp_rtt_helper_and_planner_have_no_private_rng_or_identity_fallback() 
     for call in calls:
         keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in call.keywords}
         assert keywords["timing_runtime"] == "self._timing_runtime"
-        assert "request.stable_id" in keywords["stable_id"]
+        assert "stable_id" in keywords["stable_id"]
+        assert "request.stable_id" not in keywords["stable_id"]
         assert "conn_id" in keywords["stable_id"]

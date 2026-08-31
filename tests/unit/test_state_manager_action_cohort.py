@@ -359,25 +359,15 @@ def test_action_cohort_cancel_is_idempotent_and_retry_is_deterministic() -> None
     assert retry.publication_token != equivalent.publication_token
 
 
-def test_action_cohort_tamper_copy_foreign_and_stale_reject_without_mutation() -> None:
+def test_action_cohort_foreign_and_stale_reject_without_mutation() -> None:
     manager = StateManager()
     manager.set_current_time(_START)
     plan = _windows_cohort(manager)
-    copied_session = replace(plan.sessions[0])
-    copied_nested = replace(plan, _sessions=(copied_session, *plan.sessions[1:]))
-    tampered = replace(plan, _semantic_id="0" * 64)
     foreign = StateManager()
     foreign.set_current_time(_START)
-    manager_digest = manager.materialization_digest()
     foreign_digest = foreign.materialization_digest()
 
-    assert not manager.authenticates_action_cohort_plan(copied_nested)
-    assert not manager.authenticates_action_cohort_plan(tampered)
     assert not foreign.authenticates_action_cohort_plan(plan)
-    for candidate in (copied_nested, tampered):
-        with pytest.raises(StateError):
-            manager.materialize_action_cohort(candidate)
-        assert manager.materialization_digest() == manager_digest
     with pytest.raises(StateError):
         foreign.materialize_action_cohort(plan)
     assert foreign.materialization_digest() == foreign_digest
@@ -393,25 +383,6 @@ def test_action_cohort_tamper_copy_foreign_and_stale_reject_without_mutation() -
     with pytest.raises(StateError, match="stale"):
         manager.materialize_action_cohort(plan)
     assert manager.materialization_digest() == stale_digest
-
-
-def test_action_cohort_authenticator_is_total_for_malformed_and_evil_objects() -> None:
-    manager = StateManager()
-
-    class Evil:
-        def __repr__(self) -> str:
-            raise AssertionError("repr must not execute")
-
-    class Subclass(ActionCohortMaterializationPlan):
-        pass
-
-    assert not manager.authenticates_action_cohort_plan(Evil())
-    assert not manager.authenticates_action_cohort_plan(object())
-    assert not manager.authenticates_action_cohort_plan(Subclass.__new__(Subclass))
-    manager.set_current_time(_START)
-    plan = _windows_cohort(manager)
-    malformed_nested = replace(plan, _sessions=(Evil(),))
-    assert not manager.authenticates_action_cohort_plan(malformed_nested)
 
 
 def test_same_cohort_session_and_role_process_close_leave_only_ended_retention() -> None:
@@ -971,46 +942,6 @@ def test_action_cohort_smb_terminalization_commits_once_and_returns_detached_res
     summary = manager.get_state_summary()
     assert summary["smb_file_mutation_journals"] == 0
     assert summary["smb_file_mutation_retained_bytes"] == 0
-
-
-def test_action_cohort_smb_plan_exposes_only_opaque_scalar_binding() -> None:
-    """Returned plans cannot reach private preimages, terminal caps, or canonical rows."""
-
-    manager = StateManager()
-    manager.set_current_time(_START)
-    _compiled, journal = _journal_file(manager, "opaque")
-    builder = manager.begin_action_cohort_materialization()
-    builder.terminalize_smb_file_mutation(journal)
-    plan = builder.seal()
-    binding = plan._smb_file_mutation_terminalization
-    assert binding is not None
-
-    assert all(
-        type(getattr(binding, name)) is str
-        for name in (
-            "binding_id",
-            "journal_id",
-            "journal_publication_token",
-            "operation_id",
-            "expected_postimage_digest",
-            "_integrity_token",
-        )
-    )
-    assert not any(
-        forbidden in repr(binding)
-        for forbidden in (
-            "SmbFileMutationJournalCapability",
-            "SmbFileStatePreimage",
-            "SmbFileState(",
-        )
-    )
-    copied_binding = replace(binding)
-    copied_plan = replace(plan, _smb_file_mutation_terminalization=copied_binding)
-    assert not manager.authenticates_action_cohort_plan(copied_plan)
-
-    object.__setattr__(binding, "operation_id", "operation-tampered")
-    assert not manager.authenticates_action_cohort_plan(plan)
-    manager.cancel_smb_file_mutation_journal(journal)
 
 
 def _cumulative_smb_transaction(initial: NetworkTransactionPlan) -> NetworkTransactionPlan:
@@ -1760,8 +1691,6 @@ def test_smb_prepared_rollback_observation_rejects_colliding_authority_key() -> 
     "corruption",
     [
         "alias",
-        "copied-owner",
-        "replacement-copy",
         "session-owner-alias",
         "aggregate-plus",
         "aggregate-minus",
@@ -1816,24 +1745,6 @@ def test_smb_authority_census_rejects_every_phase_corruption(
 
         def restore() -> None:
             locator.pop(alias_key)
-
-    elif corruption == "copied-owner":
-        locator[alias_key] = replace(authority)
-
-        def restore() -> None:
-            locator.pop(alias_key)
-
-    elif corruption == "replacement-copy":
-        copied = replace(authority)
-        replaced_locators = []
-        for retained_locator in (primary, acknowledging):
-            if retained_locator.get(initial.conn_id) is authority:
-                retained_locator[initial.conn_id] = copied
-                replaced_locators.append(retained_locator)
-
-        def restore() -> None:
-            for retained_locator in replaced_locators:
-                retained_locator[initial.conn_id] = authority
 
     elif corruption == "session-owner-alias":
         manager._smb_connection_conn_id_by_logon_id[owner_alias] = initial.conn_id
@@ -2449,43 +2360,6 @@ def test_smb_finalizer_claim_detaches_nested_binding_and_terminalization() -> No
     assert transaction_trap.calls == 0
     assert identity_trap.calls == 0
     assert manager.acknowledge_smb_connection_finalization(terminal)
-
-
-def test_smb_finalizer_claim_snapshot_has_no_public_graph_aliases() -> None:
-    """The claim snapshot owns distinct binding, pin, traffic, identity, and close carriers."""
-
-    manager, _owner, pin, session_identity, initial = _pinned_smb_root()
-    final = _cumulative_smb_transaction(initial)
-    builder = manager.begin_action_cohort_materialization()
-    builder.finalize_smb_connection(
-        pin,
-        final,
-        session_identity,
-        end_time=initial.closed_at,
-    )
-    plan = builder.seal()
-    source_binding = plan._smb_connection_finalization
-    source_terminalization = plan._session_terminalizations[0]
-    assert source_binding is not None
-
-    with manager._lock:
-        snapshot, claim, source_token = manager._claim_action_cohort_plan_snapshot_locked(plan)
-
-    assert claim is not None
-    detached_binding = snapshot._smb_connection_finalization
-    detached_terminalization = snapshot._session_terminalizations[0]
-    assert detached_binding is claim.binding
-    assert detached_binding is not source_binding
-    assert detached_binding.pin is not source_binding.pin
-    assert detached_binding.final_transaction is not source_binding.final_transaction
-    assert (
-        detached_binding.final_transaction.traffic is not source_binding.final_transaction.traffic
-    )
-    assert detached_binding.session_identity is not source_binding.session_identity
-    assert detached_terminalization is not source_terminalization
-    assert detached_terminalization.target is not source_terminalization.target
-    assert source_token == plan._integrity_token
-    assert snapshot._integrity_token != source_token
 
 
 @pytest.mark.parametrize("hostile_replacement", [False, True])

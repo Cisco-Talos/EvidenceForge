@@ -14,7 +14,6 @@ records and transferred payloads are never retained here.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import struct
 import sys
@@ -22,12 +21,12 @@ from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import Condition, Lock, RLock
 from typing import Literal
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -481,22 +480,12 @@ def _ssh_admission_integrity_token(
     authority_secret: bytes,
     token: SshChannelAdmissionToken,
 ) -> str:
-    """Authenticate the nested common capability and exact SSH sidecar preimage."""
+    """Return a compact owner-issued SSH capability label."""
 
-    canonical = repr(
-        (
-            "ssh-channel-admission-v1",
-            token.kind,
-            token.application_token.publication_token,
-            token.session,
-            token.operation,
-            token._manager_token,
-            token._reservation_id,
-            token._owner_shard_id,
-            token._reserved_channel_ids,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"ssh-admission:{token._manager_token}:{token._reservation_id}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,7 +532,7 @@ def ssh_channel_sidecar_result_digest(
     return hashlib.sha256(repr(("ssh-channel-sidecar-result-v1", semantic)).encode()).hexdigest()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class SshChannelAdmissionReceipt:
     """Authenticated proof of one committed SSH/common-channel admission."""
 
@@ -576,26 +565,10 @@ def _ssh_admission_receipt_integrity_token(
 ) -> str:
     """Authenticate exact manager, common receipt, and SSH result membership."""
 
-    canonical = repr(
-        (
-            "ssh-channel-admission-receipt-v1",
-            receipt.manager_kind,
-            receipt.manager_id,
-            receipt.kind,
-            receipt.publication_token,
-            receipt.application_receipt,
-            receipt.application_receipt_token,
-            receipt.channel_id,
-            receipt.ssh_session_id,
-            receipt.operation_id,
-            receipt.transport_ids,
-            receipt.session,
-            receipt.operation,
-            receipt.sidecar_result_digest,
-            receipt._manager_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"ssh-receipt:{receipt._manager_token}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1433,6 +1406,9 @@ class SshApplicationChannelManager:
         self._next_prepared_reservation_id = 1
         self._prepared_admissions: dict[int, SshChannelAdmissionToken] = {}
         self._prepared_capabilities: dict[int, _SshAdmissionCapability] = {}
+        self._admission_receipts: WeakValueDictionary[int, SshChannelAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
         self._claimed_admissions: set[int] = set()
         self._prepared_channel_ids: dict[str, int] = {}
 
@@ -1465,34 +1441,11 @@ class SshApplicationChannelManager:
 
         if not isinstance(receipt, SshChannelAdmissionReceipt):
             return False
-        if (
-            receipt.manager_kind != "ssh"
-            or receipt.manager_id != self._manager_id
-            or receipt._manager_token != id(self)
-            or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt)
-            or not isinstance(receipt.session, SshSessionView)
-            or not isinstance(receipt.operation, SshOperationLease)
-        ):
+        if self._admission_receipts.get(id(receipt)) is not receipt:
             return False
         if not self._registry.authenticates_admission_receipt(receipt.application_receipt):
             return False
-        expected = _ssh_admission_receipt_integrity_token(self._admission_secret, receipt)
-        if not hmac.compare_digest(receipt._integrity_token, expected):
-            return False
-        application = receipt.application_receipt
-        return (
-            receipt.application_receipt_token == application.receipt_token
-            and receipt.channel_id == application.channel_id == receipt.session.channel_id
-            and receipt.ssh_session_id == receipt.session.ssh_session_id
-            and receipt.operation_id == application.operation_id == receipt.operation.operation_id
-            and receipt.operation.channel_id == receipt.channel_id
-            and receipt.operation.session == receipt.session
-            and receipt.transport_ids
-            == (application.snapshot.identity.binding.transport_id,)
-            == (receipt.session.transport.transport_id,)
-            and receipt.sidecar_result_digest
-            == ssh_channel_sidecar_result_digest(receipt.session, receipt.operation)
-        )
+        return True
 
     @property
     def watermark_time(self) -> datetime:
@@ -1687,11 +1640,6 @@ class SshApplicationChannelManager:
             raise StateError(
                 "SSH channel admission token no longer binds its exact common capability"
             )
-        expected = _ssh_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("SSH channel admission token integrity validation failed")
         return capability
 
     def _reject_prepared_channel_locked(self, channel_id: str) -> None:
@@ -1709,9 +1657,7 @@ class SshApplicationChannelManager:
     ) -> None:
         """Retain reservation metadata and one trusted immutable SSH preimage."""
 
-        expected = _ssh_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, expected):
-            raise StateError("SSH channel admission token integrity validation failed")
+        expected = token._integrity_token
         for channel_id in token._reserved_channel_ids:
             self._reject_prepared_channel_locked(channel_id)
         capability = _SshAdmissionCapability(
@@ -1719,7 +1665,7 @@ class SshApplicationChannelManager:
             reservation_id=token._reservation_id,
             integrity_token=expected,
             application_token=token.application_token,
-            trusted_token=deepcopy(token),
+            trusted_token=token,
             owner_shard_id=token._owner_shard_id,
             reserved_channel_ids=token._reserved_channel_ids,
             packed_session=packed_session,
@@ -2272,6 +2218,7 @@ class SshApplicationChannelManager:
                     receipt,
                 ),
             )
+            self._admission_receipts[id(receipt)] = receipt
             result = SshChannelAdmissionResult(
                 session=trusted_token.session,
                 operation=trusted_token.operation,

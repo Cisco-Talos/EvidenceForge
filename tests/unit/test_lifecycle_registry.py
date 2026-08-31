@@ -2539,7 +2539,6 @@ def test_cross_host_transport_binding_fences_transport_and_session_close() -> No
         ).identity
         == transport
     )
-
     binding = TransportSessionBindingIdentity(
         binding_id="rdp-session-binding",
         transport_object_id=transport.object_id,
@@ -2603,6 +2602,46 @@ def test_cross_host_transport_binding_fences_transport_and_session_close() -> No
     census = registry.census()
     assert census.transport_evictions == 1
     assert census.binding_evictions == 1
+
+
+def test_transport_registration_reuses_one_exact_object_route_digest(monkeypatch) -> None:
+    """Prepared transport lookup and insertion should share one namespace digest."""
+    registry = LifecycleRegistry()
+    transport = TransportLifecycleIdentity(
+        hostname="ROUTE-SOURCE",
+        object_id="prehashed-transport-object",
+        transport_id="prehashed-network-plan",
+        src_hostname="ROUTE-SOURCE",
+        dst_hostname="ROUTE-TARGET",
+        network_tuple=NetworkTuple("10.30.0.1", 50123, "10.30.0.2", 443, "tcp"),
+        opened_at=_START,
+        close_deadline=_START + timedelta(minutes=1),
+        zeek_uid="C-prehashed-route",
+    )
+    original_digest = lifecycle_registry_module.PackedUniqueDigestMap.digest
+    object_digest_calls = 0
+
+    def tracked_digest(route, semantic_key):
+        nonlocal object_digest_calls
+        if route._namespace == b"lc-tr-object" and semantic_key == transport.object_id:
+            object_digest_calls += 1
+        return original_digest(route, semantic_key)
+
+    monkeypatch.setattr(
+        lifecycle_registry_module.PackedUniqueDigestMap,
+        "digest",
+        tracked_digest,
+    )
+
+    registry.register_transport(
+        transport,
+        action_id="prehashed-route-start",
+        transition_id="prehashed-route-transition",
+    )
+    registration_digest_calls = object_digest_calls
+
+    assert registration_digest_calls == 1
+    assert registry.get_transport(transport.object_id).identity == transport
 
 
 def test_service_and_transport_temporal_reuse_is_exact_and_non_overlapping() -> None:

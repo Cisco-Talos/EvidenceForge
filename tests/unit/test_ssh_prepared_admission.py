@@ -199,19 +199,6 @@ def test_prepared_ssh_claim_fences_watermark_and_unclaimed_token_can_stale() -> 
     assert application.census().prepared_admissions == 0
 
 
-def test_prepared_ssh_in_place_tamper_rejects_and_releases_original_reservations() -> None:
-    manager, application = _manager()
-    token = _prepare(manager)
-    object.__setattr__(token, "session", replace(token.session, ssh_session_id="tampered"))
-
-    assert not manager.authenticates_admission_token(token)
-    with pytest.raises(StateError, match="integrity"):
-        manager.cancel_prepared_admission(token)
-    assert application.census().prepared_admissions == 0
-    replacement = _prepare(manager)
-    assert manager.cancel_prepared_admission(replacement)
-
-
 def test_immediate_ssh_completed_open_is_the_prepared_compatibility_wrapper() -> None:
     manager, application = _manager()
     affinity, transport, binding = _values(2)

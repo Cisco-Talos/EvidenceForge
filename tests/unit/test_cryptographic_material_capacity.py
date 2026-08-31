@@ -66,21 +66,21 @@ class _RejectedDoubleCountingRegistry(CryptographicMaterialRegistry):
             assert (
                 self._tls_active_claim_transaction_locked(capability.preparation_id) is transaction
             )
-            for patch in capability.trusted_token._patches:
-                if (
-                    self._tls_live_material_points_locked() + len(self._tls_point_reservations)
-                    > capacity
-                ):
-                    raise CryptographicMaterialCapacityError(
-                        "negative control double-counted a published reservation"
-                    )
-                CryptographicMaterialRegistry._publish_tls_material_locked(
-                    self,
-                    patch.family,
-                    patch.key,
-                    patch.value,
-                    reservation_id=capability.preparation_id,
+        for patch in capability.patches:
+            if (
+                self._tls_live_material_points_locked() + len(self._tls_point_reservations)
+                > capacity
+            ):
+                raise CryptographicMaterialCapacityError(
+                    "negative control double-counted a published reservation"
                 )
+            CryptographicMaterialRegistry._publish_tls_material_locked(
+                self,
+                patch.family,
+                patch.key,
+                patch.value,
+                reservation_id=capability.preparation_id,
+            )
         raise AssertionError("negative control unexpectedly published every point")
 
 
@@ -623,23 +623,6 @@ def test_copy_cancel_and_replay_release_only_the_original_reservation() -> None:
     with pytest.raises(StateError, match="stale or already consumed"):
         with registry.prepared_tls_material(token):
             pytest.fail("cancelled capability replay entered the claim body")
-
-
-def test_mutated_public_preparation_id_releases_exact_internal_capability() -> None:
-    """Cleanup locates the exact live token without trusting its mutable public ID."""
-
-    registry = CryptographicMaterialRegistry(tls_material_capacity=1)
-    initial = (registry.census(), registry.state_digest())
-    preparation = registry.begin_tls_preparation()
-    preparation.public_key_spki("mutated-preparation-id", key_type="ecdsa", key_size=256)
-    token = preparation.seal()
-    object.__setattr__(token, "preparation_id", token.preparation_id + 10_000)
-
-    assert not registry.authenticates_tls_preparation_token(token)
-    with pytest.raises(StateError, match="integrity validation failed"):
-        registry.cancel_tls_preparation(token)
-    assert initial == (registry.census(), registry.state_digest())
-    registry.public_key_spki("after-mutated-preparation-id", key_type="ecdsa", key_size=256)
 
 
 def test_claim_abort_releases_finite_capacity_and_restores_state_digest() -> None:

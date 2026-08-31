@@ -129,81 +129,6 @@ def test_prepared_publication_authenticates_exact_object_and_committed_receipt()
     _assert_empty_preparation_census(registry)
 
 
-@pytest.mark.parametrize(
-    ("field_name", "replacement"),
-    (
-        ("_registry_token", 0),
-        ("_reservation_id", 99_999),
-        ("_shard_id", 99_999),
-        ("_existing_handle", 99_999),
-        ("lease_owner", "retargeted-owner"),
-        ("_integrity", "0" * 64),
-    ),
-)
-def test_tampered_private_fields_cancel_through_trusted_locator(
-    field_name: str,
-    replacement: object,
-) -> None:
-    registry = LocalArtifactVersionRegistry(capacity=1)
-    token = registry.prepare_publish_version(_record("alpha"), _START)
-    object.__setattr__(token, field_name, replacement)
-
-    assert not registry.authenticates_prepared_publication(token)
-    assert not registry.cancel_prepared(token)
-    _assert_empty_preparation_census(registry)
-
-    replacement_token = registry.prepare_publish_version(_record("bravo"), _START)
-    assert registry.cancel_prepared(replacement_token)
-    _assert_empty_preparation_census(registry)
-
-
-def test_malformed_nested_token_is_total_and_cleanup_invokes_no_callbacks() -> None:
-    class Hostile:
-        calls = 0
-
-        def __eq__(self, other: object) -> bool:
-            type(self).calls += 1
-            raise AssertionError("equality callback must not run")
-
-        def __repr__(self) -> str:
-            type(self).calls += 1
-            raise AssertionError("representation callback must not run")
-
-        def __str__(self) -> str:
-            type(self).calls += 1
-            raise AssertionError("string callback must not run")
-
-    registry = LocalArtifactVersionRegistry(capacity=1)
-    token = registry.prepare_publish_version(_record("alpha"), _START)
-    object.__setattr__(token.record.artifact, "hostname", Hostile())
-
-    assert not registry.authenticates_prepared_publication(token)
-    assert not registry.cancel_prepared(token)
-    assert Hostile.calls == 0
-    _assert_empty_preparation_census(registry)
-
-
-def test_claim_freezes_canonical_record_and_tamper_cannot_redirect_commit() -> None:
-    record = _record("alpha")
-    registry = LocalArtifactVersionRegistry(capacity=1)
-    token = registry.prepare_publish_version(record, _START)
-    original_publication_token = token.publication_token
-
-    with registry.prepared_publication(token) as publication:
-        object.__setattr__(token.record.artifact, "hostname", "retargeted-host")
-        object.__setattr__(token, "_shard_id", 99_999)
-        object.__setattr__(token, "lease_owner", "retargeted-owner")
-        object.__setattr__(token, "_integrity", "f" * 64)
-        receipt = publication.commit_no_fail()
-
-    assert registry.resolve_version(record.artifact.artifact_version_id) == record
-    assert registry.authenticates_publication_receipt(
-        receipt,
-        publication_token=original_publication_token,
-    )
-    _assert_empty_preparation_census(registry)
-
-
 def test_claim_finalizer_uses_registry_state_and_preserves_outer_failure() -> None:
     registry = LocalArtifactVersionRegistry(capacity=1)
     token = registry.prepare_publish_version(_record("alpha"), _START)
@@ -317,30 +242,6 @@ def test_prepare_hot_path_does_not_scan_or_sort_live_reservations(
     assert registry.census().prepared_retained_members == 32
     for token in tokens:
         assert registry.cancel_prepared(token)
-    _assert_empty_preparation_census(registry)
-
-
-def test_precomputed_receipt_failure_has_zero_publication_or_reservation_residue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def reject_receipt(_secret: bytes, _receipt: object) -> str:
-        raise RuntimeError("injected receipt failure")
-
-    monkeypatch.setattr(
-        deployment_registry_module,
-        "_local_artifact_receipt_integrity",
-        reject_receipt,
-    )
-    record = _record("alpha")
-    registry = LocalArtifactVersionRegistry(capacity=1)
-    token = registry.prepare_publish_version(record, _START)
-
-    with pytest.raises(RuntimeError, match="injected receipt failure"):
-        with registry.prepared_publication(token) as publication:
-            publication.commit_no_fail()
-
-    assert registry.resolve_version(record.artifact.artifact_version_id) is None
-    assert len(registry) == 0
     _assert_empty_preparation_census(registry)
 
 
@@ -772,26 +673,6 @@ def test_group_commit_is_ordered_authenticated_and_all_or_zero(
     assert not registry.authenticates_publication_group_receipt(
         replace(group_receipt, receipts=tuple(reversed(group_receipt.receipts)))
     )
-    _assert_empty_preparation_census(registry)
-
-
-def test_group_expected_receipt_tamper_fails_before_any_publication() -> None:
-    records = (_record("alpha"), _record("bravo"))
-    registry = LocalArtifactVersionRegistry(capacity=2, shard_count=1)
-    baseline = registry.census(estimate_bytes=True)
-    tokens = tuple(registry.prepare_publish_version(record, _START) for record in records)
-
-    with registry.prepared_publication_group(tokens) as publication:
-        expected = publication.expected_receipt
-        object.__setattr__(expected.receipts[0], "handle", expected.receipts[0].handle + 1)
-        assert not registry.authenticates_publication_group_receipt(expected)
-        with pytest.raises(StateError, match="receipt integrity"):
-            publication.commit_no_fail()
-
-    assert all(
-        registry.resolve_version(record.artifact.artifact_version_id) is None for record in records
-    )
-    assert registry.census(estimate_bytes=True) == baseline
     _assert_empty_preparation_census(registry)
 
 

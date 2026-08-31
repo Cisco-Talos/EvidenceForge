@@ -106,7 +106,7 @@ def test_expected_receipt_authenticates_before_commit_and_is_returned_by_identit
     )
     assert ledger.authenticates_batch_receipt(expected, request=request)
     assert not ledger.authenticates_batch_receipt(copied_receipt, request=request)
-    assert ledger.authenticates_batch_receipt(deepcopy(expected), request=request)
+    assert not ledger.authenticates_batch_receipt(deepcopy(expected), request=request)
     _assert_empty(ledger)
 
 

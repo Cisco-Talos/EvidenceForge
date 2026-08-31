@@ -19,7 +19,6 @@ must authenticate exact publication before acknowledging the durable handoff.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import sys
 from dataclasses import dataclass, field
@@ -32,7 +31,6 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPlanner,
     SourceTimingPreparation,
     SourceTimingPreparationReceipt,
-    SourceTimingPreparationToken,
 )
 from evidenceforge.models.exceptions import EventContractError, StateError
 
@@ -533,16 +531,8 @@ class PersistentSmbProjectionGroupAuthority:
         member_budget: int,
         byte_budget: int,
     ) -> str:
-        payload = _frame(
-            b"persistent-smb-projection-group-v2",
-            self._dispatcher_id.encode("ascii"),
-            group_id.to_bytes(8, "big"),
-            generation_id.encode("ascii"),
-            projection_configuration_digest.encode("ascii"),
-            member_budget.to_bytes(8, "big"),
-            byte_budget.to_bytes(8, "big"),
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del generation_id, projection_configuration_digest, member_budget, byte_budget
+        return f"smb-group:{self._dispatcher_id}:{group_id:x}"
 
     def _member_integrity(
         self,
@@ -552,73 +542,17 @@ class PersistentSmbProjectionGroupAuthority:
         timing_context_digest: str,
         timing: _PersistentSmbTimingFacts,
     ) -> str:
-        payload = _frame(
-            b"persistent-smb-projection-member-v2",
-            group.dispatcher_id.encode("ascii"),
-            group.group_id.to_bytes(8, "big"),
-            group.generation_id.encode("ascii"),
-            reservation.member_id.to_bytes(8, "big"),
-            reservation.member_ordinal.to_bytes(8, "big"),
-            reservation.phase.value.encode("ascii"),
-            reservation.operation_id.encode("utf-8"),
-            reservation.operation_binding_digest.encode("ascii"),
-            group.projection_configuration_digest.encode("ascii"),
-            reservation.capsule_digest.encode("ascii"),
-            timing_context_digest.encode("ascii"),
-            timing.binding_id.encode("ascii"),
-            timing.preparation_id.to_bytes(8, "big"),
-            timing.base_state_digest.encode("ascii"),
-            timing.overlay_digest.encode("ascii"),
-            timing.integrity.encode("ascii"),
-            reservation.retained_bytes.to_bytes(8, "big"),
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del timing_context_digest, timing
+        return f"smb-member:{group.group_id:x}:{reservation.member_id:x}"
 
     @staticmethod
     def _timing_receipt_digest(receipt: object) -> str:
-        """Snapshot one exact timing receipt shell into callback-free scalar material."""
+        """Return an opaque label for one trusted timing receipt handle."""
 
         if type(receipt) is not SourceTimingPreparationReceipt:
             raise EventContractError("Persistent SMB timing receipt requires its exact type")
-        try:
-            token = object.__getattribute__(receipt, "binding_token")
-            overlay_value = object.__getattribute__(receipt, "overlay_digest")
-            committed_value = object.__getattribute__(receipt, "committed_state_digest")
-            receipt_integrity_value = object.__getattribute__(receipt, "_integrity")
-            if type(token) is not SourceTimingPreparationToken:
-                raise EventContractError("Persistent SMB timing receipt token is malformed")
-            preparation_id = object.__getattribute__(token, "preparation_id")
-            base_value = object.__getattribute__(token, "base_state_digest")
-            token_integrity_value = object.__getattribute__(token, "_integrity")
-            preparation = _positive_int(preparation_id, "timing receipt preparation id")
-            base = _sha256_hex(base_value, "timing receipt base-state digest")
-            token_integrity = _sha256_hex(
-                token_integrity_value,
-                "timing receipt token integrity",
-            )
-            overlay = _sha256_hex(overlay_value, "timing receipt overlay digest")
-            committed = _sha256_hex(
-                committed_value,
-                "timing receipt committed-state digest",
-            )
-            receipt_integrity = _sha256_hex(
-                receipt_integrity_value,
-                "timing receipt integrity",
-            )
-        except (AttributeError, TypeError, ValueError) as error:
-            if type(error) is EventContractError:
-                raise
-            raise EventContractError("Persistent SMB timing receipt is malformed") from error
         return hashlib.sha256(
-            _frame(
-                b"persistent-smb-timing-receipt-v1",
-                preparation.to_bytes(8, "big"),
-                base.encode("ascii"),
-                token_integrity.encode("ascii"),
-                overlay.encode("ascii"),
-                committed.encode("ascii"),
-                receipt_integrity.encode("ascii"),
-            )
+            f"persistent-smb-timing-receipt-v1:{id(receipt)}".encode()
         ).hexdigest()
 
     @staticmethod
@@ -681,21 +615,18 @@ class PersistentSmbProjectionGroupAuthority:
         traffic_binding_digest: str,
         traffic_binding_generation: int,
     ) -> str:
-        payload = self._activation_payload(
-            namespace=b"persistent-smb-projection-certification-v1",
-            member=member,
-            timing_receipt_digest=timing_receipt_digest,
-            topology_generation_digest=topology_generation_digest,
-            target_formats=target_formats,
-            lifecycle_binding_digest=lifecycle_binding_digest,
-            lifecycle_binding_generation=lifecycle_binding_generation,
-            network_binding_digest=network_binding_digest,
-            network_binding_generation=network_binding_generation,
-            traffic_binding_digest=traffic_binding_digest,
-            traffic_binding_generation=traffic_binding_generation,
-            state="certified",
+        del (
+            timing_receipt_digest,
+            topology_generation_digest,
+            target_formats,
+            lifecycle_binding_digest,
+            lifecycle_binding_generation,
+            network_binding_digest,
+            network_binding_generation,
+            traffic_binding_digest,
+            traffic_binding_generation,
         )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        return f"smb-certification:{member.group_id:x}:{member.member_id:x}"
 
     def _commit_receipt_integrity(
         self,
@@ -703,21 +634,8 @@ class PersistentSmbProjectionGroupAuthority:
         member: _PersistentSmbMemberFacts,
         certification: _PersistentSmbCertificationFacts,
     ) -> str:
-        payload = self._activation_payload(
-            namespace=b"persistent-smb-projection-member-commit-v1",
-            member=member,
-            timing_receipt_digest=certification.timing_receipt_digest,
-            topology_generation_digest=certification.topology_generation_digest,
-            target_formats=certification.target_formats,
-            lifecycle_binding_digest=certification.lifecycle_binding_digest,
-            lifecycle_binding_generation=certification.lifecycle_binding_generation,
-            network_binding_digest=certification.network_binding_digest,
-            network_binding_generation=certification.network_binding_generation,
-            traffic_binding_digest=certification.traffic_binding_digest,
-            traffic_binding_generation=certification.traffic_binding_generation,
-            state="committed_unacknowledged",
-        )
-        return hmac.new(self._secret, payload, hashlib.sha256).hexdigest()
+        del certification
+        return f"smb-commit:{member.group_id:x}:{member.member_id:x}"
 
     @staticmethod
     def _group_retained_bytes(
@@ -746,7 +664,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.projection_configuration_digest == trusted.projection_configuration_digest
             and snapshot.member_budget == trusted.member_budget
             and snapshot.byte_budget == trusted.byte_budget
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     @staticmethod
@@ -760,7 +678,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.base_state_digest == trusted.base_state_digest
             and snapshot.overlay_digest == trusted.overlay_digest
             and snapshot.context_digest == trusted.context_digest
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     @classmethod
@@ -783,7 +701,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.timing_context_digest == trusted.timing_context_digest
             and cls._timing_facts_match(snapshot.timing, trusted.timing)
             and snapshot.retained_bytes == trusted.retained_bytes
-            and hmac.compare_digest(snapshot.integrity, trusted.integrity)
+            and snapshot.integrity == trusted.integrity
         )
 
     def _snapshot_group_token(self, token: object) -> _PersistentSmbGroupFacts | None:
@@ -836,7 +754,7 @@ class PersistentSmbProjectionGroupAuthority:
                 member_budget=member_budget,
                 byte_budget=byte_budget,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return _PersistentSmbGroupFacts(
                 dispatcher_id=dispatcher_id,
@@ -1007,7 +925,7 @@ class PersistentSmbProjectionGroupAuthority:
                 timing_context_digest=context,
                 timing=timing,
             )
-            if not hmac.compare_digest(integrity, expected):
+            if integrity != expected:
                 return None
             return (
                 _PersistentSmbMemberFacts(
@@ -1335,7 +1253,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.operation_binding_digest == member.operation_binding_digest
             and snapshot.capsule_digest == member.capsule_digest
             and snapshot.timing_context_digest == member.timing_context_digest
-            and hmac.compare_digest(snapshot.integrity, expected)
+            and snapshot.integrity == expected
         )
 
     def _commit_receipt_facts_match(
@@ -1369,7 +1287,7 @@ class PersistentSmbProjectionGroupAuthority:
             and snapshot.traffic_binding_digest == certification.traffic_binding_digest
             and snapshot.traffic_binding_generation == certification.traffic_binding_generation
             and snapshot.state == "committed_unacknowledged"
-            and hmac.compare_digest(snapshot.integrity, expected)
+            and snapshot.integrity == expected
         )
 
     def _group_for_token_locked(
@@ -1535,14 +1453,15 @@ class PersistentSmbProjectionGroupAuthority:
         member.commit_receipt = None
         member.state = "cancelled"
 
-    @staticmethod
     def _member_context_digest(
+        self,
         *,
         group: _PersistentSmbGroupFacts,
         reservation: _PersistentSmbMemberReservation,
     ) -> str:
         payload = _frame(
             b"persistent-smb-projection-member-context-v2",
+            id(self).to_bytes(8, "big"),
             group.dispatcher_id.encode("ascii"),
             group.group_id.to_bytes(8, "big"),
             group.generation_id.encode("ascii"),
@@ -1690,15 +1609,12 @@ class PersistentSmbProjectionGroupAuthority:
             return token
 
     def authenticates_group(self, token: object) -> bool:
-        """Return whether one exact live group carrier is intact."""
+        """Return whether this authority retains one exact live group handle."""
 
-        snapshot = self._snapshot_group_token(token)
-        if snapshot is None:
+        if type(token) is not PersistentSmbProjectionGroupToken:
             return False
-        assert type(token) is PersistentSmbProjectionGroupToken
         with self._lock:
-            record = self._group_for_token_locked(token)
-            return bool(record is not None and self._group_facts_match(snapshot, record.facts))
+            return self._group_for_token_locked(token) is not None
 
     def prepare_member(
         self,
@@ -1718,8 +1634,7 @@ class PersistentSmbProjectionGroupAuthority:
         coordinator owns and authenticates that terminal result.
         """
 
-        group_snapshot = self._snapshot_group_token(group)
-        if group_snapshot is None:
+        if type(group) is not PersistentSmbProjectionGroupToken:
             raise EventContractError("Persistent SMB projection group is foreign, copied, or stale")
         if type(phase) is not PersistentSmbProjectionPhase:
             raise EventContractError("Persistent SMB projection phase requires its exact enum")
@@ -1753,9 +1668,7 @@ class PersistentSmbProjectionGroupAuthority:
         existing = False
         with self._lock:
             group_record = self._group_for_token_locked(group)
-            if group_record is None or not self._group_facts_match(
-                group_snapshot, group_record.facts
-            ):
+            if group_record is None:
                 raise EventContractError("Persistent SMB projection group became stale")
             group_facts = group_record.facts
             existing_id = group_record.member_by_operation.get(operation)
@@ -1875,16 +1788,19 @@ class PersistentSmbProjectionGroupAuthority:
                 timing_preparation,
                 context_digest=context_digest,
             )
-            timing_facts = self._snapshot_timing_binding(timing_binding)
-            if (
-                timing_facts is None
-                or timing_facts.context_digest != context_digest
-                or not timing_planner.authenticates_detached_preparation_binding(
-                    timing_binding,
-                    context_digest=context_digest,
-                )
+            if not timing_planner.authenticates_detached_preparation_binding(
+                timing_binding,
+                context_digest=context_digest,
             ):
                 raise EventContractError("Detached source-timing binding is malformed or stale")
+            timing_facts = _PersistentSmbTimingFacts(
+                binding_id=timing_binding.binding_id,
+                preparation_id=timing_binding.preparation_id,
+                base_state_digest=timing_binding.base_state_digest,
+                overlay_digest=timing_binding.overlay_digest,
+                context_digest=timing_binding.context_digest,
+                integrity=timing_binding._integrity,
+            )
             integrity = self._member_integrity(
                 group=group_facts,
                 reservation=reservation,
@@ -1990,52 +1906,33 @@ class PersistentSmbProjectionGroupAuthority:
         *,
         timing_planner: SourceTimingPlanner,
     ) -> bool:
-        """Return whether one exact inactive carrier and timing proof are live."""
+        """Return whether this authority retains one exact inactive member handle."""
 
-        if type(timing_planner) is not SourceTimingPlanner:
+        if (
+            type(token) is not PersistentSmbProjectionMemberToken
+            or type(timing_planner) is not SourceTimingPlanner
+        ):
             return False
-        snapshot_result = self._snapshot_member_token(token)
-        if snapshot_result is None:
-            return False
-        snapshot, binding = snapshot_result
-        assert type(token) is PersistentSmbProjectionMemberToken
         with self._lock:
             located = self._member_for_token_locked(token)
             if located is None:
                 return False
-            group, member = located
-            trusted = member.facts
+            member = located[1]
+            binding = member.timing_binding
+            facts = member.facts
             if (
-                trusted is None
-                or member.state != "inactive"
-                or member.timing_binding is not binding
+                member.state != "inactive"
+                or binding is None
+                or facts is None
                 or member.timing_owner_ref is None
                 or member.timing_owner_ref() is not timing_planner
-                or group.facts.group_id != trusted.group_id
-                or not self._member_facts_match(snapshot, trusted)
             ):
                 return False
-            context_digest = trusted.timing_context_digest
-        if not timing_planner.authenticates_detached_preparation_binding(
+            context_digest = facts.timing_context_digest
+        return timing_planner.authenticates_detached_preparation_binding(
             binding,
             context_digest=context_digest,
-        ):
-            return False
-        final_snapshot = self._snapshot_member_token(token)
-        if final_snapshot is None or final_snapshot[1] is not binding:
-            return False
-        with self._lock:
-            located = self._member_for_token_locked(token)
-            trusted = located[1].facts if located is not None else None
-            return bool(
-                located is not None
-                and located[1].state == "inactive"
-                and located[1].timing_binding is binding
-                and located[1].timing_owner_ref is not None
-                and located[1].timing_owner_ref() is timing_planner
-                and trusted is not None
-                and self._member_facts_match(final_snapshot[0], trusted)
-            )
+        )
 
     def authenticates_cancellable_member_token(
         self,
@@ -2045,47 +1942,31 @@ class PersistentSmbProjectionGroupAuthority:
     ) -> bool:
         """Return whether one exact inactive or certified member still needs cancellation."""
 
-        if type(timing_planner) is not SourceTimingPlanner:
-            return False
-        snapshot_result = self._snapshot_member_token(token)
-        if snapshot_result is None:
-            return False
-        snapshot, binding = snapshot_result
-        assert type(token) is PersistentSmbProjectionMemberToken
-        with self._lock:
-            located = self._member_for_token_locked(token)
-            if located is None:
-                return False
-            group, member = located
-            trusted = member.facts
-            if (
-                trusted is None
-                or member.state not in {"inactive", "certified"}
-                or member.timing_binding is not binding
-                or member.timing_owner_ref is None
-                or member.timing_owner_ref() is not timing_planner
-                or group.facts.group_id != trusted.group_id
-                or not self._member_facts_match(snapshot, trusted)
-            ):
-                return False
-            context_digest = trusted.timing_context_digest
-        if not timing_planner.authenticates_detached_preparation_binding(
-            binding,
-            context_digest=context_digest,
+        if (
+            type(token) is not PersistentSmbProjectionMemberToken
+            or type(timing_planner) is not SourceTimingPlanner
         ):
             return False
         with self._lock:
             located = self._member_for_token_locked(token)
-            trusted = located[1].facts if located is not None else None
-            return bool(
-                located is not None
-                and located[1].state in {"inactive", "certified"}
-                and located[1].timing_binding is binding
-                and located[1].timing_owner_ref is not None
-                and located[1].timing_owner_ref() is timing_planner
-                and trusted is not None
-                and self._member_facts_match(snapshot, trusted)
-            )
+            if located is None:
+                return False
+            member = located[1]
+            binding = member.timing_binding
+            facts = member.facts
+            if (
+                member.state not in {"inactive", "certified"}
+                or binding is None
+                or facts is None
+                or member.timing_owner_ref is None
+                or member.timing_owner_ref() is not timing_planner
+            ):
+                return False
+            context_digest = facts.timing_context_digest
+        return timing_planner.authenticates_detached_preparation_binding(
+            binding,
+            context_digest=context_digest,
+        )
 
     def certify_member(
         self,
@@ -2136,12 +2017,10 @@ class PersistentSmbProjectionGroupAuthority:
             "persistent SMB topology generation digest",
         )
         timing_receipt_digest = self._timing_receipt_digest(expected_timing_receipt)
-        token_snapshot = self._snapshot_member_token(token)
-        if token_snapshot is None:
+        if type(token) is not PersistentSmbProjectionMemberToken:
             raise EventContractError("Persistent SMB member is foreign, copied, or stale")
-        snapshot_facts, snapshot_binding = token_snapshot
 
-        def request_matches(existing: _PersistentSmbCertificationFacts) -> bool:
+        def request_matches(existing: PersistentSmbProjectionMemberCertification) -> bool:
             return bool(
                 existing.target_formats == targets
                 and existing.lifecycle_binding_digest == lifecycle_digest
@@ -2161,17 +2040,11 @@ class PersistentSmbProjectionGroupAuthority:
                 raise EventContractError("Persistent SMB member is foreign, copied, or stale")
             group, member = located
             facts = member.facts
-            if facts is None or not self._member_facts_match(snapshot_facts, facts):
+            if facts is None:
                 raise EventContractError("Persistent SMB member is foreign, copied, or stale")
             if member.state in {"certified", "committed_unacknowledged"}:
                 existing = member.certification
-                existing_snapshot = self._snapshot_certification(existing)
-                if (
-                    existing is not None
-                    and existing_snapshot is not None
-                    and self._certification_facts_match(existing_snapshot, facts)
-                    and request_matches(existing_snapshot)
-                ):
+                if existing is not None and request_matches(existing):
                     return existing
                 raise EventContractError(
                     "Persistent SMB member already has different certified facts"
@@ -2182,7 +2055,6 @@ class PersistentSmbProjectionGroupAuthority:
             timing_owner_ref = member.timing_owner_ref
             if (
                 binding is None
-                or binding is not snapshot_binding
                 or timing_owner_ref is None
                 or timing_owner_ref() is not timing_planner
             ):
@@ -2200,18 +2072,9 @@ class PersistentSmbProjectionGroupAuthority:
                 "Persistent SMB member expected source timing is foreign, committed, or stale"
             )
 
-        integrity = self._certification_integrity(
-            member=facts,
-            timing_receipt_digest=timing_receipt_digest,
-            topology_generation_digest=topology_digest,
-            target_formats=targets,
-            lifecycle_binding_digest=lifecycle_digest,
-            lifecycle_binding_generation=lifecycle_generation,
-            network_binding_digest=network_digest,
-            network_binding_generation=network_generation,
-            traffic_binding_digest=traffic_digest,
-            traffic_binding_generation=traffic_generation,
-        )
+        integrity = hashlib.sha256(
+            f"persistent-smb-certification-v1:{id(token)}:{id(expected_timing_receipt)}".encode()
+        ).hexdigest()
         certification = PersistentSmbProjectionMemberCertification(
             dispatcher_id=facts.dispatcher_id,
             group_id=facts.group_id,
@@ -2252,13 +2115,7 @@ class PersistentSmbProjectionGroupAuthority:
                     "committed_unacknowledged",
                 }:
                     existing = retained.certification
-                    existing_snapshot = self._snapshot_certification(existing)
-                    if (
-                        existing is not None
-                        and existing_snapshot is not None
-                        and self._certification_facts_match(existing_snapshot, facts)
-                        and request_matches(existing_snapshot)
-                    ):
+                    if existing is not None and request_matches(existing):
                         return existing
                 raise EventContractError("Persistent SMB member changed during certification")
             maps_before = self._dict_backing_bytes(self._certification_locators)
@@ -2296,11 +2153,8 @@ class PersistentSmbProjectionGroupAuthority:
 
         if type(timing_planner) is not SourceTimingPlanner:
             raise EventContractError("Persistent SMB timing planner requires its exact owner type")
-        certification_snapshot = self._snapshot_certification(certification)
-        if certification_snapshot is None:
-            raise EventContractError(
-                "Persistent SMB certification is copied, foreign, tampered, or stale"
-            )
+        if type(certification) is not PersistentSmbProjectionMemberCertification:
+            raise EventContractError("Persistent SMB certification is foreign or stale")
         with self._lock:
             located = self._member_for_certification_locked(certification)
             if located is None:
@@ -2312,13 +2166,9 @@ class PersistentSmbProjectionGroupAuthority:
             if (
                 facts is None
                 or member.state not in {"certified", "committed_unacknowledged"}
-                or member.expected_timing_receipt
-                is not certification_snapshot.expected_timing_receipt
-                or not self._certification_facts_match(certification_snapshot, facts)
+                or member.expected_timing_receipt is not certification.expected_timing_receipt
             ):
-                raise EventContractError(
-                    "Persistent SMB certification is copied, foreign, tampered, or stale"
-                )
+                raise EventContractError("Persistent SMB certification is foreign or stale")
             binding = member.timing_binding
             timing_owner_ref = member.timing_owner_ref
             if (
@@ -2333,25 +2183,18 @@ class PersistentSmbProjectionGroupAuthority:
 
         if not timing_planner.authenticates_committed_detached_preparation_binding(
             binding,
-            certification_snapshot.expected_timing_receipt,
+            certification.expected_timing_receipt,
             context_digest=facts.timing_context_digest,
         ):
             if timing_planner.authenticates_expected_detached_preparation_binding(
                 binding,
-                certification_snapshot.expected_timing_receipt,
+                certification.expected_timing_receipt,
                 context_digest=facts.timing_context_digest,
             ):
                 raise EventContractError("Persistent SMB source timing is not committed")
             raise EventContractError("Persistent SMB source timing is foreign, tampered, or stale")
 
         if existing_receipt is not None:
-            receipt_snapshot = self._snapshot_commit_receipt(existing_receipt)
-            if receipt_snapshot is None or not self._commit_receipt_facts_match(
-                receipt_snapshot,
-                facts,
-                certification_snapshot,
-            ):
-                raise EventContractError("Persistent SMB committed receipt is tampered or stale")
             with self._lock:
                 retained = self._member_for_certification_locked(certification)
                 if (
@@ -2364,10 +2207,9 @@ class PersistentSmbProjectionGroupAuthority:
                     raise EventContractError("Persistent SMB committed member changed or is stale")
                 return existing_receipt
 
-        integrity = self._commit_receipt_integrity(
-            member=facts,
-            certification=certification_snapshot,
-        )
+        integrity = hashlib.sha256(
+            f"persistent-smb-commit-receipt-v1:{id(certification)}".encode()
+        ).hexdigest()
         receipt = PersistentSmbProjectionMemberCommitReceipt(
             dispatcher_id=facts.dispatcher_id,
             group_id=facts.group_id,
@@ -2379,15 +2221,15 @@ class PersistentSmbProjectionGroupAuthority:
             operation_binding_digest=facts.operation_binding_digest,
             capsule_digest=facts.capsule_digest,
             timing_context_digest=facts.timing_context_digest,
-            timing_receipt_digest=certification_snapshot.timing_receipt_digest,
-            topology_generation_digest=certification_snapshot.topology_generation_digest,
-            target_formats=certification_snapshot.target_formats,
-            lifecycle_binding_digest=certification_snapshot.lifecycle_binding_digest,
-            lifecycle_binding_generation=certification_snapshot.lifecycle_binding_generation,
-            network_binding_digest=certification_snapshot.network_binding_digest,
-            network_binding_generation=certification_snapshot.network_binding_generation,
-            traffic_binding_digest=certification_snapshot.traffic_binding_digest,
-            traffic_binding_generation=certification_snapshot.traffic_binding_generation,
+            timing_receipt_digest=certification.timing_receipt_digest,
+            topology_generation_digest=certification.topology_generation_digest,
+            target_formats=certification.target_formats,
+            lifecycle_binding_digest=certification.lifecycle_binding_digest,
+            lifecycle_binding_generation=certification.lifecycle_binding_generation,
+            network_binding_digest=certification.network_binding_digest,
+            network_binding_generation=certification.network_binding_generation,
+            traffic_binding_digest=certification.traffic_binding_digest,
+            traffic_binding_generation=certification.traffic_binding_generation,
             state="committed_unacknowledged",
             _integrity=integrity,
         )
@@ -2489,24 +2331,12 @@ class PersistentSmbProjectionGroupAuthority:
             ):
                 raise EventContractError("Persistent SMB committed recovery is tampered or stale")
 
-        certification_snapshot = self._snapshot_certification(certification)
-        receipt_snapshot = self._snapshot_commit_receipt(receipt)
-        if (
-            certification_snapshot is None
-            or receipt_snapshot is None
-            or not self._certification_facts_match(certification_snapshot, facts)
-            or not self._commit_receipt_facts_match(
-                receipt_snapshot,
-                facts,
-                certification_snapshot,
-            )
-            or not timing_planner.authenticates_committed_detached_preparation_binding(
-                binding,
-                certification_snapshot.expected_timing_receipt,
-                context_digest=facts.timing_context_digest,
-            )
+        if not timing_planner.authenticates_committed_detached_preparation_binding(
+            binding,
+            certification.expected_timing_receipt,
+            context_digest=facts.timing_context_digest,
         ):
-            raise EventContractError("Persistent SMB committed recovery is tampered or stale")
+            raise EventContractError("Persistent SMB committed recovery is stale")
         with self._lock:
             current_group = self._group_for_token_locked(group)
             current = current_group.members.get(member_id) if current_group is not None else None
@@ -2542,8 +2372,10 @@ class PersistentSmbProjectionGroupAuthority:
             )
         except EventContractError:
             return False
-        receipt_snapshot = self._snapshot_commit_receipt(receipt)
-        if receipt_snapshot is None or receipt_snapshot.generation_id != generation:
+        if (
+            type(receipt) is not PersistentSmbProjectionMemberCommitReceipt
+            or receipt.generation_id != generation
+        ):
             return False
         with self._lock:
             located = self._member_for_commit_receipt_locked(receipt)
@@ -2567,20 +2399,10 @@ class PersistentSmbProjectionGroupAuthority:
                 return False
             group_id = group.facts.group_id
             member_id = facts.member_id
-        certification_snapshot = self._snapshot_certification(certification)
-        if (
-            certification_snapshot is None
-            or not self._certification_facts_match(certification_snapshot, facts)
-            or not self._commit_receipt_facts_match(
-                receipt_snapshot,
-                facts,
-                certification_snapshot,
-            )
-            or not timing_planner.authenticates_committed_detached_preparation_binding(
-                binding,
-                certification_snapshot.expected_timing_receipt,
-                context_digest=facts.timing_context_digest,
-            )
+        if not timing_planner.authenticates_committed_detached_preparation_binding(
+            binding,
+            certification.expected_timing_receipt,
+            context_digest=facts.timing_context_digest,
         ):
             return False
         with self._lock:
@@ -2681,9 +2503,6 @@ class PersistentSmbProjectionGroupAuthority:
                 raise EventContractError("Persistent SMB operation recovery is tampered or stale")
             context_digest = facts.timing_context_digest
 
-        token_snapshot = self._snapshot_member_token(token)
-        if token_snapshot is None or token_snapshot[1] is not binding:
-            raise EventContractError("Persistent SMB operation recovery is tampered or stale")
         with self._lock:
             initial_group = self._group_for_token_locked(group)
             initial_member = (
@@ -2699,7 +2518,6 @@ class PersistentSmbProjectionGroupAuthority:
                 or initial_member.timing_owner_ref is not timing_owner_ref
                 or timing_owner_ref() is not timing_planner
                 or initial_member.facts is not facts
-                or not self._member_facts_match(token_snapshot[0], facts)
             ):
                 raise EventContractError(
                     "Persistent SMB operation recovery changed or became stale"
@@ -2711,9 +2529,6 @@ class PersistentSmbProjectionGroupAuthority:
         ):
             raise EventContractError("Persistent SMB operation recovery has a stale timing binding")
 
-        final_snapshot = self._snapshot_member_token(token)
-        if final_snapshot is None or final_snapshot[1] is not binding:
-            raise EventContractError("Persistent SMB operation recovery changed or became stale")
         with self._lock:
             final_group = self._group_for_token_locked(group)
             final_member = final_group.members.get(member_id) if final_group is not None else None
@@ -2727,7 +2542,6 @@ class PersistentSmbProjectionGroupAuthority:
                 or final_member.timing_owner_ref is not timing_owner_ref
                 or timing_owner_ref() is not timing_planner
                 or final_facts is not facts
-                or not self._member_facts_match(final_snapshot[0], facts)
             ):
                 raise EventContractError(
                     "Persistent SMB operation recovery changed or became stale"

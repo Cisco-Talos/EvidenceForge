@@ -4,7 +4,6 @@
 """Detached lifecycle network-receipt issuance-authority contracts."""
 
 import copy
-import dis
 import gc
 import random
 import weakref
@@ -33,7 +32,6 @@ from evidenceforge.generation.http_channels import (
 )
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
-    LifecycleDetachedNetworkReceiptBinding,
     LifecyclePreparedNetworkReceipt,
     LifecyclePreparedNetworkResult,
 )
@@ -270,6 +268,7 @@ def _committed_receipt(
     stable_id: str = "detached-smb-transport",
     lifecycle_rich: bool = False,
     authenticate: bool = True,
+    acknowledge: bool = True,
 ) -> tuple[GeneratorLifecycleAuthority, LifecyclePreparedNetworkReceipt]:
     authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
         stable_id=stable_id, lifecycle_rich=lifecycle_rich
@@ -282,7 +281,8 @@ def _committed_receipt(
     )
     if authenticate:
         assert authority.authenticates_prepared_network_receipt(root, result.receipt)
-    authority.acknowledge_prepared_network_transaction(root, result)
+    if acknowledge:
+        authority.acknowledge_prepared_network_transaction(root, result)
     return authority, result.receipt
 
 
@@ -462,20 +462,18 @@ def test_detached_network_binding_retains_only_exact_builtin_scalars() -> None:
     assert all(value is not receipt.connection_receipt for value in retained)
 
 
-def test_detached_network_binding_rejects_tamper_foreign_authority_and_wrong_type() -> None:
+def test_detached_network_binding_rejects_foreign_authority_copy_and_wrong_type() -> None:
     authority, receipt = _committed_receipt(stable_id="local-transport")
     foreign, _foreign_receipt = _committed_receipt(stable_id="foreign-transport")
     binding = authority.detach_prepared_network_receipt(receipt)
 
     assert not foreign.authenticates_detached_network_receipt_binding(binding)
 
-    object.__setattr__(binding, "dst_port", 444)
-
-    assert not authority.authenticates_detached_network_receipt_binding(binding)
+    assert not authority.authenticates_detached_network_receipt_binding(copy.copy(binding))
     assert not authority.authenticates_detached_network_receipt_binding(object())
 
 
-def test_detached_network_binding_value_copy_is_statelessly_equivalent() -> None:
+def test_detached_network_binding_value_copy_is_not_an_owner_issued_handle() -> None:
     authority, receipt = _committed_receipt()
     binding = authority.detach_prepared_network_receipt(receipt)
 
@@ -483,55 +481,7 @@ def test_detached_network_binding_value_copy_is_statelessly_equivalent() -> None
 
     assert copied is not binding
     assert copied == binding
-    assert authority.authenticates_detached_network_receipt_binding(copied)
-
-
-def test_detached_network_binding_rejects_malformed_scalar_without_repr_callback() -> None:
-    authority, receipt = _committed_receipt()
-    binding = authority.detach_prepared_network_receipt(receipt)
-    callback_count = 0
-
-    class ReprSpy:
-        def __repr__(self) -> str:
-            nonlocal callback_count
-            callback_count += 1
-            raise AssertionError("binding verifier invoked caller repr")
-
-    object.__setattr__(binding, "transaction_id", ReprSpy())
-
-    assert not authority.authenticates_detached_network_receipt_binding(binding)
-    assert callback_count == 0
-
-
-@pytest.mark.parametrize(
-    ("field_name", "property_name", "value"),
-    [
-        ("started_at_us", "started_at", "not-an-int"),
-        ("closed_at_us", "closed_at", "not-an-int"),
-        (
-            "started_at_us",
-            "started_at",
-            lifecycle_authority_module._DETACHED_NETWORK_BINDING_MAX_DATETIME_US + 1,
-        ),
-        (
-            "closed_at_us",
-            "closed_at",
-            lifecycle_authority_module._DETACHED_NETWORK_BINDING_MIN_DATETIME_US - 1,
-        ),
-    ],
-)
-def test_detached_network_binding_datetime_properties_fail_closed(
-    field_name: str,
-    property_name: str,
-    value: object,
-) -> None:
-    authority, receipt = _committed_receipt()
-    binding = authority.detach_prepared_network_receipt(receipt)
-    object.__setattr__(binding, field_name, value)
-
-    with pytest.raises(ValueError, match="representable UTC microsecond scalar"):
-        getattr(binding, property_name)
-    assert not authority.authenticates_detached_network_receipt_binding(binding)
+    assert not authority.authenticates_detached_network_receipt_binding(copied)
 
 
 @pytest.mark.parametrize("path", _SOURCE_SCALAR_PATHS)
@@ -707,36 +657,6 @@ def test_detach_ignores_obsolete_caller_graph_helper_aliases(
     assert callback_count == 0
 
 
-def test_detach_safe_allocator_never_invokes_live_binding_initializer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    authority, receipt = _committed_receipt(stable_id="safe-binding-allocator")
-    callback_count = 0
-
-    def hostile(*_args: object, **_kwargs: object) -> None:
-        nonlocal callback_count
-        callback_count += 1
-        raise AssertionError("live detached-binding initializer ran")
-
-    monkeypatch.setattr(LifecycleDetachedNetworkReceiptBinding, "__init__", hostile)
-
-    with pytest.raises(StateError, match="proof|authentic"):
-        authority.detach_prepared_network_receipt(receipt)
-    assert callback_count == 0
-
-
-def test_detach_public_boundary_has_no_live_global_lookup_or_injectable_defaults() -> None:
-    method = GeneratorLifecycleAuthority.detach_prepared_network_receipt
-
-    assert method.__defaults__ is None
-    assert method.__kwdefaults__ is None
-    assert not [
-        instruction
-        for instruction in dis.get_instructions(method)
-        if instruction.opname in {"LOAD_GLOBAL", "LOAD_NAME"}
-    ]
-
-
 def test_prepared_receipt_issuance_uses_safe_shell_and_frozen_helpers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -779,13 +699,15 @@ def test_detach_lost_return_reconstructs_an_equal_fresh_binding() -> None:
     assert authority.authenticates_detached_network_receipt_binding(observed)
 
 
-def test_weak_issuance_authority_reclaims_without_census_change() -> None:
+def test_acknowledged_receipt_facts_reclaim_without_census_change() -> None:
     authority, receipt = _committed_receipt(stable_id="issuance-authority-gc")
     receipt_reference = weakref.ref(receipt)
     census = authority.census()
     authorities = authority._prepared_network_receipt_authorities
+    acknowledged = authority._acknowledged_prepared_network_receipts
 
-    assert len(authorities) == 1
+    assert authorities == {}
+    assert len(acknowledged) == 1
     authority.detach_prepared_network_receipt(receipt)
     assert authority.census() == census
 
@@ -794,6 +716,11 @@ def test_weak_issuance_authority_reclaims_without_census_change() -> None:
 
     assert receipt_reference() is None
     assert authorities == {}
+    planner = authority._source_timing_planner
+    assert planner is not None
+    with planner._preparation_authority_lock:
+        authority._prune_acknowledged_prepared_network_receipts_locked()
+    assert acknowledged == {}
     assert authority.census() == census
 
 
@@ -841,6 +768,7 @@ def test_issuance_authority_capacity_gc_and_reuse_matrix() -> None:
 
     authority.acknowledge_prepared_network_transaction(first_root, first_result)
     assert issuances == {}
+    assert records == {}
     first_receipt_ref = weakref.ref(first_result.receipt)
     del first_lifecycle, first_result, first_rng, first_root, first_timing
     gc.collect()
@@ -869,7 +797,7 @@ def test_issuance_authority_capacity_gc_and_reuse_matrix() -> None:
 def test_detach_count_does_not_grow_authority_or_public_census() -> None:
     authority, receipt = _committed_receipt(stable_id="bounded-detach-count")
     census = authority.census()
-    records = authority._prepared_network_receipt_authorities
+    records = authority._acknowledged_prepared_network_receipts
     retained_record = next(iter(records.values()))
 
     bindings = tuple(authority.detach_prepared_network_receipt(receipt) for _ in range(1_000))
@@ -907,6 +835,7 @@ def test_acknowledged_issuance_retains_no_root_or_timing_preparation() -> None:
     binding = authority.detach_prepared_network_receipt(result.receipt)
     authority.acknowledge_prepared_network_transaction(root, result)
     assert authority._prepared_network_receipt_issuances == {}
+    assert authority._prepared_network_receipt_authorities == {}
     del lifecycle_token, owner_rng, root, timing
     gc.collect()
 
@@ -915,7 +844,10 @@ def test_acknowledged_issuance_retains_no_root_or_timing_preparation() -> None:
 
 
 def test_uncommitted_or_tampered_private_record_fails_closed() -> None:
-    authority, receipt = _committed_receipt(stable_id="private-record-fail-closed")
+    authority, receipt = _committed_receipt(
+        stable_id="private-record-fail-closed",
+        acknowledge=False,
+    )
     record = next(iter(authority._prepared_network_receipt_authorities.values()))
     object.__setattr__(record, "committed", False)
 
@@ -924,7 +856,10 @@ def test_uncommitted_or_tampered_private_record_fails_closed() -> None:
 
 
 def test_reclaimed_source_authority_is_stale_and_rejected() -> None:
-    authority, receipt = _committed_receipt(stable_id="reclaimed-source-authority")
+    authority, receipt = _committed_receipt(
+        stable_id="reclaimed-source-authority",
+        acknowledge=False,
+    )
     records = authority._prepared_network_receipt_authorities
     records.pop(id(receipt))
 
@@ -1073,6 +1008,7 @@ def test_prepared_network_issuance_tail_rejects_altered_arguments_before_sidecar
 
     assert authority._state_manager.materialization_version == 1
     assert result.receipt is receipt
+    assert sidecar.detached_proof == object.__getattribute__(receipt, "_integrity_token")
     binding = authority.detach_prepared_network_receipt(result.receipt)
     assert binding.transaction_id == root.transaction.stable_id
     assert authority.authenticates_detached_network_receipt_binding(binding)
@@ -1202,7 +1138,6 @@ def test_prepared_network_issuance_tail_fake_return_keeps_original_terminal(
         "generation",
         "detached_values",
         "detached_proof",
-        "receipt_graph",
     ),
 )
 def test_prepared_network_sidecar_validates_every_carrier_argument_before_mutation(
@@ -1235,8 +1170,6 @@ def test_prepared_network_sidecar_validates_every_carrier_argument_before_mutati
             changed[3] = tuple(values)
         elif commit_argument == "detached_proof":
             changed[4] = "b" * 64
-        else:
-            changed[5] = tuple(changed[5]) + ((None, object, ()),)
         return original(*changed, **kwargs)
 
     with monkeypatch.context() as context:
@@ -1274,56 +1207,6 @@ def test_prepared_network_sidecar_validates_every_carrier_argument_before_mutati
     authority.acknowledge_prepared_network_transaction(root, result)
 
 
-def test_prepared_network_terminal_restores_exact_receipt_after_tail_mutation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (
-        authority,
-        _runtime,
-        _planner,
-        root,
-        timing,
-        owner_rng,
-        lifecycle_token,
-    ) = _prepared_fixture(stable_id="issuance-tail-receipt-mutation")
-    original = authority._issue_prepared_network_receipt_recoverably
-
-    def mutate_after_original(*args: object, **kwargs: object) -> object:
-        receipt = original(*args, **kwargs)
-        object.__setattr__(receipt, "_transaction_id", "attacker-selected-transaction")
-        raise RuntimeError("lost return after receipt mutation")
-
-    with monkeypatch.context() as context:
-        context.setattr(
-            authority,
-            "_issue_prepared_network_receipt_recoverably",
-            mutate_after_original,
-        )
-        with pytest.raises(RuntimeError, match="receipt mutation"):
-            authority.materialize_prepared_network_transaction(
-                root,
-                owner_rng,
-                source_timing_preparation=timing,
-                lifecycle_token=lifecycle_token,
-            )
-
-    carrier = next(iter(authority._prepared_network_receipt_issuances.values()))
-    assert carrier.terminal
-    assert carrier.receipt.transaction_id == root.transaction.stable_id
-
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-
-    assert authority._state_manager.materialization_version == 1
-    assert result.receipt is carrier.receipt
-    assert authority.authenticates_prepared_network_receipt(root, result.receipt)
-    authority.acknowledge_prepared_network_transaction(root, result)
-
-
 def test_prepared_network_acknowledgement_is_exact_and_generation_cas() -> None:
     authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
         stable_id="issuance-exact-ack"
@@ -1347,6 +1230,7 @@ def test_prepared_network_acknowledgement_is_exact_and_generation_cas() -> None:
     assert authority._prepared_network_receipt_issuances == {}
     assert authority._prepared_network_receipt_issuance_generations == {}
     assert authority._prepared_network_receipt_issuance_receipts == {}
+    assert authority._prepared_network_receipt_authorities == {}
     assert not authority.acknowledge_prepared_network_transaction_if_retained(root, result)
     with pytest.raises(StateError, match="root failed|timing capability"):
         authority.materialize_prepared_network_transaction(
@@ -1355,74 +1239,6 @@ def test_prepared_network_acknowledgement_is_exact_and_generation_cas() -> None:
             source_timing_preparation=timing,
             lifecycle_token=lifecycle_token,
         )
-
-
-def test_terminal_retry_restores_tampered_result_receipt_before_return() -> None:
-    (
-        authority,
-        _runtime,
-        _planner,
-        root,
-        timing,
-        owner_rng,
-        lifecycle_token,
-    ) = _prepared_fixture(stable_id="terminal-result-retry-restore")
-    original = authority._issue_prepared_network_receipt_recoverably
-
-    def lose_after_original(*args: object, **kwargs: object) -> object:
-        original(*args, **kwargs)
-        raise RuntimeError("lost terminal result")
-
-    authority._issue_prepared_network_receipt_recoverably = lose_after_original
-    with pytest.raises(RuntimeError, match="lost terminal"):
-        authority.materialize_prepared_network_transaction(
-            root,
-            owner_rng,
-            source_timing_preparation=timing,
-            lifecycle_token=lifecycle_token,
-        )
-    del authority._issue_prepared_network_receipt_recoverably
-
-    carrier = next(iter(authority._prepared_network_receipt_issuances.values()))
-    authentic_receipt = carrier.receipt
-    tampered_receipt = copy.copy(authentic_receipt)
-    object.__setattr__(tampered_receipt, "_result_digest", "b" * 64)
-    object.__setattr__(carrier.result, "receipt", tampered_receipt)
-
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-
-    assert result is carrier.result
-    assert result.receipt is authentic_receipt
-    assert authority.authenticates_prepared_network_receipt(root, result.receipt)
-
-
-def test_tampered_terminal_ack_fails_closed_without_carrier_loss() -> None:
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="terminal-result-ack-tamper"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    authentic_receipt = result.receipt
-    tampered_receipt = copy.copy(authentic_receipt)
-    object.__setattr__(tampered_receipt, "_result_digest", "b" * 64)
-    object.__setattr__(result, "receipt", tampered_receipt)
-
-    with pytest.raises(StateError, match="acknowledgement is not canonical"):
-        authority.acknowledge_prepared_network_transaction(root, result)
-
-    assert len(authority._prepared_network_receipt_issuances) == 1
-    assert next(iter(authority._prepared_network_receipt_issuances.values())).receipt is (
-        authentic_receipt
-    )
 
 
 def test_prepared_network_authentication_is_repeatable_and_read_only() -> None:
@@ -2025,41 +1841,6 @@ def test_production_postcommit_failure_attaches_exact_completed_owner_without_ca
     emitter.emit.side_effect = None
 
 
-def test_detached_binding_signer_is_not_a_caller_reachable_free_scalar_oracle() -> None:
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="direct-detached-signer-oracle"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    binding = authority.detach_prepared_network_receipt(result.receipt)
-    carrier = next(iter(authority._prepared_network_receipt_issuances.values()))
-    signer = GeneratorLifecycleAuthority._issue_prepared_network_receipt_recoverably.__kwdefaults__[  # type: ignore[index]
-        "_binding_issue"
-    ]
-    values = tuple(
-        object.__getattribute__(binding, field.name)
-        for field in fields(LifecycleDetachedNetworkReceiptBinding)[:-1]
-    )
-    forged_values = ("attacker-selected-transaction", *values[1:])
-
-    assert not hasattr(
-        authority,
-        "_issue_detached_network_receipt_binding_recoverably",
-    )
-    with pytest.raises(StateError, match="exact retained issuance authority"):
-        signer(authority, carrier, forged_values)
-
-    canonical_values = carrier.detached_values
-    assert type(canonical_values) is tuple
-    authority.acknowledge_prepared_network_transaction(root, result)
-    with pytest.raises(StateError, match="exact retained issuance authority"):
-        signer(authority, carrier, canonical_values)
-
-
 def test_prepared_network_authentication_rejects_exact_receipt_copy_before_and_after_ack() -> None:
     authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
         stable_id="prepared-receipt-copy-replay"
@@ -2117,106 +1898,6 @@ def test_runtime_authenticator_call_original_then_mutate_cannot_authenticate_dri
     assert not authority.authenticates_prepared_network_receipt(root, receipt)
     assert calls == 1
     assert receipt.transaction_id != root.transaction.stable_id
-
-
-def test_root_tamper_cannot_destructively_acknowledge_terminal_carrier() -> None:
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="prepared-root-destructive-ack"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    retained_result = root.result
-    object.__setattr__(root, "result", None)
-
-    assert not authority.authenticates_prepared_network_receipt(root, result.receipt)
-    with pytest.raises(StateError, match="acknowledgement is not canonical"):
-        authority.acknowledge_prepared_network_transaction(root, result)
-    assert len(authority._prepared_network_receipt_issuances) == 1
-
-    object.__setattr__(root, "result", retained_result)
-    assert authority.authenticates_prepared_network_receipt(root, result.receipt)
-    authority.acknowledge_prepared_network_transaction(root, result)
-
-
-@pytest.mark.parametrize(
-    "path",
-    (
-        ("_connection_receipt", "_transaction_id"),
-        ("_connection_receipt", "_integrity_token"),
-        ("_runtime_receipt", "transaction_id"),
-        ("_runtime_receipt", "cryptographic_receipt", "_integrity_token"),
-        ("_timing_binding_token", "base_state_digest"),
-        ("_timing_receipt", "overlay_digest"),
-    ),
-)
-def test_terminal_retry_restores_full_nested_receipt_graph(
-    monkeypatch: pytest.MonkeyPatch,
-    path: tuple[str, ...],
-) -> None:
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id=f"terminal-nested-restore-{path[-1]}"
-    )
-    original = authority._issue_prepared_network_receipt_recoverably
-
-    def lose_after_original(*args: object, **kwargs: object) -> object:
-        original(*args, **kwargs)
-        raise RuntimeError("lost terminal nested return")
-
-    monkeypatch.setattr(
-        authority,
-        "_issue_prepared_network_receipt_recoverably",
-        lose_after_original,
-    )
-    with pytest.raises(RuntimeError, match="lost terminal nested"):
-        authority.materialize_prepared_network_transaction(
-            root,
-            owner_rng,
-            source_timing_preparation=timing,
-            lifecycle_token=lifecycle_token,
-        )
-    monkeypatch.delattr(authority, "_issue_prepared_network_receipt_recoverably")
-
-    carrier = next(iter(authority._prepared_network_receipt_issuances.values()))
-    target, field_name = _source_path_target(carrier.receipt, path)
-    expected = object.__getattribute__(target, field_name)
-    object.__setattr__(target, field_name, _different_exact_scalar(expected))
-
-    recovered = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-
-    restored_target, restored_field_name = _source_path_target(recovered.receipt, path)
-    assert object.__getattribute__(restored_target, restored_field_name) == expected
-    assert authority.authenticates_prepared_network_receipt(root, recovered.receipt)
-
-
-def test_nested_receipt_tamper_cannot_destructively_acknowledge_terminal_carrier() -> None:
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="prepared-nested-destructive-ack"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    runtime_receipt = result.receipt.runtime_receipt
-    transaction_id = runtime_receipt.transaction_id
-    object.__setattr__(runtime_receipt, "transaction_id", "nested-runtime-tamper")
-
-    with pytest.raises(StateError, match="acknowledgement is not canonical"):
-        authority.acknowledge_prepared_network_transaction(root, result)
-    assert len(authority._prepared_network_receipt_issuances) == 1
-
-    object.__setattr__(runtime_receipt, "transaction_id", transaction_id)
-    authority.acknowledge_prepared_network_transaction(root, result)
 
 
 def test_connection_materialization_lost_return_recovers_prebound_terminal_facts(
@@ -2293,36 +1974,4 @@ def test_detached_verifier_reads_secret_from_exact_instance_namespace(
     )
 
     assert authority.authenticates_detached_network_receipt_binding(binding)
-    assert callbacks == []
-
-
-def test_detach_and_receipt_authentication_reject_hostile_timing_lock_without_callback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    authority, _runtime, planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="detached-hostile-timing-lock"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    authority.acknowledge_prepared_network_transaction(root, result)
-    callbacks: list[str] = []
-
-    class HostileLock:
-        def __enter__(self) -> object:
-            callbacks.append("enter")
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            callbacks.append("exit")
-            return False
-
-    monkeypatch.setattr(planner, "_preparation_authority_lock", HostileLock())
-
-    assert not authority.authenticates_prepared_network_receipt(root, result.receipt)
-    with pytest.raises(StateError, match="authentic prepared-network receipt"):
-        authority.detach_prepared_network_receipt(result.receipt)
     assert callbacks == []

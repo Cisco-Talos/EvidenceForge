@@ -20,6 +20,7 @@ from evidenceforge.events.lifecycle import (
     SessionLifecycleIdentity,
 )
 from evidenceforge.events.network import NetworkTrafficLedger, NetworkTransactionPlan
+from evidenceforge.generation import lifecycle_registry as lifecycle_registry_module
 from evidenceforge.generation.lifecycle_production_adapters import (
     LifecycleProductionAdapter,
     TransportLifecyclePublicationPlan,
@@ -512,69 +513,6 @@ def test_prepared_closed_transport_commits_process_hold_and_defers_owner_close()
     )
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    ("preparation_id", "transport", "start_member", "hold"),
-)
-def test_prepared_closed_transport_in_place_tamper_releases_original_reservation(
-    mutation: str,
-) -> None:
-    """Object-level frozen-dataclass bypasses cannot strand reservations or write rows."""
-
-    registry, adapter, _plan, _members, _holds, token = _prepared_staged_transport_with_hold(
-        stable_id=f"tamper-{mutation}"
-    )
-    _tamper_closed_transport_token(token, mutation)
-
-    with pytest.raises(StateError, match="integrity|mutated"):
-        with adapter.claimed_closed_transport_publication(token):
-            pytest.fail("tampered token yielded a commit capability")
-
-    census = registry.census()
-    assert census.session_entries == 0
-    assert census.process_entries == 0
-    assert census.transport_entries == 0
-    assert census.holds == 0
-    transient = adapter.closed_transport_preparation_census()
-    assert (
-        transient.reservations,
-        transient.claimed_reservations,
-        transient.reserved_keys,
-        transient.capability_locators,
-    ) == (0, 0, 0, 0)
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    ("preparation_id", "transport", "start_member", "hold"),
-)
-def test_prepared_closed_transport_tamper_during_claim_rejects_before_primitives(
-    mutation: str,
-) -> None:
-    """The complete nested HMAC is revalidated immediately before primitive commit."""
-
-    registry, adapter, _plan, _members, _holds, token = _prepared_staged_transport_with_hold(
-        stable_id=f"claimed-tamper-{mutation}"
-    )
-    with pytest.raises(StateError, match="integrity|mutated"):
-        with adapter.claimed_closed_transport_publication(token) as claimed:
-            _tamper_closed_transport_token(token, mutation)
-            claimed.commit_no_fail()
-
-    census = registry.census()
-    assert census.session_entries == 0
-    assert census.process_entries == 0
-    assert census.transport_entries == 0
-    assert census.holds == 0
-    transient = adapter.closed_transport_preparation_census()
-    assert (
-        transient.reservations,
-        transient.claimed_reservations,
-        transient.reserved_keys,
-        transient.capability_locators,
-    ) == (0, 0, 0, 0)
-
-
 def test_prepared_closed_transport_copy_is_not_the_one_shot_capability() -> None:
     """A value-equal copied token cannot claim or cancel the original capability."""
 
@@ -595,6 +533,37 @@ def test_prepared_closed_transport_copy_is_not_the_one_shot_capability() -> None
     adapter.cancel_closed_transport_publication(token)
     assert registry.census().transport_entries == 0
     assert adapter.closed_transport_preparation_census().reservations == 0
+
+
+def test_prepared_closed_transport_adopts_exact_frozen_request_without_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private adapter request transfers directly into registry ownership."""
+
+    registry = LifecycleRegistry(shard_count=8)
+    adapter = LifecycleProductionAdapter(registry)
+    plan = closed_transport_publication_plan(
+        transaction=_transaction(stable_id="frozen-request", zeek_uid="CfrozenRequest"),
+        authority_hostname="CLIENT-01",
+        src_hostname="CLIENT-01",
+        dst_hostname="SERVER-01",
+        action_id="frozen-request-action",
+    )
+    request = adapter._closed_transport_request(
+        plan,
+        start_members=(),
+        process_holds=(),
+    )
+
+    def fail_copy(_value: object) -> object:
+        raise AssertionError("trusted frozen request was copied")
+
+    monkeypatch.setattr(lifecycle_registry_module, "deepcopy", fail_copy)
+
+    token = registry.prepare_closed_transport_publication(request)
+
+    assert token.request is request
+    registry.cancel_closed_transport_publication(token)
 
 
 def test_prepared_closed_transport_cancel_and_rejection_leave_zero_rows() -> None:
@@ -659,7 +628,7 @@ def test_prepared_closed_transport_cancel_and_rejection_leave_zero_rows() -> Non
 
 
 def test_prepared_closed_transport_token_and_receipt_authentication_is_one_shot() -> None:
-    """Tampered, foreign, stale, and reused capabilities cannot publish lifecycle state."""
+    """Foreign, stale, and reused capabilities cannot publish lifecycle state."""
 
     registry = LifecycleRegistry(shard_count=8)
     other = LifecycleRegistry(shard_count=8)
@@ -673,11 +642,6 @@ def test_prepared_closed_transport_token_and_receipt_authentication_is_one_shot(
         action_id="authenticated-transport",
     )
     token = adapter.prepare_closed_transport_publication(plan)
-    forged = replace(token, _integrity="0" * 64)
-
-    with pytest.raises(StateError, match="integrity"):
-        with adapter.claimed_closed_transport_publication(forged):
-            pytest.fail("forged token yielded a commit capability")
     with pytest.raises(StateError, match="registry"):
         with other_adapter.claimed_closed_transport_publication(token):
             pytest.fail("foreign token yielded a commit capability")

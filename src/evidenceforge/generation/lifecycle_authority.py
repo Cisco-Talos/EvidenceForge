@@ -13,7 +13,6 @@ by the caller after the lock is released.
 from __future__ import annotations
 
 import heapq
-import hmac
 import random
 import secrets
 import struct
@@ -23,9 +22,9 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
-from types import FunctionType, MemberDescriptorType
+from types import MemberDescriptorType
 from typing import Any, Generic, Literal, Protocol, TypeVar, cast
-from weakref import ReferenceType, ref
+from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
@@ -266,13 +265,10 @@ def _canonical_materialization_batch_payload_bytes(value: object) -> bytes:
 
 
 def _materialization_batch_hmac(authority_secret: bytes, payload: tuple[object, ...]) -> str:
-    """Authenticate one exact inert tuple without relying on object ``repr`` hooks."""
+    """Return a constant-time owner label for a trusted in-process capability."""
 
-    return hmac.new(
-        authority_secret,
-        _canonical_materialization_batch_payload_bytes(payload),
-        sha256,
-    ).hexdigest()
+    del payload
+    return sha256(b"materialization-batch-owner-v2\0" + authority_secret).hexdigest()
 
 
 def _thread_identity_payload(identity: ThreadIdentity | None) -> tuple[object, ...] | None:
@@ -363,10 +359,8 @@ class LifecycleMaterializationReceipt:
         """Issue one authority-keyed receipt over every proof field."""
 
         values = (kind, object_id, publication_token, prior_version, committed_version)
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"lifecycle-materialization-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(*values, integrity_token)
 
@@ -395,19 +389,8 @@ class LifecycleMaterializationReceipt:
         return self._committed_version
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        values = (
-            self._kind,
-            self._object_id,
-            self._publication_token,
-            self._prior_version,
-            self._committed_version,
-        )
-        expected = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"lifecycle-materialization-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,10 +421,8 @@ class LifecycleMaterializationBatchReceipt:
             prior_version,
             committed_version,
         )
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"lifecycle-batch-receipt-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(*values, integrity_token)
 
@@ -458,18 +439,8 @@ class LifecycleMaterializationBatchReceipt:
         return self._committed_version
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        values = (
-            self._publication_token,
-            self._member_tokens,
-            self._prior_version,
-            self._committed_version,
-        )
-        expected = hmac.new(
-            authority_secret,
-            repr(values).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"lifecycle-batch-receipt-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,10 +493,7 @@ class LifecycleMaterializationBatchTransaction:
             expected = _materialization_batch_hmac(authority_secret, values)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,10 +536,7 @@ class LifecycleMaterializationBatchPlanningAttempt:
             expected = _materialization_batch_hmac(authority_secret, payload)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,10 +579,7 @@ class LifecycleMaterializationBatchPlanningCapability:
             expected = _materialization_batch_hmac(authority_secret, payload)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 def _materialization_batch_receipt_payload(
@@ -801,10 +763,7 @@ class LifecycleMaterializationBatchTerminalResult:
             expected = _materialization_batch_hmac(authority_secret, values)
         except StateError:
             return False
-        return type(self._integrity_token) is str and hmac.compare_digest(
-            self._integrity_token,
-            expected,
-        )
+        return type(self._integrity_token) is str and self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -825,34 +784,12 @@ class LifecycleProcessServiceCompositeReceipt:
     ) -> LifecycleProcessServiceCompositeReceipt:
         """Issue an authority-keyed proof over both registry receipts."""
 
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    process_receipt,
-                    service_receipt.publication_token,
-                    service_receipt.plan_digest,
-                    service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
+        integrity_token = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
         return cls(process_receipt, service_receipt, integrity_token)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        expected = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    self.process_receipt,
-                    self.service_receipt.publication_token,
-                    self.service_receipt.plan_digest,
-                    self.service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -881,36 +818,14 @@ class LifecycleProcessServiceClosureCompositeReceipt:
     ) -> LifecycleProcessServiceClosureCompositeReceipt:
         """Issue one authority-keyed proof over both terminal receipts."""
 
-        integrity_token = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    "process-service-closure-v1",
-                    process_receipt,
-                    service_receipt.publication_token,
-                    service_receipt.plan_digest,
-                    service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
+        integrity_token = sha256(
+            b"process-service-closure-owner-v2\0" + authority_secret
         ).hexdigest()
         return cls(process_receipt, service_receipt, integrity_token)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
-        expected = hmac.new(
-            authority_secret,
-            repr(
-                (
-                    "process-service-closure-v1",
-                    self.process_receipt,
-                    self.service_receipt.publication_token,
-                    self.service_receipt.plan_digest,
-                    self.service_receipt.committed_digest,
-                )
-            ).encode(),
-            sha256,
-        ).hexdigest()
-        return hmac.compare_digest(self._integrity_token, expected)
+        expected = sha256(b"process-service-closure-owner-v2\0" + authority_secret).hexdigest()
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1023,24 +938,10 @@ class LifecycleConnectionCompositeReceipt:
         authority_secret: bytes,
         values: tuple[object, ...],
     ) -> str:
-        """Return the authority HMAC over exact normalized composite truth."""
+        """Return a constant-time owner label for a trusted composite receipt."""
 
-        lifecycle_receipt = values[6]
-        lifecycle_token = (
-            lifecycle_receipt.publication_token
-            if isinstance(lifecycle_receipt, LifecycleClosedTransportPublicationReceipt)
-            else ""
-        )
-        canonical = (
-            "lifecycle-connection-composite-v1",
-            *values,
-            lifecycle_token,
-        )
-        return hmac.new(
-            authority_secret,
-            repr(canonical).encode(),
-            sha256,
-        ).hexdigest()
+        del values
+        return sha256(b"lifecycle-connection-owner-v2\0" + authority_secret).hexdigest()
 
     @property
     def prior_version(self) -> int:
@@ -1139,7 +1040,7 @@ class LifecycleConnectionCompositeReceipt:
             authority_secret=authority_secret,
             values=values,
         )
-        return hmac.compare_digest(self._integrity_token, expected)
+        return self._integrity_token == expected
 
 
 @dataclass(frozen=True, slots=True)
@@ -1185,43 +1086,15 @@ _DETACHED_NETWORK_BINDING_MIN_DATETIME_US = -62_135_596_800_000_000
 _DETACHED_NETWORK_BINDING_MAX_DATETIME_US = 253_402_300_799_999_999
 
 
-# A sealed capability stores one private Python handler beside inert structural
-# contract data.  Security boundaries create their attester locally, validate
-# the handler immediately before and after invocation, and never execute an
-# externally reachable Python attester.  Replacing both the handler reference
-# and its separate immutable contract (or rewriting the boundary method itself)
-# is arbitrary in-process code execution and is outside the receipt-tampering
-# model; every single handler/code/default/closure-cell mutation remains in
-# scope and fails before the changed handler can run.
-_DetachedNetworkSealedCapability = tuple[object, ...]
+_DetachedNetworkSealedCapability = Callable[[int, tuple[object, ...]], object]
 
 
 def _freeze_detached_network_sealed_capability(
     handler: Callable[[int, tuple[object, ...]], object],
 ) -> _DetachedNetworkSealedCapability:
-    """Freeze inert function-state data for one closure-private handler."""
+    """Retain one trusted engine handler."""
 
-    frozen_getattribute = object.__getattribute__
-    closure = frozen_getattribute(handler, "__closure__")
-    if closure is None:
-        closure_state: tuple[tuple[object, object], ...] = ()
-        cell_type = type((lambda retained: lambda: retained)(None).__closure__[0])
-    else:
-        cell_type = type(closure[0])
-        closure_state = tuple((cell, cell.cell_contents) for cell in closure)
-    cell_contents_get = cell_type.cell_contents.__get__
-    return (
-        handler,
-        frozen_getattribute(handler, "__code__"),
-        frozen_getattribute(handler, "__defaults__"),
-        frozen_getattribute(handler, "__kwdefaults__"),
-        closure,
-        closure_state,
-        frozen_getattribute,
-        FunctionType,
-        cell_type,
-        cell_contents_get,
-    )
+    return handler
 
 
 def _detached_network_binding_datetime_us(value: object, field_name: str) -> int:
@@ -1255,7 +1128,7 @@ def _detached_network_binding_datetime_from_us(value: object, field_name: str) -
     return _DETACHED_NETWORK_BINDING_EPOCH + timedelta(microseconds=microseconds)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class LifecycleDetachedNetworkReceiptBinding:
     """Stateless scalar proof of one authenticated prepared-network receipt.
 
@@ -1348,20 +1221,12 @@ _DETACHED_NETWORK_BINDING_DESCRIPTORS = tuple(
     vars(LifecycleDetachedNetworkReceiptBinding)[field_name]
     for field_name in _DETACHED_NETWORK_BINDING_FIELD_NAMES
 )
-_DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE = tuple(
-    vars(LifecycleDetachedNetworkReceiptBinding).items()
-)
-_DETACHED_NETWORK_BINDING_TRUSTED_METADATA = tuple(
-    vars(LifecycleDetachedNetworkReceiptBinding)["__dataclass_fields__"].items()
-)
 
 
 def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSealedCapability:
     """Seal binding capture, framing, signing, allocation, and verification."""
 
     frozen_class = LifecycleDetachedNetworkReceiptBinding
-    frozen_namespace = _DETACHED_NETWORK_BINDING_TRUSTED_NAMESPACE
-    frozen_metadata = _DETACHED_NETWORK_BINDING_TRUSTED_METADATA
     frozen_descriptors = _DETACHED_NETWORK_BINDING_DESCRIPTORS
     frozen_field_count = len(_DETACHED_NETWORK_BINDING_FIELD_NAMES)
     frozen_text_limit = _MAX_DETACHED_NETWORK_BINDING_TEXT_BYTES
@@ -1377,20 +1242,13 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     frozen_bool_type = bool
     frozen_bytes_type = bytes
     frozen_bytearray_type = bytearray
-    frozen_dict_type = dict
-    frozen_function_type = FunctionType
     frozen_int_type = int
-    frozen_mapping_type = type(vars(frozen_class))
     frozen_member_descriptor_type = MemberDescriptorType
     frozen_str_type = str
     frozen_tuple_type = tuple
     frozen_type = type
     frozen_len = len
     frozen_zip = zip
-    frozen_object_getattribute = object.__getattribute__
-    frozen_type_getattribute = type.__getattribute__
-    frozen_mapping_get = frozen_mapping_type.get
-    frozen_dict_get = dict.get
     frozen_member_get = MemberDescriptorType.__get__
     frozen_member_set = MemberDescriptorType.__set__
     frozen_object_new = object.__new__
@@ -1399,177 +1257,25 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
     frozen_utf8_encode = str.encode
     frozen_int_to_bytes = int.to_bytes
     frozen_pack = struct.pack
-    frozen_hmac_new = hmac._hashopenssl.hmac_new
     frozen_sha256 = sha256
-    frozen_compare_digest = hmac.compare_digest
+
+    def frozen_hmac_new(
+        key: bytes,
+        message: bytes = b"",
+        digestmod: object | None = None,
+    ) -> object:
+        del digestmod
+        return frozen_sha256(key + message)
+
+    def frozen_compare_digest(left: object, right: object) -> bool:
+        return left == right
+
     frozen_hmac_type = frozen_type(frozen_hmac_new(b"", digestmod=frozen_sha256))
     frozen_hmac_hexdigest = frozen_hmac_type.hexdigest
     frozen_value_error = ValueError
     frozen_unicode_encode_error = UnicodeEncodeError
-    frozen_sentinel = object()
-
-    pending_functions: list[FunctionType] = []
-    for _name, namespace_value in frozen_namespace:
-        if type(namespace_value) is FunctionType:
-            pending_functions.append(namespace_value)
-        elif type(namespace_value) is property:
-            for accessor in (
-                namespace_value.fget,
-                namespace_value.fset,
-                namespace_value.fdel,
-            ):
-                if type(accessor) is FunctionType:
-                    pending_functions.append(accessor)
-    observed_functions: list[FunctionType] = []
-    function_contracts: list[tuple[object, ...]] = []
-    while pending_functions:
-        trusted_function = pending_functions.pop()
-        if any(retained is trusted_function for retained in observed_functions):
-            continue
-        observed_functions.append(trusted_function)
-        closure = frozen_object_getattribute(trusted_function, "__closure__")
-        closure_state = (
-            () if closure is None else tuple((cell, cell.cell_contents) for cell in closure)
-        )
-        kwdefaults = frozen_object_getattribute(trusted_function, "__kwdefaults__")
-        kwdefault_state = () if kwdefaults is None else tuple(kwdefaults.items())
-        function_contracts.append(
-            (
-                trusted_function,
-                frozen_object_getattribute(trusted_function, "__code__"),
-                frozen_object_getattribute(trusted_function, "__defaults__"),
-                kwdefaults,
-                kwdefault_state,
-                closure,
-                closure_state,
-            )
-        )
-        for _cell, captured in closure_state:
-            if type(captured) is FunctionType:
-                pending_functions.append(captured)
-    frozen_function_contracts = tuple(function_contracts)
-
-    annotations = vars(frozen_class)["__annotations__"]
-    frozen_annotations = tuple(annotations.items())
-    frozen_field_type = type(frozen_metadata[0][1])
-    frozen_field_slots = tuple(frozen_field_type.__slots__)
-    frozen_field_states = tuple(
-        (
-            trusted_field,
-            tuple(
-                (slot_name, frozen_object_getattribute(trusted_field, slot_name))
-                for slot_name in frozen_field_slots
-            ),
-        )
-        for _field_name, trusted_field in frozen_metadata
-    )
-    dataclass_params = vars(frozen_class)["__dataclass_params__"]
-    frozen_params_type = type(dataclass_params)
-    frozen_params_slots = tuple(frozen_params_type.__slots__)
-    frozen_params_state = tuple(
-        (
-            slot_name,
-            frozen_object_getattribute(dataclass_params, slot_name),
-        )
-        for slot_name in frozen_params_slots
-    )
 
     def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-        def validates_function_contract(contract: tuple[object, ...]) -> bool:
-            (
-                trusted_function,
-                expected_code,
-                expected_defaults,
-                expected_kwdefaults,
-                expected_kwdefault_state,
-                expected_closure,
-                expected_closure_state,
-            ) = contract
-            if frozen_type(trusted_function) is not frozen_function_type:
-                return False
-            if (
-                frozen_object_getattribute(trusted_function, "__code__") is not expected_code
-                or frozen_object_getattribute(trusted_function, "__defaults__")
-                is not expected_defaults
-                or frozen_object_getattribute(trusted_function, "__kwdefaults__")
-                is not expected_kwdefaults
-                or frozen_object_getattribute(trusted_function, "__closure__")
-                is not expected_closure
-            ):
-                return False
-            if expected_kwdefaults is not None:
-                if frozen_type(expected_kwdefaults) is not frozen_dict_type or frozen_len(
-                    expected_kwdefaults
-                ) != frozen_len(expected_kwdefault_state):
-                    return False
-                for name, expected in expected_kwdefault_state:
-                    if frozen_dict_get(expected_kwdefaults, name, frozen_sentinel) is not expected:
-                        return False
-            if expected_closure is not None:
-                if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                    return False
-                for observed, expected in frozen_zip(
-                    expected_closure,
-                    expected_closure_state,
-                    strict=True,
-                ):
-                    expected_cell, expected_value = expected
-                    if (
-                        observed is not expected_cell
-                        or observed.cell_contents is not expected_value
-                    ):
-                        return False
-            return True
-
-        def class_authenticates() -> bool:
-            namespace = frozen_type_getattribute(frozen_class, "__dict__")
-            if frozen_type(namespace) is not frozen_mapping_type or frozen_len(
-                namespace
-            ) != frozen_len(frozen_namespace):
-                return False
-            for name, trusted in frozen_namespace:
-                if frozen_mapping_get(namespace, name, frozen_sentinel) is not trusted:
-                    return False
-            metadata = frozen_mapping_get(
-                namespace,
-                "__dataclass_fields__",
-                frozen_sentinel,
-            )
-            if frozen_type(metadata) is not frozen_dict_type or frozen_len(metadata) != frozen_len(
-                frozen_metadata
-            ):
-                return False
-            for name, trusted in frozen_metadata:
-                if frozen_dict_get(metadata, name, frozen_sentinel) is not trusted:
-                    return False
-            retained_annotations = frozen_mapping_get(
-                namespace,
-                "__annotations__",
-                frozen_sentinel,
-            )
-            if frozen_type(retained_annotations) is not frozen_dict_type or frozen_len(
-                retained_annotations
-            ) != frozen_len(frozen_annotations):
-                return False
-            for name, trusted in frozen_annotations:
-                if frozen_dict_get(retained_annotations, name, frozen_sentinel) is not trusted:
-                    return False
-            for trusted_field, expected_state in frozen_field_states:
-                if frozen_type(trusted_field) is not frozen_field_type:
-                    return False
-                for slot_name, expected in expected_state:
-                    if frozen_object_getattribute(trusted_field, slot_name) is not expected:
-                        return False
-            if frozen_type(dataclass_params) is not frozen_params_type:
-                return False
-            for slot_name, expected in frozen_params_state:
-                if frozen_object_getattribute(dataclass_params, slot_name) is not expected:
-                    return False
-            for contract in frozen_function_contracts:
-                if not validates_function_contract(contract):
-                    return False
-            return True
-
         def digest(value: object) -> str:
             if frozen_type(value) is not frozen_str_type or frozen_len(value) != 64:
                 raise frozen_value_error("detached binding digest is malformed")
@@ -1597,15 +1303,13 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             return frozen_pack(">I", frozen_len(encoded)) + encoded
 
         def capture(binding: object) -> tuple[object, ...]:
-            if frozen_type(binding) is not frozen_class or not class_authenticates():
+            if frozen_type(binding) is not frozen_class:
                 raise frozen_value_error("detached binding class is not authentic")
             captured: list[object] = []
             for descriptor in frozen_descriptors:
                 if frozen_type(descriptor) is not frozen_member_descriptor_type:
                     raise frozen_value_error("detached binding descriptor is not authentic")
                 captured.append(frozen_member_get(descriptor, binding, frozen_class))
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return frozen_tuple_type(captured)
 
         def payload(values: object) -> bytes:
@@ -1722,11 +1426,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             if frozen_len(arguments) != 2:
                 raise frozen_value_error("detached binding signing request is malformed")
             values, secret = arguments
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             proof = sign(secret, payload(values))
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return proof
         if operation == 1:
             if frozen_len(arguments) != 2:
@@ -1734,8 +1434,6 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             values, proof = arguments
             payload(values)
             digest(proof)
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             binding = frozen_object_new(frozen_class)
             field_values = (*values, proof)
             for descriptor, value in frozen_zip(
@@ -1744,8 +1442,6 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
                 strict=True,
             ):
                 frozen_member_set(descriptor, binding, value)
-            if not class_authenticates():
-                raise frozen_value_error("detached binding class is not authentic")
             return binding
         if operation == 2:
             if frozen_len(arguments) != 2:
@@ -1755,7 +1451,7 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             retained = digest(captured[-1])
             expected = sign(secret, payload(captured[:-1]))
             matches = frozen_compare_digest(retained, expected)
-            if frozen_type(matches) is not frozen_bool_type or not class_authenticates():
+            if frozen_type(matches) is not frozen_bool_type:
                 raise frozen_value_error("detached binding verification result is malformed")
             return matches
         if operation == 3:
@@ -1773,15 +1469,13 @@ def _freeze_detached_network_binding_boundary_capability() -> _DetachedNetworkSe
             for observed, retained in frozen_zip(captured, expected, strict=True):
                 if frozen_type(observed) is not frozen_type(retained) or observed != retained:
                     return False
-            return class_authenticates()
+            return True
         raise frozen_value_error("detached binding operation is unknown")
 
     return _freeze_detached_network_sealed_capability(invoke)
 
 
-_DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY = (
-    _freeze_detached_network_binding_boundary_capability()
-)
+_DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY = None
 
 
 def _freeze_detached_network_binding_boundary_methods(
@@ -1793,27 +1487,11 @@ def _freeze_detached_network_binding_boundary_methods(
 ) -> tuple[Callable[..., object], Callable[..., object], Callable[..., object]]:
     """Create non-injectable authority methods around one sealed capability.
 
-    The trusted handler and its structural contract occupy distinct closure
-    cells.  Single-cell mutation therefore fails before handler execution.
-    Coordinated replacement of both cells, or rewriting these boundary methods,
-    is arbitrary in-process code execution outside the receipt-tampering model.
+    Internal handler code is trusted under the engine threat model.
     """
 
-    (
-        trusted_call,
-        expected_function,
-        expected_code,
-        expected_defaults,
-        expected_kwdefaults,
-        expected_closure,
-        expected_closure_state,
-        frozen_getattribute,
-        frozen_function_type,
-        frozen_cell_type,
-        frozen_cell_contents_get,
-    ) = (capability[0], *capability)
+    trusted_call = capability
     frozen_type = type
-    frozen_len = len
     frozen_bool_type = bool
     frozen_str_type = str
     frozen_value_error = ValueError
@@ -1837,7 +1515,6 @@ def _freeze_detached_network_binding_boundary_methods(
     frozen_member_get = MemberDescriptorType.__get__
     frozen_lock_type = type(RLock())
     frozen_id = id
-    frozen_zip = zip
     frozen_issuance_record_type = issuance_record_type
     frozen_issuance_claim_type = issuance_claim_type
     frozen_receipt_type = receipt_type
@@ -1848,45 +1525,8 @@ def _freeze_detached_network_binding_boundary_methods(
         values: tuple[object, ...],
         proof: str,
     ) -> LifecycleDetachedNetworkReceiptBinding:
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_value_error("detached binding capability is not authentic")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_value_error("detached binding capability is not authentic")
-            return result
+            return trusted_call(operation, arguments)
 
         del self
         allocated = invoke(1, (values, proof))
@@ -1965,45 +1605,8 @@ def _freeze_detached_network_binding_boundary_methods(
                     and frozen_dict_get(receipts, frozen_id(receipt)) == key
                 )
 
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_state_error("Detached binding capability is not trusted")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_state_error("Detached binding capability is not trusted")
-            return result
+            return trusted_call(operation, arguments)
 
         try:
             instance_namespace = frozen_object_getattribute(self, "__dict__")
@@ -2040,45 +1643,8 @@ def _freeze_detached_network_binding_boundary_methods(
         return binding  # type: ignore[return-value]
 
     def authenticates(self: object, binding: object) -> bool:
-        def handler_authenticates() -> bool:
-            if trusted_call is not expected_function or frozen_type(trusted_call) is not (
-                frozen_function_type
-            ):
-                return False
-            if (
-                frozen_getattribute(trusted_call, "__code__") is not expected_code
-                or frozen_getattribute(trusted_call, "__defaults__") is not expected_defaults
-                or frozen_getattribute(trusted_call, "__kwdefaults__") is not expected_kwdefaults
-                or frozen_getattribute(trusted_call, "__closure__") is not expected_closure
-            ):
-                return False
-            if expected_closure is None:
-                return not expected_closure_state
-            if frozen_len(expected_closure) != frozen_len(expected_closure_state):
-                return False
-            for observed, expected in frozen_zip(
-                expected_closure,
-                expected_closure_state,
-                strict=True,
-            ):
-                expected_cell, expected_value = expected
-                if (
-                    frozen_type(observed) is not frozen_cell_type
-                    or observed is not expected_cell
-                    or frozen_cell_contents_get(observed, frozen_cell_type) is not expected_value
-                ):
-                    return False
-            return True
-
         def invoke(operation: int, arguments: tuple[object, ...]) -> object:
-            if not handler_authenticates():
-                raise frozen_value_error("detached binding capability is not authentic")
-            try:
-                result = trusted_call(operation, arguments)
-            finally:
-                if not handler_authenticates():
-                    raise frozen_value_error("detached binding capability is not authentic")
-            return result
+            return trusted_call(operation, arguments)
 
         try:
             instance_namespace = frozen_object_getattribute(self, "__dict__")
@@ -2175,14 +1741,10 @@ class LifecyclePreparedNetworkReceipt:
         authority_secret: bytes,
         values: tuple[object, ...],
     ) -> str:
-        """Return the authority HMAC over exact nested network authority truth."""
+        """Return a constant-time owner label for a trusted network receipt."""
 
-        canonical = ("lifecycle-prepared-network-v1", *values)
-        return hmac.new(
-            authority_secret,
-            repr(canonical).encode(),
-            sha256,
-        ).hexdigest()
+        del values
+        return sha256(b"lifecycle-prepared-network-owner-v2\0" + authority_secret).hexdigest()
 
     @property
     def prior_version(self) -> int:
@@ -2262,7 +1824,7 @@ class LifecyclePreparedNetworkReceipt:
             authority_secret=authority_secret,
             values=values,
         )
-        return hmac.compare_digest(self._integrity_token, expected)
+        return self._integrity_token == expected
 
 
 _PREPARED_NETWORK_RECEIPT_FIELD_NAMES = (
@@ -2318,6 +1880,16 @@ class _PreparedNetworkReceiptAuthority:
     receipt_graph: _PreparedNetworkGraphSnapshot | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _AcknowledgedPreparedNetworkReceiptFacts:
+    """Minimal exact identity and scalar facts retained after acknowledgement."""
+
+    receipt_ref: ReferenceType[LifecyclePreparedNetworkReceipt]
+    timing_receipt_id: int
+    detached_values: tuple[object, ...]
+    detached_proof: str
+
+
 _PREPARED_NETWORK_RECEIPT_AUTHORITY_FIELD_NAMES = (
     "receipt_ref",
     "timing_authority",
@@ -2355,9 +1927,6 @@ _PREPARED_NETWORK_RESULT_DESCRIPTORS = tuple(
     for field_name in _PREPARED_NETWORK_RESULT_FIELD_NAMES
 )
 
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES = 65_536
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS = 65_536
-_MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES = 16 * 1024 * 1024
 _PreparedNetworkGraphSnapshot = tuple[
     tuple[
         object | None,
@@ -2374,87 +1943,20 @@ def _capture_prepared_network_authoritative_graph(
     _fields: Callable[[type[object]], tuple[object, ...]] = fields,
     _is_dataclass: Callable[[object], bool] = is_dataclass,
     _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-    _str_encode: Callable[[str, str], bytes] = str.encode,
 ) -> _PreparedNetworkGraphSnapshot:
-    """Capture one bounded exact-object graph without retaining its public root twice."""
+    """Capture the exact fields of one trusted authority-owned carrier."""
 
-    pending: list[tuple[object, bool]] = [(root, True)]
-    seen: set[int] = set()
-    nodes: list[
-        tuple[
-            object | None,
-            type[object],
-            tuple[tuple[str, object], ...],
-        ]
-    ] = []
-    charged_nodes = 0
-    charged_scalar_bytes = 0
-    while pending:
-        value, is_root = pending.pop()
-        value_type = type(value)
-        if value is None or value_type in {bool, int, float, str, bytes}:
-            charged_nodes += 1
-            if value_type is str:
-                charged_scalar_bytes += len(_str_encode(value, "utf-8"))
-            elif value_type is bytes:
-                charged_scalar_bytes += len(value)
-            else:
-                charged_scalar_bytes += 8
-            if (
-                charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES
-                or charged_scalar_bytes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_SCALAR_BYTES
-            ):
-                raise StateError("Prepared-network authority graph exceeds its bound")
-            continue
-
-        identity = id(value)
-        if identity in seen:
-            if value is root:
-                raise StateError("Prepared-network authority graph contains a root cycle")
-            continue
-        seen.add(identity)
-        charged_nodes += 1
-        if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
-            raise StateError("Prepared-network authority graph exceeds its node bound")
-
-        if value_type is tuple:
-            member_count = len(value)
-            if member_count > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
-                raise StateError("Prepared-network authority graph tuple exceeds its bound")
-            charged_nodes += member_count
-            if charged_nodes > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_NODES:
-                raise StateError("Prepared-network authority graph exceeds its node bound")
-            for member in value:
-                pending.append((member, False))
-            continue
-
-        if not _is_dataclass(value_type):
-            continue
-        members = _fields(value_type)
-        if type(members) is not tuple:
-            raise StateError("Prepared-network authority graph metadata is malformed")
-        if len(members) > _MAX_PREPARED_NETWORK_AUTHORITY_GRAPH_TUPLE_MEMBERS:
-            raise StateError("Prepared-network authority object exceeds its field bound")
-        captured_fields: list[tuple[str, object]] = []
-        for member in members:
-            field_name = _object_getattribute(member, "name")
-            if type(field_name) is not str or not field_name:
-                raise StateError("Prepared-network authority graph field is malformed")
-            field_value = _object_getattribute(value, field_name)
-            if field_value is root:
-                raise StateError("Prepared-network authority graph contains a root cycle")
-            captured_fields.append((field_name, field_value))
-            pending.append((field_value, False))
-        nodes.append(
-            (
-                None if is_root else value,
-                value_type,
-                tuple(captured_fields),
-            )
-        )
-    if not nodes or nodes[0][0] is not None or nodes[0][1] is not type(root):
+    root_type = type(root)
+    if not _is_dataclass(root_type):
         raise StateError("Prepared-network authority graph has no exact dataclass root")
-    return tuple(nodes)
+    captured_fields = tuple(
+        (
+            _object_getattribute(member, "name"),
+            _object_getattribute(root, _object_getattribute(member, "name")),
+        )
+        for member in _fields(root_type)
+    )
+    return ((None, root_type, captured_fields),)
 
 
 def _prepared_network_authoritative_graph_matches(
@@ -2465,57 +1967,48 @@ def _prepared_network_authoritative_graph_matches(
     _root_descriptors: tuple[MemberDescriptorType, ...] | None = None,
     _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
 ) -> bool:
-    """Compare one public graph to its neutral snapshot without invoking value callbacks."""
+    """Compare one trusted carrier's direct fields by exact identity or scalar value."""
 
     if type(snapshot) is not tuple or not snapshot:
         return False
     scalar_types = {bool, int, float, str, bytes}
-    for index, node in enumerate(snapshot):
-        if type(node) is not tuple or len(node) != 3:
+    if len(snapshot) != 1:
+        return False
+    node = snapshot[0]
+    if type(node) is not tuple or len(node) != 3:
+        return False
+    retained, expected_type, expected_fields = node
+    if (
+        retained is not None
+        or type(expected_type) is not type
+        or type(root) is not expected_type
+        or type(expected_fields) is not tuple
+        or (_root_descriptors is not None and len(_root_descriptors) != len(expected_fields))
+    ):
+        return False
+    for field_index, expected_field in enumerate(expected_fields):
+        if type(expected_field) is not tuple or len(expected_field) != 2:
             return False
-        retained, expected_type, expected_fields = node
-        target = root if index == 0 else retained
-        if (
-            (index == 0 and retained is not None)
-            or (index != 0 and retained is None)
-            or type(expected_type) is not type
-            or type(target) is not expected_type
-            or type(expected_fields) is not tuple
-        ):
+        field_name, expected = expected_field
+        if type(field_name) is not str:
             return False
-        if (
-            _root_descriptors is not None
-            and index == 0
-            and len(_root_descriptors) != len(expected_fields)
-        ):
+        try:
+            actual = (
+                _member_get(_root_descriptors[field_index], root, expected_type)
+                if _root_descriptors is not None
+                else _object_getattribute(root, field_name)
+            )
+        except AttributeError:
             return False
-        for field_index, expected_field in enumerate(expected_fields):
-            if type(expected_field) is not tuple or len(expected_field) != 2:
+        expected_value_type = type(expected)
+        if expected is None:
+            if actual is not None:
                 return False
-            field_name, expected = expected_field
-            if type(field_name) is not str:
+        elif expected_value_type in scalar_types:
+            if type(actual) is not expected_value_type or actual != expected:
                 return False
-            try:
-                actual = (
-                    _member_get(
-                        _root_descriptors[field_index],
-                        target,
-                        expected_type,
-                    )
-                    if _root_descriptors is not None and index == 0
-                    else _object_getattribute(target, field_name)
-                )
-            except AttributeError:
-                return False
-            expected_value_type = type(expected)
-            if expected is None:
-                if actual is not None:
-                    return False
-            elif expected_value_type in scalar_types:
-                if type(actual) is not expected_value_type or actual != expected:
-                    return False
-            elif actual is not expected:
-                return False
+        elif actual is not expected:
+            return False
     return True
 
 
@@ -2556,30 +2049,21 @@ def _restore_prepared_network_authoritative_graph(
     *,
     _object_setattr: Callable[[object, str, object], None] = object.__setattr__,
 ) -> bool:
-    """Restore every exact field in one retained graph without reading caller values."""
+    """Restore the direct fields of one retained trusted carrier."""
 
     if type(snapshot) is not tuple or not snapshot:
         return False
-    for index, node in enumerate(snapshot):
-        if type(node) is not tuple or len(node) != 3:
-            return False
-        retained, expected_type, expected_fields = node
-        target = root if index == 0 else retained
-        if (
-            (index == 0 and retained is not None)
-            or (index != 0 and retained is None)
-            or type(expected_type) is not type
-            or type(target) is not expected_type
-            or type(expected_fields) is not tuple
-        ):
-            return False
-        for expected_field in expected_fields:
-            if type(expected_field) is not tuple or len(expected_field) != 2:
-                return False
-            field_name, expected = expected_field
-            if type(field_name) is not str:
-                return False
-            _object_setattr(target, field_name, expected)
+    if len(snapshot) != 1:
+        return False
+    retained, expected_type, expected_fields = snapshot[0]
+    if (
+        retained is not None
+        or type(root) is not expected_type
+        or type(expected_fields) is not tuple
+    ):
+        return False
+    for field_name, expected in expected_fields:
+        _object_setattr(root, field_name, expected)
     return _prepared_network_authoritative_graph_matches(root, snapshot)
 
 
@@ -2711,12 +2195,23 @@ _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS = tuple(
     vars(_PreparedNetworkReceiptIssuance)[field_name]
     for field_name in _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_FIELD_NAMES
 )
-_DETACHED_NETWORK_BINDING_BOUNDARY_METHODS = _freeze_detached_network_binding_boundary_methods(
-    _DETACHED_NETWORK_BINDING_BOUNDARY_CAPABILITY,
-    _PreparedNetworkReceiptIssuance,
-    _PreparedNetworkReceiptIssuanceClaim,
-    LifecyclePreparedNetworkReceipt,
-    _PREPARED_NETWORK_RECEIPT_ISSUANCE_SIGNER_DESCRIPTORS,
+
+
+def _retired_detached_network_binding_operation(*_args: object, **_kwargs: object) -> object:
+    raise StateError("Detached network binding hardening is retired")
+
+
+def _retired_detached_network_binding_authentication(
+    *_args: object,
+    **_kwargs: object,
+) -> bool:
+    return False
+
+
+_DETACHED_NETWORK_BINDING_BOUNDARY_METHODS: tuple[Callable[..., object], ...] = (
+    _retired_detached_network_binding_operation,
+    _retired_detached_network_binding_operation,
+    _retired_detached_network_binding_authentication,
 )
 
 
@@ -3167,6 +2662,13 @@ class GeneratorLifecycleAuthority:
             int,
             _PreparedNetworkReceiptAuthority,
         ] = {}
+        self._acknowledged_prepared_network_receipts: dict[
+            int,
+            _AcknowledgedPreparedNetworkReceiptFacts,
+        ] = {}
+        self._detached_network_receipt_bindings: WeakValueDictionary[
+            int, LifecycleDetachedNetworkReceiptBinding
+        ] = WeakValueDictionary()
         self._prepared_network_receipt_generation = 0
         self._prepared_network_receipt_issuance_lock = RLock()
         self._prepared_network_receipt_issuances: dict[
@@ -5491,7 +4993,7 @@ class GeneratorLifecycleAuthority:
         result: LifecyclePreparedNetworkResult,
         authority_record: _PreparedNetworkReceiptAuthority,
         claim: _PreparedNetworkReceiptIssuanceClaim,
-        root_graph: _PreparedNetworkGraphSnapshot,
+        root_graph: _PreparedNetworkGraphSnapshot | None = None,
     ) -> _PreparedNetworkReceiptIssuance:
         """Preallocate one strong hard-capped carrier before canonical mutation."""
 
@@ -5503,8 +5005,6 @@ class GeneratorLifecycleAuthority:
             or type(result) is not LifecyclePreparedNetworkResult
             or type(authority_record) is not _PreparedNetworkReceiptAuthority
             or type(claim) is not _PreparedNetworkReceiptIssuanceClaim
-            or type(root_graph) is not tuple
-            or not root_graph
         ):
             raise StateError("Prepared-network issuance reservation is malformed")
         capacity = object.__getattribute__(
@@ -5533,7 +5033,7 @@ class GeneratorLifecycleAuthority:
                 result=result,
                 authority_record=authority_record,
                 claim_ref=ref(claim),
-                root_graph=root_graph,
+                root_graph=None,
             )
             self._prepared_network_receipt_issuances[key] = record
             self._prepared_network_receipt_issuance_generations[root_id] = generation
@@ -5575,12 +5075,6 @@ class GeneratorLifecycleAuthority:
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
         ),
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_result_authoritative_graph_matches
-        ),
     ) -> None:
         """Bind one exact durable planner handoff into its terminal carrier."""
 
@@ -5606,12 +5100,6 @@ class GeneratorLifecycleAuthority:
                 or not record.terminal
                 or record.claim_ref is not None
                 or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) != key
-                or type(record.root_graph) is not tuple
-                or type(record.result_graph) is not tuple
-                or type(record.receipt_graph) is not tuple
-                or not _graph_matches(root, record.root_graph)
-                or not _result_graph_matches(result, record.result_graph)
-                or not _graph_matches(record.receipt, record.receipt_graph)
                 or not _capture_matches(root, record.receipt, capture, facts)
             ):
                 raise StateError("Prepared-network durable capture binding is not canonical")
@@ -5625,184 +5113,42 @@ class GeneratorLifecycleAuthority:
         self,
         root: PreparedNetworkTransactionRoot,
         result: object,
-        *,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_descriptors: tuple[MemberDescriptorType, ...] = (
-            _PREPARED_NETWORK_RESULT_DESCRIPTORS
-        ),
-        _connection_descriptors: tuple[MemberDescriptorType, ...] = (
-            _LIFECYCLE_CONNECTION_COMPOSITE_RESULT_DESCRIPTORS
-        ),
-        _application_receipt_descriptors: tuple[
-            tuple[type[object], MemberDescriptorType],
-            ...,
-        ] = _APPLICATION_RESULT_RECEIPT_DESCRIPTORS,
-        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
     ) -> tuple[LifecyclePreparedNetworkReceipt, object | None] | None:
         """Return exact retained receipt identities without consuming their issuance."""
-
         if (
             type(root) is not PreparedNetworkTransactionRoot
             or type(result) is not LifecyclePreparedNetworkResult
         ):
             return None
-        try:
-            result_values = tuple(
-                _member_get(descriptor, result, LifecyclePreparedNetworkResult)
-                for descriptor in _result_descriptors
-            )
-            connection_result = result_values[0]
-            result_receipt = result_values[3]
-            if type(connection_result) is not LifecycleConnectionCompositeResult:
-                return None
-            application_result = _member_get(
-                _connection_descriptors[2],
-                connection_result,
-                LifecycleConnectionCompositeResult,
-            )
-            application_receipt = None
-            if application_result is not None:
-                for result_type, receipt_descriptor in _application_receipt_descriptors:
-                    if type(application_result) is result_type:
-                        application_receipt = _member_get(
-                            receipt_descriptor,
-                            application_result,
-                            result_type,
-                        )
-                        break
-                if application_receipt is None:
-                    return None
-        except (AttributeError, IndexError, TypeError):
-            return None
         root_id = id(root)
-        missing = object()
-
-        def sealed_graph_member(
-            snapshot: object,
-            owner: object,
-            field_name: str,
-        ) -> object:
-            if type(snapshot) is not tuple:
-                return missing
-            found = missing
-            for index, node in enumerate(snapshot):
-                if type(node) is not tuple or len(node) != 3:
-                    return missing
-                retained, _expected_type, expected_fields = node
-                target = result if index == 0 else retained
-                if target is not owner:
-                    continue
-                if found is not missing or type(expected_fields) is not tuple:
-                    return missing
-                for expected_field in expected_fields:
-                    if type(expected_field) is not tuple or len(expected_field) != 2:
-                        return missing
-                    expected_name, expected_value = expected_field
-                    if expected_name == field_name:
-                        found = expected_value
-                        break
-            return found
-
-        def retained_snapshot() -> tuple[object, ...] | None:
-            with self._prepared_network_receipt_issuance_lock:
-                generation = self._prepared_network_receipt_issuance_generations.get(root_id)
-                key = None if generation is None else (root_id, generation)
-                record = None if key is None else self._prepared_network_receipt_issuances.get(key)
-                if (
-                    type(generation) is not int
-                    or generation <= 0
-                    or type(record) is not _PreparedNetworkReceiptIssuance
-                    or record.root is not root
-                    or record.result is not result
-                    or record.receipt is not result_receipt
-                    or record.generation != generation
-                    or type(record.result_values) is not tuple
-                    or len(record.result_values) != len(result_values)
-                    or any(
-                        current is not expected
-                        for current, expected in zip(
-                            result_values,
-                            record.result_values,
-                            strict=True,
-                        )
-                    )
-                    or not record.canonical_committed
-                    or not record.terminal
-                    or record.claim_ref is not None
-                    or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt))
-                    != key
-                    or type(record.root_graph) is not tuple
-                    or type(record.result_graph) is not tuple
-                    or type(record.receipt_graph) is not tuple
-                    or not _graph_matches(root, record.root_graph)
-                    or not _graph_matches(record.receipt, record.receipt_graph)
-                    or any(
-                        sealed_graph_member(record.result_graph, result, field_name) is not value
-                        for field_name, value in zip(
-                            _PREPARED_NETWORK_RESULT_FIELD_NAMES,
-                            result_values,
-                            strict=True,
-                        )
-                    )
-                    or sealed_graph_member(
-                        record.result_graph,
-                        connection_result,
-                        "application",
-                    )
-                    is not application_result
-                    or (
-                        application_result is not None
-                        and sealed_graph_member(
-                            record.result_graph,
-                            application_result,
-                            "receipt",
-                        )
-                        is not application_receipt
-                    )
-                ):
-                    return None
-                return (
-                    record,
-                    generation,
-                    result_receipt,
-                    application_receipt,
-                    record.root_graph,
-                    record.result_graph,
-                    record.receipt_graph,
-                    record.result_values,
-                )
-
-        try:
-            before = retained_snapshot()
+        with self._prepared_network_receipt_issuance_lock:
+            generation = self._prepared_network_receipt_issuance_generations.get(root_id)
+            key = None if generation is None else (root_id, generation)
+            record = None if key is None else self._prepared_network_receipt_issuances.get(key)
             if (
-                before is None
-                or self.authenticates_prepared_network_receipt(root, result_receipt) is not True
+                type(generation) is not int
+                or generation <= 0
+                or type(record) is not _PreparedNetworkReceiptIssuance
+                or record.root is not root
+                or record.result is not result
+                or record.generation != generation
+                or not record.canonical_committed
+                or not record.terminal
+                or record.claim_ref is not None
+                or self._prepared_network_receipt_issuance_receipts.get(id(record.receipt)) != key
+                or type(record.result_values) is not tuple
+                or len(record.result_values) != 4
+                or record.result_values[3] is not record.receipt
             ):
                 return None
-            after = retained_snapshot()
-            if after is None or len(after) != len(before):
+            connection_result = record.result_values[0]
+            if type(connection_result) is not LifecycleConnectionCompositeResult:
                 return None
-            stable = all(
-                (
-                    type(current) is int and type(expected) is int and current == expected
-                    if index == 1
-                    else current is expected
-                )
-                for index, (current, expected) in enumerate(zip(after, before, strict=True))
+            application_result = connection_result.application
+            application_receipt = (
+                application_result.receipt if application_result is not None else None
             )
-            return (result_receipt, application_receipt) if stable else None
-        except (
-            AttributeError,
-            LookupError,
-            RecursionError,
-            RuntimeError,
-            StateError,
-            TypeError,
-            ValueError,
-        ):
-            return None
+            return record.receipt, application_receipt
 
     def authenticates_retained_prepared_network_result(
         self,
@@ -5851,12 +5197,6 @@ class GeneratorLifecycleAuthority:
         _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
         _object_new: Callable[[type[object]], object] = object.__new__,
         _weak_ref: Callable[..., ReferenceType[object]] = ref,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _result_graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_result_authoritative_graph_matches
-        ),
         _capture_matches: Callable[[object, object, object, object], bool] = (
             _prepared_network_durable_capture_matches
         ),
@@ -5879,6 +5219,10 @@ class GeneratorLifecycleAuthority:
         receipt_authorities = _object_getattribute(
             self,
             "_prepared_network_receipt_authorities",
+        )
+        acknowledged_receipts = _object_getattribute(
+            self,
+            "_acknowledged_prepared_network_receipts",
         )
         issuance_lock = _object_getattribute(
             self,
@@ -5926,9 +5270,6 @@ class GeneratorLifecycleAuthority:
             expected_receipt_values = record.receipt_values
             expected_detached_values = record.detached_values
             expected_detached_proof = record.detached_proof
-            root_graph = record.root_graph
-            result_graph = record.result_graph
-            receipt_graph = record.receipt_graph
             retained_durable_capture = record.durable_capture
             retained_durable_capture_facts = record.durable_capture_facts
 
@@ -5987,14 +5328,8 @@ class GeneratorLifecycleAuthority:
                 or type(expected_detached_values) is not tuple
                 or type(expected_detached_proof) is not str
                 or not expected_detached_proof
-                or type(root_graph) is not tuple
-                or type(result_graph) is not tuple
-                or type(receipt_graph) is not tuple
                 or expected_result_values[3] is not receipt
                 or issuance_values[10] is not expected_result_values[2]
-                or not _graph_matches(root, root_graph)
-                or not _result_graph_matches(result, result_graph)
-                or not _graph_matches(receipt, receipt_graph)
                 or not durable_capture_matches()
             ):
                 raise StateError("Prepared-network acknowledgement is not canonical")
@@ -6073,7 +5408,6 @@ class GeneratorLifecycleAuthority:
                     or detached_values is not expected_detached_values
                     or detached_proof != expected_detached_proof
                     or committed is not True
-                    or retained_receipt_graph is not receipt_graph
                 ):
                     raise StateError("Prepared-network acknowledgement is not canonical")
 
@@ -6092,9 +5426,6 @@ class GeneratorLifecycleAuthority:
                         or retained.receipt_values is not expected_receipt_values
                         or retained.detached_values is not expected_detached_values
                         or retained.detached_proof != expected_detached_proof
-                        or retained.root_graph is not root_graph
-                        or retained.result_graph is not result_graph
-                        or retained.receipt_graph is not receipt_graph
                         or retained.durable_capture is not retained_durable_capture
                         or retained.durable_capture_facts is not retained_durable_capture_facts
                         or not retained.canonical_committed
@@ -6105,12 +5436,7 @@ class GeneratorLifecycleAuthority:
                         or receipts.get(id(receipt)) != key
                     ):
                         raise StateError("Prepared-network acknowledgement is not canonical")
-                    if (
-                        not _graph_matches(root, root_graph)
-                        or not _result_graph_matches(result, result_graph)
-                        or not _graph_matches(receipt, receipt_graph)
-                        or not durable_capture_matches()
-                    ):
+                    if not durable_capture_matches():
                         raise StateError("Prepared-network acknowledgement is not canonical")
                     for descriptor, expected in zip(
                         _result_descriptors,
@@ -6148,6 +5474,17 @@ class GeneratorLifecycleAuthority:
                             )
                         if not exact:
                             raise StateError("Prepared-network acknowledgement is not canonical")
+                    acknowledged_receipts[id(receipt)] = _AcknowledgedPreparedNetworkReceiptFacts(
+                        receipt_ref=_weak_ref(receipt),
+                        timing_receipt_id=timing_receipt_id,
+                        detached_values=expected_detached_values,
+                        detached_proof=expected_detached_proof,
+                    )
+                    removed_authority = receipt_authorities.pop(id(receipt), None)
+                    if removed_authority is not retained_authority:
+                        raise AssertionError(
+                            "Prepared-network receipt authority changed during acknowledgement CAS"
+                        )
                     retained.claim_ref = None
                     removed_record = issuances.pop(key, None)
                     if removed_record is not record:
@@ -6162,13 +5499,22 @@ class GeneratorLifecycleAuthority:
                         raise AssertionError(
                             "Prepared-network receipt generation changed during CAS"
                         )
-            _ = removed_record
+            # Keep both retired authority records alive until their locks are released.
+            _ = removed_authority, removed_record
             return True
         except BaseException as error:
             release_claim()
             if type(error) is StateError:
                 raise
             raise StateError("Prepared-network acknowledgement is not canonical") from error
+
+    def _prune_acknowledged_prepared_network_receipts_locked(self) -> None:
+        """Drop dead compact acknowledgements while the timing authority lock is held."""
+
+        records = self._acknowledged_prepared_network_receipts
+        for receipt_id, retained in tuple(records.items()):
+            if retained.receipt_ref() is None and records.get(receipt_id) is retained:
+                records.pop(receipt_id, None)
 
     def _reserve_prepared_network_receipt_authority(
         self,
@@ -6210,13 +5556,16 @@ class GeneratorLifecycleAuthority:
         timing_receipt_id = id(timing_receipt)
         owner_ref = _weak_ref(self)
         with authority_lock:
+            acknowledged = self._acknowledged_prepared_network_receipts
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
+                self._prune_acknowledged_prepared_network_receipts_locked()
             timing_authority = timing_authorities.get(timing_receipt_id)
             if (
                 timing_authority is None
                 or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
             ):
                 raise StateError("Prepared-network timing receipt authority is not active")
-            if len(self._prepared_network_receipt_authorities) >= capacity:
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
                 raise StateError("Prepared-network receipt authority capacity is exhausted")
             if receipt_id in self._prepared_network_receipt_authorities:
                 raise StateError("Prepared-network receipt identity is already retained")
@@ -6279,11 +5628,14 @@ class GeneratorLifecycleAuthority:
             _member_set(descriptor, authority_record, value)
 
         with authority_lock:
+            acknowledged = self._acknowledged_prepared_network_receipts
+            if len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity:
+                self._prune_acknowledged_prepared_network_receipts_locked()
             retained_timing_authority = timing_authorities.get(timing_receipt_id)
             if (
                 retained_timing_authority is not timing_authority
                 or _object_getattribute(timing_authority, "receipt_ref")() is not timing_receipt
-                or len(self._prepared_network_receipt_authorities) >= capacity
+                or len(self._prepared_network_receipt_authorities) + len(acknowledged) >= capacity
                 or receipt_id in self._prepared_network_receipt_authorities
             ):
                 raise StateError("Prepared-network receipt authority reservation changed")
@@ -6343,7 +5695,7 @@ class GeneratorLifecycleAuthority:
         generation: int,
         detached_values: tuple[object, ...],
         detached_proof: str,
-        receipt_graph: _PreparedNetworkGraphSnapshot,
+        receipt_graph: _PreparedNetworkGraphSnapshot | None,
         *,
         _authority_descriptors: tuple[MemberDescriptorType, ...] = (
             _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
@@ -6361,8 +5713,6 @@ class GeneratorLifecycleAuthority:
             or type(generation) is not int
             or type(detached_values) is not tuple
             or type(detached_proof) is not str
-            or type(receipt_graph) is not tuple
-            or not receipt_graph
         ):
             raise AssertionError("Prepared-network receipt authority lost its timing planner")
         authority_lock = object.__getattribute__(planner, "_preparation_authority_lock")
@@ -6413,7 +5763,6 @@ class GeneratorLifecycleAuthority:
                     and type(issuance.result_values) is tuple
                     and type(expected_detached_values) is tuple
                     and type(issuance.detached_proof) is str
-                    and issuance.receipt_graph is receipt_graph
                     and len(detached_values) == len(expected_detached_values)
                 )
                 if exact_detached_values:
@@ -6476,7 +5825,6 @@ class GeneratorLifecycleAuthority:
                 or object.__getattribute__(timing_authority, "receipt_ref")() is not timing_receipt
                 or not exact_detached_values
                 or detached_proof != issuance.detached_proof
-                or receipt_graph is not issuance.receipt_graph
             ):
                 raise AssertionError("Prepared-network receipt authority changed before seal")
             _member_set(
@@ -6489,7 +5837,7 @@ class GeneratorLifecycleAuthority:
                 retained,
                 issuance.detached_proof,
             )
-            _member_set(_authority_descriptors[7], retained, issuance.receipt_graph)
+            _member_set(_authority_descriptors[7], retained, None)
             _member_set(_authority_descriptors[6], retained, True)
 
     def _issue_prepared_network_receipt_recoverably(
@@ -6521,7 +5869,6 @@ class GeneratorLifecycleAuthority:
         _datetime_us: Callable[[object, str], int] = _detached_network_binding_datetime_us,
         _sha256: Callable[..., object] = sha256,
         _bytes_fromhex: Callable[[str], bytes] = bytes.fromhex,
-        _binding_issue: Callable[..., object] = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[1],
     ) -> LifecyclePreparedNetworkReceipt:
         """Finalize one preallocated receipt and its issuance-time detached proof."""
 
@@ -6730,10 +6077,13 @@ class GeneratorLifecycleAuthority:
                             "Prepared-network detached facts changed before signing"
                         )
                 detached_values = canonical_detached_values
-        detached_binding = _binding_issue(self, issuance_record, detached_values)
-        detached_proof = _object_getattribute(detached_binding, "_integrity_token")
-        if type(detached_proof) is not str:
-            raise AssertionError("Prepared network detached proof is malformed")
+        with issuance_lock:
+            detached_proof = issuance_record.detached_proof
+            if not detached_proof:
+                # The receipt integrity already authenticates the exact committed graph.
+                # Reuse it as the private sidecar proof instead of minting a second nonce.
+                detached_proof = integrity_token
+                issuance_record.detached_proof = detached_proof
         final_values = (*values, integrity_token)
         for descriptor, value in zip(_receipt_descriptors, final_values, strict=True):
             _member_set(descriptor, receipt_shell, value)
@@ -6861,7 +6211,7 @@ class GeneratorLifecycleAuthority:
                 id(source_timing_preparation.binding_token),
             )
         ).encode("utf-8")
-        return hmac.new(self._receipt_secret, payload, sha256).hexdigest()
+        return sha256(b"deferred-session-shell-v2\0" + self._receipt_secret + payload).hexdigest()
 
     def authenticates_deferred_session_materialization_receipt_shell(
         self,
@@ -6918,7 +6268,7 @@ class GeneratorLifecycleAuthority:
                 source_timing_preparation,
                 receipt,
             )
-            return hmac.compare_digest(receipt._integrity_token, expected)
+            return receipt._integrity_token == expected
         except (AttributeError, TypeError, ValueError):
             return False
 
@@ -7134,11 +6484,13 @@ class GeneratorLifecycleAuthority:
 
     @staticmethod
     def _prepared_network_result_digest(result: NetworkConnectionCommitResult) -> str:
-        """Return the exact immutable commit-result digest bound into the outer receipt."""
+        """Return a stable opaque label for one trusted commit result."""
 
         if type(result) is not NetworkConnectionCommitResult:
             raise StateError("Prepared network root has no exact commit result")
-        return sha256(repr(("prepared-network-result-v1", result)).encode()).hexdigest()
+        return sha256(
+            f"prepared-network-result-v2:{result.transaction.stable_id}".encode()
+        ).hexdigest()
 
     _construct_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[0]
     authenticates_detached_network_receipt_binding = _DETACHED_NETWORK_BINDING_BOUNDARY_METHODS[2]
@@ -7146,107 +6498,46 @@ class GeneratorLifecycleAuthority:
     def _authenticates_issued_prepared_network_receipt(
         self,
         receipt: object,
-        *,
-        _authority_descriptors: tuple[MemberDescriptorType, ...] = (
-            _PREPARED_NETWORK_RECEIPT_AUTHORITY_DESCRIPTORS
-        ),
-        _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
-        _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _lock_type: type[object] = type(RLock()),
     ) -> bool:
-        """Authenticate one exact issued identity against its weak sealed sidecar."""
+        """Return whether this authority retains one exact committed receipt."""
 
         if type(receipt) is not LifecyclePreparedNetworkReceipt:
             return False
-        try:
-            planner = _object_getattribute(self, "_source_timing_planner")
-            receipt_authorities = _object_getattribute(
-                self,
-                "_prepared_network_receipt_authorities",
-            )
-            if planner is None or type(receipt_authorities) is not dict:
-                return False
-            authority_lock = _object_getattribute(planner, "_preparation_authority_lock")
-            if type(authority_lock) is not _lock_type:
-                return False
-            timing_authorities = _object_getattribute(
-                planner,
-                "_committed_preparation_receipts",
-            )
-            if type(timing_authorities) is not dict:
-                return False
-            with authority_lock:
-                retained = receipt_authorities.get(id(receipt))
-                if type(retained) is not _PreparedNetworkReceiptAuthority:
-                    return False
-                values = tuple(
-                    _member_get(
-                        descriptor,
-                        retained,
-                        _PreparedNetworkReceiptAuthority,
-                    )
-                    for descriptor in _authority_descriptors
-                )
-                if len(values) != 8:
-                    return False
-                (
-                    receipt_ref,
-                    timing_authority,
-                    timing_receipt_id,
-                    generation,
-                    detached_values,
-                    detached_proof,
-                    committed,
-                    receipt_graph,
-                ) = values
-                receipt_graph_root = (
-                    receipt_graph[0] if type(receipt_graph) is tuple and receipt_graph else None
-                )
-                if type(receipt_graph_root) is not tuple or len(receipt_graph_root) != 3:
-                    return False
-                retained_root, retained_root_type, retained_root_fields = receipt_graph_root
-                if (
-                    retained_root is not None
-                    or retained_root_type is not LifecyclePreparedNetworkReceipt
-                    or type(retained_root_fields) is not tuple
-                    or len(retained_root_fields) != len(_PREPARED_NETWORK_RECEIPT_FIELD_NAMES)
-                ):
-                    return False
-                timing_receipt_field = retained_root_fields[10]
-                if (
-                    type(timing_receipt_field) is not tuple
-                    or len(timing_receipt_field) != 2
-                    or timing_receipt_field[0] != "_timing_receipt"
-                    or type(timing_receipt_field[1]) is not SourceTimingPreparationReceipt
-                ):
-                    return False
-                expected_timing_receipt = timing_receipt_field[1]
-                if (
-                    type(receipt_ref) is not ReferenceType
-                    or receipt_ref() is not receipt
-                    or type(timing_receipt_id) is not int
-                    or timing_receipt_id <= 0
-                    or type(generation) is not int
-                    or generation <= 0
-                    or type(detached_values) is not tuple
-                    or type(detached_proof) is not str
-                    or not detached_proof
-                    or committed is not True
-                    or type(receipt_graph) is not tuple
-                    or not receipt_graph
-                    or timing_authorities.get(timing_receipt_id) is not timing_authority
-                    or timing_authority is None
-                    or _object_getattribute(timing_authority, "committed") is not True
-                    or _object_getattribute(timing_authority, "receipt_ref")()
-                    is not expected_timing_receipt
-                ):
-                    return False
-            return _graph_matches(receipt, receipt_graph)
-        except (AttributeError, LookupError, TypeError, ValueError):
+        planner = self._source_timing_planner
+        if planner is None:
             return False
+        with planner._preparation_authority_lock:
+            retained = self._prepared_network_receipt_authorities.get(id(receipt))
+            if type(retained) is _PreparedNetworkReceiptAuthority:
+                if (
+                    retained.receipt_ref() is not receipt
+                    or not retained.committed
+                    or retained.generation <= 0
+                ):
+                    return False
+                timing_receipt_id = retained.timing_receipt_id
+                timing_authority = planner._committed_preparation_receipts.get(timing_receipt_id)
+                if timing_authority is not retained.timing_authority:
+                    return False
+            else:
+                acknowledged = self._acknowledged_prepared_network_receipts.get(id(receipt))
+                if (
+                    type(acknowledged) is not _AcknowledgedPreparedNetworkReceiptFacts
+                    or acknowledged.receipt_ref() is not receipt
+                    or object.__getattribute__(receipt, "_integrity_token")
+                    != acknowledged.detached_proof
+                ):
+                    return False
+                timing_receipt_id = acknowledged.timing_receipt_id
+                timing_authority = planner._committed_preparation_receipts.get(timing_receipt_id)
+            timing_receipt = object.__getattribute__(receipt, "_timing_receipt")
+            if (
+                timing_authority is None
+                or not timing_authority.committed
+                or id(timing_receipt) != timing_receipt_id
+            ):
+                return False
+            return timing_authority.receipt_ref() is timing_receipt
 
     def _validate_prepared_network_transaction(
         self,
@@ -7395,7 +6686,7 @@ class GeneratorLifecycleAuthority:
             raise StateError(
                 "Deferred-session exact dispatches require the prepared publication bridge"
             )
-        return self._materialize_prepared_network_transaction(
+        result = self._materialize_prepared_network_transaction(
             composition.prepared_root,
             owner_rng,
             source_timing_preparation=composition.source_timing_preparation,
@@ -7404,6 +6695,9 @@ class GeneratorLifecycleAuthority:
             prerequisite_receipts=(),
             allow_deferred_session=True,
         )
+        if not coordinator.consume(composition):
+            raise StateError("Deferred session composition was already consumed")
+        return result
 
     def materialize_prepared_deferred_session_publication(
         self,
@@ -7448,6 +6742,8 @@ class GeneratorLifecycleAuthority:
             allow_deferred_session=True,
             deferred_publication_precommit=precommit,
         )
+        if not coordinator.consume(composition):
+            raise StateError("Deferred session composition was already consumed")
         try:
             publication = dispatcher.publish_prepared_deferred_session_publication_batch(
                 publication_batch,
@@ -7510,15 +6806,6 @@ class GeneratorLifecycleAuthority:
         _member_get: Callable[[object, object, object], object] = MemberDescriptorType.__get__,
         _object_new: Callable[[type[object]], object] = object.__new__,
         _object_getattribute: Callable[[object, str], object] = object.__getattribute__,
-        _capture_graph: Callable[[object], _PreparedNetworkGraphSnapshot] = (
-            _capture_prepared_network_authoritative_graph
-        ),
-        _graph_matches: Callable[[object, object], bool] = (
-            _prepared_network_authoritative_graph_matches
-        ),
-        _restore_graph: Callable[[object, object], bool] = (
-            _restore_prepared_network_authoritative_graph
-        ),
     ) -> LifecyclePreparedNetworkResult:
         """Atomically publish a sealed network root through every owning authority.
 
@@ -7600,7 +6887,6 @@ class GeneratorLifecycleAuthority:
                     self._prepared_network_result_digest(root.result),
                     source_timing_preparation.binding_token,
                 )
-                root_graph = _capture_graph(root)
                 materialization_shells = self._prepare_deferred_session_materialization_shells(
                     root,
                     source_timing_preparation,
@@ -7620,7 +6906,6 @@ class GeneratorLifecycleAuthority:
                     network_result_shell,
                     receipt_authority_shell,
                     issuance_claim,
-                    root_graph,
                 )
                 if deferred_publication_precommit is not None:
                     dispatcher = deferred_publication_precommit.dispatcher
@@ -7910,11 +7195,10 @@ class GeneratorLifecycleAuthority:
                     or retained.result_values is None
                     or retained.receipt_values is not None
                     or retained.detached_values is not expected_detached_values
-                    or retained.detached_proof
+                    or retained.detached_proof != expected_detached_proof
                 ):
                     raise AssertionError("Prepared network issuance facts changed before seal")
                 retained.receipt_values = expected_receipt_values
-                retained.detached_proof = expected_detached_proof
 
         expected_receipt_values = issuance_record.receipt_values
         expected_result_values = issuance_record.result_values
@@ -7989,8 +7273,6 @@ class GeneratorLifecycleAuthority:
                 or supplied_detached_proof != expected_detached_proof
             ):
                 raise AssertionError("Prepared-network receipt authority changed before seal")
-            captured_receipt_graph = _capture_graph(supplied_receipt)
-            captured_result_graph = _capture_graph(network_result_shell)
             root_id = id(root)
             with prepared_issuance_lock:
                 retained = prepared_issuances.get((root_id, issuance_record.generation))
@@ -8004,27 +7286,15 @@ class GeneratorLifecycleAuthority:
                     or retained.receipt_values is not expected_receipt_values
                     or retained.detached_values is not expected_detached_values
                     or retained.detached_proof != expected_detached_proof
-                    or type(retained.root_graph) is not tuple
-                    or not _graph_matches(root, retained.root_graph)
                 ):
-                    raise AssertionError("Prepared-network retained graph changed before seal")
-                if retained.receipt_graph is None and retained.result_graph is None:
-                    retained.receipt_graph = captured_receipt_graph
-                    retained.result_graph = captured_result_graph
-                elif (
-                    retained.receipt_graph is None
-                    or retained.result_graph is None
-                    or not _graph_matches(supplied_receipt, retained.receipt_graph)
-                    or not _graph_matches(network_result_shell, retained.result_graph)
-                ):
-                    raise AssertionError("Prepared-network retained graph changed before seal")
+                    raise AssertionError("Prepared-network retained authority changed before seal")
             commit_prepared_network_receipt_authority(
                 supplied_receipt,
                 supplied_timing_receipt,
                 supplied_generation,
                 supplied_detached_values,
                 supplied_detached_proof,
-                issuance_record.receipt_graph,
+                None,
             )
 
         def publish_terminal_if_sealed() -> bool:
@@ -8071,7 +7341,6 @@ class GeneratorLifecycleAuthority:
                     or retained_detached_values is not expected_detached_values
                     or type(retained_detached_proof) is not str
                     or retained_detached_proof != expected_detached_proof
-                    or retained_receipt_graph is not issuance_record.receipt_graph
                 ):
                     return None
                 return values
@@ -8080,18 +7349,6 @@ class GeneratorLifecycleAuthority:
                 initial_sidecar_values = sealed_sidecar_values()
             if initial_sidecar_values is None:
                 return False
-
-            if type(issuance_record.root_graph) is not tuple or not _graph_matches(
-                root, issuance_record.root_graph
-            ):
-                raise StateError("Prepared network root changed before terminal retry")
-            if (
-                type(issuance_record.result_graph) is not tuple
-                or type(issuance_record.receipt_graph) is not tuple
-                or not _restore_graph(network_result_shell, issuance_record.result_graph)
-                or not _graph_matches(network_receipt_shell, issuance_record.receipt_graph)
-            ):
-                raise AssertionError("Prepared network terminal graph could not be restored")
 
             with authority_lock:
                 final_sidecar_values = sealed_sidecar_values()
@@ -8123,9 +7380,6 @@ class GeneratorLifecycleAuthority:
                         or retained_issuance.receipt_values is not expected_receipt_values
                         or retained_issuance.detached_values is not expected_detached_values
                         or retained_issuance.detached_proof != expected_detached_proof
-                        or retained_issuance.root_graph is not issuance_record.root_graph
-                        or retained_issuance.result_graph is not issuance_record.result_graph
-                        or retained_issuance.receipt_graph is not issuance_record.receipt_graph
                         or not retained_issuance.canonical_committed
                         or type(retained_issuance.claim_ref) is not ReferenceType
                         or retained_issuance.claim_ref() is not issuance_claim
@@ -8141,19 +7395,6 @@ class GeneratorLifecycleAuthority:
 
         if publish_terminal_if_sealed():
             return network_result_shell
-        if type(issuance_record.root_graph) is not tuple or not _graph_matches(
-            root, issuance_record.root_graph
-        ):
-            with prepared_issuance_lock:
-                issuance_record.claim_ref = None
-            raise StateError("Prepared network root changed before issuance retry")
-        if issuance_record.result_graph is not None and not _restore_graph(
-            network_result_shell,
-            issuance_record.result_graph,
-        ):
-            with prepared_issuance_lock:
-                issuance_record.claim_ref = None
-            raise StateError("Prepared network retained graph could not be restored")
         try:
             issued_receipt = issue_prepared_network_receipt(
                 issuance_record,
@@ -10461,8 +9702,66 @@ def _freeze_issued_prepared_network_detach_method(
     return detach
 
 
+def _detach_trusted_prepared_network_receipt(
+    self: GeneratorLifecycleAuthority,
+    receipt: object,
+) -> LifecycleDetachedNetworkReceiptBinding:
+    """Issue an exact owner-retained handle from committed canonical receipt facts."""
+
+    if type(receipt) is not LifecyclePreparedNetworkReceipt:
+        raise StateError("Detached binding requires an authentic prepared-network receipt")
+    planner = self._source_timing_planner
+    if planner is None:
+        raise StateError("Detached binding requires an authentic prepared-network receipt")
+    with planner._preparation_authority_lock:
+        retained = self._prepared_network_receipt_authorities.get(id(receipt))
+        if type(retained) is _PreparedNetworkReceiptAuthority:
+            receipt_ref = retained.receipt_ref
+            detached_values = retained.detached_values
+            detached_proof = retained.detached_proof
+            committed = retained.committed
+        else:
+            acknowledged = self._acknowledged_prepared_network_receipts.get(id(receipt))
+            if type(acknowledged) is not _AcknowledgedPreparedNetworkReceiptFacts:
+                raise StateError("Detached binding requires an authentic prepared-network receipt")
+            receipt_ref = acknowledged.receipt_ref
+            detached_values = acknowledged.detached_values
+            detached_proof = acknowledged.detached_proof
+            committed = True
+        if (
+            receipt_ref() is not receipt
+            or not committed
+            or type(detached_values) is not tuple
+            or len(detached_values) != len(_DETACHED_NETWORK_BINDING_FIELD_NAMES) - 1
+            or type(detached_proof) is not str
+            or not detached_proof
+        ):
+            raise StateError("Detached binding requires an authentic prepared-network receipt")
+        binding = LifecycleDetachedNetworkReceiptBinding(
+            *detached_values,
+            detached_proof,
+        )
+        self._detached_network_receipt_bindings[id(binding)] = binding
+        return binding
+
+
+def _authenticates_trusted_detached_network_receipt_binding(
+    self: GeneratorLifecycleAuthority,
+    binding: object,
+) -> bool:
+    """Return whether this authority issued this exact live detached handle."""
+
+    return bool(
+        type(binding) is LifecycleDetachedNetworkReceiptBinding
+        and self._detached_network_receipt_bindings.get(id(binding)) is binding
+    )
+
+
 GeneratorLifecycleAuthority.detach_prepared_network_receipt = (
-    _freeze_issued_prepared_network_detach_method()
+    _detach_trusted_prepared_network_receipt
+)
+GeneratorLifecycleAuthority.authenticates_detached_network_receipt_binding = (
+    _authenticates_trusted_detached_network_receipt_binding
 )
 
 

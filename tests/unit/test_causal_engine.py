@@ -280,6 +280,8 @@ class TestDnsBeforeConnection:
         assert ev.kwargs["src_ip"] == "10.10.10.5"
         assert ev.kwargs["dst_ip"] == "203.0.113.50"
         assert ev.timing.position == "before"
+        assert ev.occurrence_time_kwarg == "planned_query_time"
+        assert ev.trigger_time_kwarg == "time"
 
 
 # --- ExpansionContext ---
