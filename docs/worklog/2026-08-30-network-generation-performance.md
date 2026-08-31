@@ -100,6 +100,13 @@ fences, and added trusted reuse of Pydantic identity subgraph digests. Public re
 performs fresh boundary validation and retains seed-scoped behavior. This follow-up is intentionally
 the pause point; another matched profile and scenario benchmark remain future work.
 
+The shortened workload is now tracked as the anonymized performance fixture
+`tests/fixtures/performance/network_warmup_profile.yaml`. It preserves the 78-system, 63-user,
+four-segment, three-sensor topology and Zeek workload shape while replacing exercise,
+organization, network-identity, host, and user names. Future baseline/current comparisons must run
+the same tracked fixture on both revisions; its renamed stable-seed scopes mean its output is not
+byte-comparable to the earlier non-anonymized shortened run.
+
 The final slow gate passed 1,760 tests and had one environment-only failure because the referenced
 `meridian-healthcare-solutions` pack was absent from both the worktree and main checkout. No soak
 tests were run.
