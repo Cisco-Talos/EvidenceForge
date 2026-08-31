@@ -1338,38 +1338,6 @@ class _PersistentSmbGroupTopologySnapshot:
     semantic_bytes: int
 
 
-@dataclass(frozen=True, slots=True)
-class _PersistentSmbStateCloseProofAuthenticator:
-    """Dispatcher-private authenticator for one exact State-owned SMB close."""
-
-    state_manager: object
-    state_result: object
-    binding_id: str
-    close_facts_digest: str
-
-    def authenticates_persistent_smb_close_proof(
-        self,
-        proof: object,
-        binding_id: str,
-        close_facts_digest: str,
-    ) -> bool:
-        """Authenticate the retained State result and exact final traffic digest."""
-
-        if proof is not self.state_result:
-            return False
-        authenticates = getattr(
-            self.state_manager,
-            "authenticates_smb_connection_finalization_result",
-            None,
-        )
-        return (
-            callable(authenticates)
-            and authenticates(self.state_result) is True
-            and hmac.compare_digest(binding_id, self.binding_id)
-            and hmac.compare_digest(close_facts_digest, self.close_facts_digest)
-        )
-
-
 class EventDispatcher:
     """Routes sealed canonical occurrences to state and matching emitters."""
 
@@ -5951,25 +5919,12 @@ class EventDispatcher:
             )
         ):
             raise EventContractError("Persistent SMB close lacks an exact State terminal proof")
-        close_facts_digest = traffic_authority._prepare_close_proof_digest(
-            binding,
-            final_traffic,
-            final_observation_traffic,
-        )
-        proof_authenticator = _PersistentSmbStateCloseProofAuthenticator(
-            state_manager=self.state_manager,
-            state_result=state_result,
-            binding_id=binding.binding_id,
-            close_facts_digest=close_facts_digest,
-        )
-        return traffic_authority._rebind_authenticated_close(
+        return traffic_authority._rebind_committed_close(
             binding,
             opening_transport,
             final_traffic,
             opening_observations,
             final_observation_traffic,
-            state_result,
-            proof_authenticator,
         )
 
     @staticmethod

@@ -13,17 +13,16 @@ records, payload bytes, or duration-wide transaction history are retained.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import struct
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, RLock
 from typing import Literal
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -264,25 +263,12 @@ def _http_admission_integrity_token(
     authority_secret: bytes,
     token: HttpChannelAdmissionToken,
 ) -> str:
-    """Authenticate the common capability and every HTTP sidecar/result field."""
+    """Return a compact owner-issued HTTP capability label."""
 
-    canonical = repr(
-        (
-            "http-channel-admission-v1",
-            token.kind,
-            token.application_token.publication_token,
-            token.result,
-            token.expected_transport,
-            token.prepared_transport,
-            token._manager_token,
-            token._reservation_id,
-            token._owner_id,
-            token._owner_shard_id,
-            token._reserved_channel_ids,
-            token._reserved_affinity_digests,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"http-admission:{token._manager_token}:{token._reservation_id}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,7 +287,7 @@ class _HttpAdmissionCapability:
     linearization_time: datetime
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class HttpChannelAdmissionReceipt:
     """Authenticated proof of one committed HTTP/common-channel admission."""
 
@@ -366,24 +352,10 @@ def _http_admission_receipt_integrity_token(
 ) -> str:
     """Authenticate exact manager, common receipt, and HTTP result membership."""
 
-    canonical = repr(
-        (
-            "http-channel-admission-receipt-v1",
-            receipt.manager_kind,
-            receipt.manager_id,
-            receipt.kind,
-            receipt.publication_token,
-            receipt.application_receipt,
-            receipt.application_receipt_token,
-            receipt.channel_id,
-            receipt.operation_id,
-            receipt.transport_id,
-            receipt.sidecar_result,
-            receipt.sidecar_result_digest,
-            receipt._manager_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    del authority_secret
+    return hashlib.sha256(
+        f"http-receipt:{receipt._manager_token}:{receipt.publication_token}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -842,6 +814,9 @@ class HttpApplicationChannelManager:
         self._next_prepared_reservation_id = 1
         self._prepared_admissions: dict[int, HttpChannelAdmissionToken] = {}
         self._prepared_capabilities: dict[int, _HttpAdmissionCapability] = {}
+        self._admission_receipts: WeakValueDictionary[int, HttpChannelAdmissionReceipt] = (
+            WeakValueDictionary()
+        )
         self._claimed_admissions: set[int] = set()
         self._prepared_channel_ids: dict[str, int] = {}
         self._prepared_affinity_digests: dict[tuple[str, str], int] = {}
@@ -875,35 +850,11 @@ class HttpApplicationChannelManager:
 
         if not isinstance(receipt, HttpChannelAdmissionReceipt):
             return False
-        if (
-            receipt.manager_kind != "http"
-            or receipt.manager_id != self._manager_id
-            or receipt._manager_token != id(self)
-            or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt)
-            or not isinstance(
-                receipt.sidecar_result,
-                (HttpChannelTransport, HttpChannelReuse),
-            )
-        ):
+        if self._admission_receipts.get(id(receipt)) is not receipt:
             return False
         if not self._registry.authenticates_admission_receipt(receipt.application_receipt):
             return False
-        expected = _http_admission_receipt_integrity_token(
-            self._admission_secret,
-            receipt,
-        )
-        if not hmac.compare_digest(receipt._integrity_token, expected):
-            return False
-        return (
-            receipt.application_receipt_token == receipt.application_receipt.receipt_token
-            and receipt.channel_id == receipt.application_receipt.channel_id
-            and receipt.operation_id == receipt.application_receipt.operation_id
-            and receipt.transport_id
-            == receipt.application_receipt.snapshot.identity.binding.transport_id
-            and receipt.channel_id == receipt.sidecar_result.channel_id
-            and receipt.sidecar_result_digest
-            == http_channel_sidecar_result_digest(receipt.sidecar_result)
-        )
+        return True
 
     def _shard(
         self,
@@ -959,11 +910,6 @@ class HttpApplicationChannelManager:
             raise StateError(
                 "HTTP channel admission token no longer binds its exact common capability"
             )
-        expected = _http_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, capability.integrity_token) or not (
-            hmac.compare_digest(expected, capability.integrity_token)
-        ):
-            raise StateError("HTTP channel admission token integrity validation failed")
         return capability
 
     def _reject_prepared_conflict_locked(
@@ -988,9 +934,7 @@ class HttpApplicationChannelManager:
     ) -> None:
         """Retain only reservation metadata and one trusted immutable preimage."""
 
-        expected = _http_admission_integrity_token(self._admission_secret, token)
-        if not hmac.compare_digest(token._integrity_token, expected):
-            raise StateError("HTTP channel admission token integrity validation failed")
+        expected = token._integrity_token
         self._reject_prepared_conflict_locked(
             owner_id=token._owner_id,
             channel_ids=token._reserved_channel_ids,
@@ -1001,7 +945,7 @@ class HttpApplicationChannelManager:
             reservation_id=token._reservation_id,
             integrity_token=expected,
             application_token=token.application_token,
-            trusted_token=deepcopy(token),
+            trusted_token=token,
             owner_id=token._owner_id,
             owner_shard_id=token._owner_shard_id,
             reserved_channel_ids=token._reserved_channel_ids,
@@ -1665,6 +1609,7 @@ class HttpApplicationChannelManager:
                     receipt,
                 ),
             )
+            self._admission_receipts[id(receipt)] = receipt
             result = HttpChannelAdmissionResult(
                 result=trusted_token.result,
                 application=application_result,

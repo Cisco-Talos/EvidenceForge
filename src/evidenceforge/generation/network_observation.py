@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import math
 import random
 import secrets
@@ -15,6 +14,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
+from weakref import ReferenceType, ref
 
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -883,7 +883,7 @@ class _PersistentSmbObservationFacts:
     source_durations: tuple[tuple[str, float], ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class PersistentSmbTrafficRebindBinding:
     """Signed scalar binding for one SMB transport and ordered sensor cohort."""
 
@@ -905,21 +905,14 @@ class _PersistentSmbBindingFacts:
     integrity: str
 
 
-class _PersistentSmbTrafficCloseProofAuthenticator(Protocol):
-    """Trusted future dispatcher interface for its exact frozen opaque proof.
+@dataclass(slots=True)
+class _PersistentSmbTrafficAuthorityRecord:
+    """Authority-owned canonical opening state for one live binding handle."""
 
-    Implementations authenticate the retained State terminal result/receipt and
-    the dispatcher-owned ordered sensor projection. This module never issues
-    that proof and invokes the trusted callback only after bounded snapshots are
-    complete, outside every lock.
-    """
-
-    def authenticates_persistent_smb_close_proof(
-        self,
-        proof: object,
-        binding_id: str,
-        close_facts_digest: str,
-    ) -> bool: ...
+    binding_ref: ReferenceType[PersistentSmbTrafficRebindBinding]
+    transport: NetworkTransactionPlan
+    observations: tuple[NetworkSensorObservation, ...]
+    lossless_ordinals: tuple[int, ...]
 
 
 def _snapshot_persistent_smb_traffic(
@@ -1974,20 +1967,13 @@ def _materialize_persistent_smb_observation(
 
 
 class PersistentSmbTrafficRebindAuthority:
-    """Issue and authenticate stateless bounded SMB opening bindings.
+    """Issue exact owner-retained SMB opening bindings."""
 
-    The authority retains only its private signing key and identifier. Bindings
-    carry ordered scalar digests, never transport, observation, emitter, timing,
-    or callback references. Byte-identical binding copies are harmless. Final
-    reconstruction is deliberately private and unavailable without a future
-    dispatcher-owned close-proof authenticator.
-    """
-
-    __slots__ = ("_authority_id", "_secret")
+    __slots__ = ("_authority_id", "_records")
 
     def __init__(self) -> None:
         self._authority_id = secrets.token_hex(16)
-        self._secret = secrets.token_bytes(32)
+        self._records: dict[int, _PersistentSmbTrafficAuthorityRecord] = {}
 
     def _integrity(
         self,
@@ -1996,18 +1982,21 @@ class PersistentSmbTrafficRebindAuthority:
         observation_digests: tuple[str, ...],
         lossless_ordinals: tuple[int, ...],
     ) -> str:
-        digest = hmac.new(self._secret, digestmod=hashlib.sha256)
-        _persistent_smb_stream_field(digest, b"persistent-smb-traffic-rebind-binding-v2")
-        _persistent_smb_stream_text(digest, self._authority_id)
-        _persistent_smb_stream_text(digest, binding_id)
-        _persistent_smb_stream_field(digest, transport_digest.encode("ascii"))
-        _persistent_smb_stream_int(digest, len(observation_digests))
-        for observation_digest in observation_digests:
-            _persistent_smb_stream_field(digest, observation_digest.encode("ascii"))
-        _persistent_smb_stream_int(digest, len(lossless_ordinals))
-        for ordinal in lossless_ordinals:
-            _persistent_smb_stream_int(digest, ordinal)
-        return digest.hexdigest()
+        del transport_digest, observation_digests, lossless_ordinals
+        return hashlib.sha256(
+            f"persistent-smb-binding-v3:{self._authority_id}:{binding_id}".encode()
+        ).hexdigest()
+
+    def _record_for_binding(
+        self,
+        binding: PersistentSmbTrafficRebindBinding,
+    ) -> _PersistentSmbTrafficAuthorityRecord:
+        """Return retained canonical state for one exact live binding handle."""
+
+        record = self._records.get(id(binding))
+        if record is None or record.binding_ref() is not binding:
+            raise ValueError("Persistent SMB traffic binding is foreign or stale")
+        return record
 
     @staticmethod
     def _snapshot_observation_cohort(
@@ -2085,30 +2074,81 @@ class PersistentSmbTrafficRebindAuthority:
         transport: NetworkTransactionPlan,
         observations: tuple[NetworkSensorObservation, ...],
     ) -> PersistentSmbTrafficRebindBinding:
-        """Sign one exact SMB transport and its ordered, already-decided sensors."""
+        """Retain one exact SMB transport and its ordered, already-decided sensors."""
 
         _persistent_smb_schema_preflight()
-        _preflight_persistent_smb_opening(transport, observations)
-        snapshot_budget = _PersistentSmbAggregateBudget()
-        transport_snapshot, transport_traffic_object = _snapshot_persistent_smb_transport(
-            transport,
-            snapshot_budget,
+        if (
+            type(transport) is not NetworkTransactionPlan
+            or transport.outcome != "success"
+            or transport.protocol != "tcp"
+            or transport.ip_proto != 6
+            or transport.dst_port != 445
+            or transport.service != "smb"
+        ):
+            raise ValueError("Persistent traffic rebinding requires successful SMB TCP/445")
+        if (
+            transport.application_layer_only
+            or transport.closed_at is None
+            or transport.duration is None
+            or not 0 < transport.src_port <= 65_535
+        ):
+            raise ValueError("Persistent SMB binding requires a final physical transport")
+        if any(timestamp > transport.closed_at for _phase, timestamp in transport.phase_times):
+            raise ValueError("Persistent SMB transport phase follows its declared close")
+        canonical_traffic = _snapshot_materialized_traffic(transport.traffic)
+        _persistent_smb_validate_final_tcp_history(
+            transport.history,
+            canonical_traffic,
+            "Persistent SMB transport",
         )
-        snapshots, lossless_ordinals = self._snapshot_observation_cohort(
-            observations,
-            transport_snapshot,
-            transport_traffic_object,
-            snapshot_budget,
-        )
-        transport_digest = _persistent_smb_transport_digest(transport_snapshot)
-        lossless_set = frozenset(lossless_ordinals)
-        observation_digests = tuple(
-            _persistent_smb_observation_digest(
-                snapshot,
-                ordinal,
-                lossless=ordinal in lossless_set,
+        if type(observations) is not tuple:
+            raise TypeError("Persistent SMB observations require an exact tuple")
+        if len(observations) > _PERSISTENT_SMB_MAX_OBSERVATIONS:
+            raise ValueError("Persistent SMB observations exceed their cohort bound")
+        sensor_identities: set[str] = set()
+        connection_uids: set[str] = set()
+        for ordinal, observation in enumerate(observations):
+            if type(observation) is not NetworkSensorObservation:
+                raise TypeError("Persistent SMB observations require exact observation values")
+            sensor = observation.sensor_identity.casefold()
+            if sensor in sensor_identities:
+                raise ValueError("Persistent SMB observations require a unique sensor identity")
+            if observation.connection_uid in connection_uids:
+                raise ValueError("Persistent SMB observations require a unique connection UID")
+            sensor_identities.add(sensor)
+            connection_uids.add(observation.connection_uid)
+            observed_traffic = _snapshot_materialized_traffic(observation.traffic)
+            _persistent_smb_validate_capture(
+                canonical_traffic,
+                observed_traffic,
+                f"observations[{ordinal}]",
             )
-            for ordinal, snapshot in enumerate(snapshots)
+            lossless = _persistent_smb_traffic_values_equal(
+                canonical_traffic,
+                observed_traffic,
+            )
+            if lossless != (observation.traffic is transport.traffic):
+                raise ValueError("Lossless observation must alias canonical traffic")
+        lossless_ordinals = tuple(
+            ordinal
+            for ordinal, observation in enumerate(observations)
+            if observation.traffic is transport.traffic
+        )
+        transport_digest = hashlib.sha256(
+            (
+                "persistent-smb-transport-v3:"
+                f"{transport.stable_id}:{transport.conn_id}:{transport.zeek_uid}:"
+                f"{transport.src_ip}:{transport.src_port}:{transport.dst_ip}:{transport.dst_port}"
+            ).encode()
+        ).hexdigest()
+        observation_digests = tuple(
+            hashlib.sha256(
+                (
+                    "persistent-smb-observation-v3:"
+                    f"{ordinal}:{observation.sensor_identity}:{observation.connection_uid}"
+                ).encode()
+            ).hexdigest()
+            for ordinal, observation in enumerate(observations)
         )
         binding_id = secrets.token_hex(16)
         integrity = self._integrity(
@@ -2117,7 +2157,7 @@ class PersistentSmbTrafficRebindAuthority:
             observation_digests,
             lossless_ordinals,
         )
-        return PersistentSmbTrafficRebindBinding(
+        binding = PersistentSmbTrafficRebindBinding(
             authority_id=self._authority_id,
             binding_id=binding_id,
             transport_digest=transport_digest,
@@ -2125,247 +2165,76 @@ class PersistentSmbTrafficRebindAuthority:
             lossless_ordinals=lossless_ordinals,
             _integrity=integrity,
         )
+        binding_id_value = id(binding)
 
-    def _prepare_close_proof_digest(
-        self,
-        binding: PersistentSmbTrafficRebindBinding,
-        final_traffic: NetworkTrafficLedger,
-        final_observation_traffic: tuple[NetworkTrafficLedger, ...],
-    ) -> str:
-        """Prepare the bounded final-facts digest an outer proof must authenticate.
+        def release(_binding_ref: object) -> None:
+            self._records.pop(binding_id_value, None)
 
-        This private helper does not issue or authenticate a close proof. The
-        future dispatcher owner calls it only after authenticating State's exact
-        terminal result and its own ordered sensor projection.
-        """
-
-        _persistent_smb_schema_preflight()
-        _preflight_persistent_smb_close_facts(
-            binding,
-            final_traffic,
-            final_observation_traffic,
+        self._records[binding_id_value] = _PersistentSmbTrafficAuthorityRecord(
+            binding_ref=ref(binding, release),
+            transport=transport,
+            observations=observations,
+            lossless_ordinals=lossless_ordinals,
         )
-        snapshot_budget = _PersistentSmbAggregateBudget()
-        binding_snapshot = _snapshot_persistent_smb_binding(binding, snapshot_budget)
-        expected_integrity = self._integrity(
-            binding_snapshot.binding_id,
-            binding_snapshot.transport_digest,
-            binding_snapshot.observation_digests,
-            binding_snapshot.lossless_ordinals,
-        )
-        if binding_snapshot.authority_id != self._authority_id or not hmac.compare_digest(
-            binding_snapshot.integrity,
-            expected_integrity,
-        ):
-            raise ValueError("Persistent SMB traffic binding is foreign or tampered")
-        if len(final_observation_traffic) != len(binding_snapshot.observation_digests):
-            raise ValueError(
-                "Every persistent network observation requires one final traffic ledger"
-            )
+        return binding
 
-        final_snapshot, _final_object = _snapshot_persistent_smb_traffic(
-            final_traffic,
-            "final_traffic",
-            snapshot_budget,
-        )
-        snapshot_budget.consume_work()
-        snapshot_budget.consume_items(len(final_observation_traffic))
-        lossless_set = frozenset(binding_snapshot.lossless_ordinals)
-        final_observation_snapshots: list[_PersistentSmbTrafficFacts] = []
-        for ordinal, candidate in enumerate(final_observation_traffic):
-            candidate_snapshot, candidate_object = _snapshot_persistent_smb_traffic(
-                candidate,
-                f"final_observation_traffic[{ordinal}]",
-                snapshot_budget,
-            )
-            _persistent_smb_validate_capture(
-                final_snapshot,
-                candidate_snapshot,
-                f"final_observation_traffic[{ordinal}]",
-            )
-            final_is_lossless = _persistent_smb_traffic_values_equal(
-                final_snapshot,
-                candidate_snapshot,
-            )
-            candidate_aliases = candidate_object is final_traffic
-            if ordinal in lossless_set:
-                if not final_is_lossless or not candidate_aliases:
-                    raise ValueError(
-                        f"Lossless observation {ordinal} must alias final canonical traffic"
-                    )
-            elif final_is_lossless or candidate_aliases:
-                raise ValueError(
-                    f"Lossy observation {ordinal} cannot change its signed alias topology"
-                )
-            final_observation_snapshots.append(candidate_snapshot)
-        return _persistent_smb_close_facts_digest(
-            binding_snapshot,
-            final_snapshot,
-            tuple(final_observation_snapshots),
-        )
-
-    def _rebind_authenticated_close(
+    def _rebind_committed_close(
         self,
         binding: PersistentSmbTrafficRebindBinding,
         transport: NetworkTransactionPlan,
         final_traffic: NetworkTrafficLedger,
         observations: tuple[NetworkSensorObservation, ...],
         final_observation_traffic: tuple[NetworkTrafficLedger, ...],
-        proof: object,
-        proof_authenticator: _PersistentSmbTrafficCloseProofAuthenticator,
     ) -> tuple[NetworkTransactionPlan, tuple[NetworkSensorObservation, ...]]:
-        """Privately reconstruct one externally authenticated final SMB cohort.
+        """Reconstruct final SMB traffic after the dispatcher commits State."""
 
-        The method performs no planning, RNG, visibility, timing, or state
-        mutation. The future dispatcher must supply an opaque close proof whose
-        trusted authenticator cross-binds State's terminal result and the ordered
-        sensor projection. No production caller exists in this slice.
-        """
-
-        _persistent_smb_schema_preflight()
-        _preflight_persistent_smb_close_inputs(
-            binding,
-            transport,
-            final_traffic,
-            observations,
-            final_observation_traffic,
-        )
-        snapshot_budget = _PersistentSmbAggregateBudget()
-        binding_snapshot = _snapshot_persistent_smb_binding(binding, snapshot_budget)
-        transport_snapshot, transport_traffic_object = _snapshot_persistent_smb_transport(
-            transport,
-            snapshot_budget,
-        )
-        observation_snapshots, lossless_ordinals = self._snapshot_observation_cohort(
-            observations,
-            transport_snapshot,
-            transport_traffic_object,
-            snapshot_budget,
-        )
-        final_snapshot, _final_object = _snapshot_persistent_smb_traffic(
-            final_traffic,
-            "final_traffic",
-            snapshot_budget,
-        )
-        if type(final_observation_traffic) is not tuple:
-            raise TypeError("Persistent final observation traffic requires an exact tuple")
-        if len(final_observation_traffic) != len(observation_snapshots):
+        record = self._record_for_binding(binding)
+        if record.transport is not transport or len(record.observations) != len(observations):
+            raise ValueError("Persistent SMB opening transport is foreign or stale")
+        if any(
+            retained is not supplied
+            for retained, supplied in zip(record.observations, observations, strict=True)
+        ):
+            raise ValueError("Persistent SMB opening observations are foreign or stale")
+        if len(final_observation_traffic) != len(observations):
             raise ValueError(
                 "Every persistent network observation requires one final traffic ledger"
             )
-        snapshot_budget.consume_work()
-        snapshot_budget.consume_items(len(final_observation_traffic))
-
-        final_candidates: list[tuple[_PersistentSmbTrafficFacts, bool]] = []
-        for ordinal, candidate in enumerate(final_observation_traffic):
-            candidate_snapshot, candidate_object = _snapshot_persistent_smb_traffic(
-                candidate,
-                f"final_observation_traffic[{ordinal}]",
-                snapshot_budget,
-            )
-            final_candidates.append((candidate_snapshot, candidate_object is final_traffic))
-
-        # No digest or trusted callback executes until the complete current graph
-        # has passed the second cumulative census used by these exact slot locals.
-        expected_integrity = self._integrity(
-            binding_snapshot.binding_id,
-            binding_snapshot.transport_digest,
-            binding_snapshot.observation_digests,
-            binding_snapshot.lossless_ordinals,
-        )
-        if binding_snapshot.authority_id != self._authority_id or not hmac.compare_digest(
-            binding_snapshot.integrity,
-            expected_integrity,
-        ):
-            raise ValueError("Persistent SMB traffic binding is foreign or tampered")
-
-        transport_digest = _persistent_smb_transport_digest(transport_snapshot)
-        if not hmac.compare_digest(transport_digest, binding_snapshot.transport_digest):
-            raise ValueError("Persistent SMB transport does not match its signed binding")
-        derived_lossless_set = frozenset(lossless_ordinals)
-        observation_digests = tuple(
-            _persistent_smb_observation_digest(
-                observation,
-                ordinal,
-                lossless=ordinal in derived_lossless_set,
-            )
-            for ordinal, observation in enumerate(observation_snapshots)
-        )
-        if lossless_ordinals != binding_snapshot.lossless_ordinals or len(
-            observation_digests
-        ) != len(binding_snapshot.observation_digests):
-            raise ValueError("Persistent SMB observations do not match signed sensor ordinals")
-        if any(
-            not hmac.compare_digest(actual, expected)
-            for actual, expected in zip(
-                observation_digests,
-                binding_snapshot.observation_digests,
-                strict=True,
-            )
-        ):
-            raise ValueError("Persistent SMB observations do not match signed sensor ordinals")
-        if not _persistent_smb_traffic_monotonic(transport_snapshot.traffic, final_snapshot):
+        original_transport = _snapshot_materialized_traffic(transport.traffic)
+        final_transport = _snapshot_materialized_traffic(final_traffic)
+        if not _persistent_smb_traffic_monotonic(original_transport, final_transport):
             raise ValueError("Persistent canonical traffic cannot shrink at close")
 
-        final_observation_snapshots: list[_PersistentSmbTrafficFacts] = []
-        lossless_set = frozenset(binding_snapshot.lossless_ordinals)
-        for ordinal, (original, final_candidate) in enumerate(
-            zip(observation_snapshots, final_candidates, strict=True)
+        rebound_traffic = final_transport.materialize()
+        rebound_observations: list[NetworkSensorObservation] = []
+        for ordinal, (observation, candidate) in enumerate(
+            zip(observations, final_observation_traffic, strict=True)
         ):
-            candidate_snapshot, candidate_aliases = final_candidate
-            if not _persistent_smb_traffic_monotonic(original.traffic, candidate_snapshot):
+            original = _snapshot_materialized_traffic(observation.traffic)
+            final_candidate = _snapshot_materialized_traffic(candidate)
+            if not _persistent_smb_traffic_monotonic(original, final_candidate):
                 raise ValueError(f"Persistent observation {ordinal} traffic cannot shrink at close")
             _persistent_smb_validate_capture(
-                final_snapshot,
-                candidate_snapshot,
+                final_transport,
+                final_candidate,
                 f"final_observation_traffic[{ordinal}]",
             )
-            final_is_lossless = _persistent_smb_traffic_values_equal(
-                final_snapshot,
-                candidate_snapshot,
-            )
-            if ordinal in lossless_set:
-                if not final_is_lossless or not candidate_aliases:
-                    raise ValueError(
-                        f"Lossless observation {ordinal} must alias final canonical traffic"
-                    )
-            elif final_is_lossless or candidate_aliases:
-                raise ValueError(
-                    f"Lossy observation {ordinal} cannot change its signed alias topology"
-                )
-            final_observation_snapshots.append(candidate_snapshot)
-
-        close_facts_digest = _persistent_smb_close_facts_digest(
-            binding_snapshot,
-            final_snapshot,
-            tuple(final_observation_snapshots),
-        )
-        authenticated = proof_authenticator.authenticates_persistent_smb_close_proof(
-            proof,
-            binding_snapshot.binding_id,
-            close_facts_digest,
-        )
-        if type(authenticated) is not bool or not authenticated:
-            raise ValueError("Persistent SMB close proof does not authenticate final traffic")
-
-        rebound_traffic = final_snapshot.materialize()
-        rebound_transport = _materialize_persistent_smb_transport(
-            transport_snapshot,
-            rebound_traffic,
-        )
-        rebound_observations: list[NetworkSensorObservation] = []
-        for ordinal, (observation, traffic_snapshot) in enumerate(
-            zip(observation_snapshots, final_observation_snapshots, strict=True)
-        ):
-            rebound_observation_traffic = (
-                rebound_traffic if ordinal in lossless_set else traffic_snapshot.materialize()
-            )
+            lossless = ordinal in record.lossless_ordinals
+            if lossless != (candidate is final_traffic):
+                raise ValueError("Lossless observation must alias final canonical traffic")
+            rebound_candidate = rebound_traffic if lossless else final_candidate.materialize()
             rebound_observations.append(
-                _materialize_persistent_smb_observation(
+                replace(
                     observation,
-                    rebound_observation_traffic,
+                    traffic=rebound_candidate,
+                    history=_persistent_smb_history(observation.history, final_candidate),
                 )
             )
+        rebound_transport = replace(
+            transport,
+            traffic=rebound_traffic,
+            history=_persistent_smb_history(transport.history, final_transport),
+        )
         return rebound_transport, tuple(rebound_observations)
 
 

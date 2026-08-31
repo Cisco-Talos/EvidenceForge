@@ -13,16 +13,16 @@ payload bytes and rendered records are never retained.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 import struct
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from threading import Condition, Lock, RLock
 from typing import Literal
+from weakref import WeakValueDictionary
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -401,7 +401,7 @@ ProxyAdmissionResult = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ExplicitProxyRequestSnapshot:
     """Authenticated immutable view used before a deferred request preparation."""
 
@@ -462,17 +462,13 @@ class ExplicitProxyAdmissionToken:
 
 
 def _proxy_admission_seal(
-    authority_secret: bytes,
     token: ExplicitProxyAdmissionToken,
 ) -> bytes:
-    """Return an integrity seal over the complete proxy capability payload."""
+    """Return a compact opaque label for one owner-retained capability."""
 
-    payload = tuple(
-        (item.name, getattr(token, item.name))
-        for item in fields(token)
-        if item.name != "_token_seal"
-    )
-    return hmac.new(authority_secret, repr(payload).encode("utf-8"), hashlib.sha256).digest()
+    return hashlib.sha256(
+        f"explicit-proxy-admission-v1:{token._manager_token}:{token._admission_id}".encode()
+    ).digest()
 
 
 def _prepared_proxy_admission_estimated_bytes(token: ExplicitProxyAdmissionToken) -> int:
@@ -512,7 +508,7 @@ class _ExplicitProxyAdmissionCapability:
     estimated_bytes: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ExplicitProxyAdmissionReceipt:
     """Authenticated proof of one committed common and proxy admission."""
 
@@ -595,52 +591,23 @@ def explicit_proxy_sidecar_result_digest(result: ProxyAdmissionResult) -> str:
 
 
 def _proxy_request_snapshot_integrity_token(
-    authority_secret: bytes,
     snapshot: ExplicitProxyRequestSnapshot,
 ) -> str:
-    """Authenticate one manager-issued immutable current-tunnel projection."""
+    """Return a compact opaque label for one owner-retained snapshot."""
 
-    canonical = repr(
-        (
-            "explicit-proxy-request-snapshot-v1",
-            snapshot.manager_id,
-            snapshot.affinity_digest,
-            snapshot.requested_at,
-            snapshot.tunnel,
-            snapshot.application_snapshot,
-            snapshot.generation_token,
-            snapshot._manager_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return hashlib.sha256(
+        f"explicit-proxy-request-snapshot-v1:{snapshot._manager_token}:{id(snapshot)}".encode()
+    ).hexdigest()
 
 
 def _proxy_admission_receipt_integrity_token(
-    authority_secret: bytes,
     receipt: ExplicitProxyAdmissionReceipt,
 ) -> str:
-    """Authenticate the nested common receipt and exact sidecar result."""
+    """Return a compact opaque label for one owner-retained receipt."""
 
-    canonical = repr(
-        (
-            "explicit-proxy-admission-receipt-v3",
-            receipt.manager_kind,
-            receipt.manager_id,
-            receipt.kind,
-            receipt.publication_token,
-            receipt.application_receipt,
-            receipt.application_receipt_token,
-            receipt.channel_id,
-            receipt.operation_id,
-            receipt.current_transport_id,
-            receipt.prerequisite_transport_ids,
-            receipt.origin_affinity_digest,
-            receipt.sidecar_result,
-            receipt.sidecar_result_digest,
-            receipt._manager_token,
-        )
-    ).encode()
-    return hmac.new(authority_secret, canonical, hashlib.sha256).hexdigest()
+    return hashlib.sha256(
+        f"explicit-proxy-admission-receipt-v3:{receipt._manager_token}:{id(receipt)}".encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1315,14 +1282,12 @@ class ExplicitProxyChannelManager:
         self._prepared_affinity_keys: dict[tuple[str, str], int] = {}
         self._prepared_origin_transport_ids: dict[str, int] = {}
         self._next_admission_id = 1
-        self._admission_secret = secrets.token_bytes(32)
-        self._manager_id = (
-            "explicit-proxy-manager-"
-            + hmac.new(
-                self._admission_secret,
-                b"explicit-proxy-manager-instance-v1",
-                hashlib.sha256,
-            ).hexdigest()[:32]
+        self._manager_id = f"explicit-proxy-manager-{secrets.token_hex(16)}"
+        self._request_snapshots: WeakValueDictionary[int, ExplicitProxyRequestSnapshot] = (
+            WeakValueDictionary()
+        )
+        self._admission_receipts: WeakValueDictionary[int, ExplicitProxyAdmissionReceipt] = (
+            WeakValueDictionary()
         )
         self._estimated_prepared_bytes = 0
 
@@ -1357,19 +1322,14 @@ class ExplicitProxyChannelManager:
         return self._registry.authenticates_admission_token(token.application_token)
 
     def authenticates_request_snapshot(self, snapshot: ExplicitProxyRequestSnapshot) -> bool:
-        """Return whether this manager issued one intact current-tunnel snapshot."""
+        """Return whether this manager issued this exact current-tunnel snapshot."""
 
-        if (
-            not isinstance(snapshot, ExplicitProxyRequestSnapshot)
-            or snapshot._manager_token != id(self)
-            or not hmac.compare_digest(snapshot.manager_id, self._manager_id)
-        ):
-            return False
-        expected = _proxy_request_snapshot_integrity_token(
-            self._admission_secret,
-            snapshot,
+        return (
+            isinstance(snapshot, ExplicitProxyRequestSnapshot)
+            and snapshot._manager_token == id(self)
+            and snapshot.manager_id == self._manager_id
+            and self._request_snapshots.get(id(snapshot)) is snapshot
         )
-        return hmac.compare_digest(snapshot._integrity_token, expected)
 
     def snapshot_request(
         self,
@@ -1413,19 +1373,20 @@ class ExplicitProxyChannelManager:
                 generation_token=generation_token,
                 _manager_token=id(self),
             )
-            return replace(
+            issued = replace(
                 snapshot,
                 _integrity_token=_proxy_request_snapshot_integrity_token(
-                    self._admission_secret,
                     snapshot,
                 ),
             )
+            self._request_snapshots[id(issued)] = issued
+            return issued
 
     def authenticates_admission_receipt(
         self,
         receipt: ExplicitProxyAdmissionReceipt,
     ) -> bool:
-        """Return whether this manager issued an exact coupled-publication receipt."""
+        """Return whether this manager issued this exact coupled-publication receipt."""
 
         if not isinstance(receipt, ExplicitProxyAdmissionReceipt):
             return False
@@ -1438,22 +1399,13 @@ class ExplicitProxyChannelManager:
             ),
         ) or not isinstance(receipt.application_receipt, ApplicationChannelAdmissionReceipt):
             return False
-        if (
-            receipt.manager_kind != _PROXY_MANAGER_KIND
-            or not hmac.compare_digest(
-                receipt.manager_id,
-                self._manager_id,
-            )
-            or receipt._manager_token != id(self)
-        ):
+        if receipt.manager_kind != _PROXY_MANAGER_KIND or receipt._manager_token != id(self):
+            return False
+        if receipt.manager_id != self._manager_id:
+            return False
+        if self._admission_receipts.get(id(receipt)) is not receipt:
             return False
         if not self._registry.authenticates_admission_receipt(receipt.application_receipt):
-            return False
-        expected = _proxy_admission_receipt_integrity_token(
-            self._admission_secret,
-            receipt,
-        )
-        if not hmac.compare_digest(receipt._integrity_token, expected):
             return False
         result = receipt.sidecar_result
         expected_current, expected_prerequisites = _proxy_admission_transport_legs(result)
@@ -1617,29 +1569,9 @@ class ExplicitProxyChannelManager:
         active = self._prepared_admissions.get(capability.admission_id)
         if active is not token:
             raise StateError("explicit-proxy admission token is stale or already consumed")
-        self._verify_admission_integrity(token)
-        if not hmac.compare_digest(
-            token._application_publication_token,
-            capability.application_publication_token,
-        ) or not hmac.compare_digest(token._token_seal, capability.token_seal):
-            raise StateError("explicit-proxy admission token integrity validation failed")
+        if token.application_token is not active.application_token:
+            raise StateError("explicit-proxy common admission token changed identity")
         return capability
-
-    def _verify_admission_integrity(self, token: ExplicitProxyAdmissionToken) -> None:
-        """Reject retargeted proxy or nested common admission capabilities."""
-
-        if not token._application_publication_token or not token._token_seal:
-            raise StateError("explicit-proxy admission token is missing its integrity seal")
-        if not hmac.compare_digest(
-            token.application_token.publication_token,
-            token._application_publication_token,
-        ):
-            raise StateError("explicit-proxy common admission token was modified")
-        if not hmac.compare_digest(
-            _proxy_admission_seal(self._admission_secret, token),
-            token._token_seal,
-        ):
-            raise StateError("explicit-proxy admission token was modified")
 
     def _reject_proxy_reservation_conflict_locked(
         self,
@@ -1756,7 +1688,7 @@ class ExplicitProxyChannelManager:
         object.__setattr__(
             token,
             "_token_seal",
-            _proxy_admission_seal(self._admission_secret, token),
+            _proxy_admission_seal(token),
         )
         self._register_admission_locked(token)
         return token
@@ -2302,10 +2234,10 @@ class ExplicitProxyChannelManager:
         receipt = replace(
             receipt,
             _integrity_token=_proxy_admission_receipt_integrity_token(
-                self._admission_secret,
                 receipt,
             ),
         )
+        self._admission_receipts[id(receipt)] = receipt
         return ExplicitProxyAdmissionCommitResult(result=result, receipt=receipt)
 
     def open_tunnel(
