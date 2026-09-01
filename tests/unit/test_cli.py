@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from rich.console import Console
+from rich.progress import BarColumn, Progress
 from typer.testing import CliRunner
 
 from evidenceforge import __version__
@@ -38,6 +39,8 @@ from evidenceforge.cli.commands import (
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
     _generation_progress,
+    _GenerationProgressTracker,
+    _GenerationSpeedColumn,
     app,
 )
 from evidenceforge.composition import compile_scenario
@@ -54,6 +57,117 @@ def test_generation_progress_uses_fifteen_minute_speed_window():
     progress = _generation_progress(Console(file=StringIO()))
 
     assert progress.speed_estimate_period == 15 * 60
+
+
+def test_generation_progress_uses_one_expanding_hour_bar():
+    """The hour bar should use all remaining terminal width."""
+    progress = _generation_progress(Console(file=StringIO()))
+
+    bar_columns = [column for column in progress.columns if isinstance(column, BarColumn)]
+
+    assert progress.expand is True
+    assert len(bar_columns) == 1
+    assert bar_columns[0].bar_width is None
+
+
+def test_generation_speed_column_renders_average_and_recent_rates():
+    """The speed column should expose both full-run and rolling throughput."""
+    clock = [0.0]
+    progress = Progress(
+        _GenerationSpeedColumn(),
+        get_time=lambda: clock[0],
+        speed_estimate_period=15 * 60,
+    )
+    task_id = progress.add_task(
+        "Hour 1/2",
+        total=2,
+        progress_kind="simulated_hours",
+        average_seconds_per_hour=2.5,
+    )
+
+    clock[0] = 1.0
+    progress.update(task_id, completed=1)
+    clock[0] = 3.0
+    progress.update(task_id, completed=2)
+
+    rendered = _GenerationSpeedColumn().render(progress.tasks[task_id])
+
+    assert rendered.plain == "2.5 s/hr avg · 2.0 s/hr recent"
+
+
+def test_generation_progress_tracker_combines_warmup_and_baseline():
+    """Warmup and baseline updates should share one global hour task."""
+    progress = _generation_progress(Console(file=StringIO()))
+    tracker = _GenerationProgressTracker(progress)
+
+    tracker(
+        "warmup_progress",
+        {
+            "hour": 1,
+            "total_hours": 2,
+            "completed_simulated_hours": 0,
+            "total_simulated_hours": 5,
+        },
+    )
+    assert len(progress.tasks) == 1
+    task_id = tracker.hour_task
+    assert task_id is not None
+    assert progress.tasks[task_id].description == "Warm-up hour 1/2"
+    assert progress.tasks[task_id].completed == 0
+    assert progress.tasks[task_id].total == 5
+
+    tracker("phase_end", {"phase": "warmup"})
+    assert progress.tasks[task_id].completed == 2
+
+    tracker(
+        "hour_progress",
+        {
+            "hour": 1,
+            "total_hours": 3,
+            "completed_simulated_hours": 2,
+            "total_simulated_hours": 5,
+        },
+    )
+
+    assert tracker.hour_task == task_id
+    assert len(progress.tasks) == 1
+    assert progress.tasks[task_id].description == "Hour 1/3"
+    assert progress.tasks[task_id].completed == 2
+
+
+def test_generation_progress_tracker_completes_combined_task():
+    """Baseline completion should finish the same task created during warmup."""
+    progress = _generation_progress(Console(file=StringIO()))
+    tracker = _GenerationProgressTracker(progress)
+
+    tracker(
+        "warmup_progress",
+        {
+            "hour": 1,
+            "total_hours": 1,
+            "completed_simulated_hours": 0,
+            "total_simulated_hours": 2,
+        },
+    )
+    task_id = tracker.hour_task
+    assert task_id is not None
+
+    tracker("phase_end", {"phase": "warmup"})
+    tracker(
+        "hour_progress",
+        {
+            "hour": 1,
+            "total_hours": 1,
+            "completed_simulated_hours": 1,
+            "total_simulated_hours": 2,
+        },
+    )
+    tracker("phase_end", {"phase": "baseline"})
+
+    task = progress.tasks[task_id]
+    assert task.completed == 2
+    assert task.total == 2
+    assert task.finished is True
 
 
 def _write_included_minimal_scenario(tmp_path, *, name="include-cli-test"):

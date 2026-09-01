@@ -5458,8 +5458,14 @@ class BaselineMixin:
         # but establish lease state for periodic renewals)
         self._emit_dhcp_leases()
 
+        total_hours = max(
+            1,
+            math.ceil((self.end_time - self.start_time).total_seconds() / 3600),
+        )
+
         # --- Warm-up phase: pre-populate state without emitting ---
         warmup_hours = math.ceil(self.warmup_duration.total_seconds() / 3600)
+        total_simulated_hours = warmup_hours + total_hours
         if warmup_hours > 0:
             logger.info(f"Running {warmup_hours}-hour warm-up for state pre-population")
             self._report_progress(
@@ -5482,6 +5488,8 @@ class BaselineMixin:
                     {
                         "hour": warmup_count,
                         "total_hours": warmup_hours,
+                        "completed_simulated_hours": warmup_count - 1,
+                        "total_simulated_hours": total_simulated_hours,
                         "current_time": current_hour,
                     },
                 )
@@ -5511,7 +5519,6 @@ class BaselineMixin:
         # --- Real baseline: emit sensor startup and begin output ---
         self._emit_sensor_startup()
 
-        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
         current_hour = self.start_time
         hour_count = 0
 
@@ -5521,7 +5528,13 @@ class BaselineMixin:
 
             self._report_progress(
                 "hour_progress",
-                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+                {
+                    "hour": hour_count,
+                    "total_hours": total_hours,
+                    "completed_simulated_hours": warmup_hours + hour_count - 1,
+                    "total_simulated_hours": total_simulated_hours,
+                    "current_time": current_hour,
+                },
             )
 
             self._generate_hour(current_hour, enabled_users)

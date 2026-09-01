@@ -28,10 +28,12 @@ Provides commands for initialization, log generation, and validation.
 
 import json
 import logging
+import math
 import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,13 +47,16 @@ from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
     Progress,
+    ProgressColumn,
     SpinnerColumn,
+    Task,
+    TaskID,
     TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from rich.table import Table
+from rich.table import Column, Table
 from rich.text import Text
 
 from evidenceforge import __version__
@@ -111,6 +116,127 @@ class AbbreviatedGroup(typer.core.TyperGroup):
         return super().resolve_command(ctx, args)
 
 
+def _format_seconds_per_hour(value: float | None) -> str:
+    """Format a wall-clock throughput value for the generation progress display."""
+    if value is None or not math.isfinite(value) or value < 0:
+        return "--"
+    if value < 1:
+        return f"{value:.2f}"
+    return f"{value:.1f}"
+
+
+class _GenerationSpeedColumn(ProgressColumn):
+    """Render average and recent wall-clock seconds per simulated hour."""
+
+    def __init__(self) -> None:
+        super().__init__(table_column=Column(no_wrap=True))
+
+    def render(self, task: Task) -> Text:
+        """Render the current average and recent generation speeds."""
+        if task.fields.get("progress_kind") != "simulated_hours":
+            return Text("")
+        average = task.fields.get("average_seconds_per_hour")
+        recent_speed = task.speed
+        recent = 1.0 / recent_speed if recent_speed and recent_speed > 0 else None
+        return Text(
+            f"{_format_seconds_per_hour(average)} s/hr avg · "
+            f"{_format_seconds_per_hour(recent)} s/hr recent",
+            style="progress.speed",
+        )
+
+
+class _GenerationProgressTracker:
+    """Coordinate the single combined warmup and baseline progress task."""
+
+    def __init__(self, progress: Progress) -> None:
+        self.progress = progress
+        self.hour_task: TaskID | None = None
+        self.storyline_task: TaskID | None = None
+        self._generation_started_at: float | None = None
+        self._warmup_hours: int | None = None
+
+    def __call__(self, event_type: str, data: dict) -> None:
+        """Handle one generation progress callback event."""
+        if event_type in ("warmup_progress", "hour_progress"):
+            self._update_hour_progress(event_type, data)
+        elif event_type == "phase_end":
+            self._handle_phase_end(data)
+        elif event_type == "storyline_progress":
+            self._update_storyline_progress(data)
+
+    def _update_hour_progress(self, event_type: str, data: dict) -> None:
+        """Update the combined simulated-hour task without resetting it."""
+        is_warmup = event_type == "warmup_progress"
+        phase_hour = data["hour"]
+        phase_total = data["total_hours"]
+        if is_warmup:
+            description = f"Warm-up hour {phase_hour}/{phase_total}"
+            self._warmup_hours = phase_total
+        else:
+            description = f"Hour {phase_hour}/{phase_total}"
+
+        if self.hour_task is None:
+            self._generation_started_at = time.monotonic()
+            self.hour_task = self.progress.add_task(
+                description,
+                total=data["total_simulated_hours"],
+                average_seconds_per_hour=None,
+                progress_kind="simulated_hours",
+            )
+
+        self.progress.update(
+            self.hour_task,
+            completed=data["completed_simulated_hours"],
+            description=description,
+        )
+        self._update_average_speed()
+
+    def _update_average_speed(self) -> None:
+        """Update the full-run throughput field without affecting task timing."""
+        if self.hour_task is None or self._generation_started_at is None:
+            return
+        task = self.progress.tasks[self.hour_task]
+        elapsed = time.monotonic() - self._generation_started_at
+        completed = task.completed
+        average = elapsed / completed if completed > 0 else None
+        self.progress.update(self.hour_task, average_seconds_per_hour=average)
+
+    def _handle_phase_end(self, data: dict) -> None:
+        """Complete the appropriate phase while retaining one combined task."""
+        if self.hour_task is None:
+            return
+        phase = data["phase"]
+        if phase == "warmup" and self._warmup_hours is not None:
+            self.progress.update(self.hour_task, completed=self._warmup_hours)
+            self._update_average_speed()
+        elif phase == "baseline":
+            task = self.progress.tasks[self.hour_task]
+            if task.total is not None:
+                self.progress.update(self.hour_task, completed=task.total)
+                self._update_average_speed()
+
+        if phase == "storyline" and self.storyline_task is not None:
+            self.progress.update(
+                self.storyline_task,
+                completed=self.progress.tasks[self.storyline_task].total,
+            )
+
+    def _update_storyline_progress(self, data: dict) -> None:
+        """Update the optional event-count progress task."""
+        if self.storyline_task is None:
+            self.storyline_task = self.progress.add_task(
+                "Storyline events...", total=data["total_events"], progress_kind="events"
+            )
+        self.progress.update(
+            self.storyline_task,
+            completed=data["event_num"],
+            description=(
+                f"Event {data['event_num']}/{data['total_events']}: "
+                f"{data['actor']} on {data['system']}"
+            ),
+        )
+
+
 # Initialize Typer app and Rich console
 
 
@@ -119,13 +245,17 @@ def _generation_progress(console: Console) -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
+        BarColumn(bar_width=None, table_column=Column(ratio=1, min_width=1)),
         TaskProgressColumn(),
         TimeElapsedColumn(),
-        TimeRemainingColumn(),
+        TextColumn("ETA"),
+        TimeRemainingColumn(compact=True),
+        TextColumn("·"),
+        _GenerationSpeedColumn(),
         console=console,
         transient=False,
         speed_estimate_period=15 * 60,
+        expand=True,
     )
 
 
@@ -1272,53 +1402,13 @@ def generate(
 
         # Create progress display with Rich
         with _generation_progress(console) as progress:
-            # Progress tracking state
-            phase_task = progress.add_task("Initializing...", total=None)
-            hour_task = None
-            storyline_task = None
-
-            # Progress callback closure
-            def progress_callback(event_type: str, data: dict) -> None:
-                nonlocal phase_task, hour_task, storyline_task
-
-                if event_type == "phase_start":
-                    progress.update(phase_task, description=data["description"])
-
-                elif event_type == "phase_end":
-                    if data["phase"] == "baseline" and hour_task is not None:
-                        progress.update(hour_task, completed=progress.tasks[hour_task].total)
-                    elif data["phase"] == "storyline" and storyline_task is not None:
-                        progress.update(
-                            storyline_task, completed=progress.tasks[storyline_task].total
-                        )
-
-                elif event_type == "hour_progress":
-                    if hour_task is None:
-                        hour_task = progress.add_task(
-                            "Processing hours...", total=data["total_hours"]
-                        )
-                    progress.update(
-                        hour_task,
-                        completed=data["hour"],
-                        description=f"Hour {data['hour']}/{data['total_hours']}",
-                    )
-
-                elif event_type == "storyline_progress":
-                    if storyline_task is None:
-                        storyline_task = progress.add_task(
-                            "Storyline events...", total=data["total_events"]
-                        )
-                    progress.update(
-                        storyline_task,
-                        completed=data["event_num"],
-                        description=f"Event {data['event_num']}/{data['total_events']}: {data['actor']} on {data['system']}",
-                    )
+            progress_tracker = _GenerationProgressTracker(progress)
 
             # Generate logs with progress reporting
             engine = GenerationEngine(
                 scenario=scenario,
                 output_dir=gen_data_dir,
-                progress_callback=progress_callback,
+                progress_callback=progress_tracker,
                 ground_truth_dir=gen_gt_dir,
                 artifact_dir=gen_artifacts_dir,
                 scenario_root=scenario_dir,
