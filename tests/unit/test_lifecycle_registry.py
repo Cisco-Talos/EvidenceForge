@@ -32,11 +32,14 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
 )
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleProcessStartRequest,
     LifecycleRegistry,
     LifecycleSessionStartRequest,
 )
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
 _START = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
@@ -2324,6 +2327,149 @@ def test_live_child_pages_remove_closed_bindings_and_keep_deadline_exact() -> No
     assert registry.process_child_close_deadline(parent.object_id) == latest_close
     after = registry.census()
     assert after.lookup_candidates_inspected - before.lookup_candidates_inspected == 1
+
+
+def test_process_parent_rejects_cross_session_ownership_before_registration() -> None:
+    """A user-session process cannot become another session's structural child."""
+
+    registry = LifecycleRegistry(shard_count=1)
+    first_session = _register_session(
+        registry,
+        object_id="session-first",
+        logon_id="0x11111",
+    )
+    second_session = _register_session(
+        registry,
+        object_id="session-second",
+        logon_id="0x22222",
+    )
+    first_shell = _register_process(
+        registry,
+        object_id="first-shell",
+        pid=5_200,
+        session_object_id=first_session.object_id,
+        token_logon_id=first_session.logon_id,
+        role="shell",
+    )
+
+    with pytest.raises(StateError, match="parent crosses session ownership"):
+        _register_process(
+            registry,
+            object_id="second-command",
+            pid=5_201,
+            started_at=_START + timedelta(seconds=2),
+            session_object_id=second_session.object_id,
+            parent_object_id=first_shell.object_id,
+            token_logon_id=second_session.logon_id,
+        )
+
+    assert registry.get_process("second-command") is None
+    assert registry.live_child_process_page(first_shell.object_id, limit=1) == ((), None)
+    assert registry.live_session_member_process_page(second_session.object_id, limit=1) == (
+        (),
+        None,
+    )
+
+
+def test_bootstrap_handoff_can_cross_session_without_owning_child_lifetime() -> None:
+    """The explicit handoff role remains a non-owning cross-session exception."""
+
+    registry = LifecycleRegistry(shard_count=1)
+    first_session = _register_session(
+        registry,
+        object_id="handoff-session",
+        logon_id="0x11111",
+    )
+    second_session = _register_session(
+        registry,
+        object_id="child-session",
+        logon_id="0x22222",
+    )
+    handoff = _register_process(
+        registry,
+        object_id="session-handoff",
+        pid=5_210,
+        session_object_id=first_session.object_id,
+        token_logon_id=first_session.logon_id,
+        role="bootstrap_handoff",
+    )
+
+    child = _register_process(
+        registry,
+        object_id="handoff-child",
+        pid=5_211,
+        started_at=_START + timedelta(seconds=2),
+        session_object_id=second_session.object_id,
+        parent_object_id=handoff.object_id,
+        token_logon_id=second_session.logon_id,
+    )
+
+    assert registry.get_process(child.object_id) is not None
+    assert registry.live_child_process_page(handoff.object_id, limit=1) == ((), None)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("descendant_count", (1, 10, 100, 1_000, 4_096))
+def test_descendant_postorder_work_is_linear_and_state_neutral(
+    descendant_count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Indexed teardown work follows one tree, independent of retained history."""
+
+    state = StateManager()
+    state.set_current_time(_START)
+    registry = LifecycleRegistry(shard_count=1)
+    authority = GeneratorLifecycleAuthority(
+        state,
+        LifecycleShadow(state, registry),
+        shard_count=1,
+    )
+    session = _register_session(registry)
+    root = _register_process(
+        registry,
+        object_id="linear-root",
+        pid=20_000,
+        session_object_id=session.object_id,
+        token_logon_id=session.logon_id,
+        role="receiver",
+    )
+    parent = root
+    for ordinal in range(descendant_count):
+        parent = _register_process(
+            registry,
+            object_id=f"linear-child-{ordinal}",
+            pid=20_001 + ordinal,
+            started_at=_START + timedelta(seconds=1, microseconds=ordinal + 1),
+            session_object_id=session.object_id,
+            parent_object_id=parent.object_id,
+            token_logon_id=session.logon_id,
+        )
+
+    original_page = registry.live_child_process_page
+    page_calls = 0
+    returned_candidates = 0
+
+    def count_page(*args: object, **kwargs: object):
+        nonlocal page_calls, returned_candidates
+        page_calls += 1
+        page, cursor = original_page(*args, **kwargs)
+        returned_candidates += len(page)
+        return page, cursor
+
+    monkeypatch.setattr(registry, "live_child_process_page", count_page)
+    before = registry.stats()
+
+    descendants = authority.live_process_descendant_postorder(
+        root.object_id,
+        limit=descendant_count,
+    )
+
+    assert len(descendants) == descendant_count
+    assert descendants[0].identity.object_id == f"linear-child-{descendant_count - 1}"
+    assert descendants[-1].identity.object_id == "linear-child-0"
+    assert page_calls == descendant_count + 1
+    assert returned_candidates == descendant_count
+    assert registry.stats() == before
 
 
 def test_bootstrap_handoff_parent_does_not_own_shell_child_lifetime() -> None:

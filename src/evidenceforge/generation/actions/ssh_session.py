@@ -58,7 +58,11 @@ from evidenceforge.events.dispatcher import (
     StateNeutralProjectionPublicationResult,
 )
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
-from evidenceforge.events.lifecycle import ActionLifecycleContext, SessionEndPlan
+from evidenceforge.events.lifecycle import (
+    ActionLifecycleContext,
+    ProcessLifecycleSnapshot,
+    SessionEndPlan,
+)
 from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
@@ -119,6 +123,7 @@ from evidenceforge.generation.timing import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
+from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
@@ -2719,6 +2724,7 @@ class SshSessionExecutor(Protocol):
         process_name: str,
         logon_id: str,
         from_storyline: bool = False,
+        session_end_plan: SessionEndPlan | None = None,
     ) -> None:
         """Generate source-native process termination evidence."""
         ...
@@ -5473,14 +5479,27 @@ class SshSessionActionBundle:
             else self._source_native_session_close_time(state, auth_state)
         )
         if not logout_complete:
+            compatibility_descendants = (
+                self._plan_compatibility_receiver_descendant_terminations(
+                    state,
+                    auth_state,
+                    close_time,
+                )
+                if continuation is None
+                else ()
+            )
             self._retire_exact_application_session(
                 state,
                 close_time,
                 continuation=continuation,
             )
             if continuation is None:
-                self._terminate_receiver_session_children(state, auth_state, close_time)
-                self._terminate_receiver_session_shell(state, close_time)
+                self._terminate_compatibility_receiver_descendants(
+                    state,
+                    auth_state,
+                    close_time,
+                    planned=compatibility_descendants,
+                )
             else:
                 self._terminate_exact_receiver_descendants(
                     state,
@@ -6022,88 +6041,211 @@ class SshSessionActionBundle:
                 f"receiver={receiver_identity.object_id} residual={residual!r}"
             )
 
-    def _terminate_receiver_session_children(
+    def _plan_compatibility_receiver_descendant_terminations(
         self,
         state: _SshTransportState,
         auth_state: _SshLinuxAuthState,
         close_time: datetime,
-    ) -> None:
-        """End residual commands before their owning SSH session closes."""
+    ) -> tuple[_SshReceiverDescendantTermination, ...]:
+        """Freeze one indexed children-first compatibility close schedule."""
+
         if not state.logon_id:
-            return
+            return ()
         request = self.request
+        authority = self.executor._lifecycle_authority
         session = self.executor.state_manager.get_session(state.logon_id)
-        shell_pid = session.session_shell_pid if session is not None else None
-        children = [
-            process
-            for process in self.executor.state_manager.get_processes_for_session(
-                state.logon_id,
-                request.target_system.hostname,
+        session_identity = self.executor.state_manager.get_session_identity(state.logon_id)
+        receiver = self.executor.state_manager.get_process(
+            request.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        receiver_identity = self.executor.state_manager.get_process_identity(
+            request.target_system.hostname,
+            auth_state.sshd_pid,
+        )
+        receiver_snapshot = (
+            authority.registry.get_process(receiver_identity.object_id)
+            if receiver_identity is not None
+            else None
+        )
+        if (
+            session is None
+            or session_identity is None
+            or receiver is None
+            or receiver_identity is None
+            or receiver_snapshot is None
+            or receiver_snapshot.closed_at is not None
+            or receiver_snapshot.close_barrier is not None
+            or receiver_snapshot.closure_ticket is not None
+            or session.ecar_object_id != session_identity.object_id
+            or session.system != request.target_system.hostname
+            or session.logon_id != state.logon_id
+            or session.transport_pid != auth_state.sshd_pid
+            or receiver.ecar_object_id != receiver_identity.object_id
+            or receiver_identity.logon_id != state.logon_id
+        ):
+            raise StateError("Compatibility SSH close lost its exact receiver/session identity")
+
+        descendants = authority.live_process_descendant_postorder(
+            receiver_identity.object_id,
+            limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+        )
+        members = authority.live_session_member_process_census(
+            request.target_system.hostname,
+            state.logon_id,
+            limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
+        )
+        descendant_ids = {snapshot.identity.object_id for snapshot in descendants}
+        member_ids = {
+            snapshot.identity.object_id
+            for snapshot in members
+            if snapshot.identity.object_id != receiver_identity.object_id
+        }
+        if descendant_ids != member_ids:
+            raise StateError(
+                "Compatibility SSH lifecycle graph disagrees with session membership: "
+                f"receiver={receiver_identity.object_id} "
+                f"structural_only={tuple(sorted(descendant_ids - member_ids))!r} "
+                f"session_only={tuple(sorted(member_ids - descendant_ids))!r}"
             )
-            if process.pid not in {shell_pid, auth_state.sshd_pid}
-        ]
-        children.sort(key=lambda process: process.start_time, reverse=True)
-        for ordinal, process in enumerate(children):
-            terminate_time = close_time - timedelta(milliseconds=50 + (ordinal * 25))
-            terminate_time = max(
-                process.start_time + timedelta(milliseconds=100),
-                terminate_time,
+
+        validated: list[
+            tuple[ProcessLifecycleSnapshot, ProcessIdentity, RunningProcess, datetime]
+        ] = []
+        for snapshot in descendants:
+            identity = self.executor.state_manager.get_process_identity(
+                snapshot.identity.hostname,
+                snapshot.identity.pid,
             )
-            if terminate_time >= close_time:
-                terminate_time = close_time - timedelta(milliseconds=1)
+            running = self.executor.state_manager.get_process(
+                snapshot.identity.hostname,
+                snapshot.identity.pid,
+            )
+            if (
+                snapshot.token.logon_id != state.logon_id
+                or snapshot.membership.owner_kind != "session"
+                or snapshot.membership.owner_object_id != session_identity.object_id
+                or snapshot.membership.session_object_id != session_identity.object_id
+                or identity is None
+                or identity.object_id != snapshot.identity.object_id
+                or identity.hostname != snapshot.identity.hostname
+                or identity.pid != snapshot.identity.pid
+                or identity.image != snapshot.identity.image
+                or identity.started_at != snapshot.identity.started_at
+                or identity.logon_id != state.logon_id
+                or running is None
+                or running.ecar_object_id != identity.object_id
+                or running.logon_id != state.logon_id
+            ):
+                raise StateError(
+                    "Compatibility SSH lifecycle descendant crossed its session owner: "
+                    f"process={snapshot.identity.object_id}"
+                )
+            retained_child_close = authority.process_latest_closed_child_at_for_object(
+                identity.object_id
+            )
+            minimum = max(
+                identity.started_at + timedelta(microseconds=1),
+                ensure_utc(running.last_activity_time or identity.started_at)
+                + timedelta(microseconds=1),
+                ensure_utc(snapshot.latest_dependent_at or identity.started_at)
+                + timedelta(microseconds=1),
+                ensure_utc(snapshot.latest_hold_until or identity.started_at)
+                + timedelta(microseconds=1),
+                ensure_utc(retained_child_close or identity.started_at) + timedelta(microseconds=1),
+            )
+            validated.append((snapshot, identity, running, minimum))
+
+        transport_close = ensure_utc(state.close_time)
+        schedule_start = max(
+            (minimum for _snapshot, _identity, _running, minimum in validated),
+            default=transport_close,
+        )
+        available = transport_close - schedule_start
+        if validated and available <= timedelta(microseconds=len(validated)):
+            raise StateError("Compatibility SSH receiver has no descendant close interval")
+        step = available / max(2, len(validated) + 1)
+        prior = schedule_start
+        planned: list[_SshReceiverDescendantTermination] = []
+        for ordinal, (_snapshot, identity, running, minimum) in enumerate(validated, start=1):
+            terminate_at = max(
+                schedule_start + step * ordinal,
+                minimum,
+                prior + timedelta(microseconds=1),
+            )
+            if terminate_at >= transport_close:
+                raise StateError(
+                    "Compatibility SSH descendant cannot terminate before transport close: "
+                    f"process={identity.object_id} "
+                    f"process_close={terminate_at.isoformat()} "
+                    f"transport_close={transport_close.isoformat()}"
+                )
+            planned.append(
+                _SshReceiverDescendantTermination(
+                    identity=identity,
+                    terminate_at=terminate_at,
+                    concurrency_group_id=running.concurrency_group_id,
+                    session_identity=session_identity,
+                )
+            )
+            prior = terminate_at
+        return tuple(planned)
+
+    def _terminate_compatibility_receiver_descendants(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+        close_time: datetime,
+        *,
+        planned: tuple[_SshReceiverDescendantTermination, ...],
+    ) -> None:
+        """End one compatibility receiver tree in structural postorder."""
+        session = self.executor.state_manager.get_session(state.logon_id)
+        for entry in planned:
             self.executor.generate_process_termination(
-                user=request.user,
-                system=request.target_system,
-                time=terminate_time,
-                pid=process.pid,
-                process_name=process.image,
-                logon_id=process.logon_id,
-                from_storyline=request.source.startswith("storyline"),
+                user=self.request.user,
+                system=self.request.target_system,
+                time=entry.terminate_at,
+                pid=entry.identity.pid,
+                process_name=entry.identity.image,
+                logon_id=entry.identity.logon_id,
+                from_storyline=self.request.source.startswith("storyline"),
                 session_end_plan=session.end_plan if session is not None else None,
             )
 
-    def _terminate_receiver_session_shell(
-        self,
-        state: _SshTransportState,
-        close_time: datetime,
-    ) -> None:
-        """End the bundle-owned login shell before the SSH session closes."""
-
-        request = self.request
-        if not state.logon_id:
-            return
-        session = self.executor.state_manager.get_session(state.logon_id)
-        shell_pid = session.session_shell_pid if session is not None else None
-        if shell_pid is None:
-            return
-        running = self.executor.state_manager.get_process(
-            request.target_system.hostname,
-            shell_pid,
+        receiver_identity = self.executor.state_manager.get_process_identity(
+            self.request.target_system.hostname,
+            auth_state.sshd_pid,
         )
-        if running is None:
-            return
-        seed = _stable_seed(
-            "ssh_session_shell_terminate:"
-            f"{request.target_system.hostname}:{state.logon_id}:{shell_pid}:"
-            f"{state.close_time.isoformat()}"
+        if receiver_identity is None:
+            raise StateError("Compatibility SSH descendant census lost its receiver identity")
+        live_children = self.executor._lifecycle_authority.live_child_process_page_for_object(
+            receiver_identity.object_id,
+            limit=1,
         )
-        gap = close_time - state.close_time
-        maximum_offset_ms = max(20, int(gap.total_seconds() * 1000) - 25)
-        terminate_time = state.close_time + timedelta(
-            milliseconds=20 + (seed % max(1, maximum_offset_ms - 19)),
-            microseconds=101 + (seed % 733),
+        live_members = self.executor._lifecycle_authority.live_session_member_process_census(
+            self.request.target_system.hostname,
+            state.logon_id,
+            limit=_SSH_RECEIVER_DESCENDANT_CAPACITY,
         )
-        if terminate_time >= close_time:
-            terminate_time = close_time - timedelta(milliseconds=1)
-        self.executor.generate_process_termination(
-            user=request.user,
-            system=request.target_system,
-            time=terminate_time,
-            pid=shell_pid,
-            process_name=running.image,
-            logon_id=running.logon_id,
-            from_storyline=request.source.startswith("storyline"),
+        residual_members = tuple(
+            member
+            for member in live_members
+            if member.identity.object_id != receiver_identity.object_id
         )
+        if live_children or residual_members:
+            residual = tuple(
+                sorted(
+                    {
+                        *(child.identity.object_id for child in live_children),
+                        *(member.identity.object_id for member in residual_members),
+                    }
+                )
+            )
+            raise StateError(
+                "Compatibility SSH target-process census retained live descendants: "
+                f"receiver={receiver_identity.object_id} residual={residual!r}"
+            )
 
     def _terminate_receiver_sshd_process(
         self,

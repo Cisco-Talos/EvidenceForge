@@ -4455,6 +4455,187 @@ def _open_exact_ssh_receiver_descendant_graph(
     return logon_id, receiver_pid, shell_pid, child_pid
 
 
+def _open_compatibility_ssh_receiver_descendant_graph(
+    fixture: _RealSshFixture,
+) -> tuple[str, int, int, int, int]:
+    """Open one compatibility receiver -> shell -> command -> child graph."""
+
+    systemd_pid = fixture.generator.generate_system_process(
+        fixture.target,
+        _START - timedelta(seconds=10),
+        "/usr/lib/systemd/systemd",
+        "/usr/lib/systemd/systemd --system",
+        parent_pid=0,
+        username="root",
+        emit_linux_syslog=False,
+    )
+    global_sshd_pid = fixture.generator.generate_system_process(
+        fixture.target,
+        _START - timedelta(seconds=9),
+        "/usr/sbin/sshd",
+        "/usr/sbin/sshd -D",
+        parent_pid=systemd_pid,
+        username="root",
+        emit_linux_syslog=False,
+    )
+    fixture.generator._system_pids = {
+        fixture.target.hostname: {"systemd": systemd_pid, "sshd": global_sshd_pid}
+    }
+    fixture.generator._users_by_username = {fixture.user.username: fixture.user}
+    fixture.generator.generate_logon(
+        fixture.user,
+        fixture.source,
+        _START,
+        logon_type=2,
+        source_ip=fixture.source.ip,
+        emit_network_evidence=False,
+    )
+    request_time = _START + timedelta(minutes=5)
+    request = replace(
+        fixture.request(),
+        time=request_time,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    bundle = SshSessionActionBundle(request, fixture.generator)
+    assert not bundle._uses_exact_deferred_publication()
+    _uid, logon_id = bundle.execute_with_identity()
+    session = fixture.state.get_session(logon_id)
+    assert session is not None and session.transport_pid is not None
+    receiver_pid = session.transport_pid
+    shell_pid = fixture.generator.ensure_linux_ssh_session_shell(
+        fixture.user,
+        fixture.target,
+        logon_id,
+        session.start_time,
+        request_time + timedelta(seconds=5),
+    )
+    assert shell_pid is not None
+    command_pid = fixture.generator.generate_process(
+        fixture.user,
+        fixture.target,
+        request_time + timedelta(seconds=6),
+        logon_id,
+        "/usr/bin/python3",
+        "python3 worker.py",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    child_pid = fixture.generator.generate_process(
+        fixture.user,
+        fixture.target,
+        request_time + timedelta(seconds=7),
+        logon_id,
+        "/usr/bin/sleep",
+        "sleep 120",
+        parent_pid=command_pid,
+        suppress_command_file_effect=True,
+    )
+    return logon_id, receiver_pid, shell_pid, command_pid, child_pid
+
+
+def test_compatibility_close_drains_nested_receiver_tree_in_linear_postorder(
+    tmp_path: Path,
+) -> None:
+    """Compatibility SSH teardown closes every nested child before its parent."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    logon_id, receiver_pid, shell_pid, command_pid, child_pid = (
+        _open_compatibility_ssh_receiver_descendant_graph(fixture)
+    )
+    identities = {
+        pid: fixture.state.get_process_identity(fixture.target.hostname, pid)
+        for pid in (receiver_pid, shell_pid, command_pid, child_pid)
+    }
+    assert all(identity is not None for identity in identities.values())
+
+    fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+    closed = {
+        pid: fixture.generator._lifecycle_authority.registry.get_process(identity.object_id)
+        for pid, identity in identities.items()
+        if identity is not None
+    }
+    assert all(
+        snapshot is not None and snapshot.closed_at is not None for snapshot in closed.values()
+    )
+    assert closed[child_pid].closed_at < closed[command_pid].closed_at
+    assert closed[command_pid].closed_at < closed[shell_pid].closed_at
+    assert closed[shell_pid].closed_at < closed[receiver_pid].closed_at
+    assert fixture.state.get_session(logon_id) is None
+    assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
+    _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+    _ecar_rows, zeek_rows = fixture.close_and_read()
+    assert sum(row["id.resp_p"] == 22 for row in zeek_rows) == 1
+
+
+def test_compatibility_close_rejects_foreign_descendant_before_teardown_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A foreign structural child cannot retire any SSH close owner."""
+
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    logon_id, receiver_pid, shell_pid, command_pid, child_pid = (
+        _open_compatibility_ssh_receiver_descendant_graph(fixture)
+    )
+    foreign_logon_id = fixture.generator.generate_logon(
+        fixture.user,
+        fixture.target,
+        _START + timedelta(minutes=6),
+        logon_type=2,
+        source_ip="-",
+        emit_network_evidence=False,
+    )
+    foreign_pid = fixture.generator.generate_process(
+        fixture.user,
+        fixture.target,
+        _START + timedelta(minutes=6, seconds=1),
+        foreign_logon_id,
+        "/usr/bin/true",
+        "true",
+        parent_pid=0,
+        suppress_command_file_effect=True,
+    )
+    foreign_identity = fixture.state.get_process_identity(fixture.target.hostname, foreign_pid)
+    assert foreign_identity is not None
+    foreign_snapshot = fixture.generator._lifecycle_authority.registry.get_process(
+        foreign_identity.object_id
+    )
+    assert foreign_snapshot is not None
+    authority = fixture.generator._lifecycle_authority
+    original_descendants = authority.live_process_descendant_postorder
+
+    def inject_foreign_descendant(
+        process_object_id: str,
+        *,
+        limit: int = 4_096,
+    ) -> tuple[ProcessLifecycleSnapshot, ...]:
+        return (*original_descendants(process_object_id, limit=limit), foreign_snapshot)
+
+    monkeypatch.setattr(
+        authority,
+        "live_process_descendant_postorder",
+        inject_foreign_descendant,
+    )
+    before = fixture.state.materialization_digest()
+    channel_before = fixture.generator._ssh_channel_manager.census()
+    tracked = (receiver_pid, shell_pid, command_pid, child_pid)
+
+    with pytest.raises(StateError, match="graph disagrees with session membership"):
+        fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+    assert fixture.state.materialization_digest() == before
+    assert all(
+        fixture.state.get_process(fixture.target.hostname, pid) is not None for pid in tracked
+    )
+    assert fixture.state.get_session(logon_id) is not None
+    assert fixture.generator._ssh_channel_manager.census() == channel_before
+    fixture.close_and_read()
+
+
 def test_exact_close_freezes_receiver_descendants_children_first_before_parent(
     tmp_path: Path,
 ) -> None:
@@ -4834,6 +5015,20 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
         source="ssh_foreign_descendant_test",
     )
     assert foreign_logon_id != ssh_logon_id
+    before_rejected_creation = fixture.state.materialization_digest()
+    with pytest.raises(StateError, match="parent crosses session ownership"):
+        fixture.generator.generate_process(
+            foreign_user,
+            fixture.target,
+            _START + timedelta(seconds=8),
+            foreign_logon_id,
+            "/usr/bin/tail",
+            "tail -f /var/log/auth.log",
+            parent_pid=receiver_pid,
+            suppress_command_file_effect=True,
+        )
+    assert fixture.state.materialization_digest() == before_rejected_creation
+
     foreign_pid = fixture.generator.generate_process(
         foreign_user,
         fixture.target,
@@ -4841,7 +5036,7 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
         foreign_logon_id,
         "/usr/bin/tail",
         "tail -f /var/log/auth.log",
-        parent_pid=receiver_pid,
+        parent_pid=0,
         suppress_command_file_effect=True,
     )
     ssh_session_identity = fixture.state.get_session_identity(ssh_logon_id)
@@ -4880,6 +5075,12 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
     before_state_digest = fixture.state.materialization_digest()
     before_publication = fixture.generator.dispatcher.action_cohort_publication_census()
     continuation = fixture.generator._pending_ssh_session_closures[0]
+    authority = fixture.generator._lifecycle_authority
+    original_descendants = authority.live_process_descendant_postorder
+    foreign_identity = fixture.state.get_process_identity(fixture.target.hostname, foreign_pid)
+    assert foreign_identity is not None
+    foreign_snapshot = authority.registry.get_process(foreign_identity.object_id)
+    assert foreign_snapshot is not None
 
     def assert_target_state_is_neutral() -> None:
         """Require both session owners and every target process to remain unchanged."""
@@ -4902,6 +5103,18 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
             )
         _assert_no_dispatcher_residue(fixture.generator.dispatcher)
 
+    def inject_foreign_descendant(
+        process_object_id: str,
+        *,
+        limit: int = 4_096,
+    ) -> tuple[ProcessLifecycleSnapshot, ...]:
+        return (*original_descendants(process_object_id, limit=limit), foreign_snapshot)
+
+    monkeypatch.setattr(
+        authority,
+        "live_process_descendant_postorder",
+        inject_foreign_descendant,
+    )
     with pytest.raises(StateError, match="lifecycle target crossed its session owner"):
         fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     assert_target_state_is_neutral()
@@ -4909,17 +5122,12 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
     # Even if a copied lifecycle snapshot launders the foreign process through
     # the SSH session's exact membership values, its live State session remains
     # foreign and must independently reject on retry before any cohort claim.
-    authority = fixture.generator._lifecycle_authority
-    original_descendants = authority.live_process_descendant_postorder
-    foreign_identity = fixture.state.get_process_identity(fixture.target.hostname, foreign_pid)
-    assert foreign_identity is not None
-
     def copy_ssh_lifecycle_membership(
         process_object_id: str,
         *,
         limit: int = 4_096,
     ) -> tuple[ProcessLifecycleSnapshot, ...]:
-        snapshots = original_descendants(process_object_id, limit=limit)
+        snapshots = inject_foreign_descendant(process_object_id, limit=limit)
         return tuple(
             replace(
                 snapshot,

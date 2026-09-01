@@ -2790,6 +2790,7 @@ class _LifecyclePartition:
         transition: LifecycleTransition,
         staged_sessions: dict[str, SessionLifecycleIdentity] | None = None,
         staged_processes: dict[str, ProcessLifecycleIdentity] | None = None,
+        staged_process_memberships: dict[str, LifecycleMembership] | None = None,
     ) -> _PreparedProcessPartitionStart:
         """Validate a process start without mutating partition state."""
 
@@ -2814,6 +2815,12 @@ class _LifecyclePartition:
             identity,
             membership,
             staged_sessions=staged_sessions,
+        )
+        self._validate_process_parent_membership(
+            identity,
+            membership,
+            staged_processes=staged_processes,
+            staged_process_memberships=staged_process_memberships,
         )
         self._reject_overlapping_pid_identity(identity)
         self._validate_transition_claim(transition)
@@ -5766,6 +5773,47 @@ class _LifecyclePartition:
             raise StateError(
                 f"Process lifecycle session {membership.session_object_id} has accepted close "
                 f"barrier {session.close_barrier.barrier_id} before process start"
+            )
+
+    def _validate_process_parent_membership(
+        self,
+        identity: ProcessLifecycleIdentity,
+        membership: LifecycleMembership,
+        *,
+        staged_processes: dict[str, ProcessLifecycleIdentity] | None = None,
+        staged_process_memberships: dict[str, LifecycleMembership] | None = None,
+    ) -> None:
+        """Reject structural process edges that cross exact session ownership."""
+
+        parent_object_id = identity.parent_object_id
+        child_session_id = membership.session_object_id
+        if not parent_object_id or not child_session_id:
+            return
+
+        parent = self._processes.get(parent_object_id)
+        if parent is not None:
+            parent_identity = parent.identity
+            parent_membership = parent.membership
+        else:
+            parent_identity = (
+                None if staged_processes is None else staged_processes.get(parent_object_id)
+            )
+            parent_membership = (
+                None
+                if staged_process_memberships is None
+                else staged_process_memberships.get(parent_object_id)
+            )
+        if parent_identity is None or parent_membership is None:
+            return
+        if parent_identity.role == "bootstrap_handoff":
+            return
+
+        parent_session_id = parent_membership.session_object_id
+        if parent_session_id and parent_session_id != child_session_id:
+            raise StateError(
+                "Process lifecycle parent crosses session ownership: "
+                f"parent={parent_object_id} parent_session={parent_session_id} "
+                f"child={identity.object_id} child_session={child_session_id}"
             )
 
     def _validate_descendants_closed(
@@ -10394,6 +10442,7 @@ class LifecycleRegistry:
         request = token.request
         admitted_sessions: dict[str, SessionLifecycleIdentity] = {}
         admitted_processes: dict[str, ProcessLifecycleIdentity] = {}
+        admitted_process_memberships: dict[str, LifecycleMembership] = {}
         states: dict[LifecycleEntityRef, _ActionCohortSubjectState] = {}
         staged_children: dict[str, set[str]] = {}
         staged_members: dict[str, set[str]] = {}
@@ -10490,6 +10539,7 @@ class LifecycleRegistry:
                     transition=transition,
                     staged_sessions=admitted_sessions,
                     staged_processes=admitted_processes,
+                    staged_process_memberships=admitted_process_memberships,
                 )
                 already_present = prepared.existing is not None
                 if already_present != (prior_process is not None):
@@ -10525,6 +10575,7 @@ class LifecycleRegistry:
                             raise StateError("Lifecycle action cohort starts after session closure")
                 states[identity.ref] = state
                 admitted_processes[identity.object_id] = identity
+                admitted_process_memberships[identity.object_id] = operation.membership
                 if identity.parent_object_id:
                     parent = state_for(LifecycleEntityRef("process", identity.parent_object_id))
                     if parent.process_role != "bootstrap_handoff":
@@ -12492,6 +12543,9 @@ class LifecycleRegistry:
 
         staged_sessions = {item.identity.object_id: item.identity for item in session_requests}
         staged_processes = {item.identity.object_id: item.identity for item in process_requests}
+        staged_process_memberships = {
+            item.identity.object_id: item.membership for item in process_requests
+        }
         prepared_sessions: list[tuple[int, _PreparedSessionPartitionStart, object | None]] = []
         for item in session_requests:
             identity = item.identity
@@ -12590,6 +12644,7 @@ class LifecycleRegistry:
                 transition=transition,
                 staged_sessions=staged_sessions,
                 staged_processes=staged_processes,
+                staged_process_memberships=staged_process_memberships,
             )
             prepared_processes.append((partition_id, prepared, item.membership))
             admitted_processes.add(identity.object_id)
@@ -13362,6 +13417,9 @@ class LifecycleRegistry:
             staged_processes = {
                 request.identity.object_id: request.identity for request in processes
             }
+            staged_process_memberships = {
+                request.identity.object_id: request.membership for request in processes
+            }
             pending = list(zip(processes, process_transitions, strict=True))
             ordered: list[tuple[LifecycleProcessStartRequest, LifecycleTransition]] = []
             admitted_ids: set[str] = set()
@@ -13429,6 +13487,7 @@ class LifecycleRegistry:
                     transition=transition,
                     staged_sessions=staged_sessions,
                     staged_processes=staged_processes,
+                    staged_process_memberships=staged_process_memberships,
                 )
                 prepared_processes.append((partition_id, prepared, request.membership))
 
@@ -13678,6 +13737,10 @@ class LifecycleRegistry:
             member.process_start.identity.object_id: member.process_start.identity
             for member in request.staged_process_bindings
         }
+        staged_process_memberships = {
+            member.process_start.identity.object_id: member.process_start.membership
+            for member in request.staged_process_bindings
+        }
         for member in request.staged_process_bindings:
             start = member.process_start
             process_identity = start.identity
@@ -13717,6 +13780,7 @@ class LifecycleRegistry:
                 membership=start.membership,
                 transition=process_transition,
                 staged_processes=staged_processes,
+                staged_process_memberships=staged_process_memberships,
             )
         transition = LifecycleTransition(
             transition_id=request.transition_id,

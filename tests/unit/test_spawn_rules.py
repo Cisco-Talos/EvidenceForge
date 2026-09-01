@@ -1811,6 +1811,62 @@ class TestLinuxParentSelection:
 
         assert parent_pid == bash_pid
 
+    def test_unknown_command_uses_requested_concurrent_session_shell(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Legacy fallback must not borrow an earlier shell for the same user."""
+
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        first_logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+        second_logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.51",
+            session_kind="ssh",
+        )
+        first_shell = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            logon_id=first_logon_id,
+        )
+        second_shell = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            logon_id=second_logon_id,
+        )
+        first_session = state_manager.get_session(first_logon_id)
+        second_session = state_manager.get_session(second_logon_id)
+        assert first_session is not None
+        assert second_session is not None
+        first_session.session_shell_pid = first_shell
+        second_session.session_shell_pid = second_shell
+
+        parent_pid = ag._select_parent_pid(
+            linux_system,
+            user,
+            "/opt/example/bin/unmapped-command",
+            time=datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_id=second_logon_id,
+        )
+
+        assert parent_pid == second_shell
+        assert parent_pid != first_shell
+
     def test_ssh_login_shell_keeps_privileged_sshd_parent(
         self, state_manager, mock_emitters, linux_system, user
     ):

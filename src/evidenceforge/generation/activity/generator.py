@@ -41268,7 +41268,12 @@ class ActivityGenerator:
             return explorer_pid
         else:
             # Linux: most user commands spawn from a shell
-            session_shell_pid = self._active_session_shell_pid(system, user, time)
+            session_shell_pid = self._active_session_shell_pid(
+                system,
+                user,
+                time,
+                logon_id,
+            )
             if session_shell_pid is not None:
                 return session_shell_pid
             shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
