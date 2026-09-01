@@ -25,6 +25,7 @@ from evidenceforge.generation.activity.smb_profiles import (
     samba_audit_enabled,
     select_client_profile,
     select_server_profile,
+    smb_file_evolution_profile,
 )
 
 pytestmark = pytest.mark.slow
@@ -53,6 +54,10 @@ def test_packaged_profiles_cover_native_client_and_server_modes() -> None:
     assert config.samba_audit.failure_audit_profiles == ("standard", "high")
     assert config.transfer_timing.throughput_median_bytes_per_second == 25_000_000
     assert config.transfer_timing.throughput_sigma == 0.72
+    assert config.file_evolution.default_profile == "general"
+    assert config.file_evolution.profiles["general"].capacity_bytes == 256 * 1024**2
+    assert config.file_evolution.profiles["package"].capacity_bytes == 4 * 1024**3
+    assert config.file_evolution.profiles["backup"].capacity_bytes == 2 * 1024**4
     assert config.client_defaults == {
         "windows": "windows_explorer",
         "linux": "linux_gvfs",
@@ -102,6 +107,34 @@ def test_schema_rejects_incoherent_smb_transfer_timing() -> None:
 
     with pytest.raises(ValidationError, match="0 <= minimum < maximum"):
         SmbProfilesConfig.model_validate(raw)
+
+
+def test_schema_rejects_incoherent_smb_file_evolution_profiles() -> None:
+    raw = deepcopy(load_smb_profiles().model_dump(mode="python"))
+    raw["file_evolution"]["profiles"]["general"]["minimum_size_ratio"] = 2.1
+
+    with pytest.raises(ValidationError, match="less than or equal to 1"):
+        SmbProfilesConfig.model_validate(raw)
+
+    raw = deepcopy(load_smb_profiles().model_dump(mode="python"))
+    raw["file_evolution"]["extension_profiles"][".iso"] = "missing"
+
+    with pytest.raises(ValidationError, match="unknown profiles"):
+        SmbProfilesConfig.model_validate(raw)
+
+
+def test_file_evolution_profile_selection_is_extension_first_and_overlayable() -> None:
+    assert (
+        smb_file_evolution_profile(".xlsx")
+        is load_smb_profiles().file_evolution.profiles["general"]
+    )
+    assert (
+        smb_file_evolution_profile(" .MSI ")
+        is load_smb_profiles().file_evolution.profiles["package"]
+    )
+    assert (
+        smb_file_evolution_profile(".vhdx") is load_smb_profiles().file_evolution.profiles["backup"]
+    )
 
 
 def test_client_selection_prefers_explicit_aliases_and_defaults_generic_smb() -> None:

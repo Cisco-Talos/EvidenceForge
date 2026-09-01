@@ -11,7 +11,10 @@ import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.actions.smb_activity import SmbActivityActionBundle
-from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
+from evidenceforge.generation.activity.smb_profiles import (
+    load_smb_profiles,
+    smb_file_evolution_profile,
+)
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
@@ -106,6 +109,158 @@ def test_smb_file_transfer_fuid_is_bound_to_final_content_version() -> None:
 
     assert bundle._file_transfer_fuid(after, "write") == bundle._file_transfer_fuid(after, "write")
     assert bundle._file_transfer_fuid(after, "write") != bundle._file_transfer_fuid(before, "write")
+
+
+def test_smb_update_size_mean_reverts_around_original_nominal_size() -> None:
+    nominal = 10_000_000
+    file = CompiledStorageFile(
+        file_id="mean-reverting-document",
+        share="FS-01.finance",
+        path="Reports\\forecast.xlsx",
+        size_bytes=nominal,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    current = {"value": nominal}
+    bundle = _timing_bundle(operation="update")
+    bundle.executor.state_manager.smb_file_size = lambda _file: current["value"]
+
+    current["value"] = nominal // 2
+    below = bundle._updated_size(file, 0)
+    current["value"] = nominal
+    at_nominal = bundle._updated_size(file, 0)
+    current["value"] = nominal * 2
+    above = bundle._updated_size(file, 0)
+
+    assert nominal // 2 < below < nominal
+    assert int(nominal * 0.95) <= at_nominal <= int(nominal * 1.05)
+    assert nominal < above < nominal * 2
+
+
+def test_smb_update_size_remains_bounded_across_thousands_of_updates() -> None:
+    nominal = 12_000_000
+    file = CompiledStorageFile(
+        file_id="long-running-document",
+        share="FS-01.finance",
+        path="Reports\\rolling.xlsx",
+        size_bytes=nominal,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    def evolve() -> tuple[int, ...]:
+        current = nominal
+        values: list[int] = []
+        for index in range(5_000):
+            bundle = _timing_bundle(operation="update")
+            bundle.anchor = SimpleNamespace(stable_id=f"bounded-update-{index}")
+            bundle.executor.state_manager.smb_file_size = lambda _file, size=current: size
+            current = bundle._updated_size(file, 0)
+            values.append(current)
+        return tuple(values)
+
+    first = evolve()
+    second = evolve()
+
+    assert first == second
+    assert min(first) >= int(nominal * 0.5)
+    assert max(first) <= int(nominal * 2.0)
+    assert any(left < right for left, right in zip(first, first[1:], strict=False))
+    assert any(left > right for left, right in zip(first, first[1:], strict=False))
+    assert max(first[-1_000:]) < int(nominal * 1.5)
+
+
+@pytest.mark.parametrize(
+    ("path", "minimum", "maximum", "ceiling"),
+    [
+        ("Reports\\forecast.xlsx", 0.5, 2.0, 256 * 1024**2),
+        ("Packages\\agent.msi", 0.75, 1.25, 4 * 1024**3),
+        ("Backups\\nightly.vhdx", 0.9, 1.15, 2 * 1024**4),
+    ],
+)
+def test_smb_update_profiles_match_extension_first(
+    path: str,
+    minimum: float,
+    maximum: float,
+    ceiling: int,
+) -> None:
+    extension = CompiledStorageFile(
+        file_id="profile-test",
+        share="FS-01.finance",
+        path=path,
+        size_bytes=1,
+        mime_type="application/octet-stream",
+    ).extension
+
+    profile = smb_file_evolution_profile(extension)
+
+    assert profile.minimum_size_ratio == minimum
+    assert profile.maximum_size_ratio == maximum
+    assert profile.capacity_bytes == ceiling
+
+
+def test_smb_update_profile_ceiling_preserves_explicitly_authored_large_nominal_file() -> None:
+    nominal = 512 * 1024**2
+    file = CompiledStorageFile(
+        file_id="authored-large-document",
+        share="FS-01.finance",
+        path="Reports\\large.xlsx",
+        size_bytes=nominal,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    bundle = _timing_bundle(operation="update")
+    bundle.executor.state_manager.smb_file_size = lambda _file: nominal * 2
+
+    assert bundle._updated_size(file, 0) == nominal
+
+
+def test_generic_smb_selection_is_stable_distributed_and_preserves_exact_modes() -> None:
+    files = tuple(
+        CompiledStorageFile(
+            file_id=f"selection-{index}",
+            share="FS-01.finance",
+            path=f"Reports\\selection-{index}.xlsx",
+            size_bytes=4_096 + index,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        for index in range(16)
+    )
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.world = SimpleNamespace(select=lambda *_args, **_kwargs: files)
+    bundle.executor = SimpleNamespace(
+        state_manager=SimpleNamespace(smb_file_is_available=lambda _file: True)
+    )
+    bundle.request = SimpleNamespace(
+        files_override=(),
+        spec=SimpleNamespace(operation="read", batch=None),
+    )
+    generic = SimpleNamespace(
+        share="FS-01.finance",
+        file_ref=None,
+        path=None,
+        selector=None,
+    )
+    selections: list[str] = []
+    for index in range(128):
+        bundle.anchor = SimpleNamespace(stable_id=f"selection-action-{index}")
+        selections.append(bundle._select(generic)[0].file_id)
+
+    bundle.anchor = SimpleNamespace(stable_id="selection-action-17")
+    assert bundle._select(generic)[0].file_id == selections[17]
+    assert len(set(selections)) == len(files)
+
+    bundle.request.files_override = (files[9],)
+    assert bundle._select(generic) == (files[9],)
+    bundle.request.files_override = ()
+    exact = SimpleNamespace(
+        share="FS-01.finance",
+        file_ref="selection-4",
+        path=None,
+        selector=None,
+    )
+    bundle.world.select = lambda *_args, **_kwargs: (files[4],)
+    assert bundle._select(exact) == (files[4],)
+    bundle.world.select = lambda *_args, **_kwargs: files
+    bundle.request.spec.batch = SimpleNamespace(count=3, fraction=None)
+    assert bundle._select(generic) == files[:3]
 
 
 def test_authored_smb_duration_scales_operations_inside_transport_budget() -> None:

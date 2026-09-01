@@ -16,6 +16,7 @@ from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.config.schemas import (
     SmbClientProfile,
+    SmbFileEvolutionProfile,
     SmbProcessProfile,
     SmbProfilesConfig,
     SmbSambaAuditOperation,
@@ -74,6 +75,15 @@ def reset_smb_profiles_cache() -> None:
 
     global _CACHED_PROFILES  # noqa: PLW0603
     _CACHED_PROFILES = None
+
+
+def smb_file_evolution_profile(extension: str) -> SmbFileEvolutionProfile:
+    """Return the configured bounded size profile for one file extension."""
+
+    config = load_smb_profiles().file_evolution
+    normalized = extension.strip().casefold()
+    profile_name = config.extension_profiles.get(normalized, config.default_profile)
+    return config.profiles[profile_name]
 
 
 def advertised_filesystem_default(platform: str, backing_filesystem: str) -> str:

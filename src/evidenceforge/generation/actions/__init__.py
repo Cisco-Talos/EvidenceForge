@@ -188,6 +188,7 @@ from evidenceforge.generation.actions.scanner_probe import (
 )
 from evidenceforge.generation.actions.smb_activity import (
     SmbActivityActionBundle,
+    SmbActivityPreparation,
     SmbActivityRequest,
 )
 from evidenceforge.generation.actions.ssh_session import (
@@ -313,6 +314,7 @@ __all__ = [
     "ScpReceiverFileActionBundle",
     "ScpReceiverFileRequest",
     "SmbActivityActionBundle",
+    "SmbActivityPreparation",
     "SmbActivityRequest",
     "SmbActivityResult",
     "StagedArchiveSmbReadActionBundle",

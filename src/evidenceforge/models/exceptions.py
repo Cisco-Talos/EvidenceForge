@@ -146,6 +146,37 @@ class TransportPortExhaustionError(StateError):
         )
 
 
+class SmbActivityWindowError(StateError):
+    """One exact SMB activity plan extends beyond the runtime window."""
+
+    def __init__(
+        self,
+        *,
+        action_id: str,
+        share: str,
+        file_ids: tuple[str, ...],
+        operation: str,
+        size_bytes: int,
+        opened_at: datetime,
+        closed_at: datetime,
+        window_end: datetime,
+    ) -> None:
+        self.action_id = action_id
+        self.share = share
+        self.file_ids = file_ids
+        self.operation = operation
+        self.size_bytes = size_bytes
+        self.opened_at = opened_at
+        self.closed_at = closed_at
+        self.window_end = window_end
+        super().__init__(
+            "SMB activity closes after the runtime window: "
+            f"action={action_id!r}, share={share!r}, files={file_ids!r}, "
+            f"operation={operation!r}, size_bytes={size_bytes}, "
+            f"interval=[{opened_at}, {closed_at}), window_end={window_end}"
+        )
+
+
 class InsufficientDiskSpaceError(GenerationError):
     """Insufficient disk space for output.
 

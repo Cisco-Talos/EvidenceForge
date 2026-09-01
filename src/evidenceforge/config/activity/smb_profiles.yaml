@@ -41,6 +41,39 @@ transfer_timing:
     auto: [0.1, 1.4]
   transport_tail_seconds: 0.04
 
+# Successful updates evolve around the compiled file's nominal size instead of
+# recursively multiplying the prior version. Extension routes take precedence;
+# unlisted files use the general document envelope.
+file_evolution:
+  default_profile: general
+  extension_profiles:
+    .bak: backup
+    .vhdx: backup
+    .msi: package
+    .exe: package
+    .cab: package
+    .zip: package
+    .7z: package
+  profiles:
+    general:
+      minimum_size_ratio: 0.5
+      maximum_size_ratio: 2.0
+      capacity_bytes: 268435456
+      mean_reversion: 0.25
+      variation_ratio: 0.05
+    package:
+      minimum_size_ratio: 0.75
+      maximum_size_ratio: 1.25
+      capacity_bytes: 4294967296
+      mean_reversion: 0.35
+      variation_ratio: 0.02
+    backup:
+      minimum_size_ratio: 0.9
+      maximum_size_ratio: 1.15
+      capacity_bytes: 2199023255552
+      mean_reversion: 0.4
+      variation_ratio: 0.01
+
 # Canonical event eligibility and vfs_full_audit operation labels. Minimal is
 # lifecycle-only and must not appear in either VFS profile list. Failures are
 # visible at standard/high even when the successful operation is high-only.

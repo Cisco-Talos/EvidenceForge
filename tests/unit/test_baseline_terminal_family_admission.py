@@ -260,7 +260,13 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
     assert Counter(
         owner for owner, _call in _calls("_baseline_dhcp_renewal_close_bound_seconds")
     ) == Counter({"_generate_system_traffic": 1})
-    assert Counter(owner for owner, _call in _calls("generate_smb_activity")) == Counter(
+    assert Counter(owner for owner, _call in _calls("prepare_smb_activity")) == Counter(
+        {
+            "_generate_baseline_smb_activity": 1,
+            "_generate_inline_windows_baseline_smb_activity": 1,
+        }
+    )
+    assert Counter(owner for owner, _call in _calls("execute_prepared_smb_activity")) == Counter(
         {
             "_generate_baseline_smb_activity": 1,
             "_generate_inline_windows_baseline_smb_activity": 1,
@@ -276,6 +282,54 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_emit_web_server_access": 1,
         }
     )
+
+
+def test_optional_baseline_smb_omits_first_exact_plan_that_closes_after_window() -> None:
+    """Optional SMB does not retry, substitute, compress, or mutate after an infeasible plan."""
+
+    source = System(
+        hostname="CLIENT-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+        roles=[],
+        services=[],
+    )
+    actor = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
+    baseline = BaselineMixin()
+    baseline.end_time = _WINDOW_START + timedelta(hours=1)
+    baseline.activity_generator = Mock()
+    baseline.state_manager = Mock()
+    baseline._baseline_network_close_bound_seconds = Mock()
+    baseline._baseline_pass_admits = Mock()
+    intent = SimpleNamespace(
+        time=baseline.end_time - timedelta(seconds=1),
+        duration=15.0,
+        actor=actor,
+        share_ref="FS-01.finance",
+        source_system=source,
+        process_pid=1234,
+        operation="update",
+        target_ip="10.0.0.20",
+        orig_bytes=10_000,
+        resp_bytes=2_000,
+        emit_dns=True,
+    )
+    baseline._plan_baseline_smb_activity = Mock(return_value=(intent,))
+    exact_plan = SimpleNamespace(
+        closed_at=baseline.end_time + timedelta(minutes=30),
+        duration=1_801.0,
+    )
+    baseline.activity_generator.prepare_smb_activity.return_value = exact_plan
+
+    baseline._generate_baseline_smb_activity(_WINDOW_START)
+
+    baseline.activity_generator.prepare_smb_activity.assert_called_once()
+    baseline.activity_generator.execute_prepared_smb_activity.assert_not_called()
+    baseline.activity_generator.generate_connection.assert_not_called()
+    baseline._baseline_network_close_bound_seconds.assert_not_called()
+    baseline._baseline_pass_admits.assert_not_called()
+    baseline.state_manager.set_current_time.assert_not_called()
 
 
 def test_terminal_optional_service_bounds_retain_embryonic_transport_branch() -> None:

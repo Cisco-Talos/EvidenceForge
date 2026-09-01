@@ -22781,6 +22781,28 @@ class StateManager:
                 return candidate.size_bytes
             return 0 if state.deleted else state.size_bytes
 
+    def smb_file_snapshot(self, file: CompiledStorageFile) -> SmbFileState:
+        """Return one immutable-by-convention detached file prestate for planning."""
+
+        candidate = self._detach_compiled_smb_file(file)
+        with self._lock:
+            state = self._smb_file_state_for_observation(candidate.file_id)
+            if state is None:
+                return self._detached_smb_file_state(candidate)
+            if type(state) is _SmbFileStateSnapshot:
+                return SmbFileState(
+                    file_id=state.file_id,
+                    share=state.share,
+                    path=state.path,
+                    version=state.version,
+                    size_bytes=state.size_bytes,
+                    mime_type=state.mime_type,
+                    tags=tuple(state.tags),
+                    deleted=state.deleted,
+                    prior_paths=tuple(state.prior_paths),
+                )
+            return self._detached_smb_file_state(state)
+
     def touch_smb_file(
         self,
         file: CompiledStorageFile,

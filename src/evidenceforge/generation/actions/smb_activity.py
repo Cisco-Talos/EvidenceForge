@@ -60,6 +60,7 @@ from evidenceforge.generation.activity.smb_profiles import (
     load_smb_profiles,
     local_smbclient_operand,
     select_client_profile,
+    smb_file_evolution_profile,
 )
 from evidenceforge.generation.activity.smb_profiles import render_process as render_smb_process
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
@@ -115,11 +116,12 @@ from evidenceforge.generation.state_manager import (
 )
 from evidenceforge.generation.storage_world import (
     CompiledStorageFile,
+    CompiledStorageMapping,
     CompiledStorageShare,
     StorageWorldModel,
 )
 from evidenceforge.generation.timing import TimingRuntime
-from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.models.exceptions import EventContractError, SmbActivityWindowError, StateError
 from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SmbClientLocation,
@@ -127,6 +129,7 @@ from evidenceforge.models.scenario import (
     System,
     User,
 )
+from evidenceforge.models.state import SmbFileState
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc, parse_duration
@@ -147,6 +150,67 @@ class SmbActivityRequest:
     process_image: str = ""
     activity_source: Literal["storyline", "baseline"] = "storyline"
     files_override: tuple[CompiledStorageFile, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SmbFilePrecondition:
+    """Exact read-only file state consumed by one SMB preparation."""
+
+    file_id: str
+    share: str
+    path: str
+    version: int
+    size_bytes: int
+    mime_type: str
+    tags: tuple[str, ...]
+    deleted: bool
+    prior_paths: tuple[str, ...]
+
+    @classmethod
+    def from_state(cls, state: SmbFileState) -> SmbFilePrecondition:
+        """Freeze a detached mutable state row into immutable planning truth."""
+
+        return cls(
+            file_id=state.file_id,
+            share=state.share,
+            path=state.path,
+            version=state.version,
+            size_bytes=state.size_bytes,
+            mime_type=state.mime_type,
+            tags=tuple(state.tags),
+            deleted=state.deleted,
+            prior_paths=tuple(state.prior_paths),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SmbActivityPreparation:
+    """Immutable one-leg SMB selection, mutation, byte, and timing plan."""
+
+    request: SmbActivityRequest
+    primary_location: SmbShareLocation
+    share: CompiledStorageShare
+    server: System
+    client_system: System | None
+    client_ip: str
+    mapping: CompiledStorageMapping | None
+    smb_principal: str
+    client_access: str
+    outcome: str
+    auth_protocol: str
+    principal_user: User
+    effective_uid: int | None
+    effective_gid: int | None
+    selected: tuple[CompiledStorageFile, ...]
+    prestates: tuple[SmbFilePrecondition, ...]
+    planned_sizes: tuple[int, ...]
+    operation_timings: tuple[_SmbOperationTiming, ...]
+    byte_allocations: tuple[tuple[int, int], ...]
+    duration: float
+    closed_at: datetime
+    binding_digest: str
+    client_source_by_destination: tuple[tuple[str, CompiledStorageFile], ...] = ()
+    client_source_by_destination_path: tuple[tuple[str, CompiledStorageFile], ...] = ()
 
 
 class SmbActivityActionBundle:
@@ -170,6 +234,129 @@ class SmbActivityActionBundle:
         self.rng = random.Random(_stable_seed(f"smb-activity:{self.anchor.stable_id}"))
         self._client_source_by_destination: dict[str, CompiledStorageFile] = {}
         self._client_source_by_destination_path: dict[str, CompiledStorageFile] = {}
+        self._preparation: SmbActivityPreparation | None = None
+        self._planning_prestates: dict[str, SmbFilePrecondition] = {}
+        self._planning_post_sizes: dict[str, int] = {}
+
+    def _requires_composite_expansion(self) -> bool:
+        """Return whether this request expands into separately prepared SMB legs."""
+
+        spec = self.request.spec
+        source = spec.source
+        destination = spec.destination
+        if spec.operation not in {"copy", "move"} or not isinstance(source, SmbShareLocation):
+            return False
+        if (
+            spec.operation == "move"
+            and isinstance(destination, SmbShareLocation)
+            and destination.share.casefold() == source.share.casefold()
+        ):
+            return False
+        if not isinstance(destination, SmbShareLocation) and spec.operation == "copy":
+            return False
+        return True
+
+    def _adopt_preparation(self, preparation: SmbActivityPreparation) -> None:
+        """Install exact immutable planning truth on its matching bundle."""
+
+        if type(preparation) is not SmbActivityPreparation:
+            raise StateError("SMB execution requires an exact activity preparation")
+        if preparation.request != self.request:
+            raise StateError("SMB preparation belongs to a different activity request")
+        if preparation.binding_digest != self._preparation_binding_digest(preparation):
+            raise StateError("SMB preparation binding digest does not authenticate its plan")
+        if preparation.closed_at != self.request.time + timedelta(seconds=preparation.duration):
+            raise StateError("SMB preparation close time does not match its duration")
+        if len(preparation.selected) != len(preparation.prestates) or len(
+            preparation.selected
+        ) != len(preparation.planned_sizes):
+            raise StateError("SMB preparation file vectors have inconsistent lengths")
+        if len(preparation.selected) != len(preparation.operation_timings) or len(
+            preparation.selected
+        ) != len(preparation.byte_allocations):
+            raise StateError("SMB preparation operation vectors have inconsistent lengths")
+        self.server = preparation.server
+        self.client_system = preparation.client_system
+        self.mapping = preparation.mapping
+        self.smb_principal = preparation.smb_principal
+        self.client_access = preparation.client_access
+        self.outcome = preparation.outcome
+        self._client_source_by_destination = dict(preparation.client_source_by_destination)
+        self._client_source_by_destination_path = dict(
+            preparation.client_source_by_destination_path
+        )
+        self._preparation = preparation
+
+    @staticmethod
+    def _preparation_binding_digest(preparation: SmbActivityPreparation) -> str:
+        """Digest every immutable field that execution consumes."""
+
+        return hashlib.sha256(
+            repr(
+                (
+                    "smb-activity-preparation-v1",
+                    preparation.request,
+                    preparation.primary_location,
+                    preparation.share,
+                    preparation.server,
+                    preparation.client_system,
+                    preparation.client_ip,
+                    preparation.mapping,
+                    preparation.smb_principal,
+                    preparation.client_access,
+                    preparation.outcome,
+                    preparation.auth_protocol,
+                    preparation.principal_user,
+                    preparation.effective_uid,
+                    preparation.effective_gid,
+                    preparation.selected,
+                    preparation.prestates,
+                    preparation.planned_sizes,
+                    preparation.operation_timings,
+                    preparation.byte_allocations,
+                    preparation.duration,
+                    preparation.closed_at,
+                    preparation.client_source_by_destination,
+                    preparation.client_source_by_destination_path,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def _validate_preparation_prestate(self, preparation: SmbActivityPreparation) -> None:
+        """Reject stale file state before opening any SMB mutation authority."""
+
+        for file, expected in zip(
+            preparation.selected,
+            preparation.prestates,
+            strict=True,
+        ):
+            actual = SmbFilePrecondition.from_state(
+                self.executor.state_manager.smb_file_snapshot(file)
+            )
+            if actual != expected:
+                raise StateError(
+                    "SMB activity preparation is stale before mutation: "
+                    f"file={file.file_id!r}, expected_version={expected.version}, "
+                    f"actual_version={actual.version}, expected_size={expected.size_bytes}, "
+                    f"actual_size={actual.size_bytes}"
+                )
+
+    def _validate_preparation_window(self, preparation: SmbActivityPreparation) -> None:
+        """Reject an explicit prepared activity that exceeds the strict runtime window."""
+
+        window_end = getattr(self.executor, "_scenario_end_time", None)
+        if not isinstance(window_end, datetime) or preparation.closed_at <= window_end:
+            return
+        raise SmbActivityWindowError(
+            action_id=self.anchor.stable_id,
+            share=preparation.share.ref,
+            file_ids=tuple(file.file_id for file in preparation.selected),
+            operation=self.request.spec.operation,
+            size_bytes=sum(preparation.planned_sizes),
+            opened_at=self.request.time,
+            closed_at=preparation.closed_at,
+            window_end=window_end,
+        )
 
     def _timing_planner(self) -> BaselineTimingPlanner:
         """Return the shared engine timing planner for this SMB action."""
@@ -201,6 +388,11 @@ class SmbActivityActionBundle:
         payload = (
             "persistent-smb-terminal-action-binding-v1",
             self.anchor.stable_id,
+            (
+                preparation.binding_digest
+                if (preparation := getattr(self, "_preparation", None)) is not None
+                else ""
+            ),
             self.anchor.source,
             self.request.time,
             self.request.actor.username,
@@ -237,11 +429,14 @@ class SmbActivityActionBundle:
         )
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
-    def execute(self) -> SmbActivityResult:
+    def prepare(self) -> SmbActivityPreparation:
+        """Freeze one non-composite SMB activity without mutating runtime authorities."""
+
         spec = self.request.spec
-        composite = self._execute_composite_transfer()
-        if composite is not None:
-            return composite
+        if self._requires_composite_expansion():
+            raise StateError(
+                "Composite SMB transfers prepare and execute one physical leg at a time"
+            )
         share_locations = self._share_locations()
         if not share_locations:
             raise ValueError("smb_activity requires at least one share location")
@@ -295,7 +490,96 @@ class SmbActivityActionBundle:
         if not selected:
             raise ValueError(f"smb_activity selected no files on {share.ref}")
 
-        duration = self._duration(selected)
+        prestates = tuple(
+            SmbFilePrecondition.from_state(self.executor.state_manager.smb_file_snapshot(file))
+            for file in selected
+        )
+        self._planning_prestates = {state.file_id: state for state in prestates}
+        try:
+            planned_sizes = tuple(
+                self._updated_size(file, index)
+                if spec.operation == "update" and self.outcome == "success"
+                else self._planned_transfer_size(file, index)
+                for index, file in enumerate(selected)
+            )
+            self._planning_post_sizes = dict(
+                zip((file.file_id for file in selected), planned_sizes, strict=True)
+            )
+            duration = self._duration(selected)
+            operation_timings = tuple(
+                self._operation_timing(
+                    file,
+                    index,
+                    size_bytes=self._planned_operation_size(file, index),
+                )
+                for index, file in enumerate(selected)
+            )
+            byte_allocations = self._transport_byte_allocations(selected)
+        finally:
+            self._planning_prestates = {}
+            self._planning_post_sizes = {}
+        closed_at = self.request.time + timedelta(seconds=duration)
+        preparation = SmbActivityPreparation(
+            request=self.request,
+            primary_location=primary_location,
+            share=share,
+            server=server,
+            client_system=client_system,
+            client_ip=client_ip,
+            mapping=self.mapping,
+            smb_principal=self.smb_principal,
+            client_access=self.client_access,
+            outcome=self.outcome,
+            auth_protocol=auth_protocol,
+            principal_user=principal_user,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+            selected=selected,
+            prestates=prestates,
+            planned_sizes=planned_sizes,
+            operation_timings=operation_timings,
+            byte_allocations=byte_allocations,
+            duration=duration,
+            closed_at=closed_at,
+            binding_digest="",
+            client_source_by_destination=tuple(self._client_source_by_destination.items()),
+            client_source_by_destination_path=tuple(
+                self._client_source_by_destination_path.items()
+            ),
+        )
+        preparation = replace(
+            preparation,
+            binding_digest=self._preparation_binding_digest(preparation),
+        )
+        self._preparation = preparation
+        return preparation
+
+    def execute(
+        self,
+        preparation: SmbActivityPreparation | None = None,
+    ) -> SmbActivityResult:
+        """Execute one exact prepared SMB leg or expand a composite transfer."""
+
+        spec = self.request.spec
+        if preparation is None and self._requires_composite_expansion():
+            composite = self._execute_composite_transfer()
+            if composite is None:
+                raise StateError("Composite SMB expansion did not produce a result")
+            return composite
+        preparation = preparation or self.prepare()
+        self._adopt_preparation(preparation)
+        self._validate_preparation_prestate(preparation)
+        self._validate_preparation_window(preparation)
+        share = preparation.share
+        server = preparation.server
+        client_system = preparation.client_system
+        client_ip = preparation.client_ip
+        auth_protocol = preparation.auth_protocol
+        principal_user = preparation.principal_user
+        effective_uid = preparation.effective_uid
+        effective_gid = preparation.effective_gid
+        selected = preparation.selected
+        duration = preparation.duration
         if self._server_platform(server) == "windows":
             if not 1 <= len(selected) <= _MAX_PERSISTENT_SMB_OPERATIONS:
                 raise ValueError("Persistent SMB production requires 1..64 file operations")
@@ -730,7 +1014,10 @@ class SmbActivityActionBundle:
             process_image=transport_image or None,
             preserve_explicit_payload=True,
             suppress_application_side_effects=True,
-            suppress_source_pid_inference=self.client_access == "cifs_mount",
+            suppress_source_pid_inference=(
+                self.client_access == "cifs_mount"
+                or (process_plan is not None and transport_pid <= 0)
+            ),
             parent_action_group_id=self.anchor.stable_id,
         )
         transport_plan = self.executor.dispatcher.network_plan_for(transport_uid)
@@ -3637,7 +3924,7 @@ class SmbActivityActionBundle:
         selected = self._select(source)
         if not selected:
             raise ValueError(f"smb_activity selected no files on {source.share}")
-        results: list[SmbActivityResult] = []
+        preparations: list[SmbActivityPreparation] = []
         copy_outcome = spec.outcome
         if spec.operation == "move" and not isinstance(destination, SmbShareLocation):
             copy_outcome = self._leg_outcome(source, operation="read")
@@ -3655,7 +3942,7 @@ class SmbActivityActionBundle:
             smb_principal=spec.smb_principal,
         )
         if not isinstance(destination, SmbShareLocation):
-            results.append(self._execute_child(copy_spec, selected, offset_ms=0))
+            preparations.append(self._prepare_child(copy_spec, selected, offset_ms=0))
         else:
             source_outcome = self._leg_outcome(source, operation="read")
             read_spec = SmbActivityEventSpec(
@@ -3670,51 +3957,49 @@ class SmbActivityActionBundle:
                 auth_protocol=spec.auth_protocol,
                 smb_principal=spec.smb_principal,
             )
-            results.append(self._execute_child(read_spec, selected, offset_ms=0))
-            if any(operation["outcome"] != "success" for operation in results[-1].operations):
-                return self._combine_results(results)
-            destination_files = tuple(
-                file.model_copy(
-                    update={
-                        "file_id": stable_uuid(
-                            "smb-copy-destination",
-                            self.anchor.stable_id,
-                            destination.share,
-                            self._destination_path(destination, file.path),
-                        ),
-                        "share": destination.share,
-                        "path": self._destination_path(destination, file.path),
-                    }
+            read_preparation = self._prepare_child(read_spec, selected, offset_ms=0)
+            preparations.append(read_preparation)
+            if read_preparation.outcome == "success":
+                destination_files = tuple(
+                    file.model_copy(
+                        update={
+                            "file_id": stable_uuid(
+                                "smb-copy-destination",
+                                self.anchor.stable_id,
+                                destination.share,
+                                self._destination_path(destination, file.path),
+                            ),
+                            "share": destination.share,
+                            "path": self._destination_path(destination, file.path),
+                        }
+                    )
+                    for file in selected
                 )
-                for file in selected
-            )
-            create_spec = SmbActivityEventSpec(
-                operation="create",
-                purpose=spec.purpose,
-                target=destination.model_copy(
-                    update={
-                        "path": destination.path if len(selected) == 1 else None,
-                        "directory": None,
-                    }
-                ),
-                outcome=self._leg_outcome(destination, operation="create"),
-                path_style=spec.path_style,
-                mapping=self._mapping_for_share(destination.share),
-                client=spec.client,
-                client_access=spec.client_access,
-                auth_protocol=spec.auth_protocol,
-                smb_principal=spec.smb_principal,
-            )
-            results.append(self._execute_child(create_spec, destination_files, offset_ms=25))
+                create_spec = SmbActivityEventSpec(
+                    operation="create",
+                    purpose=spec.purpose,
+                    target=destination.model_copy(
+                        update={
+                            "path": destination.path if len(selected) == 1 else None,
+                            "directory": None,
+                        }
+                    ),
+                    outcome=self._leg_outcome(destination, operation="create"),
+                    path_style=spec.path_style,
+                    mapping=self._mapping_for_share(destination.share),
+                    client=spec.client,
+                    client_access=spec.client_access,
+                    auth_protocol=spec.auth_protocol,
+                    smb_principal=spec.smb_principal,
+                )
+                preparations.append(
+                    self._prepare_child(create_spec, destination_files, offset_ms=25)
+                )
 
-        if spec.operation == "move" and any(
-            operation["outcome"] != "success"
-            for result in results
-            for operation in result.operations
+        if spec.operation == "move" and all(
+            preparation.outcome == "success" for preparation in preparations
         ):
-            return self._combine_results(results)
-        if spec.operation == "move":
-            completed_at = max(result.completed_at for result in results)
+            completed_at = max(preparation.closed_at for preparation in preparations)
             destination_scope = getattr(destination, "share", "client")
             delete_window = get_timing_window(
                 "smb.cross_server_delete_after_destination",
@@ -3753,24 +4038,28 @@ class SmbActivityActionBundle:
                 auth_protocol=spec.auth_protocol,
                 smb_principal=spec.smb_principal,
             )
-            results.append(
-                self._execute_child(
+            preparations.append(
+                self._prepare_child(
                     delete_spec,
                     selected,
                     offset_ms=0,
                     execution_time=delete_time,
                 )
             )
+        self._validate_composite_preparations(preparations)
+        results = [self._execute_prepared_child(preparation) for preparation in preparations]
         return self._combine_results(results)
 
-    def _execute_child(
+    def _prepare_child(
         self,
         spec: SmbActivityEventSpec,
         files: tuple[CompiledStorageFile, ...],
         *,
         offset_ms: int,
         execution_time: datetime | None = None,
-    ) -> SmbActivityResult:
+    ) -> SmbActivityPreparation:
+        """Freeze one physical child leg without mutating shared runtime state."""
+
         child_request = SmbActivityRequest(
             spec=spec,
             actor=self.request.actor,
@@ -3781,7 +4070,29 @@ class SmbActivityActionBundle:
             activity_source=self.request.activity_source,
             files_override=files,
         )
-        return SmbActivityActionBundle(self.executor, child_request).execute()
+        return SmbActivityActionBundle(self.executor, child_request).prepare()
+
+    def _validate_composite_preparations(
+        self,
+        preparations: list[SmbActivityPreparation],
+    ) -> None:
+        """Validate every child before the first composite leg can mutate state."""
+
+        if not preparations:
+            raise StateError("Composite SMB activity produced no physical preparations")
+        for preparation in preparations:
+            child = SmbActivityActionBundle(self.executor, preparation.request)
+            child._adopt_preparation(preparation)
+            child._validate_preparation_prestate(preparation)
+            child._validate_preparation_window(preparation)
+
+    def _execute_prepared_child(
+        self,
+        preparation: SmbActivityPreparation,
+    ) -> SmbActivityResult:
+        """Execute one already validated physical child leg exactly once."""
+
+        return SmbActivityActionBundle(self.executor, preparation.request).execute(preparation)
 
     @staticmethod
     def _combine_results(results: list[SmbActivityResult]) -> SmbActivityResult:
@@ -3920,11 +4231,15 @@ class SmbActivityActionBundle:
         )
         batch = self.request.spec.batch
         if batch is None:
-            if location.selector is not None:
-                return candidates[:1]
             if location.file_ref is not None or location.path is not None:
                 return candidates
-            return candidates[:1]
+            if not candidates:
+                return ()
+            index = _stable_seed(
+                "smb-generic-file-selection:"
+                f"{self.anchor.stable_id}:{location.share}:{self.request.spec.operation}"
+            ) % len(candidates)
+            return (candidates[index],)
         return self._apply_batch(candidates)
 
     def _create_placeholder(
@@ -4160,7 +4475,7 @@ class SmbActivityActionBundle:
                     journal=journal,
                 )
             timing = self._operation_timing(
-                state,
+                file,
                 operation_index,
                 size_bytes=state.size_bytes,
             )
@@ -4916,6 +5231,8 @@ class SmbActivityActionBundle:
         return source_path, ""
 
     def _duration(self, files: tuple[CompiledStorageFile, ...]) -> float:
+        if (preparation := getattr(self, "_preparation", None)) is not None:
+            return preparation.duration
         authored = (
             self.request.spec.batch.duration
             if self.outcome == "success" and self.request.spec.batch
@@ -4985,16 +5302,76 @@ class SmbActivityActionBundle:
     def _updated_size(self, file: CompiledStorageFile, operation_index: int) -> int:
         """Return the canonical post-update size without consuming shared RNG state."""
 
-        current_size = self.executor.state_manager.smb_file_size(file)
+        if (preparation := getattr(self, "_preparation", None)) is not None:
+            return self._prepared_file_value(
+                preparation.planned_sizes,
+                file,
+                operation_index,
+                label="planned size",
+            )
+        planned = getattr(self, "_planning_post_sizes", {}).get(file.file_id)
+        if planned is not None:
+            return planned
+        prestate = getattr(self, "_planning_prestates", {}).get(file.file_id)
+        current_size = (
+            prestate.size_bytes
+            if prestate is not None
+            else self.executor.state_manager.smb_file_size(file)
+        )
+        nominal_size = max(1, file.size_bytes)
+        profile = smb_file_evolution_profile(file.extension)
         rng = self._timing_rng(f"update-size:{operation_index}:{file.file_id}")
-        return max(1, int(current_size * rng.uniform(0.92, 1.15)))
+        drift = (nominal_size - current_size) * profile.mean_reversion
+        variation = nominal_size * rng.uniform(
+            -profile.variation_ratio,
+            profile.variation_ratio,
+        )
+        minimum = max(1, int(nominal_size * profile.minimum_size_ratio))
+        maximum = max(
+            nominal_size,
+            min(
+                int(nominal_size * profile.maximum_size_ratio),
+                profile.capacity_bytes,
+            ),
+        )
+        return min(maximum, max(minimum, round(current_size + drift + variation)))
 
     def _planned_transfer_size(self, file: CompiledStorageFile, operation_index: int) -> int:
         """Return the size that the operation will put on the wire."""
 
+        if (preparation := getattr(self, "_preparation", None)) is not None:
+            return self._prepared_file_value(
+                preparation.planned_sizes,
+                file,
+                operation_index,
+                label="transfer size",
+            )
+        planned = getattr(self, "_planning_post_sizes", {}).get(file.file_id)
+        if planned is not None:
+            return planned
         if self.request.spec.operation == "update":
             return self._updated_size(file, operation_index)
+        prestate = getattr(self, "_planning_prestates", {}).get(file.file_id)
+        if prestate is not None:
+            return prestate.size_bytes
         return self.executor.state_manager.smb_file_size(file)
+
+    def _prepared_file_value(
+        self,
+        values: tuple[Any, ...],
+        file: CompiledStorageFile,
+        operation_index: int,
+        *,
+        label: str,
+    ) -> Any:
+        """Return one indexed prepared value after validating its file binding."""
+
+        preparation = getattr(self, "_preparation", None)
+        if preparation is None or not 0 <= operation_index < len(values):
+            raise StateError(f"SMB preparation lost its {label} index")
+        if preparation.selected[operation_index].file_id != file.file_id:
+            raise StateError(f"SMB preparation {label} belongs to a different file")
+        return values[operation_index]
 
     def _planned_operation_size(self, file: CompiledStorageFile, operation_index: int) -> int:
         """Return payload size for timing, excluding failed open-only operations."""
@@ -5012,6 +5389,13 @@ class SmbActivityActionBundle:
     ) -> _SmbOperationTiming:
         """Sample one bounded operation span using a stable session-scoped RNG."""
 
+        if (preparation := getattr(self, "_preparation", None)) is not None:
+            return self._prepared_file_value(
+                preparation.operation_timings,
+                file,
+                operation_index,
+                label="operation timing",
+            )
         config = load_smb_profiles().transfer_timing
         rng = self._timing_rng(f"operation:{operation_index}:{file.file_id}")
         throughput = min(
@@ -5129,6 +5513,12 @@ class SmbActivityActionBundle:
     ) -> tuple[tuple[int, int], ...]:
         """Return exact initiator/responder byte reservations for each selected file."""
 
+        if (preparation := getattr(self, "_preparation", None)) is not None:
+            if tuple(file.file_id for file in files) != tuple(
+                file.file_id for file in preparation.selected
+            ):
+                raise StateError("SMB preparation byte allocations belong to different files")
+            return preparation.byte_allocations
         initiator = self._directional_transport_byte_allocations(files, write=True)
         responder = self._directional_transport_byte_allocations(files, write=False)
         return tuple(zip(initiator, responder, strict=True))

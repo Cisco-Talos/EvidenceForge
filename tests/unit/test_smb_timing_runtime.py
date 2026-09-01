@@ -86,15 +86,25 @@ def _composite_bundle(
     bundle._mapping_for_share = lambda _share: None
     bundle._leg_outcome = lambda _location, *, operation: "success"
 
-    def execute_child(
+    def prepare_child(
         child_spec: SmbActivityEventSpec,
         _files: tuple[CompiledStorageFile, ...],
         *,
         offset_ms: int,
         execution_time: datetime | None = None,
-    ) -> SmbActivityResult:
+    ) -> SimpleNamespace:
         started_at = execution_time or request.time + timedelta(milliseconds=offset_ms)
         completed_at = started_at + timedelta(milliseconds=10)
+        return SimpleNamespace(
+            request=SimpleNamespace(spec=child_spec, time=started_at),
+            outcome="success",
+            closed_at=completed_at,
+        )
+
+    def execute_prepared_child(preparation: SimpleNamespace) -> SmbActivityResult:
+        child_spec = preparation.request.spec
+        started_at = preparation.request.time
+        completed_at = preparation.closed_at
         calls.append((child_spec.operation, started_at, completed_at))
         return SmbActivityResult(
             session_id="smb-session",
@@ -104,7 +114,9 @@ def _composite_bundle(
             completed_at=completed_at,
         )
 
-    bundle._execute_child = execute_child
+    bundle._prepare_child = prepare_child
+    bundle._validate_composite_preparations = lambda _preparations: None
+    bundle._execute_prepared_child = execute_prepared_child
     return bundle, calls, select
 
 
@@ -112,15 +124,18 @@ def test_composite_smb_rejects_missing_engine_runtime_before_any_child() -> None
     """A missing engine runtime is allocation-free at the composite boundary."""
 
     bundle, _calls, select = _composite_bundle(TimingRuntime(reference_time=_START))
-    execute_child = Mock()
+    prepare_child = Mock()
+    execute_prepared_child = Mock()
     bundle.executor = SimpleNamespace(timing_runtime=None)
-    bundle._execute_child = execute_child
+    bundle._prepare_child = prepare_child
+    bundle._execute_prepared_child = execute_prepared_child
 
     with pytest.raises(StateError, match="executor-owned TimingRuntime"):
         bundle._execute_composite_transfer()
 
     select.assert_not_called()
-    execute_child.assert_not_called()
+    prepare_child.assert_not_called()
+    execute_prepared_child.assert_not_called()
 
 
 def test_composite_smb_delete_gap_uses_one_runtime_with_deterministic_parity() -> None:

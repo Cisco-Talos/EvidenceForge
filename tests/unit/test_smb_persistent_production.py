@@ -11,14 +11,18 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
-from datetime import timedelta
+from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 import pytest
 
 from evidenceforge.events.dispatcher import PersistentSmbSourcePublicationResult
-from evidenceforge.generation.actions.smb_activity import SmbActivityActionBundle
+from evidenceforge.generation.actions.smb_activity import (
+    SmbActivityActionBundle,
+    SmbActivityPreparation,
+)
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.persistent_smb_continuation import (
     PersistentSmbTerminalContinuation,
@@ -30,10 +34,10 @@ from evidenceforge.generation.resource_forecast import (
     ResourceSnapshot,
 )
 from evidenceforge.generation.source_timing import SourceTimingPreparation
-from evidenceforge.models.exceptions import EventContractError, StateError
-from evidenceforge.models.scenario import Scenario
+from evidenceforge.models.exceptions import EventContractError, SmbActivityWindowError, StateError
+from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec, SmbBatchSpec
 from evidenceforge.utils import load_yaml
-from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng
+from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
 _SOURCE_FILENAMES = frozenset(
     {
@@ -330,6 +334,42 @@ def _invoke_windows_read(engine: GenerationEngine, scenario: Scenario) -> object
         )
 
 
+def _prepare_windows_read(
+    engine: GenerationEngine,
+    scenario: Scenario,
+    *,
+    spec: SmbActivityEventSpec | None = None,
+    time: datetime | None = None,
+) -> SmbActivityPreparation:
+    """Prepare the fixture activity through the public canonical owner."""
+
+    storyline = scenario.storyline[0]
+    return engine.activity_generator.prepare_smb_activity(
+        spec=spec if spec is not None else storyline.events[0],
+        actor=scenario.environment.users[0],
+        parent_system=scenario.environment.systems[0],
+        time=time if time is not None else engine.start_time + timedelta(minutes=10),
+        activity_source="storyline",
+    )
+
+
+def _smb_planning_authority_snapshot(engine: GenerationEngine) -> tuple[object, ...]:
+    """Capture every runtime authority that read-only SMB planning must preserve."""
+
+    generator = engine.activity_generator
+    return (
+        generator.state_manager.get_state_summary(),
+        generator._smb_channel_manager.census(),
+        generator._network_transaction_runtime.census(),
+        generator._lifecycle_authority.census(),
+        generator._source_timing_planner.preparation_authority_census(),
+        generator._source_timing_planner.detached_binding_census(),
+        generator.persistent_smb_terminal_continuation_census(),
+        generator.dispatcher.persistent_smb_projection_group_census(),
+        generator.dispatcher.persistent_smb_source_publication_census(),
+    )
+
+
 def _assert_exact_source_order(output: Path) -> None:
     source_paths = tuple(path for path, _payload in _source_bytes(output))
     assert source_paths == (
@@ -552,6 +592,187 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
         "core-zeek/smb_files.json",
         "core-zeek/smb_mapping.json",
     )
+
+
+@pytest.mark.slow
+def test_smb_preparation_is_exact_repeatable_and_runtime_neutral(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """Read-only planning freezes one exact plan without touching runtime owners or RNG."""
+
+    scenario = _windows_read_scenario(scenarios_dir, file_count=2)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        with generation_seed_scope(scenario.generation_seed):
+            reset_thread_rng()
+            rng = _get_rng()
+            rng_before = rng.getstate()
+            authorities_before = _smb_planning_authority_snapshot(engine)
+
+            first = _prepare_windows_read(engine, scenario)
+            second = _prepare_windows_read(engine, scenario)
+
+            def prepare_concurrently(_index: int) -> SmbActivityPreparation:
+                with generation_seed_scope(scenario.generation_seed):
+                    return _prepare_windows_read(engine, scenario)
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                concurrent = tuple(pool.map(prepare_concurrently, range(8)))
+
+            assert first == second
+            assert concurrent == (first,) * len(concurrent)
+            assert first.binding_digest == second.binding_digest
+            assert first.closed_at == first.request.time + timedelta(seconds=first.duration)
+            assert rng.getstate() == rng_before
+            assert _smb_planning_authority_snapshot(engine) == authorities_before
+    finally:
+        engine._close_emitters()
+    assert _source_bytes(tmp_path) == ()
+
+
+@pytest.mark.slow
+def test_smb_execution_consumes_prepared_files_sizes_timing_and_bytes(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """Execution uses the admitted immutable preparation instead of replanning it."""
+
+    scenario = _windows_read_scenario(scenarios_dir, file_count=2)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    preparation: SmbActivityPreparation | None = None
+    try:
+        engine._initialize()
+        with generation_seed_scope(scenario.generation_seed):
+            preparation = _prepare_windows_read(engine, scenario)
+            adopted = SmbActivityActionBundle(
+                engine.activity_generator,
+                preparation.request,
+            )
+            adopted._adopt_preparation(preparation)
+            assert (
+                tuple(
+                    adopted._operation_timing(file, index, size_bytes=size)
+                    for index, (file, size) in enumerate(
+                        zip(preparation.selected, preparation.planned_sizes, strict=True)
+                    )
+                )
+                == preparation.operation_timings
+            )
+            assert adopted._transport_byte_allocations(preparation.selected) == (
+                preparation.byte_allocations
+            )
+
+            result = engine.activity_generator.execute_prepared_smb_activity(preparation)
+
+        assert tuple(str(operation["file_id"]) for operation in result.operations) == tuple(
+            file.file_id for file in preparation.selected
+        )
+        assert tuple(int(operation["size_bytes"]) for operation in result.operations) == (
+            preparation.planned_sizes
+        )
+        _assert_transient_authorities_drained(engine)
+    finally:
+        engine._close_emitters()
+
+    assert preparation is not None
+    connections = _json_records(tmp_path, "conn.json")
+    assert len(connections) == 1
+    # The source-native Zeek interval includes its independently planned sensor
+    # jitter; the canonical transport consumes the exact prepared duration.
+    assert float(connections[0]["duration"]) == pytest.approx(
+        preparation.duration,
+        abs=0.005,
+    )
+    assert int(connections[0]["orig_bytes"]) == sum(
+        allocation[0] for allocation in preparation.byte_allocations
+    )
+    assert int(connections[0]["resp_bytes"]) == sum(
+        allocation[1] for allocation in preparation.byte_allocations
+    )
+
+
+@pytest.mark.slow
+def test_smb_execution_rejects_stale_or_tampered_preparation_before_mutation(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """Preconditions and the digest reject changed plans without opening authorities."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        with generation_seed_scope(scenario.generation_seed):
+            preparation = _prepare_windows_read(engine, scenario)
+        tampered = replace(
+            preparation,
+            planned_sizes=(preparation.planned_sizes[0] + 1,),
+        )
+        authorities_before = _smb_planning_authority_snapshot(engine)
+        with pytest.raises(StateError, match="binding digest"):
+            engine.activity_generator.execute_prepared_smb_activity(tampered)
+        assert _smb_planning_authority_snapshot(engine) == authorities_before
+
+        state = engine.activity_generator.state_manager
+        selected = preparation.selected[0]
+        touched = state.touch_smb_file(selected)
+        state.update_smb_file(touched.file_id, size_bytes=touched.size_bytes + 1)
+        file_before = state.smb_file_snapshot(selected)
+        authorities_before = _smb_planning_authority_snapshot(engine)
+        with pytest.raises(StateError, match="preparation is stale"):
+            engine.activity_generator.execute_prepared_smb_activity(preparation)
+        assert state.smb_file_snapshot(selected) == file_before
+        assert _smb_planning_authority_snapshot(engine) == authorities_before
+    finally:
+        engine._close_emitters()
+    assert _source_bytes(tmp_path) == ()
+
+
+@pytest.mark.slow
+def test_smb_preparation_window_is_half_open_and_rejects_before_mutation(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """An exact-end close fits; a later close raises the dedicated diagnostic."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        event = scenario.storyline[0].events[0]
+        exact_spec = event.model_copy(update={"batch": SmbBatchSpec(count=1, duration="5m")})
+        late_spec = event.model_copy(update={"batch": SmbBatchSpec(count=1, duration="6m")})
+        with generation_seed_scope(scenario.generation_seed):
+            exact = _prepare_windows_read(
+                engine,
+                scenario,
+                spec=exact_spec,
+                time=engine.end_time - timedelta(minutes=5),
+            )
+            late = _prepare_windows_read(
+                engine,
+                scenario,
+                spec=late_spec,
+                time=engine.end_time - timedelta(minutes=5),
+            )
+        assert exact.closed_at == engine.end_time
+        SmbActivityActionBundle(
+            engine.activity_generator,
+            exact.request,
+        )._validate_preparation_window(exact)
+
+        authorities_before = _smb_planning_authority_snapshot(engine)
+        with pytest.raises(SmbActivityWindowError) as captured:
+            engine.activity_generator.execute_prepared_smb_activity(late)
+        assert captured.value.closed_at == late.closed_at
+        assert captured.value.window_end == engine.end_time
+        assert captured.value.file_ids == tuple(file.file_id for file in late.selected)
+        assert _smb_planning_authority_snapshot(engine) == authorities_before
+    finally:
+        engine._close_emitters()
+    assert _source_bytes(tmp_path) == ()
 
 
 @pytest.mark.slow

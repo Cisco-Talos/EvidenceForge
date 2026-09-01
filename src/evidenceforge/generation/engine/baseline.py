@@ -9086,22 +9086,36 @@ class BaselineMixin:
 
         from evidenceforge.models.scenario import (
             SmbActivityEventSpec,
-            SmbBatchSpec,
             SmbShareLocation,
         )
 
         for intent in self._plan_baseline_smb_activity(current_hour):
-            duration_ms = None
-            if (
-                intent.actor is not None
-                and intent.share_ref
-                and self._baseline_pass_is_terminal(current_hour)
-            ):
-                duration_ms = max(250, math.ceil(intent.duration * 1000))
-            canonical_duration = max(
-                intent.duration,
-                (duration_ms or 0) / 1000,
-            )
+            preparation = None
+            canonical_duration = intent.duration
+            if intent.actor is not None and intent.share_ref:
+                spec = SmbActivityEventSpec(
+                    type="smb_activity",
+                    operation=intent.operation,
+                    purpose="interactive",
+                    target=SmbShareLocation(type="share", share=intent.share_ref),
+                )
+                preparation = self.activity_generator.prepare_smb_activity(
+                    spec=spec,
+                    actor=intent.actor,
+                    parent_system=intent.source_system,
+                    time=intent.time,
+                    process_pid=intent.process_pid,
+                    process_image=(
+                        r"C:\Windows\explorer.exe"
+                        if intent.process_pid > 0
+                        and _get_os_category(intent.source_system.os) == "windows"
+                        else ""
+                    ),
+                    activity_source="baseline",
+                )
+                if preparation.closed_at > self.end_time:
+                    continue
+                canonical_duration = preparation.duration
             close_bound = self._baseline_network_close_bound_seconds(
                 src_ip=intent.source_system.ip,
                 dst_ip=intent.target_ip,
@@ -9120,31 +9134,9 @@ class BaselineMixin:
                 end=intent.time + timedelta(seconds=close_bound),
             ):
                 continue
-            if intent.actor is not None and intent.share_ref:
-                batch = None
-                if duration_ms is not None:
-                    batch = SmbBatchSpec(count=1, duration=f"{duration_ms}ms")
+            if preparation is not None:
                 self.state_manager.set_current_time(intent.time)
-                self.activity_generator.generate_smb_activity(
-                    spec=SmbActivityEventSpec(
-                        type="smb_activity",
-                        operation=intent.operation,
-                        purpose="interactive",
-                        target=SmbShareLocation(type="share", share=intent.share_ref),
-                        batch=batch,
-                    ),
-                    actor=intent.actor,
-                    parent_system=intent.source_system,
-                    time=intent.time,
-                    process_pid=intent.process_pid,
-                    process_image=(
-                        r"C:\Windows\explorer.exe"
-                        if intent.process_pid > 0
-                        and _get_os_category(intent.source_system.os) == "windows"
-                        else ""
-                    ),
-                    activity_source="baseline",
-                )
+                self.activity_generator.execute_prepared_smb_activity(preparation)
                 continue
 
             self.state_manager.set_current_time(intent.time)
@@ -9176,7 +9168,6 @@ class BaselineMixin:
 
         from evidenceforge.models.scenario import (
             SmbActivityEventSpec,
-            SmbBatchSpec,
             SmbShareLocation,
         )
 
@@ -9267,14 +9258,37 @@ class BaselineMixin:
                 if target_system is not None
                 else []
             )
-            duration_ms = None
-            if (
-                actor is not None
-                and server_shares
-                and self._baseline_pass_is_terminal(current_hour)
-            ):
-                duration_ms = max(250, math.ceil(duration * 1000))
-            canonical_duration = max(duration, (duration_ms or 0) / 1000)
+            preparation = None
+            canonical_duration = duration
+            if actor is not None and server_shares:
+                dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
+                share = rng.choice(dc_shares or server_shares)
+                if dc_shares and operation_profile == "write":
+                    operation_profile = "read"
+                operation = {
+                    "read": "read",
+                    "write": "update",
+                    "metadata": "browse",
+                }[operation_profile]
+                spec = SmbActivityEventSpec(
+                    type="smb_activity",
+                    operation=operation,
+                    purpose="interactive",
+                    target=SmbShareLocation(type="share", share=share.ref),
+                )
+                preparation = self.activity_generator.prepare_smb_activity(
+                    spec=spec,
+                    actor=actor,
+                    parent_system=system,
+                    time=timestamp,
+                    process_pid=(session.explorer_pid or -1) if session else -1,
+                    process_image=r"C:\Windows\explorer.exe" if session else "",
+                    activity_source="baseline",
+                )
+                if preparation.closed_at > self.end_time:
+                    scheduled_second += interval
+                    continue
+                canonical_duration = preparation.duration
             close_bound = self._baseline_network_close_bound_seconds(
                 src_ip=system.ip,
                 dst_ip=target_ip,
@@ -9295,34 +9309,8 @@ class BaselineMixin:
                 scheduled_second += interval
                 continue
             self.state_manager.set_current_time(timestamp)
-            if actor is not None and server_shares:
-                dc_shares = [share for share in server_shares if share.preset == "dc_policy"]
-                share = rng.choice(dc_shares or server_shares)
-                if dc_shares and operation_profile == "write":
-                    operation_profile = "read"
-                operation = {
-                    "read": "read",
-                    "write": "update",
-                    "metadata": "browse",
-                }[operation_profile]
-                batch = None
-                if duration_ms is not None:
-                    batch = SmbBatchSpec(count=1, duration=f"{duration_ms}ms")
-                self.activity_generator.generate_smb_activity(
-                    spec=SmbActivityEventSpec(
-                        type="smb_activity",
-                        operation=operation,
-                        purpose="interactive",
-                        target=SmbShareLocation(type="share", share=share.ref),
-                        batch=batch,
-                    ),
-                    actor=actor,
-                    parent_system=system,
-                    time=timestamp,
-                    process_pid=(session.explorer_pid or -1) if session else -1,
-                    process_image=r"C:\Windows\explorer.exe" if session else "",
-                    activity_source="baseline",
-                )
+            if preparation is not None:
+                self.activity_generator.execute_prepared_smb_activity(preparation)
             else:
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,

@@ -2548,12 +2548,66 @@ class SmbTransferTimingConfig(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class SmbFileEvolutionProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded mean-reverting size behavior for one SMB file family."""
+
+    minimum_size_ratio: float = Field(gt=0.0, le=1.0, allow_inf_nan=False)
+    maximum_size_ratio: float = Field(ge=1.0, allow_inf_nan=False)
+    capacity_bytes: int = Field(gt=0)
+    mean_reversion: float = Field(gt=0.0, le=1.0, allow_inf_nan=False)
+    variation_ratio: float = Field(ge=0.0, le=0.25, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def coherent_bounds(self) -> Self:
+        """Require an envelope that contains the nominal file size."""
+
+        if self.maximum_size_ratio < self.minimum_size_ratio:
+            raise ValueError("maximum_size_ratio must be >= minimum_size_ratio")
+        return self
+
+
+class SmbFileEvolutionConfig(BaseModel, extra="forbid", frozen=True):
+    """Extension-routed internal SMB file-size evolution profiles."""
+
+    default_profile: str
+    extension_profiles: dict[str, str]
+    profiles: dict[str, SmbFileEvolutionProfile]
+
+    @model_validator(mode="after")
+    def valid_profile_references(self) -> Self:
+        """Normalize profile names and require every extension route to resolve."""
+
+        if not self.profiles:
+            raise ValueError("SMB file evolution profiles must not be empty")
+        invalid_names = sorted(
+            name for name in self.profiles if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name) is None
+        )
+        if invalid_names:
+            raise ValueError(f"SMB file evolution profiles have invalid names: {invalid_names}")
+        if self.default_profile not in self.profiles:
+            raise ValueError("SMB file evolution default_profile must reference a profile")
+        invalid_extensions = sorted(
+            extension
+            for extension in self.extension_profiles
+            if re.fullmatch(r"\.[a-z0-9][a-z0-9._-]*", extension) is None
+        )
+        if invalid_extensions:
+            raise ValueError(
+                f"SMB file evolution routes have invalid extensions: {invalid_extensions}"
+            )
+        missing = sorted(set(self.extension_profiles.values()) - set(self.profiles))
+        if missing:
+            raise ValueError(f"SMB file evolution routes reference unknown profiles: {missing}")
+        return self
+
+
 class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     """Root schema for smb_profiles.yaml."""
 
     schema_version: Literal[1]
     advertised_filesystem_defaults: SmbAdvertisedFilesystemDefaults
     transfer_timing: SmbTransferTimingConfig
+    file_evolution: SmbFileEvolutionConfig
     samba_audit: SmbSambaAuditConfig
     client_defaults: dict[Literal["windows", "linux"], str]
     client_profiles: dict[str, SmbClientProfile]

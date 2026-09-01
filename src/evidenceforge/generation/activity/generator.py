@@ -234,6 +234,7 @@ from evidenceforge.generation.actions import (
     ServiceLogonActionBundle,
     ServiceLogonRequest,
     SmbActivityActionBundle,
+    SmbActivityPreparation,
     SmbActivityRequest,
     SmbActivityResult,
     SshSessionActionBundle,
@@ -24376,19 +24377,51 @@ class ActivityGenerator:
     ) -> SmbActivityResult:
         """Generate one bounded canonical SMB2/3 disk-share activity burst."""
 
-        return SmbActivityActionBundle(
-            self,
-            SmbActivityRequest(
-                spec=spec,
-                actor=actor,
-                parent_system=parent_system,
-                time=time,
-                process_pid=process_pid,
-                process_image=process_image,
-                activity_source=activity_source,
-                files_override=files_override,
-            ),
-        ).execute()
+        request = SmbActivityRequest(
+            spec=spec,
+            actor=actor,
+            parent_system=parent_system,
+            time=time,
+            process_pid=process_pid,
+            process_image=process_image,
+            activity_source=activity_source,
+            files_override=files_override,
+        )
+        return SmbActivityActionBundle(self, request).execute()
+
+    def prepare_smb_activity(
+        self,
+        *,
+        spec: SmbActivityEventSpec,
+        actor: User,
+        parent_system: System,
+        time: datetime,
+        process_pid: int = -1,
+        process_image: str = "",
+        activity_source: Literal["storyline", "baseline"] = "storyline",
+        files_override: tuple[Any, ...] = (),
+    ) -> SmbActivityPreparation:
+        """Freeze one non-composite SMB activity without runtime mutation."""
+
+        request = SmbActivityRequest(
+            spec=spec,
+            actor=actor,
+            parent_system=parent_system,
+            time=time,
+            process_pid=process_pid,
+            process_image=process_image,
+            activity_source=activity_source,
+            files_override=files_override,
+        )
+        return SmbActivityActionBundle(self, request).prepare()
+
+    def execute_prepared_smb_activity(
+        self,
+        preparation: SmbActivityPreparation,
+    ) -> SmbActivityResult:
+        """Execute the exact immutable SMB preparation after revalidating it."""
+
+        return SmbActivityActionBundle(self, preparation.request).execute(preparation)
 
     def persistent_smb_terminal_continuation_census(
         self,

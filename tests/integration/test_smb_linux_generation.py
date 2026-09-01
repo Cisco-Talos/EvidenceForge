@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -269,13 +270,27 @@ def test_linux_smb_flow_precedes_samba_login_and_file_observation(
 
 @pytest.mark.slow
 def test_linux_cifs_mount_uses_actor_owned_posix_client_file_evidence(
-    linux_matrix_output: Path,
+    tmp_path: Path,
 ) -> None:
     """Mounted CIFS I/O should be local application activity, not mount.cifs ownership."""
 
+    data = _scenario_data("linux-to-windows-read")
+    data["storyline"].insert(
+        0,
+        {
+            "id": "linux-user-interactive-session",
+            "time": "+1m",
+            "actor": "linux_user",
+            "system": "LNX-CLIENT-01",
+            "activity": "Linux user starts the interactive session that owns mounted file I/O",
+            "events": [{"type": "logon", "logon_type": 2}],
+        },
+    )
+    _generate(data, tmp_path)
+
     client_file = next(
         record
-        for record in _json_records(linux_matrix_output, "ecar.json")
+        for record in _json_records(tmp_path, "ecar.json")
         if record.get("hostname") == "LNX-CLIENT-01"
         and record.get("object") == "FILE"
         and record.get("action") == "READ"
@@ -292,18 +307,18 @@ def test_linux_cifs_mount_uses_actor_owned_posix_client_file_evidence(
     assert "effective_uid" not in properties
     assert "effective_gid" not in properties
 
-    truth = _ground_truth_event(linux_matrix_output, "linux-to-windows-read")["attributes"]
+    truth = _ground_truth_event(tmp_path, "linux-to-windows-read")["attributes"]
     transport_uid = truth["transport_uids"][0]
     connection = next(
         record
-        for record in _json_records(linux_matrix_output, "conn.json")
+        for record in _json_records(tmp_path, "conn.json")
         if record.get("uid") == transport_uid
     )
     connection_start_ms = int(float(connection["ts"]) * 1000)
     connection_end_ms = int((float(connection["ts"]) + float(connection.get("duration", 0))) * 1000)
     client_flows = [
         record
-        for record in _json_records(linux_matrix_output, "ecar.json")
+        for record in _json_records(tmp_path, "ecar.json")
         if record.get("hostname") == "LNX-CLIENT-01"
         and record.get("object") == "FLOW"
         and record.get("properties", {}).get("dst_ip") == "10.30.0.21"
@@ -313,6 +328,143 @@ def test_linux_cifs_mount_uses_actor_owned_posix_client_file_evidence(
     ]
     assert client_flows
     assert all("pid" not in record and "actorID" not in record for record in client_flows)
+
+
+@pytest.mark.slow
+def test_repeated_multi_day_smb_updates_stay_bounded_and_drain_runtime_state(
+    tmp_path: Path,
+) -> None:
+    """A dense two-day update stream should stay bounded, exact, and deterministic."""
+
+    data = _scenario_data()
+    data["environment"]["users"] = [
+        user for user in data["environment"]["users"] if user["username"] == "linux_user"
+    ]
+    data["environment"]["systems"] = [
+        system
+        for system in data["environment"]["systems"]
+        if system["hostname"] in {"LNX-CLIENT-01", "SAMBA-01"}
+    ]
+    data["environment"]["network"]["segments"][0]["systems"] = [
+        "LNX-CLIENT-01",
+        "SAMBA-01",
+    ]
+    data["environment"]["storage"]["servers"] = [
+        server
+        for server in data["environment"]["storage"]["servers"]
+        if server["system"] == "SAMBA-01"
+    ]
+    data["environment"]["storage"]["mappings"] = []
+    data["time_window"] = {"start": "2024-01-15T10:00:00Z", "duration": "2d"}
+    data["baseline_activity"]["traffic_rates"] = {"smb_interval": 50_000}
+    update_count = 96
+    data["storyline"] = [
+        {
+            "id": f"bounded-update-{index:03d}",
+            "time": f"+{300 + index * 1_800}",
+            "actor": "linux_user",
+            "system": "LNX-CLIENT-01",
+            "activity": "Update the same working document during a dense multi-day run",
+            "events": [
+                {
+                    "type": "smb_activity",
+                    "operation": "update",
+                    "purpose": "interactive",
+                    "target": {
+                        "type": "share",
+                        "share": "SAMBA-01.finance",
+                        "file_ref": "linux-plan",
+                    },
+                    "outcome": "success",
+                    "client_access": "smbclient",
+                    "auth_protocol": "ntlmssp",
+                }
+            ],
+        }
+        for index in range(update_count)
+    ]
+    data["output"]["logs"] = [
+        {"format": "zeek"},
+        {"format": "ecar"},
+        {"format": "syslog"},
+    ]
+
+    engines: list[GenerationEngine] = []
+    outputs: list[Path] = []
+    for run in range(2):
+        output = tmp_path / f"run-{run}"
+        engine = GenerationEngine(
+            Scenario(**copy.deepcopy(data)),
+            output,
+            resource_forecast=_forecast(output),
+        )
+        engine.generate()
+        engines.append(engine)
+        outputs.append(output)
+
+    deterministic_files = {
+        "conn.json",
+        "ecar.json",
+        "smb_files.json",
+        "smb_mapping.json",
+        "syslog.log",
+        "GROUND_TRUTH.json",
+        "STORAGE_MANIFEST.json",
+    }
+
+    def rendered_bytes(output: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(output)): path.read_bytes()
+            for path in output.rglob("*")
+            if path.is_file() and path.name in deterministic_files
+        }
+
+    assert rendered_bytes(outputs[0]) == rendered_bytes(outputs[1])
+
+    truth = json.loads((outputs[0] / "GROUND_TRUTH.json").read_text(encoding="utf-8"))
+    update_sizes = [
+        operation["size_bytes"]
+        for event in truth["events"]
+        if str(event.get("storyline_id", "")).startswith("bounded-update-")
+        for operation in event["attributes"]["operations"]
+    ]
+    nominal_size = 1_048_576
+    assert len(update_sizes) == update_count
+    assert min(update_sizes) >= nominal_size // 2
+    assert max(update_sizes) <= nominal_size * 2
+    assert any(left < right for left, right in zip(update_sizes, update_sizes[1:], strict=False))
+    assert any(left > right for left, right in zip(update_sizes, update_sizes[1:], strict=False))
+
+    connections = _json_records(outputs[0], "conn.json")
+    runtime_end = datetime.fromisoformat(data["time_window"]["start"].replace("Z", "+00:00"))
+    runtime_end += timedelta(days=2)
+    intervals_by_tuple: dict[tuple[object, ...], list[tuple[float, float]]] = {}
+    for connection in connections:
+        opened_at = float(connection["ts"])
+        closed_at = opened_at + float(connection.get("duration", 0))
+        assert closed_at <= runtime_end.timestamp()
+        key = (
+            connection["id.orig_h"],
+            connection["id.orig_p"],
+            connection["id.resp_h"],
+            connection["id.resp_p"],
+            connection["proto"],
+        )
+        intervals_by_tuple.setdefault(key, []).append((opened_at, closed_at))
+    for intervals in intervals_by_tuple.values():
+        ordered = sorted(intervals)
+        assert all(
+            current[0] >= previous[1]
+            for previous, current in zip(ordered, ordered[1:], strict=False)
+        )
+
+    engine = engines[0]
+    network_census = engine.activity_generator._network_transaction_runtime.census()
+    assert network_census.pending_transport_leases == 0
+    assert network_census.live_transport_leases == 0
+    assert network_census.retained_transport_freshness < len(connections)
+    terminal_counts = dict(engine.activity_generator.terminal_transient_owner_census().counts)
+    assert all(value == 0 for value in terminal_counts.values())
 
 
 @pytest.mark.soak
