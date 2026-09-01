@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
@@ -22,6 +23,7 @@ def _transport_id(**overrides: object) -> str:
         "dst_ip": "203.0.113.20",
         "dst_port": 443,
         "protocol": "tcp",
+        "opened_at": datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
     }
     values.update(overrides)
     return _network_transport_occurrence_stable_id(
@@ -31,6 +33,7 @@ def _transport_id(**overrides: object) -> str:
         dst_ip=cast(str, values["dst_ip"]),
         dst_port=cast(int, values["dst_port"]),
         protocol=cast(str, values["protocol"]),
+        opened_at=cast(datetime, values["opened_at"]),
     )
 
 
@@ -43,6 +46,7 @@ def _transport_id(**overrides: object) -> str:
         ("dst_ip", "203.0.113.21"),
         ("dst_port", 80),
         ("protocol", "udp"),
+        ("opened_at", datetime(2026, 8, 16, 12, 0, tzinfo=UTC) + timedelta(seconds=1)),
     ),
 )
 def test_transport_occurrence_identity_covers_intent_and_full_five_tuple(
@@ -59,3 +63,9 @@ def test_transport_occurrence_identity_is_deterministic() -> None:
 
     assert _transport_id() == _transport_id()
     assert _transport_id().startswith("network-connection-")
+
+
+def test_transport_occurrence_identity_normalizes_ipv4_mapped_addresses() -> None:
+    """Equivalent IPv4 spellings receive one canonical occurrence identity."""
+
+    assert _transport_id(src_ip="::ffff:10.0.0.10") == _transport_id()

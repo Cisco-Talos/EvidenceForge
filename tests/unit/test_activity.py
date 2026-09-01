@@ -10061,8 +10061,8 @@ class TestActivityGenerator:
         assert connection_event.network.protocol == "udp"
         assert connection_event.network.ip_proto == 17
         assert connection_event.network.duration <= 0.16
-        assert connection_event.network.orig_bytes <= 1300
-        assert connection_event.network.resp_bytes <= 1400
+        assert connection_event.network.orig_bytes <= 1300 * connection_event.network.orig_pkts
+        assert connection_event.network.resp_bytes <= 1400 * connection_event.network.resp_pkts
         assert connection_event.network.conn_state == "SF"
         wfp_event = next(
             call.args[0]

@@ -2358,6 +2358,7 @@ class NetworkTransactionPlanner:
         explicit_orig_bytes = request.orig_bytes
         explicit_resp_bytes = request.resp_bytes
         src_port = request.src_port
+        automatic_source_port = request.src_port is None
         emit_dns = request.emit_dns
         pid = request.pid
         source_system = request.source_system
@@ -2951,20 +2952,6 @@ class NetworkTransactionPlanner:
         if proto == "icmp":
             src_port = 0
             dst_port = 0
-        elif src_port is None:
-            if kerberos_dc_hostname:
-                src_port = executor._find_reserved_kerberos_source_port(
-                    src_ip,
-                    kerberos_dc_hostname,
-                    time,
-                    dst_ip=dst_ip,
-                )
-            if src_port is None and kerberos_dc_hostname:
-                src_port = executor._allocate_ephemeral_port(
-                    src_ip, dst_ip, dst_port, proto, time, source_os_category
-                )
-        if kerberos_dc_hostname and src_port is not None and src_port > 0:
-            executor._reserve_kerberos_source_port(src_ip, kerberos_dc_hostname, time, src_port)
 
         if (
             service == "dns"
@@ -3237,27 +3224,6 @@ class NetworkTransactionPlanner:
             "REJ",
             "OTH",
         } and ((resp_bytes or 0) > 0 or conn_state in {None, "SF"})
-        if (
-            kerberos_prerequisite_success
-            and not suppress_application_side_effects
-            and service == "kerberos"
-            and dst_port == 88
-            and proto in {"tcp", "udp"}
-            and src_port is not None
-            and src_port > 0
-        ):
-            executor._emit_dc_audit_for_kerberos_connection(
-                src_ip=src_ip,
-                src_port=src_port,
-                dst_ip=dst_ip,
-                time=time,
-                dst_port=dst_port,
-                proto=proto,
-                conn_state=conn_state or "SF",
-                service=service,
-                source_system=resolved_source_system,
-            )
-
         state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
         if resolved_source_system:
@@ -3403,40 +3369,16 @@ class NetworkTransactionPlanner:
             else:
                 time = adjusted_time
         if src_port is None:
-            reuse_window = generator_module._RECENT_CONNECTION_REUSE_WINDOW_SECONDS
-            for _ in range(128):
-                candidate_port = generator_module._ephemeral_port(rng, source_os_category)
-                candidate_keys = executor._connection_tuple_key_variants(
+            if kerberos_dc_hostname:
+                src_port = executor._find_reserved_kerberos_source_port(
                     src_ip,
-                    candidate_port,
-                    dst_ip,
-                    dst_port,
-                    proto,
-                )
-                runtime_recent = any(
-                    (
-                        seen_at := network_preparation.read_point(
-                            NetworkRuntimePointFamily.RECENT_TUPLE,
-                            key,
-                            None,
-                            at=ensure_utc(time),
-                        )
-                    )
-                    is not None
-                    and abs(time.timestamp() - float(seen_at)) <= reuse_window
-                    for key in candidate_keys
-                )
-                if not runtime_recent and not executor.state_manager.connection_tuple_recently_used(
-                    src_ip,
-                    candidate_port,
-                    dst_ip,
-                    dst_port,
-                    proto,
+                    kerberos_dc_hostname,
                     time,
-                    reuse_window=reuse_window,
-                ):
-                    src_port = candidate_port
-                    break
+                    dst_ip=dst_ip,
+                )
+            # Preserve the former candidate-draw location for unrelated RNG
+            # scopes. The runtime replaces this provisional value with the
+            # atomically leased port after the interval is final.
             if src_port is None:
                 src_port = generator_module._ephemeral_port(rng, source_os_category)
 
@@ -3696,19 +3638,6 @@ class NetworkTransactionPlanner:
                         sample_key="selected_midstream",
                     )
 
-        # The request identity remains the deterministic planning/timing scope. Bind
-        # canonical transport and application lifecycle ownership only after the
-        # allocator has resolved the complete transport tuple.
-        transport_stable_id = _network_transport_occurrence_stable_id(
-            stable_id,
-            src_ip=src_ip,
-            src_port=src_port,
-            dst_ip=dst_ip,
-            dst_port=dst_port,
-            protocol=proto,
-        )
-        network_preparation.bind_transaction_identity(transport_stable_id)
-
         if (
             not suppress_application_side_effects
             and not http_application_layer_only
@@ -3759,6 +3688,12 @@ class NetworkTransactionPlanner:
                 src_port,
                 time,
             )
+            if kerberos_audit_count == 0 and kerberos_prerequisite_success:
+                # A successful internal KDC transport with no existing tuple
+                # companions will publish a TGT/TGS pair after the leased
+                # transport commits. Reserve packet shape for that canonical
+                # companion contract without publishing endpoint evidence early.
+                kerberos_audit_count = 2
             if kerberos_audit_count > 0:
                 conn_state = "SF"
                 min_orig_bytes = kerberos_audit_count * rng.randint(260, 520)
@@ -4068,6 +4003,8 @@ class NetworkTransactionPlanner:
                 )
         generic_ssh_preauth_pid: int | None = None
         prepared_responder = None
+        prepare_generic_ssh_responder = False
+        prepare_generic_smb_responder = False
         if (
             target_system is not None
             and dst_host_ctx is not None
@@ -4090,27 +4027,7 @@ class NetworkTransactionPlanner:
             and (service in {"", "ssh"} or target_has_ssh)
             and deferred_authority is None
         ):
-            infer_generic_ssh_preauth = responding_pid <= 0
-            prepared_responder = executor.prepare_network_responder(
-                kind="ssh",
-                target_system=target_system,
-                time=time,
-                close_time=(
-                    time + generator_module.timedelta(seconds=max(0.0, duration))
-                    if duration is not None
-                    else None
-                ),
-                source_ip=src_ip,
-                source_port=src_port,
-                target_user=ssh_attempted_username,
-                responding_pid=responding_pid,
-                network_preparation=network_preparation,
-                source_timing_preparation=boundary.timing_preparation,
-                runtime_expires_at=boundary.network_runtime.window_end,
-            )
-            responding_pid = prepared_responder.responding_pid
-            if infer_generic_ssh_preauth:
-                generic_ssh_preauth_pid = responding_pid
+            prepare_generic_ssh_responder = True
         if (
             dst_host_ctx is not None
             and dst_host_ctx.os_category == "linux"
@@ -4121,24 +4038,7 @@ class NetworkTransactionPlanner:
             and conn_state == "SF"
             and service in {"", "smb"}
         ):
-            prepared_responder = executor.prepare_network_responder(
-                kind="smb",
-                target_system=target_system,
-                time=time,
-                close_time=(
-                    time + generator_module.timedelta(seconds=max(0.0, duration))
-                    if duration is not None
-                    else None
-                ),
-                source_ip=src_ip,
-                source_port=src_port,
-                target_user=None,
-                responding_pid=responding_pid,
-                network_preparation=network_preparation,
-                source_timing_preparation=boundary.timing_preparation,
-                runtime_expires_at=boundary.network_runtime.window_end,
-            )
-            responding_pid = prepared_responder.responding_pid
+            prepare_generic_smb_responder = True
 
         event = _NetworkOccurrenceDraft(
             timestamp=time,
@@ -5013,6 +4913,8 @@ class NetworkTransactionPlanner:
             )
             if adjusted_time > event.timestamp:
                 if preserve_start_time:
+                    # A higher-level bundle already owns the transport anchor.
+                    # Omit late attribution before leasing that immutable interval.
                     executor._set_connection_process_context(
                         event,
                         source_system=resolved_source_system,
@@ -5021,6 +4923,8 @@ class NetworkTransactionPlanner:
                     pid = -1
                     process_ctx = None
                 else:
+                    # Ordinary transport planning may still settle its interval;
+                    # the lease is acquired only after this adjustment completes.
                     event.timestamp = adjusted_time
                     time = adjusted_time
 
@@ -5056,6 +4960,73 @@ class NetworkTransactionPlanner:
             event.network.service = ""
         canonical_start = event.network.source_visible_start_time
         canonical_close = event.network.source_visible_close_time
+        if event.network.protocol in {"tcp", "udp"} and not event.network.application_layer_only:
+            if canonical_close is None:
+                raise StateError("Physical TCP/UDP transport requires a canonical close time")
+            transport_lease = network_preparation.reserve_transport_tuple(
+                intent_stable_id=stable_id,
+                src_ip=event.network.src_ip,
+                dst_ip=event.network.dst_ip,
+                dst_port=event.network.dst_port,
+                protocol=event.network.protocol,
+                opened_at=canonical_start,
+                closed_at=canonical_close,
+                source_port=(None if automatic_source_port else event.network.src_port),
+                preferred_source_port=(event.network.src_port if automatic_source_port else None),
+                source_os_category=source_os_category,
+            )
+            event.network.src_ip = transport_lease.src_ip
+            event.network.src_port = transport_lease.src_port
+            event.network.dst_ip = transport_lease.dst_ip
+            transport_stable_id = transport_lease.occurrence_stable_id
+        else:
+            transport_stable_id = _network_transport_occurrence_stable_id(
+                stable_id,
+                src_ip=event.network.src_ip,
+                src_port=event.network.src_port,
+                dst_ip=event.network.dst_ip,
+                dst_port=event.network.dst_port,
+                protocol=event.network.protocol,
+                opened_at=canonical_start,
+            )
+            network_preparation.bind_transaction_identity(transport_stable_id)
+
+        if prepare_generic_ssh_responder and target_system is not None:
+            infer_generic_ssh_preauth = responding_pid <= 0
+            prepared_responder = executor.prepare_network_responder(
+                kind="ssh",
+                target_system=target_system,
+                time=canonical_start,
+                close_time=canonical_close,
+                source_ip=event.network.src_ip,
+                source_port=event.network.src_port,
+                target_user=ssh_attempted_username,
+                responding_pid=responding_pid,
+                network_preparation=network_preparation,
+                source_timing_preparation=boundary.timing_preparation,
+                runtime_expires_at=boundary.network_runtime.window_end,
+            )
+            responding_pid = prepared_responder.responding_pid
+            event.network.responding_pid = responding_pid
+            if infer_generic_ssh_preauth:
+                generic_ssh_preauth_pid = responding_pid
+        elif prepare_generic_smb_responder and target_system is not None:
+            prepared_responder = executor.prepare_network_responder(
+                kind="smb",
+                target_system=target_system,
+                time=canonical_start,
+                close_time=canonical_close,
+                source_ip=event.network.src_ip,
+                source_port=event.network.src_port,
+                target_user=None,
+                responding_pid=responding_pid,
+                network_preparation=network_preparation,
+                source_timing_preparation=boundary.timing_preparation,
+                runtime_expires_at=boundary.network_runtime.window_end,
+            )
+            responding_pid = prepared_responder.responding_pid
+            event.network.responding_pid = responding_pid
+
         application_request_time: datetime | None = None
         if any((event.dns, event.http, event.ssl, event.smtp, event.proxy)):
             if event.http is not None and event.http.canonical_request_time is not None:
@@ -5402,31 +5373,6 @@ class NetworkTransactionPlanner:
                         )
                     )
                 process_holds = (*process_holds, *additional_holds)
-
-        if (
-            materialization_mode is ConnectionMaterializationMode.PHYSICAL
-            and event.network.protocol != "icmp"
-            and event.network.src_port > 0
-        ):
-            tuple_seen_at = (event.network.closed_at or event.network.started_at).timestamp()
-            tuple_expiry = min(
-                boundary.network_runtime.window_end,
-                (event.network.closed_at or event.network.started_at)
-                + timedelta(seconds=generator_module._RECENT_CONNECTION_REUSE_WINDOW_SECONDS),
-            )
-            for tuple_key in executor._connection_tuple_key_variants(
-                event.network.src_ip,
-                event.network.src_port,
-                event.network.dst_ip,
-                event.network.dst_port,
-                event.network.protocol,
-            ):
-                network_preparation.stage_point(
-                    NetworkRuntimePointFamily.RECENT_TUPLE,
-                    tuple_key,
-                    tuple_seen_at,
-                    expires_at=tuple_expiry,
-                )
 
         commit_result = NetworkConnectionCommitResult(
             transaction=event.network,
@@ -5959,6 +5905,28 @@ class NetworkTransactionPlanner:
             executor._last_connection_effective_transaction_id = event.network.stable_id
             executor._last_connection_http_context = event.protocol.http
             executor._last_connection_file_transfers = event.protocol.file_transfers
+        if (
+            kerberos_prerequisite_success
+            and not suppress_application_side_effects
+            and event.network.service == "kerberos"
+            and event.network.dst_port == 88
+            and event.network.protocol in {"tcp", "udp"}
+            and event.network.src_port > 0
+        ):
+            # Publish endpoint audit evidence only after the canonical transport
+            # and its final leased tuple have committed. Timestamp ordering is
+            # source truth and does not depend on publication call order.
+            executor._emit_dc_audit_for_kerberos_connection(
+                src_ip=event.network.src_ip,
+                src_port=event.network.src_port,
+                dst_ip=event.network.dst_ip,
+                time=event.network.started_at,
+                dst_port=event.network.dst_port,
+                proto=event.network.protocol,
+                conn_state=event.network.conn_state,
+                service=event.network.service,
+                source_system=resolved_source_system,
+            )
         if deferred_published is not None:
             publication = deferred_published.publication
             identifiers_by_member = getattr(publication, "identifiers", ())

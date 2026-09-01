@@ -57,8 +57,8 @@ def _reserve(
     )
 
 
-def test_explicit_port_reuses_only_the_same_near_time_connection() -> None:
-    """An explicit port is idempotent for one connection, not the full retention horizon."""
+def test_explicit_port_is_never_silently_substituted() -> None:
+    """Exact SSH intent retains its authored port at every reservation horizon."""
 
     generator = _generator()
     first = _reserve(
@@ -97,9 +97,13 @@ def test_explicit_port_reuses_only_the_same_near_time_connection() -> None:
         seed=5,
     )
 
-    assert first == same_connection == after_horizon == _SOURCE_PORT
-    assert later_connection != first
-    assert exact_horizon != first
+    assert {
+        first,
+        same_connection,
+        later_connection,
+        exact_horizon,
+        after_horizon,
+    } == {_SOURCE_PORT}
 
 
 def test_exhausted_candidate_draws_fail_instead_of_reusing_a_live_tuple(
@@ -108,22 +112,25 @@ def test_exhausted_candidate_draws_fail_instead_of_reusing_a_live_tuple(
     """The bounded retry path must never fall through to a reserved 24-hour tuple."""
 
     generator = _generator()
-    _reserve(
-        generator,
-        at=_START,
-        source_ip=_SOURCE_IP,
-        source_port=_SOURCE_PORT,
-        seed=1,
-    )
     monkeypatch.setattr(generator_module, "_ephemeral_port", lambda _rng, _os: _SOURCE_PORT)
+    first = generator.reserve_ssh_source_port(
+        _SOURCE_IP,
+        _TARGET_IP,
+        None,
+        random.Random(1),
+        "linux",
+        time=_START,
+    )
+    assert first == _SOURCE_PORT
 
     with pytest.raises(StateError, match="after 100 exact-key attempts"):
-        _reserve(
-            generator,
-            at=_START + timedelta(seconds=2),
-            source_ip=_SOURCE_IP,
-            source_port=_SOURCE_PORT,
-            seed=2,
+        generator.reserve_ssh_source_port(
+            _SOURCE_IP,
+            _TARGET_IP,
+            None,
+            random.Random(2),
+            "linux",
+            time=_START + timedelta(seconds=2),
         )
 
     assert len(generator._ssh_source_ports) == 1

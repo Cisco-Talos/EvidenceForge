@@ -59,7 +59,7 @@ from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
-from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.exceptions import StateError, TransportPortExhaustionError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _thread_local
 from tests.network_factories import network_plan
@@ -2749,7 +2749,7 @@ class TestSslContextPopulation:
         assert conn_event.process is None
         assert conn_event.network.responding_pid > 0
 
-    def test_ssh_session_avoids_existing_destination_endpoint_tuple(self, activity_gen):
+    def test_explicit_ssh_source_port_fails_on_existing_destination_tuple(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -2778,27 +2778,20 @@ class TestSslContextPopulation:
         )
         first_conn = next(event for event in events if event.event_type == "connection")
 
-        gen.generate_ssh_session(
-            user=user,
-            target_system=target,
-            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
-            source_ip="10.0.10.50",
-            source_port=51111,
-        )
-
-        ssh_transport = [event for event in events if event.event_type == "connection"][-1]
-        assert ssh_transport.network.src_port != first_conn.network.src_port
-        assert ssh_transport.network.responding_pid != first_conn.network.responding_pid
-        session_syslog_pids = {
-            event.syslog.pid
-            for event in events
-            if event.syslog is not None
-            and event.syslog.app_name == "sshd"
-            and (
-                event.syslog.message.startswith("Accepted ")
-                or event.syslog.message.startswith("pam_unix(sshd:session)")
+        with pytest.raises(TransportPortExhaustionError):
+            gen.generate_ssh_session(
+                user=user,
+                target_system=target,
+                time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+                source_ip="10.0.10.50",
+                source_port=51111,
             )
-        }
+
+        assert [
+            event
+            for event in events
+            if event.event_type == "connection" and event.network.dst_port == 22
+        ] == [first_conn]
         preauth_syslog_pids = {
             event.syslog.pid
             for event in events
@@ -2806,7 +2799,6 @@ class TestSslContextPopulation:
             and event.syslog.app_name == "sshd"
             and "invalid user unknown" in event.syslog.message
         }
-        assert session_syslog_pids == {ssh_transport.network.responding_pid}
         assert preauth_syslog_pids == {first_conn.network.responding_pid}
 
     def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
@@ -2929,7 +2921,7 @@ class TestSslContextPopulation:
         )
 
         conn_event = next(event for event in events if event.event_type == "connection")
-        assert conn_event.network.src_port == 51112
+        assert conn_event.network.src_port != 51111
 
     def test_ssh_syslog_sub_events_are_source_ordered_with_timing_texture(self, activity_gen):
         gen, events = activity_gen
@@ -3425,7 +3417,6 @@ class TestSslContextPopulation:
                 target_system=target,
                 time=base_time + timedelta(minutes=idx),
                 source_ip="10.0.10.50",
-                source_port=51111,
             )
 
         ssh_ports = [

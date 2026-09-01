@@ -6216,6 +6216,7 @@ class BaselineMixin:
 
         session_kind = self._baseline_generic_session_kind(system)
         session_end_plan = None
+        active_session = None
         if current_hour is not None and session_kind == "ssh":
             active_session = next(
                 (
@@ -6227,6 +6228,19 @@ class BaselineMixin:
                     if session.system == system.hostname
                     and session.session_kind == session_kind
                     and _session_started_by(session, time)
+                    and (
+                        (
+                            session_deadline := self.state_manager.get_session_end_time(
+                                session.logon_id
+                            )
+                        )
+                        is None
+                        or ensure_utc(time) < ensure_utc(session_deadline)
+                    )
+                    and (
+                        session.network_close_time is None
+                        or ensure_utc(time) < ensure_utc(session.network_close_time)
+                    )
                 ),
                 None,
             )
@@ -6253,6 +6267,7 @@ class BaselineMixin:
                     time,
                     rng,
                     session_kind=session_kind,
+                    allow_existing=(session_kind != "ssh" or active_session is not None),
                 )
             else:
                 session = self.world_planner.ensure_user_session(

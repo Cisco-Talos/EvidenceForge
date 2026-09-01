@@ -26,6 +26,8 @@ This module defines the exception hierarchy used throughout the application
 for clear, structured error handling.
 """
 
+from datetime import datetime
+
 
 class EvidenceForgeError(Exception):
     """Base exception for all EvidenceForge errors."""
@@ -115,6 +117,33 @@ class StateError(GenerationError):
     Raised when the generation engine encounters an impossible or
     inconsistent state (e.g., process without parent, session without logon).
     """
+
+
+class TransportPortExhaustionError(StateError):
+    """No source port can satisfy one canonical transport interval."""
+
+    def __init__(
+        self,
+        *,
+        endpoint_key: tuple[str, str, int, str],
+        opened_at: datetime,
+        closed_at: datetime,
+        port_range: tuple[int, int],
+        active_count: int,
+        automatic: bool,
+    ) -> None:
+        self.endpoint_key = endpoint_key
+        self.opened_at = opened_at
+        self.closed_at = closed_at
+        self.port_range = port_range
+        self.active_count = active_count
+        self.automatic = automatic
+        mode = "automatic" if automatic else "exact"
+        super().__init__(
+            "Canonical transport source-port exhaustion: "
+            f"endpoint={endpoint_key!r}, interval=[{opened_at}, {closed_at}), "
+            f"range={port_range[0]}-{port_range[1]}, active={active_count}, mode={mode}"
+        )
 
 
 class InsufficientDiskSpaceError(GenerationError):

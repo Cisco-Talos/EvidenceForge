@@ -1596,10 +1596,10 @@ def test_process_overlay_finishes_real_rdp_output_before_action_deadline(
     assert datetime.fromtimestamp(zeek_rows[0]["ts"] + zeek_rows[0]["duration"], tz=UTC) < deadline
 
 
-def test_unmodeled_initial_rdp_reserves_zero_skew_flow_latency_before_dependents(
+def test_unmodeled_initial_rdp_reserves_flow_latency_before_dependents(
     tmp_path: Path,
 ) -> None:
-    """A high-delay inbound FLOW must precede every exact initial RDP dependent."""
+    """The sampled inbound FLOW must precede every exact initial RDP dependent."""
 
     open_time = _START + timedelta(seconds=6)
     harness = _open_rdp_terminal_harness(
@@ -1630,7 +1630,15 @@ def test_unmodeled_initial_rdp_reserves_zero_skew_flow_latency_before_dependents
     assert len(inbound_flows) == 1
     assert len(initial_dependents) == 4
     flow_timestamp_ms = inbound_flows[0]["timestamp_ms"]
-    assert flow_timestamp_ms >= int(open_time.timestamp() * 1_000) + 1_500
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=180,
+        default_max_ms=1800,
+        default_position="after",
+        default_class="source_latency",
+    )
+    assert flow_timestamp_ms >= int(open_time.timestamp() * 1_000) + flow_window.min_ms
+    assert flow_timestamp_ms <= int(open_time.timestamp() * 1_000) + flow_window.max_ms + 1
     assert all(flow_timestamp_ms < row["timestamp_ms"] for row in initial_dependents)
 
 

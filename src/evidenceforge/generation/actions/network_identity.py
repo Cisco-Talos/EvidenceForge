@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 from dataclasses import (
     _FIELD,
     _FIELD_CLASSVAR,
@@ -51,6 +52,7 @@ from evidenceforge.events import network as _network
 from evidenceforge.events import proxy as _proxy
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.time import ensure_utc
 
 _NETWORK_CONNECTION_IDENTITY_EXCLUDED_FIELDS = frozenset(
     {
@@ -242,6 +244,7 @@ def _network_transport_occurrence_stable_id(
     dst_ip: str,
     dst_port: int,
     protocol: str,
+    opened_at: datetime,
 ) -> str:
     """Return the finalized identity for one resolved transport occurrence."""
 
@@ -259,15 +262,30 @@ def _network_transport_occurrence_stable_id(
         )
     if type(protocol) is not str or not protocol.strip():
         raise ValueError("Network transport occurrence requires a non-empty protocol")
+    if type(opened_at) is not datetime:
+        raise ValueError("Network transport occurrence requires an exact opening timestamp")
+
+    def normalize_address(value: str) -> str:
+        try:
+            address = ipaddress.ip_address(value.strip())
+        except ValueError:
+            return value.strip().casefold()
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(address)
+
+    normalized_src_ip = normalize_address(src_ip)
+    normalized_dst_ip = normalize_address(dst_ip)
     occurrence_uuid = stable_uuid(
         "network-transport-occurrence",
-        "v1",
+        "v2",
         intent_stable_id,
-        src_ip,
+        normalized_src_ip,
         src_port,
-        dst_ip,
+        normalized_dst_ip,
         dst_port,
-        protocol,
+        protocol.casefold(),
+        ensure_utc(opened_at).isoformat(),
     )
     return f"network-connection-{occurrence_uuid}"
 

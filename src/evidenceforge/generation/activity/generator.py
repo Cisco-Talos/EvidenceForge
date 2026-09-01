@@ -8665,9 +8665,42 @@ class ActivityGenerator:
             ):
                 self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
                 return src_port
-        src_port = _ephemeral_port(rng, os_category)
-        self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
-        return src_port
+        low, high = (32_768, 60_999) if os_category == "linux" else (49_152, 65_535)
+        size = high - low + 1
+        start = rng.randrange(size)
+        stride = rng.randrange(1, size + 1)
+        while math.gcd(stride, size) != 1:
+            stride = 1 if stride == size else stride + 1
+        runtime = self._network_transaction_runtime
+        instantaneous_close = ensure_utc(time) + timedelta(microseconds=1)
+        for offset in range(size):
+            src_port = low + ((start + offset * stride) % size)
+            if self._connection_tuple_recently_used(
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                proto,
+                time,
+                reuse_window=0.0,
+            ):
+                continue
+            if not runtime.transport_tuple_interval_available(
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol=proto,
+                opened_at=ensure_utc(time),
+                closed_at=instantaneous_close,
+            ):
+                continue
+            self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
+            return src_port
+        raise StateError(
+            "Compatibility source-port preview exhausted the complete OS range for "
+            f"{src_ip} -> {dst_ip}:{dst_port}/{proto} at {ensure_utc(time).isoformat()}"
+        )
 
     def _last_effective_connection_source_port(
         self,
@@ -9039,19 +9072,16 @@ class ActivityGenerator:
                             recent_connection_times.append(legacy_seen_at)
                         if runtime is None:
                             continue
-                        runtime_seen_at = runtime.get_point(
-                            NetworkRuntimePointFamily.RECENT_TUPLE,
-                            tuple_key,
-                            None,
-                            at=current_time,
+                        runtime_seen_at = runtime.transport_tuple_last_seen_at(
+                            src_ip=tuple_key[0],
+                            src_port=tuple_key[1],
+                            dst_ip=tuple_key[2],
+                            dst_port=tuple_key[3],
+                            protocol=tuple_key[4],
                         )
                         if runtime_seen_at is None:
                             continue
-                        if type(runtime_seen_at) is not float:
-                            raise StateError(
-                                "Network runtime recent-tuple point contains a malformed timestamp"
-                            )
-                        recent_connection_times.append(runtime_seen_at)
+                        recent_connection_times.append(runtime_seen_at.timestamp())
                 recent_connection_at = max(recent_connection_times, default=0.0)
                 reuse_cooldown = min(window_seconds, 2.0)
                 if not recent_connection_at or current - recent_connection_at > reuse_cooldown:
@@ -23302,6 +23332,46 @@ class ActivityGenerator:
         network_runtime = getattr(self, "_network_transaction_runtime", None)
         if ts_epoch is not None:
             self._prune_recent_connection_tuples(ts_epoch)
+        if source_port is not None:
+            # Explicit ports are exact transport intent. Retain the short-lived
+            # pending marker for competing automatic planners, but never
+            # silently substitute another port; the canonical lease owns the
+            # final overlap decision.
+            key = (source_ip, target_ip, source_port)
+            self._ssh_source_ports.set(
+                key,
+                reservation_time,
+                deadline=reservation_time,
+            )
+            if time is not None:
+                self._remember_connection_tuple(
+                    source_ip,
+                    source_port,
+                    target_ip,
+                    22,
+                    "tcp",
+                    reservation_time,
+                )
+                if network_runtime is not None:
+                    tuple_expiry = min(
+                        network_runtime.window_end,
+                        reservation_time
+                        + timedelta(seconds=_RECENT_CONNECTION_REUSE_WINDOW_SECONDS),
+                    )
+                    for tuple_key in self._connection_tuple_key_variants(
+                        source_ip,
+                        source_port,
+                        target_ip,
+                        22,
+                        "tcp",
+                    ):
+                        network_runtime.set_point(
+                            NetworkRuntimePointFamily.RECENT_TUPLE,
+                            tuple_key,
+                            reservation_time.timestamp(),
+                            expires_at=tuple_expiry,
+                        )
+            return source_port
         for _ in range(100):
             key = (source_ip, target_ip, candidate)
             reserved_at = self._ssh_source_ports.get(key)
@@ -23311,17 +23381,15 @@ class ActivityGenerator:
             recent_key = (source_ip, candidate, target_ip, 22, "tcp")
             recent_seen = self._recent_connection_tuples.get(recent_key)
             if network_runtime is not None:
-                runtime_seen = network_runtime.get_point(
-                    NetworkRuntimePointFamily.RECENT_TUPLE,
-                    recent_key,
-                    None,
-                    at=reservation_time,
+                runtime_seen_at = network_runtime.transport_tuple_last_seen_at(
+                    src_ip=source_ip,
+                    src_port=candidate,
+                    dst_ip=target_ip,
+                    dst_port=22,
+                    protocol="tcp",
                 )
-                if runtime_seen is not None:
-                    if type(runtime_seen) is not float:
-                        raise StateError(
-                            "Network runtime SSH source-port tuple contains a malformed timestamp"
-                        )
+                if runtime_seen_at is not None:
+                    runtime_seen = runtime_seen_at.timestamp()
                     recent_seen = max(
                         recent_seen if recent_seen is not None else float("-inf"),
                         runtime_seen,
@@ -23392,6 +23460,8 @@ class ActivityGenerator:
         """Select an SSH source port without publishing compatibility-cache state."""
 
         reservation_time = ensure_utc(time)
+        if source_port is not None:
+            return source_port
         reservation_cutoff = reservation_time - timedelta(
             seconds=_RECENT_CONNECTION_REUSE_WINDOW_SECONDS
         )
@@ -23404,17 +23474,15 @@ class ActivityGenerator:
                 reserved_at = None
             recent_key = (source_ip, candidate, target_ip, 22, "tcp")
             recent_seen = self._recent_connection_tuples.get(recent_key)
-            runtime_seen = network_runtime.get_point(
-                NetworkRuntimePointFamily.RECENT_TUPLE,
-                recent_key,
-                None,
-                at=reservation_time,
+            runtime_seen_at = network_runtime.transport_tuple_last_seen_at(
+                src_ip=source_ip,
+                src_port=candidate,
+                dst_ip=target_ip,
+                dst_port=22,
+                protocol="tcp",
             )
-            if runtime_seen is not None:
-                if type(runtime_seen) is not float:
-                    raise StateError(
-                        "Network runtime SSH source-port tuple contains a malformed timestamp"
-                    )
+            if runtime_seen_at is not None:
+                runtime_seen = runtime_seen_at.timestamp()
                 recent_seen = max(
                     recent_seen if recent_seen is not None else float("-inf"),
                     runtime_seen,

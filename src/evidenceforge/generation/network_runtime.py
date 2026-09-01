@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import ipaddress
+import math
 import random
 import secrets
 from collections.abc import Hashable, Iterator
@@ -60,6 +62,9 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
+from evidenceforge.generation.actions.network_identity import (
+    _network_transport_occurrence_stable_id,
+)
 from evidenceforge.generation.cryptographic_material import (
     CryptographicMaterialPreparation,
     CryptographicMaterialPreparationReceipt,
@@ -81,12 +86,16 @@ from evidenceforge.generation.state_manager import (
     SmbFileMutationJournal,
     StateManager,
 )
-from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.exceptions import StateError, TransportPortExhaustionError
 from evidenceforge.utils.time import ensure_utc
 
 _MAX_TIME = datetime.max.replace(tzinfo=UTC)
 _MIN_TIME = datetime.min.replace(tzinfo=UTC)
 _MISSING_DIGEST = hashlib.sha256(b"network-runtime:missing").hexdigest()
+_TRANSPORT_FRESHNESS_RETENTION = timedelta(hours=24)
+_TRANSPORT_FRESH_CANDIDATE_LIMIT = 128
+_WINDOWS_EPHEMERAL_PORT_RANGE = (49_152, 65_535)
+_LINUX_EPHEMERAL_PORT_RANGE = (32_768, 60_999)
 
 NetworkTransportLifecycleMode = Literal["network", "deferred_session", "application_child"]
 _DeferredCompositionKind = Literal["ssh", "rdp"]
@@ -98,6 +107,24 @@ def _canonical_datetime(value: datetime, *, field_name: str) -> datetime:
     if type(value) is not datetime:
         raise ValueError(f"Network runtime {field_name} must be an exact datetime")
     return ensure_utc(value)
+
+
+def _canonical_ip(value: str, *, field_name: str) -> str:
+    """Return one normalized IP, collapsing IPv4-mapped IPv6 addresses."""
+
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"Network runtime {field_name} must be a non-empty IP address")
+    normalized = value.strip()
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        # Compatibility callers can carry deterministic pseudo-addresses while
+        # stress-testing renderer protocol constraints. Preserve their exact
+        # endpoint spelling; scenario validation remains the IP authority.
+        return normalized.casefold()
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return str(address)
 
 
 class NetworkRuntimePointFamily(StrEnum):
@@ -333,6 +360,99 @@ class _IndexedPreparationFenceHeap:
         self._entries[left], self._entries[right] = self._entries[right], self._entries[left]
         self._positions[self._entries[left][1]] = left
         self._positions[self._entries[right][1]] = right
+
+
+class _IndexedTransportDeadlineHeap:
+    """Exact-key removable deadlines for leases and freshness entries."""
+
+    __slots__ = ("_entries", "_positions")
+
+    def __init__(self) -> None:
+        self._entries: list[tuple[datetime, int, Hashable]] = []
+        self._positions: dict[Hashable, int] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def first(self) -> tuple[datetime, int, Hashable]:
+        if not self._entries:
+            raise StateError("Network transport deadline heap is empty")
+        return self._entries[0]
+
+    def pop_first(self) -> tuple[datetime, int, Hashable]:
+        if not self._entries:
+            raise StateError("Network transport deadline heap is empty")
+        return self._remove_at(0)
+
+    def replace(
+        self,
+        key: Hashable,
+        entry: tuple[datetime, int, Hashable] | None,
+    ) -> None:
+        position = self._positions.get(key)
+        if entry is None:
+            if position is not None:
+                self._remove_at(position)
+            return
+        if entry[2] != key:
+            raise StateError("Network transport deadline identity diverged")
+        if position is None:
+            position = len(self._entries)
+            self._entries.append(entry)
+            self._positions[key] = position
+            self._sift_up(position)
+            return
+        prior = self._entries[position]
+        self._entries[position] = entry
+        if entry[:2] < prior[:2]:
+            self._sift_up(position)
+        else:
+            self._sift_down(position)
+
+    def _remove_at(self, position: int) -> tuple[datetime, int, Hashable]:
+        removed = self._entries[position]
+        last = self._entries.pop()
+        self._positions.pop(removed[2])
+        if position == len(self._entries):
+            return removed
+        self._entries[position] = last
+        self._positions[last[2]] = position
+        if position and last[:2] < self._entries[(position - 1) // 2][:2]:
+            self._sift_up(position)
+        else:
+            self._sift_down(position)
+        return removed
+
+    def _sift_up(self, position: int) -> None:
+        while position:
+            parent = (position - 1) // 2
+            if self._entries[parent][:2] <= self._entries[position][:2]:
+                return
+            self._swap(parent, position)
+            position = parent
+
+    def _sift_down(self, position: int) -> None:
+        size = len(self._entries)
+        while True:
+            left = position * 2 + 1
+            if left >= size:
+                return
+            right = left + 1
+            child = left
+            if right < size and self._entries[right][:2] < self._entries[left][:2]:
+                child = right
+            if self._entries[position][:2] <= self._entries[child][:2]:
+                return
+            self._swap(position, child)
+            position = child
+
+    def _swap(self, left: int, right: int) -> None:
+        self._entries[left], self._entries[right] = self._entries[right], self._entries[left]
+        self._positions[self._entries[left][2]] = left
+        self._positions[self._entries[right][2]] = right
 
 
 def _freeze_digest_value(value: object, active: set[int] | None = None) -> object:
@@ -689,6 +809,7 @@ class NetworkTransactionPreparationToken:
     overlay_digest: str
     state_publication_token: str
     cryptographic_publication_token: str
+    transport_occurrence_id: str = ""
     _runtime_token: int = field(repr=False, default=0)
     _integrity_token: str = field(repr=False, default="")
 
@@ -767,6 +888,66 @@ class PreparedNetworkTransactionRoot:
     result: NetworkConnectionCommitResult
 
 
+_TransportEndpointKey = tuple[str, str, int, str]
+_TransportTupleKey = tuple[str, int, str, int, str]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTransportLease:
+    """Immutable source-port ownership for one canonical physical transport."""
+
+    intent_stable_id: str
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str
+    opened_at: datetime
+    closed_at: datetime
+    occurrence_stable_id: str
+    automatic: bool
+
+    @property
+    def tuple_key(self) -> _TransportTupleKey:
+        """Return the normalized five-tuple protected by this lease."""
+
+        return (
+            self.src_ip,
+            self.src_port,
+            self.dst_ip,
+            self.dst_port,
+            self.protocol,
+        )
+
+    @property
+    def endpoint_key(self) -> _TransportEndpointKey:
+        """Return the endpoint scope across which source ports are allocated."""
+
+        return self.src_ip, self.dst_ip, self.dst_port, self.protocol
+
+
+@dataclass(frozen=True, slots=True)
+class _TransportLeaseRecord:
+    lease: NetworkTransportLease
+    preparation_id: int
+    candidate_inspections: int
+    adaptive_reuse: bool
+    committed: bool = False
+
+
+def _transport_lease_digest_value(lease: NetworkTransportLease) -> tuple[object, ...]:
+    """Return one callback-free primitive frame for a committed lease."""
+
+    return (
+        lease.intent_stable_id,
+        lease.tuple_key,
+        lease.opened_at,
+        lease.closed_at,
+        lease.occurrence_stable_id,
+        lease.automatic,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class NetworkTransactionRuntimeCensus:
     """Constant-time structural census for generator-local network state."""
@@ -781,6 +962,13 @@ class NetworkTransactionRuntimeCensus:
     reserved_deadlines: int
     active_deadlines: int
     expiry_backing: int
+    pending_transport_leases: int
+    live_transport_leases: int
+    retained_transport_freshness: int
+    transport_candidate_inspections: int
+    peak_transport_bucket_occupancy: int
+    adaptive_transport_reuses: int
+    transport_exhaustions: int
     watermark: datetime
     pending_watermark: datetime | None
     has_last_result: bool
@@ -959,6 +1147,7 @@ def _validated_token_integrity(
         or type(token.overlay_digest) is not str
         or type(token.state_publication_token) is not str
         or type(token.cryptographic_publication_token) is not str
+        or type(token.transport_occurrence_id) is not str
         or type(token._runtime_token) is not int
         or type(token._integrity_token) is not str
     ):
@@ -1311,6 +1500,39 @@ class NetworkTransactionPreparation:
 
         self._require_open()
         self._owner._bind_transaction_identity(self, stable_id)
+
+    def reserve_transport_tuple(
+        self,
+        *,
+        intent_stable_id: str,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+        opened_at: datetime,
+        closed_at: datetime,
+        source_port: int | None = None,
+        preferred_source_port: int | None = None,
+        source_os_category: str = "windows",
+        port_range: tuple[int, int] | None = None,
+    ) -> NetworkTransportLease:
+        """Atomically lease one exact physical transport tuple and interval."""
+
+        self._require_open()
+        return self._owner._reserve_transport_tuple(
+            self,
+            intent_stable_id=intent_stable_id,
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            protocol=protocol,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            source_port=source_port,
+            preferred_source_port=preferred_source_port,
+            source_os_category=source_os_category,
+            port_range=port_range,
+        )
 
     def reserve_smb_connection_pin(self) -> SmbConnectionPin:
         """Reserve the future persistent-SMB pin through the owned State cursor."""
@@ -1707,6 +1929,22 @@ class NetworkTransactionRuntime:
         ] = {}
         self._last_result: NetworkConnectionCommitResult | None = None
         self._point_state_xor = 0
+        self._transport_buckets: dict[_TransportTupleKey, list[_TransportLeaseRecord]] = {}
+        self._transport_endpoint_occurrences: dict[_TransportEndpointKey, set[str]] = {}
+        self._transport_records_by_occurrence: dict[str, _TransportLeaseRecord] = {}
+        self._transport_records_by_preparation: dict[int, _TransportLeaseRecord] = {}
+        self._adopted_transport_by_preparation: dict[int, str] = {}
+        self._transport_lease_deadlines = _IndexedTransportDeadlineHeap()
+        self._transport_freshness: dict[_TransportTupleKey, datetime] = {}
+        self._transport_freshness_deadlines = _IndexedTransportDeadlineHeap()
+        self._next_transport_ordinal = 1
+        self._pending_transport_leases = 0
+        self._live_transport_leases = 0
+        self._transport_candidate_inspections = 0
+        self._peak_transport_bucket_occupancy = 0
+        self._adaptive_transport_reuses = 0
+        self._transport_exhaustions = 0
+        self._transport_state_xor = 0
 
     @property
     def window_start(self) -> datetime:
@@ -1860,6 +2098,96 @@ class NetworkTransactionRuntime:
             if canonical_at is not None and slot.expires_at <= canonical_at:
                 return canonical_default
             return _canonical_value(slot.value)
+
+    def transport_tuple_last_seen_at(
+        self,
+        *,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+    ) -> datetime | None:
+        """Return the latest committed canonical observation for one five-tuple."""
+
+        canonical_src = _canonical_ip(src_ip, field_name="transport source IP")
+        canonical_dst = _canonical_ip(dst_ip, field_name="transport destination IP")
+        if type(src_port) is not int or not 1 <= src_port <= 65_535:
+            raise ValueError("Transport source port must be between 1 and 65535")
+        if type(dst_port) is not int or not 0 <= dst_port <= 65_535:
+            raise ValueError("Transport destination port must be between 0 and 65535")
+        if type(protocol) is not str or protocol.casefold() not in {"tcp", "udp"}:
+            raise ValueError("Transport protocol must be TCP or UDP")
+        tuple_key = (
+            canonical_src,
+            src_port,
+            canonical_dst,
+            dst_port,
+            protocol.casefold(),
+        )
+        with self._lock:
+            seen_at = self._transport_freshness.get(tuple_key)
+            compatibility_slot = self._points.get(
+                (NetworkRuntimePointFamily.RECENT_TUPLE, tuple_key)
+            )
+            if (
+                compatibility_slot is not None
+                and not compatibility_slot.is_tombstone
+                and type(compatibility_slot.value) is float
+            ):
+                compatibility_seen_at = datetime.fromtimestamp(
+                    compatibility_slot.value,
+                    tz=UTC,
+                )
+                seen_at = max(seen_at or compatibility_seen_at, compatibility_seen_at)
+            bucket = self._transport_buckets.get(tuple_key)
+            if bucket:
+                committed_closes = (
+                    record.lease.closed_at for record in reversed(bucket) if record.committed
+                )
+                latest_close = next(committed_closes, None)
+                if latest_close is not None:
+                    seen_at = max(seen_at or latest_close, latest_close)
+            return seen_at
+
+    def transport_tuple_interval_available(
+        self,
+        *,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+        opened_at: datetime,
+        closed_at: datetime,
+    ) -> bool:
+        """Return whether committed and pending leases leave one interval free."""
+
+        canonical_src = _canonical_ip(src_ip, field_name="transport source IP")
+        canonical_dst = _canonical_ip(dst_ip, field_name="transport destination IP")
+        if type(src_port) is not int or not 1 <= src_port <= 65_535:
+            raise ValueError("Transport source port must be between 1 and 65535")
+        if type(dst_port) is not int or not 0 <= dst_port <= 65_535:
+            raise ValueError("Transport destination port must be between 0 and 65535")
+        if type(protocol) is not str or protocol.casefold() not in {"tcp", "udp"}:
+            raise ValueError("Transport protocol must be TCP or UDP")
+        canonical_open = _canonical_datetime(opened_at, field_name="transport opening time")
+        canonical_close = _canonical_datetime(closed_at, field_name="transport closing time")
+        if canonical_close < canonical_open:
+            raise ValueError("Transport closing time cannot precede its opening time")
+        tuple_key = (
+            canonical_src,
+            src_port,
+            canonical_dst,
+            dst_port,
+            protocol.casefold(),
+        )
+        with self._lock:
+            return self._transport_interval_available_locked(
+                tuple_key,
+                canonical_open,
+                canonical_close,
+            )
 
     def set_point(
         self,
@@ -2205,6 +2533,42 @@ class NetworkTransactionRuntime:
             work = 0
             processed = 0
             while (
+                self._transport_lease_deadlines
+                and self._transport_lease_deadlines.first()[0] <= canonical_cutoff
+                and work < limit
+            ):
+                _deadline, _ordinal, occurrence_id = self._transport_lease_deadlines.pop_first()
+                if type(occurrence_id) is not str:
+                    raise StateError("Transport lease deadline contains an invalid occurrence ID")
+                record = self._transport_records_by_occurrence.get(occurrence_id)
+                if record is None or not record.committed:
+                    raise StateError("Transport lease deadline lost its committed occurrence")
+                self._transport_state_xor ^= self._state_component(
+                    "network-transport-lease-v1",
+                    _transport_lease_digest_value(record.lease),
+                )
+                self._remove_transport_record_locked(record)
+                self._live_transport_leases -= 1
+                work += 1
+                processed += 1
+            while (
+                self._transport_freshness_deadlines
+                and self._transport_freshness_deadlines.first()[0] <= canonical_cutoff
+                and work < limit
+            ):
+                _deadline, _ordinal, tuple_key = self._transport_freshness_deadlines.pop_first()
+                if type(tuple_key) is not tuple or len(tuple_key) != 5:
+                    raise StateError("Transport freshness deadline contains an invalid tuple")
+                seen_at = self._transport_freshness.pop(tuple_key, None)
+                if seen_at is None:
+                    raise StateError("Transport freshness deadline lost its tuple")
+                self._transport_state_xor ^= self._state_component(
+                    "network-transport-freshness-v1",
+                    (tuple_key, seen_at),
+                )
+                work += 1
+                processed += 1
+            while (
                 self._expiry_heap
                 and self._expiry_heap.first()[0] <= canonical_cutoff
                 and work < limit
@@ -2234,7 +2598,17 @@ class NetworkTransactionRuntime:
                     self._points.pop(point_key)
                     self._tombstone_points -= 1
                     processed += 1
-            has_more = bool(self._expiry_heap and self._expiry_heap.first()[0] <= canonical_cutoff)
+            has_more = bool(
+                (
+                    self._transport_lease_deadlines
+                    and self._transport_lease_deadlines.first()[0] <= canonical_cutoff
+                )
+                or (
+                    self._transport_freshness_deadlines
+                    and self._transport_freshness_deadlines.first()[0] <= canonical_cutoff
+                )
+                or (self._expiry_heap and self._expiry_heap.first()[0] <= canonical_cutoff)
+            )
             if not has_more:
                 self._watermark = canonical_cutoff
                 self._pending_watermark = None
@@ -2267,7 +2641,18 @@ class NetworkTransactionRuntime:
             preparation_fences=len(self._preparation_fences),
             reserved_deadlines=len(self._reserved_deadlines),
             active_deadlines=len(self._expiry_heap),
-            expiry_backing=len(self._expiry_heap),
+            expiry_backing=(
+                len(self._expiry_heap)
+                + len(self._transport_lease_deadlines)
+                + len(self._transport_freshness_deadlines)
+            ),
+            pending_transport_leases=self._pending_transport_leases,
+            live_transport_leases=self._live_transport_leases,
+            retained_transport_freshness=len(self._transport_freshness),
+            transport_candidate_inspections=self._transport_candidate_inspections,
+            peak_transport_bucket_occupancy=self._peak_transport_bucket_occupancy,
+            adaptive_transport_reuses=self._adaptive_transport_reuses,
+            transport_exhaustions=self._transport_exhaustions,
             watermark=self._watermark,
             pending_watermark=self._pending_watermark,
             has_last_result=self._last_result is not None,
@@ -2279,6 +2664,405 @@ class NetworkTransactionRuntime:
         with self._lock:
             cursor = self._active_open_preparation_locked(preparation).cursor
         return cursor.rng
+
+    def _reserve_transport_tuple(
+        self,
+        preparation: NetworkTransactionPreparation,
+        *,
+        intent_stable_id: str,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+        opened_at: datetime,
+        closed_at: datetime,
+        source_port: int | None,
+        preferred_source_port: int | None,
+        source_os_category: str,
+        port_range: tuple[int, int] | None,
+    ) -> NetworkTransportLease:
+        """Select and claim one tuple while holding the canonical runtime lock."""
+
+        if type(intent_stable_id) is not str or not intent_stable_id.strip():
+            raise ValueError("Transport lease intent_stable_id must not be empty")
+        canonical_src = _canonical_ip(src_ip, field_name="transport source IP")
+        canonical_dst = _canonical_ip(dst_ip, field_name="transport destination IP")
+        if type(dst_port) is not int or not 0 <= dst_port <= 65_535:
+            raise ValueError("Transport lease destination port must be between 0 and 65535")
+        if type(protocol) is not str or protocol.casefold() not in {"tcp", "udp"}:
+            raise ValueError("Transport leases support only TCP or UDP")
+        canonical_protocol = protocol.casefold()
+        canonical_open = _canonical_datetime(opened_at, field_name="transport opening time")
+        canonical_close = _canonical_datetime(closed_at, field_name="transport closing time")
+        if canonical_close < canonical_open:
+            raise ValueError("Transport lease closing time cannot precede its opening time")
+        if canonical_open < self._window_start or canonical_open >= self._window_end:
+            raise StateError("Transport lease starts outside the runtime window")
+        if canonical_close > self._window_end:
+            raise StateError("Transport lease closes after the runtime window")
+        if source_port is not None and (
+            type(source_port) is not int or not 1 <= source_port <= 65_535
+        ):
+            raise ValueError("Exact transport source port must be between 1 and 65535")
+        if preferred_source_port is not None and (
+            type(preferred_source_port) is not int or not 1 <= preferred_source_port <= 65_535
+        ):
+            raise ValueError("Preferred transport source port must be between 1 and 65535")
+        if source_port is not None and preferred_source_port is not None:
+            raise ValueError("Exact and preferred transport source ports are mutually exclusive")
+        if type(source_os_category) is not str:
+            raise ValueError("Transport source OS category must be a string")
+        selected_range = port_range
+        if selected_range is None:
+            selected_range = (
+                _LINUX_EPHEMERAL_PORT_RANGE
+                if source_os_category.casefold() == "linux"
+                else _WINDOWS_EPHEMERAL_PORT_RANGE
+            )
+        if (
+            type(selected_range) is not tuple
+            or len(selected_range) != 2
+            or type(selected_range[0]) is not int
+            or type(selected_range[1]) is not int
+            or selected_range[0] < 1
+            or selected_range[1] > 65_535
+            or selected_range[1] < selected_range[0]
+        ):
+            raise ValueError("Transport source-port range must be an inclusive valid port pair")
+
+        endpoint_key = (canonical_src, canonical_dst, dst_port, canonical_protocol)
+        with self._lock:
+            capability = self._active_open_preparation_locked(preparation)
+            existing = self._transport_records_by_preparation.get(capability.preparation_id)
+            adopted_occurrence = self._adopted_transport_by_preparation.get(
+                capability.preparation_id
+            )
+            if existing is not None or adopted_occurrence is not None:
+                retained = (
+                    existing
+                    if existing is not None
+                    else self._transport_records_by_occurrence.get(adopted_occurrence or "")
+                )
+                if retained is None:
+                    raise StateError("Transport lease adoption lost its committed occurrence")
+                requested_port = retained.lease.src_port if source_port is None else source_port
+                if (
+                    retained.lease.intent_stable_id != intent_stable_id
+                    or retained.lease.endpoint_key != endpoint_key
+                    or retained.lease.src_port != requested_port
+                    or retained.lease.opened_at != canonical_open
+                    or retained.lease.closed_at != canonical_close
+                ):
+                    raise StateError("Network preparation already owns a different transport lease")
+                return retained.lease
+
+            if source_port is not None:
+                exact_occurrence_id = _network_transport_occurrence_stable_id(
+                    intent_stable_id,
+                    src_ip=canonical_src,
+                    src_port=source_port,
+                    dst_ip=canonical_dst,
+                    dst_port=dst_port,
+                    protocol=canonical_protocol,
+                    opened_at=canonical_open,
+                )
+                exact_prior = self._transport_records_by_occurrence.get(exact_occurrence_id)
+                if exact_prior is not None and exact_prior.committed:
+                    exact_lease = exact_prior.lease
+                    if exact_lease.closed_at != canonical_close:
+                        raise StateError("Exact transport retry changed its canonical interval")
+                    self._adopted_transport_by_preparation[capability.preparation_id] = (
+                        exact_occurrence_id
+                    )
+                    self._bind_transport_identity_locked(
+                        preparation,
+                        capability,
+                        exact_occurrence_id,
+                    )
+                    return exact_lease
+
+            automatic = source_port is None
+            selected_port: int | None = None
+            adaptive = False
+            allocation_seed = int.from_bytes(
+                hashlib.sha256(
+                    repr(
+                        (
+                            "network-transport-allocation-v1",
+                            intent_stable_id,
+                            endpoint_key,
+                            canonical_open,
+                            canonical_close,
+                            selected_range,
+                        )
+                    ).encode()
+                ).digest(),
+                "big",
+            )
+            rng = random.Random(allocation_seed)
+            candidate_inspections = 0
+            if source_port is not None:
+                candidate_inspections += 1
+                tuple_key = (
+                    canonical_src,
+                    source_port,
+                    canonical_dst,
+                    dst_port,
+                    canonical_protocol,
+                )
+                if self._transport_interval_available_locked(
+                    tuple_key,
+                    canonical_open,
+                    canonical_close,
+                ):
+                    selected_port = source_port
+            else:
+                low, high = selected_range
+                fresh_candidates = (
+                    (preferred_source_port,) if preferred_source_port is not None else ()
+                )
+                for candidate_index in range(_TRANSPORT_FRESH_CANDIDATE_LIMIT):
+                    candidate = (
+                        fresh_candidates[candidate_index]
+                        if candidate_index < len(fresh_candidates)
+                        else rng.randint(low, high)
+                    )
+                    if candidate < low or candidate > high:
+                        continue
+                    candidate_inspections += 1
+                    tuple_key = (
+                        canonical_src,
+                        candidate,
+                        canonical_dst,
+                        dst_port,
+                        canonical_protocol,
+                    )
+                    if self._transport_tuple_is_fresh_locked(tuple_key, canonical_open):
+                        continue
+                    if self._transport_interval_available_locked(
+                        tuple_key,
+                        canonical_open,
+                        canonical_close,
+                    ):
+                        selected_port = candidate
+                        break
+                if selected_port is None:
+                    size = high - low + 1
+                    start = rng.randrange(size)
+                    stride = rng.randrange(1, size + 1)
+                    while math.gcd(stride, size) != 1:
+                        stride = 1 if stride == size else stride + 1
+                    for offset in range(size):
+                        candidate = low + ((start + offset * stride) % size)
+                        candidate_inspections += 1
+                        tuple_key = (
+                            canonical_src,
+                            candidate,
+                            canonical_dst,
+                            dst_port,
+                            canonical_protocol,
+                        )
+                        if self._transport_interval_available_locked(
+                            tuple_key,
+                            canonical_open,
+                            canonical_close,
+                        ):
+                            selected_port = candidate
+                            adaptive = True
+                            break
+
+            if selected_port is None:
+                self._transport_exhaustions += 1
+                raise TransportPortExhaustionError(
+                    endpoint_key=endpoint_key,
+                    opened_at=canonical_open,
+                    closed_at=canonical_close,
+                    port_range=selected_range,
+                    active_count=self._active_transport_count_locked(
+                        endpoint_key,
+                        canonical_open,
+                        canonical_close,
+                    ),
+                    automatic=automatic,
+                )
+
+            occurrence_id = _network_transport_occurrence_stable_id(
+                intent_stable_id,
+                src_ip=canonical_src,
+                src_port=selected_port,
+                dst_ip=canonical_dst,
+                dst_port=dst_port,
+                protocol=canonical_protocol,
+                opened_at=canonical_open,
+            )
+            prior = self._transport_records_by_occurrence.get(occurrence_id)
+            if prior is not None:
+                candidate_lease = prior.lease
+                if (
+                    not prior.committed
+                    or candidate_lease.intent_stable_id != intent_stable_id
+                    or candidate_lease.tuple_key
+                    != (
+                        canonical_src,
+                        selected_port,
+                        canonical_dst,
+                        dst_port,
+                        canonical_protocol,
+                    )
+                    or candidate_lease.opened_at != canonical_open
+                    or candidate_lease.closed_at != canonical_close
+                ):
+                    raise StateError("Transport occurrence identity collides with another lease")
+                self._adopted_transport_by_preparation[capability.preparation_id] = occurrence_id
+                self._bind_transport_identity_locked(preparation, capability, occurrence_id)
+                return candidate_lease
+
+            lease = NetworkTransportLease(
+                intent_stable_id=intent_stable_id,
+                src_ip=canonical_src,
+                src_port=selected_port,
+                dst_ip=canonical_dst,
+                dst_port=dst_port,
+                protocol=canonical_protocol,
+                opened_at=canonical_open,
+                closed_at=canonical_close,
+                occurrence_stable_id=occurrence_id,
+                automatic=automatic,
+            )
+            record = _TransportLeaseRecord(
+                lease=lease,
+                preparation_id=capability.preparation_id,
+                candidate_inspections=candidate_inspections,
+                adaptive_reuse=adaptive,
+            )
+            self._insert_transport_record_locked(record)
+            self._transport_records_by_preparation[capability.preparation_id] = record
+            self._pending_transport_leases += 1
+            self._bind_transport_identity_locked(preparation, capability, occurrence_id)
+            return lease
+
+    def _bind_transport_identity_locked(
+        self,
+        preparation: NetworkTransactionPreparation,
+        capability: _OpenPreparationCapability,
+        occurrence_id: str,
+    ) -> None:
+        """Bind a lease-owned occurrence without dropping the runtime lock."""
+
+        if capability.identity_bound:
+            if capability.stable_id != occurrence_id or preparation._stable_id != occurrence_id:
+                raise StateError("Network preparation identity disagrees with its transport lease")
+            return
+        rebound = replace(capability, stable_id=occurrence_id, identity_bound=True)
+        preparation._stable_id = occurrence_id
+        self._open_preparations[capability.preparation_id] = rebound
+        self._open_capabilities_by_identity[id(preparation)] = rebound
+
+    def _transport_tuple_is_fresh_locked(
+        self,
+        tuple_key: _TransportTupleKey,
+        opened_at: datetime,
+    ) -> bool:
+        seen_at = self._transport_freshness.get(tuple_key)
+        compatibility_slot = self._points.get((NetworkRuntimePointFamily.RECENT_TUPLE, tuple_key))
+        if (
+            compatibility_slot is not None
+            and not compatibility_slot.is_tombstone
+            and compatibility_slot.expires_at > opened_at
+            and type(compatibility_slot.value) is float
+        ):
+            compatibility_seen_at = datetime.fromtimestamp(
+                compatibility_slot.value,
+                tz=UTC,
+            )
+            seen_at = max(seen_at or compatibility_seen_at, compatibility_seen_at)
+        return seen_at is not None and abs(opened_at - seen_at) <= _TRANSPORT_FRESHNESS_RETENTION
+
+    def _transport_interval_available_locked(
+        self,
+        tuple_key: _TransportTupleKey,
+        opened_at: datetime,
+        closed_at: datetime,
+    ) -> bool:
+        bucket = self._transport_buckets.get(tuple_key)
+        if not bucket or closed_at == opened_at:
+            return True
+        low = 0
+        high = len(bucket)
+        while low < high:
+            middle = (low + high) // 2
+            if bucket[middle].lease.opened_at < opened_at:
+                low = middle + 1
+            else:
+                high = middle
+        for index in (low - 1, low):
+            if index < 0 or index >= len(bucket):
+                continue
+            lease = bucket[index].lease
+            if lease.opened_at < closed_at and opened_at < lease.closed_at:
+                return False
+        return True
+
+    def _insert_transport_record_locked(self, record: _TransportLeaseRecord) -> None:
+        lease = record.lease
+        self._transport_records_by_occurrence[lease.occurrence_stable_id] = record
+        if lease.opened_at == lease.closed_at:
+            return
+        bucket = self._transport_buckets.setdefault(lease.tuple_key, [])
+        low = 0
+        high = len(bucket)
+        order = (lease.opened_at, lease.occurrence_stable_id)
+        while low < high:
+            middle = (low + high) // 2
+            candidate = bucket[middle].lease
+            if (candidate.opened_at, candidate.occurrence_stable_id) < order:
+                low = middle + 1
+            else:
+                high = middle
+        bucket.insert(low, record)
+        self._transport_endpoint_occurrences.setdefault(lease.endpoint_key, set()).add(
+            lease.occurrence_stable_id
+        )
+
+    def _remove_transport_record_locked(self, record: _TransportLeaseRecord) -> None:
+        lease = record.lease
+        if lease.opened_at == lease.closed_at:
+            self._transport_records_by_occurrence.pop(lease.occurrence_stable_id, None)
+            return
+        bucket = self._transport_buckets.get(lease.tuple_key)
+        if bucket is None:
+            raise StateError("Transport lease bucket disappeared")
+        for index, candidate in enumerate(bucket):
+            if candidate.lease.occurrence_stable_id == lease.occurrence_stable_id:
+                bucket.pop(index)
+                break
+        else:
+            raise StateError("Transport lease bucket lost its occurrence")
+        if not bucket:
+            self._transport_buckets.pop(lease.tuple_key)
+        endpoint_occurrences = self._transport_endpoint_occurrences.get(lease.endpoint_key)
+        if endpoint_occurrences is None:
+            raise StateError("Transport endpoint index disappeared")
+        endpoint_occurrences.discard(lease.occurrence_stable_id)
+        if not endpoint_occurrences:
+            self._transport_endpoint_occurrences.pop(lease.endpoint_key)
+        self._transport_records_by_occurrence.pop(lease.occurrence_stable_id, None)
+
+    def _active_transport_count_locked(
+        self,
+        endpoint_key: _TransportEndpointKey,
+        opened_at: datetime,
+        closed_at: datetime,
+    ) -> int:
+        count = 0
+        for occurrence_id in self._transport_endpoint_occurrences.get(endpoint_key, set()):
+            record = self._transport_records_by_occurrence.get(occurrence_id)
+            if record is None:
+                raise StateError("Transport endpoint index contains a stale occurrence")
+            lease = record.lease
+            if lease.opened_at < closed_at and opened_at < lease.closed_at:
+                count += 1
+        return count
 
     def _reserve_physical_identity(
         self,
@@ -2675,6 +3459,23 @@ class NetworkTransactionRuntime:
         trusted_result = result
         with self._lock:
             open_capability = self._active_open_preparation_locked(preparation)
+            transport_record = self._transport_records_by_preparation.get(
+                open_capability.preparation_id
+            )
+            adopted_transport_id = self._adopted_transport_by_preparation.get(
+                open_capability.preparation_id,
+                "",
+            )
+            transport_occurrence_id = (
+                transport_record.lease.occurrence_stable_id
+                if transport_record is not None
+                else adopted_transport_id
+            )
+            retained_transport_record = transport_record
+            if retained_transport_record is None and adopted_transport_id:
+                retained_transport_record = self._transport_records_by_occurrence.get(
+                    adopted_transport_id
+                )
         overlay_digest = hashlib.sha256(
             f"network:{open_capability.preparation_id}:{open_capability.stable_id}".encode()
         ).hexdigest()
@@ -2695,6 +3496,22 @@ class NetworkTransactionRuntime:
             > self._window_end
         ):
             raise StateError("Final network transaction closes after the runtime window")
+        if retained_transport_record is not None:
+            lease = retained_transport_record.lease
+            transaction_tuple = (
+                _canonical_ip(transaction.src_ip, field_name="transaction source IP"),
+                transaction.src_port,
+                _canonical_ip(transaction.dst_ip, field_name="transaction destination IP"),
+                transaction.dst_port,
+                transaction.protocol.casefold(),
+            )
+            if (
+                transaction.stable_id != lease.occurrence_stable_id
+                or transaction_tuple != lease.tuple_key
+                or transaction_start != lease.opened_at
+                or transaction.closed_at != lease.closed_at
+            ):
+                raise StateError("Final network transaction disagrees with its transport lease")
         linearization_time = min(open_capability.linearization_time, transaction_start)
         token = NetworkTransactionPreparationToken(
             preparation_id=open_capability.preparation_id,
@@ -2706,6 +3523,7 @@ class NetworkTransactionRuntime:
             overlay_digest=overlay_digest,
             state_publication_token=state_plan.publication_token,
             cryptographic_publication_token=crypto_token.publication_token,
+            transport_occurrence_id=transport_occurrence_id,
             _runtime_token=id(self),
         )
         token = replace(token, _integrity_token=_token_integrity(self._secret, token))
@@ -2791,6 +3609,7 @@ class NetworkTransactionRuntime:
             self._open_capabilities_by_identity.pop(id(preparation))
             self._preparation_fences.remove(capability.preparation_id)
             self._release_point_reservations_locked(capability.preparation_id)
+            self._release_transport_preparation_locked(capability.preparation_id)
 
     def _active_open_preparation_locked(
         self,
@@ -3111,6 +3930,7 @@ class NetworkTransactionRuntime:
                     tombstone_anchor=tombstone_anchor,
                     trusted_value=True,
                 )
+            self._commit_transport_preparation_locked(capability.preparation_id)
             self._last_result = capability.trusted_root.result
             receipt = NetworkTransactionPreparationReceipt(
                 publication_token=capability.integrity_token,
@@ -3187,8 +4007,85 @@ class NetworkTransactionRuntime:
         self._claimed_preparations.discard(capability.preparation_id)
         self._preparation_fences.remove(capability.preparation_id)
         self._release_point_reservations_locked(capability.preparation_id)
+        self._release_transport_preparation_locked(capability.preparation_id)
         if active is None or id(active) != capability.token_identity or retained is not capability:
             raise StateError("Network transaction capability ownership diverged")
+
+    def _commit_transport_preparation_locked(self, preparation_id: int) -> None:
+        """Publish one pending lease and its 24-hour freshness timestamp."""
+
+        record = self._transport_records_by_preparation.get(preparation_id)
+        if record is None:
+            return
+        if record.committed:
+            raise StateError("Transport lease was already committed")
+        committed = replace(record, committed=True)
+        lease = committed.lease
+        bucket = self._transport_buckets.get(lease.tuple_key)
+        if bucket is None and lease.opened_at != lease.closed_at:
+            raise StateError("Pending transport lease lost its interval bucket")
+        if bucket is not None:
+            for index, candidate in enumerate(bucket):
+                if candidate is record:
+                    bucket[index] = committed
+                    break
+            else:
+                raise StateError("Pending transport lease lost its bucket record")
+        self._transport_records_by_occurrence[lease.occurrence_stable_id] = committed
+        self._transport_records_by_preparation[preparation_id] = committed
+        self._pending_transport_leases -= 1
+        self._transport_candidate_inspections += committed.candidate_inspections
+        if committed.adaptive_reuse:
+            self._adaptive_transport_reuses += 1
+        committed_bucket_occupancy = sum(1 for candidate in bucket or () if candidate.committed)
+        self._peak_transport_bucket_occupancy = max(
+            self._peak_transport_bucket_occupancy,
+            committed_bucket_occupancy,
+        )
+        ordinal = self._next_transport_ordinal
+        self._next_transport_ordinal += 1
+        self._transport_lease_deadlines.replace(
+            lease.occurrence_stable_id,
+            (lease.closed_at, ordinal, lease.occurrence_stable_id),
+        )
+        prior_freshness = self._transport_freshness.get(lease.tuple_key)
+        freshness_component = 0
+        if prior_freshness is not None:
+            freshness_component = self._state_component(
+                "network-transport-freshness-v1",
+                (lease.tuple_key, prior_freshness),
+            )
+        seen_at = max(lease.closed_at, prior_freshness or lease.closed_at)
+        self._transport_freshness[lease.tuple_key] = seen_at
+        freshness_expiry = (
+            self._window_end
+            if seen_at > _MAX_TIME - _TRANSPORT_FRESHNESS_RETENTION
+            else min(self._window_end, seen_at + _TRANSPORT_FRESHNESS_RETENTION)
+        )
+        self._transport_freshness_deadlines.replace(
+            lease.tuple_key,
+            (freshness_expiry, ordinal, lease.tuple_key),
+        )
+        self._transport_state_xor ^= freshness_component
+        self._transport_state_xor ^= self._state_component(
+            "network-transport-freshness-v1",
+            (lease.tuple_key, seen_at),
+        )
+        self._transport_state_xor ^= self._state_component(
+            "network-transport-lease-v1",
+            _transport_lease_digest_value(lease),
+        )
+        self._live_transport_leases += 1
+
+    def _release_transport_preparation_locked(self, preparation_id: int) -> None:
+        """Release pending ownership, retaining an already committed lease."""
+
+        self._adopted_transport_by_preparation.pop(preparation_id, None)
+        record = self._transport_records_by_preparation.pop(preparation_id, None)
+        if record is None or record.committed:
+            return
+        self._pending_transport_leases -= 1
+        self._remove_transport_record_locked(record)
 
     def _release_point_reservations_locked(self, preparation_id: int) -> None:
         for point_key in self._reserved_by_preparation.pop(preparation_id, set()):
@@ -3348,7 +4245,7 @@ class NetworkTransactionRuntime:
         """Return an O(1) digest of deterministic current canonical state."""
 
         state = (
-            "network-runtime-state-v2",
+            "network-runtime-state-v3",
             self._window_start,
             self._window_end,
             self._tombstone_retention,
@@ -3358,6 +4255,9 @@ class NetworkTransactionRuntime:
             self._live_points,
             self._tombstone_points,
             len(self._expiry_heap),
+            self._transport_state_xor,
+            self._live_transport_leases,
+            len(self._transport_freshness),
         )
         return hashlib.sha256(repr(_freeze_digest_value(state)).encode()).hexdigest()
 
@@ -3377,6 +4277,7 @@ __all__ = [
     "NetworkTransactionPreparedCommit",
     "NetworkTransactionRuntime",
     "NetworkTransactionRuntimeCensus",
+    "NetworkTransportLease",
     "NetworkTransportLifecycleMode",
     "PreparedNetworkTransactionRoot",
 ]
