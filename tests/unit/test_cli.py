@@ -68,6 +68,32 @@ def test_generation_progress_uses_one_expanding_hour_bar():
     assert progress.expand is True
     assert len(bar_columns) == 1
     assert bar_columns[0].bar_width is None
+    assert bar_columns[0].style == "grey50"
+    assert bar_columns[0].get_table_column().min_width == 8
+
+
+def test_generation_progress_keeps_zero_percent_bar_visible_in_narrow_terminal():
+    """The uncompleted track should remain visible in an SSH/screen-sized terminal."""
+    output = StringIO()
+    console = Console(
+        file=output,
+        width=80,
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+    )
+    progress = _generation_progress(console)
+    progress.add_task(
+        "Warm-up hour 5/8",
+        total=1000,
+        completed=0,
+        progress_kind="simulated_hours",
+        average_seconds_per_hour=None,
+    )
+
+    console.print(progress.get_renderable())
+
+    assert "━" in output.getvalue()
 
 
 def test_generation_speed_column_renders_average_and_recent_rates():

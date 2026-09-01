@@ -245,7 +245,11 @@ def _generation_progress(console: Console) -> Progress:
     return Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
-        BarColumn(bar_width=None, table_column=Column(ratio=1, min_width=1)),
+        BarColumn(
+            bar_width=None,
+            style="grey50",
+            table_column=Column(ratio=1, min_width=8),
+        ),
         TaskProgressColumn(),
         TimeElapsedColumn(),
         TextColumn("ETA"),
