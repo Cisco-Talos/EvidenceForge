@@ -172,6 +172,18 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
   `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
   session teardown unless an explicit hung/long-running outcome owns that lifecycle.
+- [ ] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
+  means "we stopped collecting data," not that systems shut down or every active connection,
+  session, process, and application operation ended cleanly. Mirror warm-up behavior at the tail:
+  allow lifecycles that start before the exclusive collection end to remain active afterward,
+  emit only source-native rows actually observed before the cutoff, and do not synthesize an
+  in-window close, logoff, teardown, or completion merely to drain runtime state. Decouple the
+  output window from network leases, application/channel registry bounds, lifecycle journals, and
+  terminal zero-owner assertions; finalize an explicit active-at-cutoff snapshot and then release
+  its runtime ownership safely. Decide during design whether ground truth records only
+  `active_at_collection_end` or also retains the exact modeled future close. This must not be used
+  to conceal pathological durations such as runaway SMB file-size growth, which remains a
+  separate root-cause fix.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
@@ -380,7 +392,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   pre-encryption, or TLS metadata. Plaintext mail is eligible only when a
   storyline or background path explicitly asserts a signature.
 - [ ] HTTP proxy server support for Squid, Blue Coat, and Zscaler.
-- [ ] Checkpointing and resume for long-running generation.
+- [ ] **Checkpointing and resume for long-running generation.** The goal is to avoid
+  restarting from the beginning when generation is interrupted; metadata-only
+  replay checkpoints are insufficient because rebuilding state can take nearly as
+  long as generation. Investigate true logical-state checkpoints at safe hourly
+  emitter barriers, persisting future-relevant sessions, processes, connections,
+  lifecycle/pending actions, timing and RNG state, allocators, long-lived protocol
+  channels, intent progress, and output-journal state while rebuilding immutable
+  configuration, derived indexes, and worker infrastructure. Use explicit,
+  versioned non-pickle serialization (human-readable manifest plus a suitable
+  state payload), atomic checkpoint commits, and recovery that resumes within one
+  checkpoint interval with byte-identical output.
 - [ ] Additional skills: create-persona, create-log-format, create-network, and
   analyze-output.
 - [ ] Example scenario collection for ransomware, credential stuffing, and
