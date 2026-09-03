@@ -227,6 +227,7 @@ class IncrementalCheckpointStore:
         self.recovery = self.workspace / "recovery"
         self.index_path = self.workspace / _INDEX_NAME
         self.lock = RunLock(self.workspace)
+        self._initialized = False
 
     @property
     def staged_bundle(self) -> Path:
@@ -237,6 +238,8 @@ class IncrementalCheckpointStore:
     def initialize(self) -> None:
         """Create and validate the protected checkpoint workspace."""
 
+        if self._initialized:
+            return
         self._validate_output_root()
         self.workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.objects.mkdir(mode=0o700, exist_ok=True)
@@ -245,6 +248,7 @@ class IncrementalCheckpointStore:
         self._validate_protected_directory(self.objects)
         self._validate_protected_directory(self.recovery)
         self._probe_filesystem()
+        self._initialized = True
 
     def _validate_output_root(self) -> None:
         current = self.output_root
@@ -294,28 +298,68 @@ class IncrementalCheckpointStore:
             replacement.unlink(missing_ok=True)
 
     @staticmethod
-    def _encode_segment(draft: SegmentDraft) -> tuple[bytes, str]:
+    def _encode_segment(
+        draft: SegmentDraft,
+        metrics: CheckpointStoreMetrics | None = None,
+    ) -> tuple[bytes, str]:
         if draft.record_count < 0:
             raise ValueError("segment record_count cannot be negative")
+        encode_started = time.perf_counter()
+        compression_seconds = 0.0
+        hashing_seconds = 0.0
         if draft.compression == "none":
             body = draft.payload
         elif draft.compression == "zlib-1":
+            compression_started = time.perf_counter()
             body = zlib.compress(draft.payload, level=1)
+            compression_seconds = time.perf_counter() - compression_started
+            if metrics is not None:
+                metrics.compression_seconds += compression_seconds
         else:
             raise ValueError(f"unsupported segment compression: {draft.compression!r}")
+        payload_hash_started = time.perf_counter()
+        payload_digest = _sha256(draft.payload)
+        hashing_seconds += time.perf_counter() - payload_hash_started
+        if metrics is not None:
+            metrics.bytes_hashed += len(draft.payload)
+            metrics.hashing_seconds += hashing_seconds
         metadata = _canonical_json(
             {
                 "codec": "stdlib-packed-v1",
                 "compression": draft.compression,
                 "owner": draft.owner,
-                "payload_sha256": _sha256(draft.payload),
+                "payload_sha256": payload_digest,
                 "record_count": draft.record_count,
                 "schema_version": draft.schema_version,
                 "uncompressed_size": len(draft.payload),
             }
         )
         encoded = _SEGMENT_MAGIC + len(metadata).to_bytes(8, "big") + metadata + body
-        return encoded, _sha256(encoded)
+        encoded_hash_started = time.perf_counter()
+        digest = _sha256(encoded)
+        encoded_hash_seconds = time.perf_counter() - encoded_hash_started
+        hashing_seconds += encoded_hash_seconds
+        if metrics is not None:
+            metrics.bytes_hashed += len(encoded)
+            metrics.hashing_seconds += encoded_hash_seconds
+            metrics.segment_encode_seconds += max(
+                0.0,
+                time.perf_counter() - encode_started - compression_seconds - hashing_seconds,
+            )
+        return encoded, digest
+
+    def persist_resolved_scenario(self, payload: bytes) -> tuple[str, str]:
+        """Write the authoritative resolved input once, outside checkpoint pauses."""
+
+        self.initialize()
+        digest = _sha256(payload)
+        relative_path, _created = self._write_content_object(
+            category="resolved",
+            digest=digest,
+            suffix=".yaml",
+            payload=payload,
+        )
+        return digest, relative_path
 
     def _write_content_object(
         self,
@@ -362,6 +406,7 @@ class IncrementalCheckpointStore:
         checkpoint_hours: int,
         cursor: CheckpointCursor,
         resolved_scenario: bytes,
+        resolved_scenario_reference: tuple[str, str] | None = None,
         inherited_segments: tuple[SegmentReference, ...],
         new_segments: tuple[SegmentDraft, ...],
         heads: tuple[HeadDraft, ...],
@@ -373,6 +418,7 @@ class IncrementalCheckpointStore:
         if checkpoint_hours <= 0:
             raise ValueError("checkpoint publication requires a positive cadence")
         self.initialize()
+        store_started = time.perf_counter()
         accounting = metrics or CheckpointStoreMetrics()
         inherited_by_digest = {segment.sha256: segment for segment in inherited_segments}
         segment_refs = list(inherited_segments)
@@ -385,8 +431,7 @@ class IncrementalCheckpointStore:
         accounting.reused_segment_bytes = sum(segment.size for segment in inherited_segments)
         segment_started = time.perf_counter()
         for draft in new_segments:
-            encoded, digest = self._encode_segment(draft)
-            accounting.bytes_hashed += len(encoded)
+            encoded, digest = self._encode_segment(draft, accounting)
             if digest in inherited_by_digest:
                 raise ValueError(
                     f"participant {draft.owner!r} attempted to reseal an inherited segment"
@@ -414,14 +459,19 @@ class IncrementalCheckpointStore:
             next_owner_ordinal[draft.owner] = next_owner_ordinal.get(draft.owner, 0) + 1
         accounting.segment_write_seconds = time.perf_counter() - segment_started
 
-        resolved_digest = _sha256(resolved_scenario)
-        accounting.bytes_hashed += len(resolved_scenario)
-        resolved_path, _ = self._write_content_object(
-            category="resolved",
-            digest=resolved_digest,
-            suffix=".yaml",
-            payload=resolved_scenario,
-        )
+        if resolved_scenario_reference is None:
+            resolved_hash_started = time.perf_counter()
+            resolved_digest = _sha256(resolved_scenario)
+            accounting.bytes_hashed += len(resolved_scenario)
+            accounting.hashing_seconds += time.perf_counter() - resolved_hash_started
+            resolved_path, _ = self._write_content_object(
+                category="resolved",
+                digest=resolved_digest,
+                suffix=".yaml",
+                payload=resolved_scenario,
+            )
+        else:
+            resolved_digest, resolved_path = resolved_scenario_reference
 
         pending = self.recovery / f".pending-{sequence:020d}-{uuid.uuid4().hex}"
         final = self.recovery / f"{sequence:020d}"
@@ -436,8 +486,10 @@ class IncrementalCheckpointStore:
             for head in sorted(heads, key=lambda item: item.owner):
                 filename = f"{head.owner}.bin"
                 path = heads_directory / filename
+                head_hash_started = time.perf_counter()
                 digest = _sha256(head.payload)
                 accounting.bytes_hashed += len(head.payload)
+                accounting.hashing_seconds += time.perf_counter() - head_hash_started
                 accounting.head_bytes += len(head.payload)
                 _write_new_file(path, head.payload)
                 head_refs.append(
@@ -465,14 +517,22 @@ class IncrementalCheckpointStore:
                 metadata={} if metadata is None else metadata,
             )
             manifest_payload = _canonical_json(manifest.model_dump(mode="json"))
+            accounting.manifest_bytes = len(manifest_payload)
+            manifest_started = time.perf_counter()
             _write_new_file(pending / _MANIFEST_NAME, manifest_payload)
             _sync_directory(pending)
-            commit_started = time.perf_counter()
+            accounting.manifest_write_seconds = time.perf_counter() - manifest_started
+            publish_started = time.perf_counter()
             os.replace(pending, final)
             _sync_directory(self.recovery)
+            accounting.atomic_publish_seconds = time.perf_counter() - publish_started
+            index_started = time.perf_counter()
             self._publish_index(manifest, manifest_payload)
-            self._rotate_and_collect()
-            accounting.commit_seconds = time.perf_counter() - commit_started
+            accounting.index_publish_seconds = time.perf_counter() - index_started
+            rotation_started = time.perf_counter()
+            self._rotate_recoveries()
+            accounting.rotation_seconds = time.perf_counter() - rotation_started
+            accounting.commit_seconds = time.perf_counter() - store_started
             return manifest
         finally:
             if pending.exists():
@@ -532,11 +592,17 @@ class IncrementalCheckpointStore:
             raise CheckpointCorruptionError("checkpoint recovery index order changed")
         return entries
 
-    def _rotate_and_collect(self) -> None:
+    def _rotate_recoveries(self) -> None:
         directories = self._recovery_directories()
         for stale in directories[2:]:
             shutil.rmtree(stale)
         _sync_directory(self.recovery)
+
+    def collect_garbage(self) -> None:
+        """Remove objects unreferenced by either recovery outside checkpoint pauses."""
+
+        self.initialize()
+        directories = self._recovery_directories()
         retained_paths: set[str] = set()
         for directory in directories[:2]:
             try:

@@ -394,6 +394,33 @@ def test_watermark_prunes_hard_lease_then_freshness() -> None:
     assert runtime.census().retained_transport_freshness == 0
 
 
+def test_checkpoint_prunes_closed_lease_without_advancing_reuse_state() -> None:
+    runtime, state = _runtime()
+    rng = random.Random(61)
+    preparation = _begin(runtime, rng, "checkpoint", _START)
+    lease = _reserve(preparation, intent="checkpoint", opened_at=_START, source_port=50_051)
+    _commit(runtime, state, rng, preparation, lease)
+    watermark = runtime.watermark
+
+    assert runtime.prune_checkpoint_transport_leases(_START + timedelta(seconds=9)) == 0
+    assert runtime.prune_checkpoint_transport_leases(_START + timedelta(seconds=10)) == 1
+
+    census = runtime.census()
+    assert census.live_transport_leases == 0
+    assert census.retained_transport_freshness == 1
+    assert runtime.watermark == watermark
+
+    later = _begin(runtime, random.Random(62), "later", _START + timedelta(seconds=11))
+    later_lease = _reserve(
+        later,
+        intent="later",
+        opened_at=_START + timedelta(seconds=11),
+        source_port=50_051,
+    )
+    assert later_lease.src_port == 50_051
+    later.cancel()
+
+
 @pytest.mark.slow
 def test_lease_candidate_work_does_not_scale_with_unrelated_history() -> None:
     """Candidate inspection stays local after many unrelated committed tuples."""

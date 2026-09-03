@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -299,9 +300,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             return
         if self.start_time is None or self.end_time is None:
             raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
+        checkpoint_started = time.perf_counter()
+        quiesce_started = time.perf_counter()
         self._barrier_flush_all_emitters()
+        emitter_quiesce_seconds = time.perf_counter() - quiesce_started
+        barrier_prepare_seconds = 0.0
         if controller is not None:
-            self._prepare_incremental_checkpoint_barrier()
+            barrier_prepare_started = time.perf_counter()
+            self._prepare_incremental_checkpoint_barrier(next_hour)
+            barrier_prepare_seconds = time.perf_counter() - barrier_prepare_started
         if next_hour < self.start_time:
             phase = "warmup"
         elif next_hour < self.end_time:
@@ -319,6 +326,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             controller.commit(
                 cursor=cursor,
                 participants=self._checkpoint_participants,
+                emitter_quiesce_seconds=emitter_quiesce_seconds,
+                barrier_prepare_seconds=barrier_prepare_seconds,
+            )
+            logger.debug(
+                "Incremental checkpoint foreground pause completed in %.6f seconds",
+                time.perf_counter() - checkpoint_started,
             )
             if self._checkpoint_synchronization_hook is not None:
                 self._checkpoint_synchronization_hook(cursor)
@@ -326,10 +339,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             assert callback is not None
             callback(completed_simulated_hours, next_hour, phase)
 
-    def _prepare_incremental_checkpoint_barrier(self) -> None:
-        """Retire owner-local terminal authorities before state capture."""
+    def _prepare_incremental_checkpoint_barrier(self, cutoff: datetime) -> None:
+        """Retire terminal authorities at the sealed post-hour frontier."""
 
         self.lifecycle_registry.prune_action_cohort_receipt_authorities()
+        self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
+        self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
 
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""

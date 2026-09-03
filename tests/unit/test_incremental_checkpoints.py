@@ -3182,6 +3182,11 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
     assert len(second.segments) == 2
     assert progress[-1]["new_segment_bytes"] > 0
     assert progress[-1]["reused_segment_bytes"] == first.segments[0].size
+    assert progress[-1]["reused_segment_bytes_read"] == 0
+    assert progress[-1]["reused_segment_bytes_hashed"] == 0
+    participant_metrics = json.loads(str(progress[-1]["participants_json"]))
+    assert participant_metrics[0]["owner"] == participant.checkpoint_owner
+    assert participant_metrics[0]["head_bytes"] > 0
 
     recovered = store.recover(expected_fingerprint=_FINGERPRINT)
     fresh = _FakeParticipant()
@@ -3282,7 +3287,8 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
     assert len(second.segments) == 2
     assert second_metrics.reused_segment_bytes == first_segment.size
     assert second_metrics.bytes_read == 0
-    assert second_metrics.bytes_hashed < sum(segment.size for segment in second.segments)
+    assert second_metrics.reused_segment_bytes_read == 0
+    assert second_metrics.reused_segment_bytes_hashed == 0
     assert [segment.owner_ordinal for segment in second.segments] == [0, 1]
     assert first_path.stat().st_ino == first_stat.st_ino
     assert first_path.stat().st_mtime_ns == first_stat.st_mtime_ns
@@ -3292,7 +3298,30 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
     assert store.read_segment(recovery.manifest.segments[1]) == b"second delta" * 100
 
 
-def test_store_rotates_manifests_and_collects_unreferenced_segments(tmp_path: Path) -> None:
+def test_store_initialization_probes_filesystem_only_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    calls = 0
+    original = store._probe_filesystem
+
+    def counted_probe() -> None:
+        nonlocal calls
+        calls += 1
+        original()
+
+    monkeypatch.setattr(store, "_probe_filesystem", counted_probe)
+    store.initialize()
+    store.initialize()
+    store.persist_resolved_scenario(b"schema_version: '2.0'\n")
+
+    assert calls == 1
+
+
+def test_store_rotates_manifests_and_collects_unreferenced_segments_outside_commit(
+    tmp_path: Path,
+) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     first = _commit(store, sequence=0, hour=6, payload=b"retired")
     retired_path = store.workspace / first.segments[0].relative_path
@@ -3309,11 +3338,13 @@ def test_store_rotates_manifests_and_collects_unreferenced_segments(tmp_path: Pa
     _commit(store, sequence=2, hour=18, inherited=retained)
     assert retired_path.exists()
     _commit(store, sequence=3, hour=24, inherited=retained)
-    assert not retired_path.exists()
+    assert retired_path.exists()
     assert [path.name for path in store._recovery_directories()] == [
         "00000000000000000003",
         "00000000000000000002",
     ]
+    store.collect_garbage()
+    assert not retired_path.exists()
 
 
 def test_store_falls_back_when_newest_head_is_corrupt(tmp_path: Path) -> None:

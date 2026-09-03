@@ -4993,6 +4993,68 @@ class _LifecyclePartition:
                 self._compact_indexes()
             return tuple(evicted)
 
+    def prune_checkpoint_terminal_transports(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Evict closed transports sealed by a checkpoint barrier.
+
+        Ordinary retention permits late source projection while an hour is active. At the
+        post-hour emitter barrier, a closed transport with no live binding or retention lease
+        has no remaining semantic owner. Its retention deadline doubles as an eligibility
+        queue, so checkpoint compaction does not scan the transport catalog.
+        """
+
+        canonical_cutoff = ensure_utc(cutoff)
+        eligibility_cutoff = canonical_cutoff + self._closed_retention
+        evicted: list[LifecycleEntityRef] = []
+        while True:
+            with self._catalog_lock, self._index_lock:
+                handles = self._transport_retention_deadlines.expire_page(eligibility_cutoff)
+                candidates: list[tuple[datetime, int, _TransportEntry]] = []
+                for handle in handles:
+                    try:
+                        entry = self._transports.get_by_handle(handle)
+                    except KeyError:
+                        continue
+                    if entry.closed_at is None:
+                        raise StateError(
+                            "Checkpoint transport eligibility referenced a live transport"
+                        )
+                    candidates.append((entry.closed_at, handle, entry))
+            if not handles:
+                break
+            candidates.sort(key=lambda item: (item[0], item[2].identity.object_id))
+            for closed_at, handle, entry in candidates:
+                subject = entry.identity.ref
+                with (
+                    self._host_lanes.lane(entry.identity.hostname),
+                    self._catalog_lock,
+                    self._index_lock,
+                ):
+                    try:
+                        current = self._transports.get_by_handle(handle)
+                    except KeyError:
+                        continue
+                    if not self._same_entry(current, entry):
+                        continue
+                    if (
+                        closed_at > canonical_cutoff
+                        or entry.active_binding_count
+                        or self._resource_lease_deadline_for(subject) is not None
+                    ):
+                        self._transport_retention_deadlines.set(
+                            handle,
+                            self._retention_deadline_for(subject, entry),
+                        )
+                        continue
+                    self._evict(subject, entry, handle=handle, retention_removed=True)
+                    evicted.append(subject)
+        with self._catalog_lock, self._index_lock:
+            self._transport_starts.compact(max_groups=8)
+            self._compact_indexes()
+        return tuple(evicted)
+
     def drain_route_removals(self) -> tuple[tuple[str, str], ...]:
         """Return and clear semantic routes removed by a sealed watermark."""
 
@@ -16592,6 +16654,24 @@ class LifecycleRegistry:
             self._watermark = canonical_cutoff
             with self._closed_transport_preparation_lock:
                 self._prune_action_cohort_reservations_locked()
+            evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
+            return tuple(evicted)
+
+    def prune_checkpoint_terminal_transports(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain and revalidate sharded terminal-transport eligibility queues."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        with self._gate.watermark():
+            evicted: list[LifecycleEntityRef] = []
+            removals: list[tuple[str, str]] = []
+            for partition in self._partitions:
+                evicted.extend(partition.prune_checkpoint_terminal_transports(canonical_cutoff))
+                removals.extend(partition.drain_route_removals())
+            self._routes.remove_many(tuple(removals))
+            self._routes.compact(max_entries=_PRIMARY_COMPACTION_PAGE)
             evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
             return tuple(evicted)
 

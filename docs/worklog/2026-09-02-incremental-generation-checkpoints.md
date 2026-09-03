@@ -398,3 +398,25 @@ until every correctness and performance gate passes.
   byte. The comparison includes evidence, resolved scenario, ground truth, and deterministic
   sidecars and excludes only `generation.log` and the time-bearing generation manifest. All three
   fresh-process cases pass.
+- Foreground checkpoint instrumentation now separates emitter quiescence, terminal-owner pruning,
+  participant extraction, segment encoding/compression/hashing/writes, head and manifest writes,
+  atomic publication, index publication, recovery rotation, and participant commit callbacks. It
+  also records per-participant head/delta size and preparation time. The resolved scenario is
+  content-addressed once before generation, filesystem capability probing is once per store
+  lifetime, and object-tree garbage collection is an explicit out-of-pause operation rather than
+  an every-checkpoint history scan. Reused payload segments report zero bytes reread and zero bytes
+  rehashed.
+- The first instrumented cadence-one minimal probe showed participant extraction, not storage, was
+  dominant: the hour-nine checkpoint spent about 112 ms extracting 4.11 MiB of live heads while
+  the complete durable store commit took about 9 ms. The lifecycle registry alone contributed
+  3.09 MiB, including 900 already-closed transports, and network runtime contributed 583 KiB. An
+  attempted global watermark/zero-retention compaction correctly failed testing because recent
+  closed process parents and frozen close schedules remain semantically necessary.
+- Checkpoint barriers now instead drain existing sharded deadline queues for only terminal
+  lifecycle transports with no live binding or retention lease, and discard only closed network
+  transport intervals while retaining the separate source-port freshness authority. At hour nine,
+  the lifecycle head fell from 3.09 MiB to 459 KiB and network runtime from 583 KiB to 226 KiB;
+  lifecycle retained the 147 process and three session identities required by later work, while
+  both heads retained zero full transport rows. The successful bundle is byte-identical to the
+  unpruned control, 146 focused lifecycle/network/checkpoint tests pass, and all three fresh-process
+  SIGINT/SIGKILL moved-root recovery cases remain byte-identical.

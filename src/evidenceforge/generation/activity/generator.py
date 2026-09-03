@@ -5779,6 +5779,11 @@ class ActivityGenerator:
             reject_terminal_closures=False,
         )
 
+    def prune_checkpoint_terminal_network_state(self, cutoff: datetime) -> int:
+        """Retire transport records whose evidence is sealed at a checkpoint barrier."""
+
+        return self._network_transaction_runtime.prune_checkpoint_transport_leases(cutoff)
+
     def _advance_application_channel_watermark(
         self,
         cutoff: datetime,
