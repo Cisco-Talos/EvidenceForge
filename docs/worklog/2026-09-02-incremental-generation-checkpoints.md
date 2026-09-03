@@ -360,3 +360,24 @@ until every correctness and performance gate passes.
   reaching an ordinary tail lifecycle error. The first recovery attempt exposed and fixed an RDP
   validation bug: a disconnected generation may legitimately predate the lifecycle watermark while
   it waits for its reconnect/logout deadline; connected generations still may not.
+- An unchanged-runtime CLI probe of the topology-heavy full-coverage fixture resumed from the
+  hour-12 recovery and completed successfully after the original process reached its pre-existing
+  terminal lifecycle-ordering failure. The resume spent roughly 13 seconds in the six displayed
+  collection/tail units, compared with roughly 65 seconds for the original generation body. The
+  successful publication removed `.eforge-generation` as required. This is not yet a byte-identity
+  acceptance result: the uninterrupted control currently reaches the same unrelated finalization
+  defect, and the differing terminal outcome must be isolated before comparing complete bundles.
+- Multiplexed Bash-history routes are now visible to the shared emitter-spool participant even
+  after their private writers have been reclaimed. Ordinary files seal only the suffix beyond the
+  prior committed length; a semantic `history -c` marks one explicit replacement generation, after
+  which later checkpoints return to suffix-only capture. Restore discards obsolete pre-replacement
+  segments, recreates the exact file bytes, rebuilds the bounded route inventory, and continues
+  appending byte-identically. Three spool tests and all 197 Bash/Snort exact-publication regressions
+  pass.
+- Resource forecasts now expose a separate `Projected checkpoint workspace` range whenever the
+  configured cadence can occur in the continuous warm-up/collection window, and add that range
+  once to projected peak working disk. The provisional model includes unique sealed output/state
+  segments, two bounded head/manifest generations, one pending delta, resolved input, and metadata;
+  it does not add external-sort transients a second time. These coefficients remain explicitly
+  provisional until the 60-day matrix calibrates them. All 48 resource-forecast and routine CLI
+  tests pass.

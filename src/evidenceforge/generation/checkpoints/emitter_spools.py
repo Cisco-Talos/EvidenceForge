@@ -16,8 +16,8 @@ from .participants import OwnerStateField, ParticipantSeal
 from .spools import AppendOnlySpoolParticipant
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "1"
-_BLOB_MAGIC = b"EFORGE-EMITTER-SPOOL-1\n"
+_SCHEMA_VERSION = "2"
+_BLOB_MAGIC = b"EFORGE-EMITTER-SPOOL-2\n"
 _EMPTY_CHAIN = "0" * 64
 
 
@@ -51,6 +51,7 @@ class _PreparedState:
     append_files: dict[str, _FileState]
     sorted_writers: dict[tuple[str, str], _SortedWriterState]
     writers: tuple[ExternalSortedLineWriter, ...]
+    declared_emitters: tuple[object, ...]
     seal: ParticipantSeal
 
 
@@ -91,13 +92,14 @@ def _decode_blob(encoded: bytes) -> tuple[str, str, int, bytes]:
     key = metadata.get("key")
     offset = metadata.get("offset")
     if (
-        kind not in {"append", "sorted-run"}
+        kind not in {"append", "replace", "sorted-run"}
         or type(key) is not str
         or not key
         or type(offset) is not int
         or offset < 0
         or metadata.get("size") != len(body)
         or metadata.get("sha256") != hashlib.sha256(body).hexdigest()
+        or (kind == "replace" and offset != 0)
     ):
         raise CheckpointCorruptionError("emitter spool segment metadata changed")
     return kind, key, offset, body
@@ -153,6 +155,7 @@ class EmitterSpoolParticipant:
     checkpoint_state_fields = (
         OwnerStateField("committed_lengths", "bounded-live-head"),
         OwnerStateField("append_chunks", "immutable-incremental-segments"),
+        OwnerStateField("replace_chunks", "immutable-incremental-segments"),
         OwnerStateField("external_sort_runs", "immutable-incremental-segments"),
         OwnerStateField("writer_locks_and_paths", "deterministically-rebuilt"),
         OwnerStateField("queued_or_buffered_rows", "transient-empty-at-barrier"),
@@ -187,6 +190,99 @@ class EmitterSpoolParticipant:
                 discovered.append((format_name, route, writer))
         return tuple(discovered)
 
+    def _declared_output_files(self) -> tuple[tuple[object, Path, bool], ...]:
+        """Return multiplexed outputs whose route writers may already be reclaimed."""
+
+        discovered: list[tuple[object, Path, bool]] = []
+        for _format_name, emitter in sorted(self.emitters.items()):
+            snapshot = getattr(emitter, "checkpoint_output_files", None)
+            if not callable(snapshot):
+                continue
+            rows = snapshot()
+            if type(rows) is not tuple:
+                raise RuntimeError("emitter checkpoint output inventory is malformed")
+            for row in rows:
+                if (
+                    type(row) is not tuple
+                    or len(row) != 2
+                    or not isinstance(row[0], Path)
+                    or type(row[1]) is not bool
+                ):
+                    raise RuntimeError("emitter checkpoint output inventory is malformed")
+                discovered.append((emitter, row[0], row[1]))
+        return tuple(discovered)
+
+    def _capture_append_file(
+        self,
+        *,
+        path: Path,
+        replace: bool,
+        require_same_identity: bool,
+        projected_append: dict[str, _FileState],
+        segments: list[SegmentDraft],
+    ) -> None:
+        """Capture one public spool as a suffix or explicit replacement generation."""
+
+        relative = self._relative_output(path)
+        previous = projected_append.get(relative)
+        if replace:
+            offset = 0
+            chain = _EMPTY_CHAIN
+            chunks = 0
+            kind = "replace"
+        else:
+            offset = 0 if previous is None else previous.length
+            chain = _EMPTY_CHAIN if previous is None else previous.chain
+            chunks = 0 if previous is None else previous.chunks
+            kind = "append"
+        body, info = _read_file(path, offset=offset)
+        if (
+            previous is not None
+            and not replace
+            and require_same_identity
+            and (info.st_dev, info.st_ino) != (previous.device, previous.inode)
+        ):
+            raise CheckpointFilesystemError(f"committed append output changed: {path}")
+        cursor = offset
+        if replace and not body:
+            segments.append(
+                SegmentDraft(
+                    owner=self.checkpoint_owner,
+                    schema_version=self.checkpoint_schema_version,
+                    payload=_encode_blob(kind=kind, key=relative, offset=0, payload=b""),
+                    record_count=1,
+                )
+            )
+            chain = _chain(chain, offset=0, payload=b"")
+            chunks += 1
+        for chunk_offset in range(0, len(body), 4 * 1024 * 1024):
+            chunk = body[chunk_offset : chunk_offset + 4 * 1024 * 1024]
+            segment_kind = kind if chunk_offset == 0 else "append"
+            segments.append(
+                SegmentDraft(
+                    owner=self.checkpoint_owner,
+                    schema_version=self.checkpoint_schema_version,
+                    payload=_encode_blob(
+                        kind=segment_kind,
+                        key=relative,
+                        offset=cursor,
+                        payload=chunk,
+                    ),
+                    record_count=1,
+                )
+            )
+            chain = _chain(chain, offset=cursor, payload=chunk)
+            chunks += 1
+            cursor += len(chunk)
+        self.last_bytes_read += len(body)
+        projected_append[relative] = _FileState(
+            length=cursor,
+            chunks=chunks,
+            chain=chain,
+            device=info.st_dev,
+            inode=info.st_ino,
+        )
+
     def prepare_checkpoint(self, sequence: int) -> ParticipantSeal:
         """Capture only content created since the previous manifest."""
 
@@ -201,6 +297,7 @@ class EmitterSpoolParticipant:
         self.last_bytes_read = 0
         sorted_documents: list[dict[str, object]] = []
         append_documents: list[dict[str, object]] = []
+        captured_paths: set[str] = set()
 
         for format_name, route, writer in self._writers():
             sorted_writer = getattr(writer, "_sorted_writer", None)
@@ -266,40 +363,32 @@ class EmitterSpoolParticipant:
             if not isinstance(output_path, Path) or not output_path.exists():
                 continue
             relative = self._relative_output(output_path)
-            previous = projected_append.get(relative)
-            offset = 0 if previous is None else previous.length
-            body, info = _read_file(output_path, offset=offset)
-            if previous is not None and (info.st_dev, info.st_ino) != (
-                previous.device,
-                previous.inode,
-            ):
-                raise CheckpointFilesystemError(f"committed append output changed: {output_path}")
-            chain = _EMPTY_CHAIN if previous is None else previous.chain
-            chunks = 0 if previous is None else previous.chunks
-            cursor = offset
-            for chunk_offset in range(0, len(body), 4 * 1024 * 1024):
-                chunk = body[chunk_offset : chunk_offset + 4 * 1024 * 1024]
-                key = relative
-                segments.append(
-                    SegmentDraft(
-                        owner=self.checkpoint_owner,
-                        schema_version=self.checkpoint_schema_version,
-                        payload=_encode_blob(kind="append", key=key, offset=cursor, payload=chunk),
-                        record_count=1,
-                    )
-                )
-                chain = _chain(chain, offset=cursor, payload=chunk)
-                chunks += 1
-                cursor += len(chunk)
-            self.last_bytes_read += len(body)
-            state = _FileState(
-                length=cursor,
-                chunks=chunks,
-                chain=chain,
-                device=info.st_dev,
-                inode=info.st_ino,
+            self._capture_append_file(
+                path=output_path,
+                replace=False,
+                require_same_identity=True,
+                projected_append=projected_append,
+                segments=segments,
             )
-            projected_append[relative] = state
+            captured_paths.add(relative)
+
+        declared_emitters: list[object] = []
+        for emitter, output_path, replace in self._declared_output_files():
+            if not output_path.exists():
+                continue
+            relative = self._relative_output(output_path)
+            if relative in captured_paths:
+                raise RuntimeError(f"emitter checkpoint output has duplicate ownership: {relative}")
+            self._capture_append_file(
+                path=output_path,
+                replace=replace,
+                require_same_identity=False,
+                projected_append=projected_append,
+                segments=segments,
+            )
+            captured_paths.add(relative)
+            if emitter not in declared_emitters:
+                declared_emitters.append(emitter)
 
         for relative, state in sorted(projected_append.items()):
             append_documents.append(
@@ -329,6 +418,7 @@ class EmitterSpoolParticipant:
             append_files=projected_append,
             sorted_writers=projected_sorted,
             writers=tuple(checkpoint_writers),
+            declared_emitters=tuple(declared_emitters),
             seal=seal,
         )
         return seal
@@ -341,6 +431,11 @@ class EmitterSpoolParticipant:
             raise RuntimeError("emitter spool commit does not match its prepared sequence")
         for writer in prepared.writers:
             writer.checkpoint_committed()
+        for emitter in prepared.declared_emitters:
+            committed = getattr(emitter, "checkpoint_outputs_committed", None)
+            if not callable(committed):
+                raise RuntimeError("emitter checkpoint output owner lost its commit hook")
+            committed()
         self._committed_append = prepared.append_files
         self._committed_sorted = prepared.sorted_writers
         self._prepared = None
@@ -367,8 +462,11 @@ class EmitterSpoolParticipant:
         sorted_bodies: dict[str, bytes] = {}
         for encoded in segments:
             kind, key, offset, body = _decode_blob(encoded)
-            if kind == "append":
-                append_bodies.setdefault(key, []).append((offset, body))
+            if kind in {"append", "replace"}:
+                retained = append_bodies.setdefault(key, [])
+                if kind == "replace":
+                    retained.clear()
+                retained.append((offset, body))
             elif key in sorted_bodies or offset != 0:
                 raise CheckpointCorruptionError("external-sort run segment set changed")
             else:
@@ -492,6 +590,14 @@ class EmitterSpoolParticipant:
         self._committed_append = restored_append
         self._committed_sorted = restored_sorted
         self._prepared = None
+        restored_paths = tuple(
+            self.output_root.joinpath(*PurePosixPath(relative).parts)
+            for relative in sorted(restored_append)
+        )
+        for emitter in self.emitters.values():
+            restored = getattr(emitter, "checkpoint_outputs_restored", None)
+            if callable(restored):
+                restored(restored_paths)
 
 
 __all__ = ["EmitterSpoolParticipant"]

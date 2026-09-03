@@ -172,6 +172,14 @@ disk:
   upper_multiplier: 1.50
   peak_lower_multiplier: 0.10
   external_sort_transient_multiplier: 1.05
+  # Provisional incremental-checkpoint calibration. The workspace keeps one
+  # content-addressed copy of sealed output/state segments, two bounded live
+  # heads/manifests, one pending delta, resolved input, and metadata. Recalibrate
+  # these coefficients from the required 60-day performance matrix before
+  # selecting a non-zero default cadence.
+  checkpoint_workspace_base_mib: 1.0
+  checkpoint_segment_multiplier: 1.05
+  checkpoint_head_memory_fraction: 0.02
   smb_activity_sidecar_bytes: 1000
   smb_operation_sidecar_bytes: 850
   smb_activity_fixed_bytes_by_format:

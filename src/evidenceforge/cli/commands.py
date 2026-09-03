@@ -519,6 +519,7 @@ def _display_resource_forecast(forecast: ResourceForecast) -> None:
     """Print an informational forecast followed immediately by pressure warnings."""
     memory = forecast.memory
     final_output = forecast.final_output
+    checkpoint_workspace = forecast.checkpoint_workspace
     disk = forecast.disk
     resources = forecast.snapshot
     console.print("\n[bold blue]Resource forecast[/bold blue]")
@@ -539,6 +540,13 @@ def _display_resource_forecast(forecast: ResourceForecast) -> None:
         f"{_format_capacity(final_output.upper_bytes)} "
         f"(expected {_format_capacity(final_output.expected_bytes)})"
     )
+    if checkpoint_workspace.expected_bytes:
+        console.print(
+            "  Projected checkpoint workspace: "
+            f"{_format_capacity(checkpoint_workspace.lower_bytes)}–"
+            f"{_format_capacity(checkpoint_workspace.upper_bytes)} "
+            f"(expected {_format_capacity(checkpoint_workspace.expected_bytes)})"
+        )
     console.print(
         "  Projected peak working disk: "
         f"{_format_capacity(disk.lower_bytes)}–{_format_capacity(disk.upper_bytes)} "
@@ -567,12 +575,14 @@ def _forecast_for_cli(
     *,
     scenario_root: Path,
     destination: Path,
+    checkpoint_hours: int = 0,
 ) -> ResourceForecast | None:
     """Build and display a forecast without masking owning validation errors."""
     forecast, error = _build_resource_forecast_for_cli(
         scenario,
         scenario_root=scenario_root,
         destination=destination,
+        checkpoint_hours=checkpoint_hours,
     )
     if error is not None:
         console.print("\n[bold blue]Resource forecast[/bold blue]")
@@ -588,12 +598,18 @@ def _build_resource_forecast_for_cli(
     *,
     scenario_root: Path,
     destination: Path,
+    checkpoint_hours: int = 0,
 ) -> tuple[ResourceForecast | None, str | None]:
     """Build a forecast for text or JSON callers without writing console output."""
 
     try:
         estimate = estimate_workload(scenario, scenario_root=scenario_root)
-        forecast = build_resource_forecast(scenario, estimate, destination)
+        forecast = build_resource_forecast(
+            scenario,
+            estimate,
+            destination,
+            checkpoint_hours=checkpoint_hours,
+        )
     except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as exc:
         return None, str(exc)
     return forecast, None
@@ -1435,6 +1451,14 @@ def generate(
         compiled = with_runtime_scenario(compiled, scenario)
         console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
 
+    selected_checkpoint_hours = checkpoint_hours
+    if selected_checkpoint_hours is None:
+        selected_checkpoint_hours = (
+            preliminary_recovery.manifest.checkpoint_hours
+            if resume and preliminary_recovery is not None
+            else _PROVISIONAL_DEFAULT_CHECKPOINT_HOURS
+        )
+
     from evidenceforge.config.provider import effective_config_scope
 
     with effective_config_scope(compiled.effective_config):
@@ -1442,6 +1466,7 @@ def generate(
             scenario,
             scenario_root=scenario_dir,
             destination=ground_truth_dir,
+            checkpoint_hours=selected_checkpoint_hours,
         )
     if resource_forecast is None:
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
@@ -1481,13 +1506,6 @@ def generate(
                 raise typer.Exit(EXIT_ABORTED)
             overwrite = True
 
-    selected_checkpoint_hours = checkpoint_hours
-    if selected_checkpoint_hours is None:
-        selected_checkpoint_hours = (
-            preliminary_recovery.manifest.checkpoint_hours
-            if resume and preliminary_recovery is not None
-            else _PROVISIONAL_DEFAULT_CHECKPOINT_HOURS
-        )
     checkpoint_formats = [
         str(log["format"])
         for log in scenario.output.logs

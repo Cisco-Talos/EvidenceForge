@@ -759,6 +759,31 @@ name: test
         assert mock_engine_class.call_args.kwargs["resource_forecast"].disk.expected_bytes > 0
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_lists_checkpoint_workspace_inside_peak_disk(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """A cadence capable of firing exposes its separate workspace projection."""
+
+        mock_engine_class.return_value = Mock()
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "1",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Projected checkpoint workspace" in result.stdout
+        resource_forecast = mock_engine_class.call_args.kwargs["resource_forecast"]
+        assert resource_forecast.checkpoint_workspace.expected_bytes > 0
+        assert resource_forecast.disk.expected_bytes > resource_forecast.final_output.expected_bytes
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_sof_elk_target(self, mock_engine_class, scenarios_dir, tmp_path):
         """--target sof-elk is passed to the generation engine."""
         mock_engine = Mock()

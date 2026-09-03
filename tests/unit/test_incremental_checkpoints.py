@@ -181,6 +181,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.http_channels import (
@@ -2775,6 +2776,72 @@ def test_emitter_spool_seals_only_new_append_bytes_and_restores_file(tmp_path: P
     )
 
     assert (restored_root / "host" / "events.log").read_bytes() == b"first\nsecond\n"
+
+
+def test_emitter_spool_restores_reclaimed_bash_routes_from_suffix_and_reset_chunks(
+    tmp_path: Path,
+) -> None:
+    def event(command: str, second: int) -> dict[str, object]:
+        return {
+            "command": command,
+            "host_fqdn": "linux-01.example.test",
+            "hostname": "linux-01",
+            "timestamp": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=second),
+            "username": "alice",
+        }
+
+    source_root = tmp_path / "source"
+    source = BashHistoryEmitter(load_format("bash_history"), source_root)
+    source.enable_incremental_checkpointing()
+    participant = EmitterSpoolParticipant(
+        emitters={"bash_history": source},
+        output_root=source_root,
+    )
+    source.emit_event(event("first", 10))
+    source.barrier_flush()
+    first = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    assert source._writers == {}
+
+    source.emit_event(event("second", 20))
+    source.barrier_flush()
+    second = participant.prepare_checkpoint(1)
+    participant.checkpoint_committed(1)
+    assert participant.last_bytes_read == len(
+        f"#{int(datetime(2026, 1, 1, 0, 0, 20, tzinfo=UTC).timestamp())}\nsecond\n".encode()
+    )
+
+    source.emit_event(event("history -c", 25))
+    source.emit_event(event("survivor", 30))
+    source.barrier_flush()
+    third = participant.prepare_checkpoint(2)
+    participant.checkpoint_committed(2)
+    expected = (
+        f"#{int(datetime(2026, 1, 1, 0, 0, 30, tzinfo=UTC).timestamp())}\nsurvivor\n"
+    ).encode()
+    assert participant.last_bytes_read == len(expected)
+
+    restored_root = tmp_path / "restored"
+    restored_emitter = BashHistoryEmitter(load_format("bash_history"), restored_root)
+    restored_emitter.enable_incremental_checkpointing()
+    restored = EmitterSpoolParticipant(
+        emitters={"bash_history": restored_emitter},
+        output_root=restored_root,
+    )
+    restored.restore_checkpoint(
+        third.head.payload,
+        tuple(segment.payload for seal in (first, second, third) for segment in seal.segments),
+    )
+    source_path = source_root / "linux-01.example.test/bash_history/alice.bash_history"
+    restored_path = restored_root / "linux-01.example.test/bash_history/alice.bash_history"
+    assert source_path.read_bytes() == expected
+    assert restored_path.read_bytes() == expected
+
+    source.emit_event(event("continued", 40))
+    restored_emitter.emit_event(event("continued", 40))
+    source.close()
+    restored_emitter.close()
+    assert restored_path.read_bytes() == source_path.read_bytes()
 
 
 def _checkpoint_snort_event(second: int, *, candidate: bool) -> dict[str, object]:

@@ -209,6 +209,7 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
     assert forecast.memory.expected_bytes < forecast.memory.upper_bytes
     assert forecast.final_output.lower_bytes < forecast.final_output.expected_bytes
     assert forecast.final_output.expected_bytes < forecast.final_output.upper_bytes
+    assert forecast.checkpoint_workspace.expected_bytes == 0
     assert forecast.disk.lower_bytes < forecast.disk.expected_bytes
     assert forecast.disk.expected_bytes < forecast.disk.upper_bytes
     assert forecast.disk.lower_bytes >= forecast.final_output.lower_bytes
@@ -272,6 +273,39 @@ def test_forecast_always_reports_memory_disk_and_calibration() -> None:
         "ssh": ("historical_calibration", "resource_forecast:historical:ssh"),
     }
     assert forecast.pressures == ()
+
+
+def test_checkpoint_workspace_is_separate_and_included_once_in_peak_disk() -> None:
+    """Enabled cadence adds shared segments and bounded heads without sort double-counting."""
+
+    scenario = _minimal_scenario()
+    estimate = estimate_workload(scenario)
+    snapshot = _snapshot(memory_and_swap=128 * _GIB, disk=1024 * _GIB)
+    disabled = build_resource_forecast(
+        scenario, estimate, Path("/forecast-target"), snapshot=snapshot
+    )
+    enabled = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        checkpoint_hours=1,
+        snapshot=snapshot,
+    )
+    after_run = build_resource_forecast(
+        scenario,
+        estimate,
+        Path("/forecast-target"),
+        checkpoint_hours=24,
+        snapshot=snapshot,
+    )
+
+    workspace = enabled.checkpoint_workspace
+    assert workspace.lower_bytes > 0
+    assert workspace.lower_bytes <= workspace.expected_bytes <= workspace.upper_bytes
+    assert enabled.disk.expected_bytes == disabled.disk.expected_bytes + workspace.expected_bytes
+    assert enabled.disk.upper_bytes == disabled.disk.upper_bytes + workspace.upper_bytes
+    assert after_run.checkpoint_workspace.expected_bytes == 0
+    assert after_run.disk == disabled.disk
 
 
 def test_registry_report_uses_maximum_floor_without_double_counting() -> None:
