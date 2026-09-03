@@ -15,7 +15,7 @@ from .models import (
     CheckpointManifest,
     CheckpointRecovery,
     CheckpointStoreMetrics,
-    SegmentReference,
+    SegmentCatalogReference,
 )
 from .participants import IncrementalCheckpointParticipant, ParticipantSeal
 from .store import IncrementalCheckpointStore
@@ -35,7 +35,7 @@ class IncrementalCheckpointController:
         resolved_scenario: bytes,
         run_id: str | None = None,
         next_sequence: int = 0,
-        inherited_segments: tuple[SegmentReference, ...] = (),
+        inherited_catalogs: tuple[SegmentCatalogReference, ...] = (),
         run_options: dict[str, object] | None = None,
         progress: Callable[[dict[str, float | int | str]], None] | None = None,
     ) -> None:
@@ -45,7 +45,7 @@ class IncrementalCheckpointController:
         self.resolved_scenario = bytes(resolved_scenario)
         self.run_id = run_id or uuid.uuid4().hex
         self.next_sequence = next_sequence
-        self.inherited_segments = inherited_segments
+        self.inherited_catalogs = inherited_catalogs
         self.run_options = {} if run_options is None else dict(run_options)
         self.progress = progress
         self.resolved_scenario_reference = self.store.persist_resolved_scenario(
@@ -75,7 +75,7 @@ class IncrementalCheckpointController:
             resolved_scenario=resolved_scenario,
             run_id=recovery.manifest.run_id,
             next_sequence=recovery.manifest.sequence + 1,
-            inherited_segments=recovery.manifest.segments,
+            inherited_catalogs=recovery.manifest.segment_catalogs,
             run_options=dict(recovery.manifest.metadata.get("run_options", {})),
             progress=progress,
         )
@@ -174,7 +174,7 @@ class IncrementalCheckpointController:
                 cursor=cursor,
                 resolved_scenario=self.resolved_scenario,
                 resolved_scenario_reference=self.resolved_scenario_reference,
-                inherited_segments=self.inherited_segments,
+                inherited_catalogs=self.inherited_catalogs,
                 new_segments=tuple(segment for _, seal in prepared for segment in seal.segments),
                 heads=tuple(seal.head for _, seal in prepared),
                 metadata={
@@ -194,7 +194,7 @@ class IncrementalCheckpointController:
             participant.checkpoint_committed(sequence)
         metrics.participant_commit_seconds = time.perf_counter() - participant_commit_started
         self.next_sequence += 1
-        self.inherited_segments = manifest.segments
+        self.inherited_catalogs = manifest.segment_catalogs
         controller_seconds = time.perf_counter() - started
         total_seconds = emitter_quiesce_seconds + barrier_prepare_seconds + controller_seconds
         metrics.foreground_pause_seconds = total_seconds
@@ -202,6 +202,8 @@ class IncrementalCheckpointController:
             "atomic_publish_seconds": metrics.atomic_publish_seconds,
             "barrier_prepare_seconds": metrics.barrier_prepare_seconds,
             "bytes_hashed": metrics.bytes_hashed,
+            "catalog_bytes": metrics.catalog_bytes,
+            "catalog_write_seconds": metrics.catalog_write_seconds,
             "checkpoint_seconds": total_seconds,
             "compression_seconds": metrics.compression_seconds,
             "completed_simulated_hours": cursor.completed_simulated_hours,
@@ -255,7 +257,7 @@ class IncrementalCheckpointController:
             references = sorted(
                 (
                     reference
-                    for reference in recovery.manifest.segments
+                    for reference in recovery.segments
                     if reference.owner == participant.checkpoint_owner
                 ),
                 key=lambda reference: reference.owner_ordinal,

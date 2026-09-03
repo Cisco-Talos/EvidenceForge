@@ -336,7 +336,7 @@ def _commit(
         checkpoint_hours=6,
         cursor=_cursor(hour),
         resolved_scenario=b"schema_version: '2.0'\n",
-        inherited_segments=inherited,
+        inherited_catalogs=inherited,
         new_segments=segments,
         heads=(
             HeadDraft(
@@ -3179,9 +3179,11 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
     assert second.sequence == 1
     assert participant.committed_sequence == 1
     assert participant.prepared_sequence is None
-    assert len(second.segments) == 2
+    first_segments = store.segment_references(first)
+    second_segments = store.segment_references(second)
+    assert len(second_segments) == 2
     assert progress[-1]["new_segment_bytes"] > 0
-    assert progress[-1]["reused_segment_bytes"] == first.segments[0].size
+    assert progress[-1]["reused_segment_bytes"] == first_segments[0].size
     assert progress[-1]["reused_segment_bytes_read"] == 0
     assert progress[-1]["reused_segment_bytes_hashed"] == 0
     participant_metrics = json.loads(str(progress[-1]["participants_json"]))
@@ -3269,7 +3271,8 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
         payload=b"first delta" * 100,
         metrics=first_metrics,
     )
-    first_segment = first.segments[0]
+    first_segments = store.segment_references(first)
+    first_segment = first_segments[0]
     first_path = store.workspace / first_segment.relative_path
     first_stat = first_path.stat()
 
@@ -3278,24 +3281,71 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
         store,
         sequence=1,
         hour=12,
-        inherited=first.segments,
+        inherited=first.segment_catalogs,
         payload=b"second delta" * 100,
         references=(first_segment.sha256,),
         metrics=second_metrics,
     )
 
-    assert len(second.segments) == 2
+    second_segments = store.segment_references(second)
+    assert len(second_segments) == 2
     assert second_metrics.reused_segment_bytes == first_segment.size
     assert second_metrics.bytes_read == 0
     assert second_metrics.reused_segment_bytes_read == 0
     assert second_metrics.reused_segment_bytes_hashed == 0
-    assert [segment.owner_ordinal for segment in second.segments] == [0, 1]
+    assert [segment.owner_ordinal for segment in second_segments] == [0, 1]
     assert first_path.stat().st_ino == first_stat.st_ino
     assert first_path.stat().st_mtime_ns == first_stat.st_mtime_ns
     recovery = store.recover(expected_fingerprint=_FINGERPRINT)
     assert recovery.manifest.sequence == 1
-    assert store.read_segment(recovery.manifest.segments[0]) == b"first delta" * 100
-    assert store.read_segment(recovery.manifest.segments[1]) == b"second delta" * 100
+    assert store.read_segment(recovery.segments[0]) == b"first delta" * 100
+    assert store.read_segment(recovery.segments[1]) == b"second delta" * 100
+
+
+def test_store_size_tiers_catalogs_without_flat_manifest_growth(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    catalogs = ()
+    manifest = None
+    for sequence in range(32):
+        metrics = CheckpointStoreMetrics()
+        manifest = _commit(
+            store,
+            sequence=sequence,
+            hour=(sequence + 1) * 6,
+            inherited=catalogs,
+            payload=f"delta-{sequence}".encode(),
+            metrics=metrics,
+        )
+        catalogs = manifest.segment_catalogs
+        assert metrics.reused_segment_bytes_read == 0
+        assert metrics.reused_segment_bytes_hashed == 0
+
+    assert manifest is not None
+    assert [catalog.level for catalog in manifest.segment_catalogs] == [5]
+    assert len(store.segment_references(manifest)) == 32
+    manifest_path = store.recovery / f"{manifest.sequence:020d}" / "manifest.json"
+    assert manifest_path.stat().st_size < 4_096
+
+
+def test_store_falls_back_when_newest_segment_catalog_is_corrupt(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    first = _commit(store, sequence=0, hour=6, payload=b"first")
+    second = _commit(
+        store,
+        sequence=1,
+        hour=12,
+        inherited=first.segment_catalogs,
+        payload=b"second",
+    )
+    newest_catalog = store.workspace / second.segment_catalogs[0].relative_path
+    newest_catalog.write_bytes(b"tampered")
+
+    recovery = store.recover(expected_fingerprint=_FINGERPRINT)
+
+    assert recovery.used_fallback
+    assert recovery.manifest.sequence == 0
+    assert recovery.warning is not None
+    assert "newest generation checkpoint was corrupt" in recovery.warning
 
 
 def test_store_initialization_probes_filesystem_only_once(
@@ -3324,17 +3374,15 @@ def test_store_rotates_manifests_and_collects_unreferenced_segments_outside_comm
 ) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     first = _commit(store, sequence=0, hour=6, payload=b"retired")
-    retired_path = store.workspace / first.segments[0].relative_path
+    first_segment = store.segment_references(first)[0]
+    retired_path = store.workspace / first_segment.relative_path
     second = _commit(
         store,
         sequence=1,
         hour=12,
-        inherited=first.segments,
         payload=b"retained",
     )
-    retained = tuple(
-        segment for segment in second.segments if segment.sha256 != first.segments[0].sha256
-    )
+    retained = second.segment_catalogs
     _commit(store, sequence=2, hour=18, inherited=retained)
     assert retired_path.exists()
     _commit(store, sequence=3, hour=24, inherited=retained)
@@ -3350,7 +3398,13 @@ def test_store_rotates_manifests_and_collects_unreferenced_segments_outside_comm
 def test_store_falls_back_when_newest_head_is_corrupt(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     first = _commit(store, sequence=0, hour=6, payload=b"first")
-    second = _commit(store, sequence=1, hour=12, inherited=first.segments, payload=b"second")
+    second = _commit(
+        store,
+        sequence=1,
+        hour=12,
+        inherited=first.segment_catalogs,
+        payload=b"second",
+    )
     newest_head = store.workspace / second.participant_heads[0].relative_path
     newest_head.write_bytes(b"tampered")
 
@@ -3365,7 +3419,13 @@ def test_store_falls_back_when_newest_head_is_corrupt(tmp_path: Path) -> None:
 def test_store_authenticates_manifest_through_recovery_index(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     first = _commit(store, sequence=0, hour=6, payload=b"first")
-    second = _commit(store, sequence=1, hour=12, inherited=first.segments, payload=b"second")
+    second = _commit(
+        store,
+        sequence=1,
+        hour=12,
+        inherited=first.segment_catalogs,
+        payload=b"second",
+    )
     newest_manifest = store.workspace / "recovery" / f"{second.sequence:020d}" / "manifest.json"
     document = json.loads(newest_manifest.read_text(encoding="utf-8"))
     document["metadata"] = {"tampered": True}
@@ -3398,7 +3458,7 @@ def test_store_rejects_fingerprint_mismatch_without_falling_back(tmp_path: Path)
 def test_store_rejects_symlinked_content(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     manifest = _commit(store, sequence=0, hour=6, payload=b"first")
-    segment_path = store.workspace / manifest.segments[0].relative_path
+    segment_path = store.workspace / store.segment_references(manifest)[0].relative_path
     replacement = tmp_path / "replacement"
     replacement.write_bytes(segment_path.read_bytes())
     segment_path.unlink()
@@ -3407,17 +3467,20 @@ def test_store_rejects_symlinked_content(tmp_path: Path) -> None:
         store.recover(expected_fingerprint=_FINGERPRINT)
 
 
-def test_store_rejects_resealing_an_inherited_segment(tmp_path: Path) -> None:
+def test_store_deduplicates_identical_segment_content(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     first = _commit(store, sequence=0, hour=6, payload=b"same")
-    with pytest.raises(ValueError, match="reseal"):
-        _commit(
-            store,
-            sequence=1,
-            hour=12,
-            inherited=first.segments,
-            payload=b"same",
-        )
+    second = _commit(
+        store,
+        sequence=1,
+        hour=12,
+        inherited=first.segment_catalogs,
+        payload=b"same",
+    )
+
+    segments = store.segment_references(second)
+    assert [segment.owner_ordinal for segment in segments] == [0, 1]
+    assert segments[0].sha256 == segments[1].sha256
 
 
 def test_run_lock_rejects_live_owner_and_reclaims_dead_local_owner(tmp_path: Path) -> None:
@@ -3440,24 +3503,9 @@ def test_run_lock_rejects_live_owner_and_reclaims_dead_local_owner(tmp_path: Pat
     replacement.release()
 
 
-def test_manifest_rejects_unknown_segment_reference() -> None:
-    with pytest.raises(ValidationError, match="unknown segments"):
-        CheckpointManifest(
-            sequence=0,
-            run_id="run",
-            run_fingerprint=_FINGERPRINT,
-            checkpoint_hours=6,
-            cursor=_cursor(6),
-            resolved_scenario_sha256="2" * 64,
-            resolved_scenario_relative_path="objects/resolved/22/input.yaml",
-            participant_heads=(
-                {
-                    "owner": "engine",
-                    "schema_version": "1",
-                    "relative_path": "recovery/0/heads/engine.bin",
-                    "size": 1,
-                    "sha256": "3" * 64,
-                    "referenced_segments": ("4" * 64,),
-                },
-            ),
-        )
+def test_store_rejects_unknown_segment_reference(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    _commit(store, sequence=0, hour=6, references=("4" * 64,))
+
+    with pytest.raises(CheckpointCorruptionError, match="unknown segments"):
+        store.recover(expected_fingerprint=_FINGERPRINT)

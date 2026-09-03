@@ -420,3 +420,25 @@ until every correctness and performance gate passes.
   both heads retained zero full transport rows. The successful bundle is byte-identical to the
   unpruned control, 146 focused lifecycle/network/checkpoint tests pass, and all three fresh-process
   SIGINT/SIGKILL moved-root recovery cases remain byte-identical.
+- A fresh-process 60-day diagnostic pair at six-hour cadence is byte-identical across every
+  deterministic bundle artifact (excluding only `generation.log` and the time-bearing generation
+  manifest), but decisively rejects the current repeated-head capture: the control completed in
+  834.866 seconds and the checkpoint run in 1,152.141 seconds, or 38.00% overhead. Its 241
+  foreground pauses totaled 504.171 seconds and grew from 0.052 seconds at hour 6 to 0.150 at hour
+  24, 0.538 at hour 168, 2.179 at hour 720, and 3.814 at hour 1,440. At the final scale point,
+  source-timing extraction consumed 2.319 seconds for a 40.22 MB head and lifecycle extraction
+  consumed 1.028 seconds for a 55.42 MB head. The lifecycle head held 17,363 process and 426
+  session identities; source timing held 179,107 retained index rows. The flat manifest also grew
+  to 3.20 MB and 9,665 segment references. Peak retained workspace was 493,403,050 bytes versus
+  258,046,109 deterministic output bytes. This is a single diagnostic pair, not the three-pair
+  acceptance matrix or a supported default-cadence result.
+- Flat cumulative segment references are replaced in the unreleased schema 2.0 by a persistent
+  size-tiered Merkle catalog forest. Each checkpoint writes a leaf for only its new immutable
+  references and performs binary-carry compaction by writing small parent nodes over already known
+  roots; it never reads, hashes, or rewrites an inherited payload. The recovery manifest therefore
+  retains at most one root per level rather than every historical segment, while the previous
+  manifest continues to reference its unchanged tree. Recovery validates and expands the tree,
+  rejects cycles/tampering/invalid owner ordinals, and garbage collection traces both retained
+  roots outside the checkpoint pause. Thirty-two synthetic generations collapse to one level-five
+  root with a manifest below 4 KiB. All 74 incremental-checkpoint tests pass, including corruption
+  fallback, and the three fresh-process moved-root SIGINT/SIGKILL cases remain byte-identical.

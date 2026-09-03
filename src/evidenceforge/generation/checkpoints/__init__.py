@@ -17,6 +17,7 @@ from .models import (
     CheckpointManifest,
     CheckpointRecovery,
     ParticipantHead,
+    SegmentCatalogReference,
     SegmentReference,
 )
 from .network_runtime_head import NetworkTransactionRuntimeParticipant
@@ -158,6 +159,7 @@ __all__ = [
     "TIMING_RELATIONSHIP_COUNTER_CHECKPOINT_FIELDS",
     "TIMING_RUNTIME_CHECKPOINT_FIELDS",
     "TimingRuntimeParticipant",
+    "SegmentCatalogReference",
     "SegmentReference",
     "SQLiteSpoolParticipant",
     "SourceTimingPlannerParticipant",

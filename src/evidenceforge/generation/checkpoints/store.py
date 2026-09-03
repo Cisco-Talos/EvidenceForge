@@ -29,6 +29,8 @@ from .models import (
     CheckpointRecovery,
     CheckpointStoreMetrics,
     ParticipantHead,
+    SegmentCatalogNode,
+    SegmentCatalogReference,
     SegmentReference,
 )
 
@@ -397,6 +399,161 @@ class IncrementalCheckpointStore:
             temporary.unlink(missing_ok=True)
         return relative, True
 
+    @staticmethod
+    def _catalog_totals(
+        references: tuple[SegmentReference, ...],
+    ) -> tuple[int, int, dict[str, int]]:
+        owner_counts: dict[str, int] = {}
+        for reference in references:
+            owner_counts[reference.owner] = owner_counts.get(reference.owner, 0) + 1
+        return len(references), sum(reference.size for reference in references), owner_counts
+
+    def _write_catalog_node(
+        self,
+        node: SegmentCatalogNode,
+        *,
+        segment_count: int,
+        segment_bytes: int,
+        owner_counts: dict[str, int],
+        metrics: CheckpointStoreMetrics,
+    ) -> SegmentCatalogReference:
+        payload = _canonical_json(node.model_dump(mode="json"))
+        hash_started = time.perf_counter()
+        digest = _sha256(payload)
+        metrics.bytes_hashed += len(payload)
+        metrics.hashing_seconds += time.perf_counter() - hash_started
+        relative, created = self._write_content_object(
+            category="catalogs",
+            digest=digest,
+            suffix=".json",
+            payload=payload,
+        )
+        if created:
+            metrics.catalog_bytes += len(payload)
+        return SegmentCatalogReference(
+            level=node.level,
+            sha256=digest,
+            relative_path=relative,
+            size=len(payload),
+            segment_count=segment_count,
+            segment_bytes=segment_bytes,
+            owner_counts=owner_counts,
+        )
+
+    def _extend_catalogs(
+        self,
+        inherited: tuple[SegmentCatalogReference, ...],
+        segments: tuple[SegmentReference, ...],
+        metrics: CheckpointStoreMetrics,
+    ) -> tuple[SegmentCatalogReference, ...]:
+        """Append one delta through a persistent binary size-tiered catalog forest."""
+
+        if not segments:
+            return inherited
+        count, size, owners = self._catalog_totals(segments)
+        carry = self._write_catalog_node(
+            SegmentCatalogNode(kind="leaf", level=0, segments=segments),
+            segment_count=count,
+            segment_bytes=size,
+            owner_counts=owners,
+            metrics=metrics,
+        )
+        by_level = {reference.level: reference for reference in inherited}
+        while carry.level in by_level:
+            left = by_level.pop(carry.level)
+            combined_owners = dict(left.owner_counts)
+            for owner, owner_count in carry.owner_counts.items():
+                combined_owners[owner] = combined_owners.get(owner, 0) + owner_count
+            carry = self._write_catalog_node(
+                SegmentCatalogNode(
+                    kind="branch",
+                    level=carry.level + 1,
+                    children=(left, carry),
+                ),
+                segment_count=left.segment_count + carry.segment_count,
+                segment_bytes=left.segment_bytes + carry.segment_bytes,
+                owner_counts=combined_owners,
+                metrics=metrics,
+            )
+        by_level[carry.level] = carry
+        return tuple(sorted(by_level.values(), key=lambda reference: reference.level, reverse=True))
+
+    def _read_catalog(
+        self,
+        reference: SegmentCatalogReference,
+        *,
+        retained_paths: set[str] | None = None,
+        visited: set[str] | None = None,
+    ) -> tuple[SegmentReference, ...]:
+        seen = set() if visited is None else visited
+        if reference.sha256 in seen:
+            raise CheckpointCorruptionError("checkpoint segment catalog contains a cycle")
+        seen.add(reference.sha256)
+        if retained_paths is not None:
+            retained_paths.add(reference.relative_path)
+        payload = self._validate_file(reference.relative_path, reference.size, reference.sha256)
+        try:
+            node = SegmentCatalogNode.model_validate_json(payload)
+        except ValidationError as error:
+            raise CheckpointCorruptionError("checkpoint segment catalog is corrupt") from error
+        if node.level != reference.level:
+            raise CheckpointCorruptionError("checkpoint segment catalog level changed")
+        if node.kind == "leaf":
+            segments = node.segments
+        else:
+            segments = tuple(
+                segment
+                for child in node.children
+                for segment in self._read_catalog(
+                    child,
+                    retained_paths=retained_paths,
+                    visited=seen,
+                )
+            )
+        count, size, owners = self._catalog_totals(segments)
+        if (
+            count != reference.segment_count
+            or size != reference.segment_bytes
+            or owners != reference.owner_counts
+        ):
+            raise CheckpointCorruptionError("checkpoint segment catalog totals changed")
+        return segments
+
+    def segment_references(
+        self,
+        manifest: CheckpointManifest,
+        *,
+        retained_paths: set[str] | None = None,
+    ) -> tuple[SegmentReference, ...]:
+        """Expand and validate the immutable catalog forest in chronological order."""
+
+        visited: set[str] = set()
+        segments = tuple(
+            segment
+            for catalog in manifest.segment_catalogs
+            for segment in self._read_catalog(
+                catalog,
+                retained_paths=retained_paths,
+                visited=visited,
+            )
+        )
+        owner_ordinals: dict[str, list[int]] = {}
+        for segment in segments:
+            owner_ordinals.setdefault(segment.owner, []).append(segment.owner_ordinal)
+        for owner, ordinals in owner_ordinals.items():
+            if ordinals != list(range(len(ordinals))):
+                raise CheckpointCorruptionError(
+                    f"checkpoint participant {owner!r} has invalid segment ordinals"
+                )
+        known = {segment.sha256 for segment in segments}
+        for head in manifest.participant_heads:
+            missing = set(head.referenced_segments) - known
+            if missing:
+                raise CheckpointCorruptionError(
+                    f"participant {head.owner!r} references unknown segments: {sorted(missing)}"
+                )
+        return segments
+
     def commit(
         self,
         *,
@@ -407,7 +564,7 @@ class IncrementalCheckpointStore:
         cursor: CheckpointCursor,
         resolved_scenario: bytes,
         resolved_scenario_reference: tuple[str, str] | None = None,
-        inherited_segments: tuple[SegmentReference, ...],
+        inherited_catalogs: tuple[SegmentCatalogReference, ...],
         new_segments: tuple[SegmentDraft, ...],
         heads: tuple[HeadDraft, ...],
         metadata: dict[str, Any] | None = None,
@@ -420,22 +577,17 @@ class IncrementalCheckpointStore:
         self.initialize()
         store_started = time.perf_counter()
         accounting = metrics or CheckpointStoreMetrics()
-        inherited_by_digest = {segment.sha256: segment for segment in inherited_segments}
-        segment_refs = list(inherited_segments)
         next_owner_ordinal: dict[str, int] = {}
-        for segment in inherited_segments:
-            next_owner_ordinal[segment.owner] = max(
-                next_owner_ordinal.get(segment.owner, 0),
-                segment.owner_ordinal + 1,
-            )
-        accounting.reused_segment_bytes = sum(segment.size for segment in inherited_segments)
+        for catalog in inherited_catalogs:
+            for owner, count in catalog.owner_counts.items():
+                next_owner_ordinal[owner] = next_owner_ordinal.get(owner, 0) + count
+        accounting.reused_segment_bytes = sum(
+            catalog.segment_bytes for catalog in inherited_catalogs
+        )
+        segment_refs: list[SegmentReference] = []
         segment_started = time.perf_counter()
         for draft in new_segments:
             encoded, digest = self._encode_segment(draft, accounting)
-            if digest in inherited_by_digest:
-                raise ValueError(
-                    f"participant {draft.owner!r} attempted to reseal an inherited segment"
-                )
             relative, created = self._write_content_object(
                 category="segments",
                 digest=digest,
@@ -457,6 +609,13 @@ class IncrementalCheckpointStore:
                 )
             )
             next_owner_ordinal[draft.owner] = next_owner_ordinal.get(draft.owner, 0) + 1
+        catalog_started = time.perf_counter()
+        segment_catalogs = self._extend_catalogs(
+            inherited_catalogs,
+            tuple(segment_refs),
+            accounting,
+        )
+        accounting.catalog_write_seconds = time.perf_counter() - catalog_started
         accounting.segment_write_seconds = time.perf_counter() - segment_started
 
         if resolved_scenario_reference is None:
@@ -512,7 +671,7 @@ class IncrementalCheckpointStore:
                 cursor=cursor,
                 resolved_scenario_sha256=resolved_digest,
                 resolved_scenario_relative_path=resolved_path,
-                segments=tuple(segment_refs),
+                segment_catalogs=segment_catalogs,
                 participant_heads=tuple(head_refs),
                 metadata={} if metadata is None else metadata,
             )
@@ -610,7 +769,11 @@ class IncrementalCheckpointStore:
             except CheckpointCorruptionError:
                 continue
             retained_paths.add(manifest.resolved_scenario_relative_path)
-            retained_paths.update(segment.relative_path for segment in manifest.segments)
+            try:
+                segments = self.segment_references(manifest, retained_paths=retained_paths)
+            except CheckpointCorruptionError:
+                continue
+            retained_paths.update(segment.relative_path for segment in segments)
         if not self.objects.exists():
             return
         for path in self.objects.rglob("*"):
@@ -725,7 +888,8 @@ class IncrementalCheckpointStore:
                     self._object_path(manifest.resolved_scenario_relative_path).stat().st_size,
                     manifest.resolved_scenario_sha256,
                 )
-                for segment in manifest.segments:
+                segments = self.segment_references(manifest)
+                for segment in segments:
                     self._validate_file(segment.relative_path, segment.size, segment.sha256)
                 for head in manifest.participant_heads:
                     self._validate_file(head.relative_path, head.size, head.sha256)
@@ -738,6 +902,7 @@ class IncrementalCheckpointStore:
                 return CheckpointRecovery(
                     checkpoint_directory=directory.relative_to(self.workspace).as_posix(),
                     manifest=manifest,
+                    segments=segments,
                     used_fallback=index > 0,
                     warning=warning,
                 )
