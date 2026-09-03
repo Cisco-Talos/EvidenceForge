@@ -480,3 +480,23 @@ until every correctness and performance gate passes.
   checkpointing was 79.253 seconds (1.31% overhead). The hour-168 emitter-spool head fell from
   160,091 bytes to 1,626 bytes. All 156 focused tests and all three moved-root fresh-process
   interruption cases pass.
+- The required codec/compressor bakeoff uses the latest real 60-day recovery delta: 8,503,722
+  bytes of bounded heads plus newly sealed segments. Each of 20 combinations ran in three rotated,
+  isolated fresh-process trials, verified deterministic semantic round trips, and reported encode,
+  compression, hash, decode, payload size, and peak RSS. Stdlib packed/no-compression required a
+  60.23 ms median write path; its zlib-1 variant required 82.77 ms and reduced the payload to
+  1,499,208 bytes. Msgspec MessagePack/no-compression was the fastest safe micro-candidate at
+  9.06 ms and 5,604,446 bytes; msgspec plus single-threaded Zstandard required 10.25 ms and
+  1,045,378 bytes. LZ4 was slightly slower than no compression. NumPy `.npy` and Arrow IPC wrapped
+  the required heterogeneous packed document and regressed to 86.07 ms or more. Multithreaded
+  Zstandard provided no benefit on these checkpoint-sized buffers.
+- No third-party candidate qualifies for production. Even the impossible upper bound that removes
+  all 60.23 ms of stdlib codec/hash work plus the complete observed 28.03 ms store commit is only
+  13.9% of the 636.55 ms hour-1,440 checkpoint path, below the required 20% checkpoint-path
+  improvement before considering implementation overhead. It therefore cannot satisfy both the
+  20% path and three-percentage-point generator gates. SQLite WAL, LMDB, and RocksDB are likewise
+  screened out before prototyping because the entire replaceable store path is only 4.4% of that
+  pause; RocksDB checkpoints also depend on same-filesystem hard links for their cheap path and
+  otherwise copy files. The production implementation remains dependency-free stdlib packed
+  segments with compression selected per payload; rejected benchmark-only dependencies are not
+  added to `pyproject.toml` or `uv.lock`.
