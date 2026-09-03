@@ -39,13 +39,19 @@ from evidenceforge.generation.checkpoints.activity_head import ActivityGenerator
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
+from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
 from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
+from evidenceforge.generation.checkpoints.network_runtime_head import (
+    NetworkTransactionRuntimeParticipant,
+)
 from evidenceforge.generation.checkpoints.packed import loads
+from evidenceforge.generation.checkpoints.rng import GenerationRngParticipant
 from evidenceforge.generation.checkpoints.source_timing_head import SourceTimingPlannerParticipant
 from evidenceforge.generation.checkpoints.ssh_channel_head import (
     SshApplicationChannelParticipant,
 )
 from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
+from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -405,6 +411,117 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
     original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     original.close_and_read()
     fresh.close_and_read()
+
+
+def test_legacy_ssh_checkpoint_resume_is_byte_identical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compatibility close hydrates from semantic facts without retaining its open event."""
+
+    monkeypatch.setattr(
+        SshSessionActionBundle,
+        "_uses_exact_deferred_publication",
+        lambda _bundle: False,
+    )
+    reset_thread_rng(42)
+    original = _fixture(tmp_path / "original")
+    original.generator._scenario_environment = SimpleNamespace(
+        systems=[original.source, original.target],
+        users=[original.user],
+    )
+    for emitter in original.generator.dispatcher.emitters.values():
+        emitter.enable_incremental_checkpointing()
+    request = replace(
+        original.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    SshSessionActionBundle(request, original.generator).execute()
+    assert original.generator.ssh_close_journal_census().legacy_pending == 1
+    for emitter in original.generator.dispatcher.emitters.values():
+        emitter.flush()
+
+    state_seal = StateManagerParticipant(original.state).prepare_checkpoint(0)
+    timing_seal = TimingRuntimeParticipant(original.generator.timing_runtime).prepare_checkpoint(0)
+    source_timing_seal = SourceTimingPlannerParticipant(
+        original.generator._source_timing_planner
+    ).prepare_checkpoint(0)
+    lifecycle_seal = LifecycleRegistryParticipant(
+        original.generator._lifecycle_authority.registry
+    ).prepare_checkpoint(0)
+    application_seal = ApplicationChannelRegistryParticipant(
+        original.generator._application_channel_registry
+    ).prepare_checkpoint(0)
+    network_seal = NetworkTransactionRuntimeParticipant(
+        original.generator._network_transaction_runtime
+    ).prepare_checkpoint(0)
+    ssh_seal = SshApplicationChannelParticipant(
+        original.generator._ssh_channel_manager
+    ).prepare_checkpoint(0)
+    activity_seal = ActivityGeneratorStateParticipant(original.generator).prepare_checkpoint(0)
+    emitter_seal = EmitterSpoolParticipant(
+        emitters=original.generator.dispatcher.emitters,
+        output_root=original.ecar_root.parent,
+    ).prepare_checkpoint(0)
+    rng_seal = GenerationRngParticipant().prepare_checkpoint(0)
+
+    original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+    original_bytes = original.frozen_bytes()
+
+    reset_thread_rng(999)
+    fresh = _fixture(tmp_path / "fresh")
+    fresh.generator._scenario_environment = SimpleNamespace(
+        systems=[fresh.source, fresh.target],
+        users=[fresh.user],
+    )
+    for emitter in fresh.generator.dispatcher.emitters.values():
+        emitter.enable_incremental_checkpointing()
+    StateManagerParticipant(fresh.state).restore_checkpoint(state_seal.head.payload, ())
+    TimingRuntimeParticipant(fresh.generator.timing_runtime).restore_checkpoint(
+        timing_seal.head.payload,
+        (),
+    )
+    SourceTimingPlannerParticipant(fresh.generator._source_timing_planner).restore_checkpoint(
+        source_timing_seal.head.payload,
+        (),
+    )
+    LifecycleRegistryParticipant(fresh.generator._lifecycle_authority.registry).restore_checkpoint(
+        lifecycle_seal.head.payload,
+        tuple(segment.payload for segment in lifecycle_seal.segments),
+    )
+    ApplicationChannelRegistryParticipant(
+        fresh.generator._application_channel_registry
+    ).restore_checkpoint(application_seal.head.payload, ())
+    NetworkTransactionRuntimeParticipant(
+        fresh.generator._network_transaction_runtime
+    ).restore_checkpoint(network_seal.head.payload, ())
+    SshApplicationChannelParticipant(fresh.generator._ssh_channel_manager).restore_checkpoint(
+        ssh_seal.head.payload,
+        (),
+    )
+    ActivityGeneratorStateParticipant(fresh.generator).restore_checkpoint(
+        activity_seal.head.payload,
+        (),
+    )
+    EmitterSpoolParticipant(
+        emitters=fresh.generator.dispatcher.emitters,
+        output_root=fresh.ecar_root.parent,
+    ).restore_checkpoint(
+        emitter_seal.head.payload,
+        tuple(segment.payload for segment in emitter_seal.segments),
+    )
+    GenerationRngParticipant().restore_checkpoint(rng_seal.head.payload, ())
+
+    restored_seal = ActivityGeneratorStateParticipant(fresh.generator).prepare_checkpoint(1)
+    assert (
+        loads(restored_seal.head.payload)["ssh_lifecycles"]
+        == loads(activity_seal.head.payload)["ssh_lifecycles"]
+    )
+    assert fresh.generator.ssh_close_journal_census().legacy_pending == 1
+    fresh.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+
+    assert fresh.frozen_bytes() == original_bytes
 
 
 def _execute_real_caller(

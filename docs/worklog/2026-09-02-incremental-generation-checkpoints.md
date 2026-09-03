@@ -341,3 +341,22 @@ until every correctness and performance gate passes.
   and evaluation digests; all 69 incremental tests, 197 focused Snort exact-publication tests, 63
   IDS tests, and the focused RDP checkpoint tests pass. The next topology-heavy full-participant
   probe now reaches a separate legacy SSH close entry that still needs an explicit bounded schema.
+- Legacy SSH compatibility closures now have an explicit semantic head instead of retaining their
+  already-rendered occurrence graph. The head stores detached request/system/host facts, canonical
+  State process/session identities, transport counters and timestamps, auth timing, and the action
+  anchor; hydration rebuilds a fresh bundle and close occurrence against restored owners. A focused
+  slow test checkpoints a real compatibility session, restores its emitter spools and owner heads,
+  and produces byte-identical eCAR and Zeek bytes. Foreign tuple entries remain rejected.
+- Successful exact action-cohort projection recovery now severs its retired record/recovery
+  back-reference immediately. This removes one-shot lifecycle receipts by reference counting at the
+  source boundary rather than relying on a process-wide cyclic-GC traversal at checkpoint time; all
+  21 focused dispatcher recovery tests pass.
+- The GenerationEngine inventory now covers every field assigned across its core/baseline/storyline
+  mixins, including lazily materialized Linux housekeeping, storyline correlation, package/GPO,
+  web-cache, and scheduling state. History-sensitive primitive state is captured, deterministic
+  caches are rebuilt, and in-step state must be empty. Unconsumed staged archives use an explicit
+  actor-token row and consumed rows are compacted away; anacron history is bounded to the latest day
+  per host. A real topology-heavy run committed both hour-6 and hour-12 recovery generations before
+  reaching an ordinary tail lifecycle error. The first recovery attempt exposed and fixed an RDP
+  validation bug: a disconnected generation may legitimately predate the lifecycle watermark while
+  it waits for its reconnect/logout deadline; connected generations still may not.

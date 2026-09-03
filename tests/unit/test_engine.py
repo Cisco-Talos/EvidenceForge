@@ -26,6 +26,7 @@ import json
 import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -306,6 +307,7 @@ class TestGenerationEngine:
         expected_rng.setstate(renewal_rng.getstate())
         engine._ambient_registry_state = {"TEST-01": {"Run": "agent.exe"}}
         engine._audit_serials = {"TEST-01": 1032}
+        engine._baseline_rdp_last_session = {("TEST-01", "DC-01", "testuser"): moment}
         engine._baseline_startup_next_age_seconds = {("TEST-01", "0x1"): 93.5}
         engine._dhcp_lease_state = {
             "TEST-01": {
@@ -317,13 +319,51 @@ class TestGenerationEngine:
         }
         engine._extra_syslog_sudo_command_counts = {"testuser": 2}
         engine._extra_syslog_sudo_command_host_counts = {("TEST-01", "testuser"): 1}
+        engine._extra_syslog_entry_counts = {"TEST-01:rsyslogd": 3}
+        engine._gpo_refresh_schedule_state = {
+            "TEST-01": {"scheduled_second": 7200.5, "sequence": 2}
+        }
         engine._hawkes_states = {"testuser": HawkesState(12.5, 0.75)}
         engine._last_tgt_time = {"testuser": moment}
+        engine._linux_dbus_bus_ids = {"TEST-01": 44}
+        engine._linux_polkit_agents = {
+            "TEST-01": [{"session_id": 19, "bus_id": 44, "process_path": "/usr/bin/agent"}]
+        }
+        engine._linux_polkit_session_pools = {"TEST-01": [19, 20, 24]}
+        engine._linux_resolved_feature_states = {"TEST-01": ("degraded", "10.0.0.2")}
+        engine._linux_rsyslog_health = {
+            "TEST-01": {"checkpoint": 12345, "pending": 3, "workers": 2}
+        }
         engine._machine_ids = {"TEST-01": "a" * 32}
         engine._ntp_schedule_state = {"TEST-01": (3, moment)}
+        engine._package_maintenance_windows = {"TEST-01": (moment, moment + timedelta(minutes=4))}
         engine._pending_unlocks = {"testuser": (moment, "0x1")}
         engine._red_herring_executed = {1}
+        engine._snapd_active_tasks = {"TEST-01": [(1001, 1, "core22")]}
+        engine._snapd_next_change_id = {"TEST-01": 1002}
         engine._storyline_executed = {0, 2}
+        engine._storyline_staged_archives = [
+            SimpleNamespace(
+                actor=engine.scenario.environment.users[0],
+                staging_host="TEST-01",
+                staging_ip="10.0.0.10",
+                source_ip="10.0.0.20",
+                archive_path=r"C:\Temp\evidence.zip",
+                smb_filename="evidence.zip",
+                staged_at=moment,
+                consumed=False,
+            ),
+            SimpleNamespace(
+                actor=engine.scenario.environment.users[0],
+                staging_host="TEST-01",
+                staging_ip="10.0.0.10",
+                source_ip="10.0.0.20",
+                archive_path=r"C:\Temp\old.zip",
+                smb_filename="old.zip",
+                staged_at=moment - timedelta(hours=1),
+                consumed=True,
+            ),
+        ]
         engine._windows_scheduled_task_counts = {"TEST-01": 4}
         engine._windows_scheduled_task_last_seen = {"TEST-01": moment}
         engine.malicious_events = [{"event": "process", "time": moment}]
@@ -337,7 +377,15 @@ class TestGenerationEngine:
         GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
 
         assert restored._ambient_registry_state == engine._ambient_registry_state
+        assert restored._baseline_rdp_last_session == engine._baseline_rdp_last_session
         assert restored._hawkes_states == engine._hawkes_states
+        assert restored._linux_polkit_agents == engine._linux_polkit_agents
+        assert restored._package_maintenance_windows == engine._package_maintenance_windows
+        assert restored._snapd_active_tasks == engine._snapd_active_tasks
+        assert len(restored._storyline_staged_archives) == 1
+        restored_archive = restored._storyline_staged_archives[0]
+        assert restored_archive.actor is restored.scenario.environment.users[0]
+        assert restored_archive.archive_path == r"C:\Temp\evidence.zip"
         assert restored._pending_unlocks == engine._pending_unlocks
         assert restored._storyline_executed == engine._storyline_executed
         assert restored.malicious_events == engine.malicious_events

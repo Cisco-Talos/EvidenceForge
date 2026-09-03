@@ -10753,6 +10753,8 @@ class EventDispatcher:
                     )
                 if record.kind == "deferred_session":
                     self._complete_deferred_session_exact_recovery(record)
+                elif record.kind == "action_cohort":
+                    self._complete_action_cohort_exact_recovery(record)
                 with self._action_cohort_lock:
                     if self._exact_projection_recoveries.get(id(receipt)) is not record:
                         raise EventContractError(
@@ -10800,6 +10802,8 @@ class EventDispatcher:
                     raise
             if record.kind == "deferred_session":
                 self._complete_deferred_session_exact_recovery(record)
+            elif record.kind == "action_cohort":
+                self._complete_action_cohort_exact_recovery(record)
             with self._action_cohort_lock:
                 if self._exact_projection_recoveries.get(id(receipt)) is not record:
                     raise EventContractError(
@@ -13494,6 +13498,25 @@ class EventDispatcher:
                     record.composition = None
                     record.coordinator = None
                     record.dispatches = ()
+
+    @staticmethod
+    def _complete_action_cohort_exact_recovery(
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Sever a released action cohort's retired recovery-owner cycle."""
+
+        record = recovery.owner_record
+        if (
+            type(record) is not _PreparedActionCohortBatchRecord
+            or record.exact_recovery is not recovery
+            or recovery.kind != "action_cohort"
+            or not recovery.batch.released
+        ):
+            raise EventContractError("Action-cohort exact recovery lost its released owner")
+        # The immutable result returned to the caller remains intact. The batch record has
+        # already been detached from every dispatcher registry, so its back-reference is only
+        # retired retry scaffolding and would otherwise require a cyclic-GC scan to disappear.
+        record.exact_recovery = None
 
     def _complete_deferred_session_owner_tail(
         self,

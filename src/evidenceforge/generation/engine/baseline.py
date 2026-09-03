@@ -3928,11 +3928,12 @@ class BaselineMixin:
             else ts
         )
         run_date = local_ts.date().isoformat()
-        emitted = getattr(self, "_anacron_lifecycle_days", set())
-        key = (system.hostname, run_date)
-        if key in emitted:
+        emitted = getattr(self, "_anacron_lifecycle_days", None)
+        if not isinstance(emitted, dict):
+            emitted = {}
+        if emitted.get(system.hostname) == run_date:
             return
-        emitted.add(key)
+        emitted[system.hostname] = run_date
         self._anacron_lifecycle_days = emitted
 
         pid = sys_pids.get("anacron", rng.randint(10000, 60000))

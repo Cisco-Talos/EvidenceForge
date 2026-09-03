@@ -28,7 +28,7 @@ from .participants import OwnerStateField, ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 # These are the bounded, output-affecting leaves owned directly by ActivityGenerator. Shared
 # managers and protocol registries have separate participants; scenario indexes are rebuilt.
@@ -439,10 +439,10 @@ def _canonical_process_identity(
     if decoded is None:
         return None
     if type(decoded) is not ProcessIdentity:
-        raise CheckpointCorruptionError("RDP checkpoint process identity is invalid")
+        raise CheckpointCorruptionError("checkpoint process identity is invalid")
     canonical = generator.state_manager.get_process_identity_by_object_id(decoded.object_id)
     if canonical != decoded:
-        raise CheckpointCorruptionError("RDP checkpoint process identity lost State authority")
+        raise CheckpointCorruptionError("checkpoint process identity lost State authority")
     return canonical
 
 
@@ -637,8 +637,15 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             )
         for phase in row[18]:
             prepared.mark_terminal_projection_complete(phase, timing_proof=proofs.get(phase))
-        if continuation.disconnect_at < generator._rdp_lifecycle_watermark:
-            raise CheckpointCorruptionError("RDP checkpoint continuation predates its watermark")
+        if row[13]:
+            if continuation.disconnect_at > generator._rdp_lifecycle_watermark:
+                raise CheckpointCorruptionError(
+                    "RDP checkpoint disconnected continuation exceeds its watermark"
+                )
+        elif continuation.disconnect_at <= generator._rdp_lifecycle_watermark:
+            raise CheckpointCorruptionError(
+                "RDP checkpoint connected continuation predates its watermark"
+            )
         if row[13] != row[14] or row[14] != (source_termination_at is not None):
             raise CheckpointCorruptionError("RDP checkpoint disconnect progress is inconsistent")
         expected_state = RdpSessionState.DISCONNECTED if row[13] else RdpSessionState.CONNECTED
@@ -695,13 +702,14 @@ def _ssh_user_row(value: object) -> list[object]:
 def _ssh_system_row(value: object | None) -> list[object] | None:
     if value is None:
         return None
+    system_type = value.system_type if hasattr(value, "system_type") else value.type
     return [
         value.hostname,
         value.ip,
         value.os,
         value.os_build,
         value.architecture,
-        value.system_type,
+        system_type,
         value.assigned_user,
         list(value.services),
         list(value.roles),
@@ -726,16 +734,148 @@ def _ssh_host_row(value: object | None) -> list[object] | None:
 
 
 def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
-    from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+    from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.generation.actions.ssh_session import (
+        SshSessionActionBundle,
+        _SshCloseContinuation,
+        _SshLinuxAuthState,
+        _SshTransportState,
+    )
 
     rows: list[list[object]] = []
     with generator._ssh_close_journal_lock:
         entries = tuple(generator._pending_ssh_session_closures)
-    if any(type(continuation) is not _SshCloseContinuation for continuation in entries):
+
+    def close_time(item: object) -> datetime:
+        if type(item) is _SshCloseContinuation:
+            return item.close_time
+        if type(item) is tuple and len(item) == 5 and type(item[0]) is datetime:
+            return item[0]
         raise CheckpointError(
-            "activity checkpoint _pending_ssh_session_closures contains a legacy or foreign entry"
+            "activity checkpoint _pending_ssh_session_closures contains a foreign continuation"
         )
-    for continuation in sorted(entries, key=lambda item: item.close_time):
+
+    for continuation in sorted(
+        entries,
+        key=close_time,
+    ):
+        if type(continuation) is tuple:
+            if (
+                len(continuation) != 5
+                or type(continuation[0]) is not datetime
+                or continuation[0].tzinfo is not UTC
+                or type(continuation[1]) is not SshSessionActionBundle
+                or continuation[1].executor is not generator
+                or type(continuation[2]) is not _SshTransportState
+                or type(continuation[3]) is not OccurrenceBuilder
+                or type(continuation[4]) is not _SshLinuxAuthState
+            ):
+                raise CheckpointError(
+                    "activity checkpoint _pending_ssh_session_closures contains a foreign "
+                    "legacy entry"
+                )
+            close_time, bundle, state, _event, auth_state = continuation
+            request = bundle.request
+            if (
+                close_time != state.close_time
+                or not request.bundle_owns_close
+                or not request.defer_session_close
+                or type(request.ids_alerts) is not list
+                or type(request.user) is not User
+                or type(request.target_system) is not System
+                or (request.source_system is not None and type(request.source_system) is not System)
+            ):
+                raise CheckpointError("SSH checkpoint legacy continuation is inconsistent")
+            source_identity = None
+            if state.source_process is not None:
+                source_system = request.source_system
+                if source_system is None:
+                    raise CheckpointError("SSH checkpoint source process has no modeled system")
+                source_identity = generator.state_manager.get_process_identity(
+                    source_system.hostname,
+                    state.source_process.pid,
+                )
+                if (
+                    source_identity is None
+                    or source_identity.image != state.source_process.image
+                    or source_identity.logon_id != state.source_process.logon_id
+                ):
+                    raise CheckpointError("SSH checkpoint source process lost State authority")
+            rows.append(
+                [
+                    "legacy-v1",
+                    encode_state_value(close_time),
+                    [
+                        _ssh_user_row(request.user),
+                        _ssh_system_row(request.target_system),
+                        _ssh_system_row(request.source_system),
+                        encode_state_value(request.time),
+                        request.source_ip,
+                        request.source_port,
+                        request.source_pid,
+                        request.source_process_image,
+                        request.sshd_pid,
+                        request.logon_id,
+                        request.session_obj_id,
+                        request.min_duration,
+                        request.duration,
+                        request.orig_bytes,
+                        request.resp_bytes,
+                        request.auth_method,
+                        request.public_key_type,
+                        request.public_key_hash,
+                        request.emit_session_close,
+                        request.defer_session_close,
+                        encode_state_value(request.session_end_plan),
+                        request.source,
+                    ],
+                    [
+                        state.source_port,
+                        state.duration,
+                        encode_state_value(state.close_time),
+                        state.orig_bytes,
+                        state.resp_bytes,
+                        state.network_visible,
+                        _ssh_host_row(state.dst_host),
+                        state.session_obj_id,
+                        _ssh_host_row(state.src_host),
+                        state.conn_id,
+                        state.uid,
+                        encode_state_value(source_identity),
+                        state.history,
+                        state.orig_pkts,
+                        state.resp_pkts,
+                        state.orig_ip_bytes,
+                        state.resp_ip_bytes,
+                        encode_state_value(state.open_time),
+                        (
+                            None
+                            if state.execution_anchor is None
+                            else [
+                                state.execution_anchor.family,
+                                state.execution_anchor.stable_id,
+                                state.execution_anchor.source,
+                            ]
+                        ),
+                        state.logon_id,
+                        state.transport_id,
+                    ],
+                    [
+                        auth_state.sshd_pid,
+                        auth_state.logind_session_id,
+                        encode_state_value(auth_state.syslog_seed),
+                        encode_state_value(auth_state.connection_time),
+                        encode_state_value(auth_state.accepted_time),
+                        encode_state_value(auth_state.pam_time),
+                        encode_state_value(auth_state.logind_time),
+                    ],
+                ]
+            )
+            continue
+        if type(continuation) is not _SshCloseContinuation:
+            raise CheckpointError(
+                "activity checkpoint _pending_ssh_session_closures contains a foreign continuation"
+            )
         prepared = continuation.prepared
         progress = prepared._progress
         descendants = prepared._receiver_descendants
@@ -883,6 +1023,200 @@ def _decode_ssh_host(value: object, *, optional: bool) -> object | None:
         raise CheckpointCorruptionError("SSH checkpoint host facts are invalid") from error
 
 
+def _restore_legacy_ssh_lifecycle(
+    generator: ActivityGenerator,
+    row: object,
+) -> tuple[datetime, object, object, object, object]:
+    from evidenceforge.events.contexts import ProcessContext
+    from evidenceforge.events.lifecycle import SessionEndPlan
+    from evidenceforge.generation.actions.base import ActionAnchor
+    from evidenceforge.generation.actions.ssh_session import (
+        SshSessionActionBundle,
+        SshSessionRequest,
+        _SshLinuxAuthState,
+        _SshTransportState,
+    )
+    from evidenceforge.utils.rng import _get_rng
+
+    if (
+        type(row) is not list
+        or len(row) != 5
+        or row[0] != "legacy-v1"
+        or type(row[2]) is not list
+        or len(row[2]) != 22
+        or type(row[3]) is not list
+        or len(row[3]) != 21
+        or type(row[4]) is not list
+        or len(row[4]) != 7
+    ):
+        raise CheckpointCorruptionError("SSH checkpoint legacy journal row is invalid")
+    request_row = row[2]
+    state_row = row[3]
+    auth_row = row[4]
+    close_time = decode_state_value(row[1])
+    request_time = decode_state_value(request_row[3])
+    session_end_plan = decode_state_value(request_row[20])
+    state_close_time = decode_state_value(state_row[2])
+    source_identity = _canonical_process_identity(generator, state_row[11])
+    open_time = decode_state_value(state_row[17])
+    auth_seed = decode_state_value(auth_row[2])
+    auth_times = [decode_state_value(value) for value in auth_row[3:]]
+    request_optional_integers = (request_row[5], request_row[8], request_row[13], request_row[14])
+    request_optional_numbers = (request_row[11], request_row[12])
+    if (
+        type(close_time) is not datetime
+        or close_time.tzinfo is not UTC
+        or type(request_time) is not datetime
+        or request_time.tzinfo is not UTC
+        or (session_end_plan is not None and type(session_end_plan) is not SessionEndPlan)
+        or any(
+            value is not None and (type(value) is not int or value < 0)
+            for value in request_optional_integers
+        )
+        or any(
+            value is not None
+            and (type(value) not in (int, float) or not math.isfinite(value) or value < 0)
+            for value in request_optional_numbers
+        )
+        or type(request_row[6]) is not int
+        or any(type(request_row[index]) is not str for index in (4, 7, 9, 10, 15, 16, 17, 21))
+        or any(type(request_row[index]) is not bool for index in (18, 19))
+        or type(state_row[0]) is not int
+        or state_row[0] <= 0
+        or type(state_row[1]) not in (int, float)
+        or not math.isfinite(state_row[1])
+        or state_row[1] < 0
+        or type(state_close_time) is not datetime
+        or state_close_time.tzinfo is not UTC
+        or any(type(state_row[index]) is not int or state_row[index] < 0 for index in (3, 4))
+        or type(state_row[5]) is not bool
+        or any(type(state_row[index]) is not str for index in (7, 9, 10, 12, 19, 20))
+        or any(type(state_row[index]) is not int or state_row[index] < 0 for index in range(13, 17))
+        or (
+            open_time is not None
+            and (type(open_time) is not datetime or open_time.tzinfo is not UTC)
+        )
+        or (
+            state_row[18] is not None
+            and (
+                type(state_row[18]) is not list
+                or len(state_row[18]) != 3
+                or any(type(value) is not str for value in state_row[18])
+            )
+        )
+        or type(auth_row[0]) is not int
+        or auth_row[0] <= 0
+        or type(auth_row[1]) is not int
+        or auth_row[1] < 0
+        or type(auth_seed) is not tuple
+        or any(type(value) is not datetime or value.tzinfo is not UTC for value in auth_times)
+    ):
+        raise CheckpointCorruptionError("SSH checkpoint legacy journal row changed type")
+    user_facts = _decode_ssh_user(request_row[0])
+    target_facts = _decode_ssh_system(request_row[1], optional=False)
+    source_facts = _decode_ssh_system(request_row[2], optional=True)
+    target_host_facts = _decode_ssh_host(state_row[6], optional=False)
+    source_host_facts = _decode_ssh_host(state_row[8], optional=True)
+    if target_facts is None or target_host_facts is None:
+        raise CheckpointCorruptionError("SSH checkpoint legacy target facts are missing")
+    request = SshSessionRequest(
+        user=user_facts.materialize(),
+        target_system=target_facts.materialize(),
+        source_system=source_facts.materialize() if source_facts is not None else None,
+        time=request_time,
+        source_ip=request_row[4],
+        source_port=request_row[5],
+        source_pid=request_row[6],
+        source_process_image=request_row[7],
+        sshd_pid=request_row[8],
+        logon_id=request_row[9],
+        session_obj_id=request_row[10],
+        min_duration=request_row[11],
+        duration=request_row[12],
+        orig_bytes=request_row[13],
+        resp_bytes=request_row[14],
+        auth_method=request_row[15],
+        public_key_type=request_row[16],
+        public_key_hash=request_row[17],
+        emit_session_close=request_row[18],
+        defer_session_close=request_row[19],
+        session_end_plan=session_end_plan,
+        ids_alerts=[],
+        source=request_row[21],
+    )
+    if not request.bundle_owns_close or not request.defer_session_close:
+        raise CheckpointCorruptionError("SSH checkpoint legacy request does not own closure")
+    if request.source_port is not None and request.source_port != state_row[0]:
+        raise CheckpointCorruptionError("SSH checkpoint legacy source port changed")
+    if close_time != state_close_time:
+        raise CheckpointCorruptionError("SSH checkpoint legacy close time changed")
+    source_process = (
+        None
+        if source_identity is None
+        else ProcessContext(
+            pid=source_identity.pid,
+            parent_pid=source_identity.parent_pid,
+            image=source_identity.image,
+            command_line=source_identity.command_line,
+            username=source_identity.principal,
+            logon_id=source_identity.logon_id,
+            start_time=source_identity.started_at,
+        )
+    )
+    anchor = (
+        None
+        if state_row[18] is None
+        else ActionAnchor(
+            family=state_row[18][0],
+            stable_id=state_row[18][1],
+            source=state_row[18][2],
+        )
+    )
+    state = _SshTransportState(
+        rng=_get_rng(),
+        source_port=state_row[0],
+        duration=state_row[1],
+        close_time=state_close_time,
+        orig_bytes=state_row[3],
+        resp_bytes=state_row[4],
+        network_visible=state_row[5],
+        dst_host=target_host_facts.materialize(),
+        session_obj_id=state_row[7],
+        src_host=source_host_facts.materialize() if source_host_facts is not None else None,
+        conn_id=state_row[9],
+        uid=state_row[10],
+        source_process=source_process,
+        history=state_row[12],
+        orig_pkts=state_row[13],
+        resp_pkts=state_row[14],
+        orig_ip_bytes=state_row[15],
+        resp_ip_bytes=state_row[16],
+        open_time=open_time,
+        execution_anchor=anchor,
+        logon_id=state_row[19],
+        transport_id=state_row[20],
+    )
+    session_identity = generator.state_manager.get_session_identity(state.logon_id)
+    if (
+        not state.logon_id
+        or session_identity is None
+        or session_identity.object_id != state.session_obj_id
+    ):
+        raise CheckpointCorruptionError("SSH checkpoint legacy session lost State authority")
+    auth_state = _SshLinuxAuthState(
+        sshd_pid=auth_row[0],
+        logind_session_id=auth_row[1],
+        syslog_seed=auth_seed,
+        connection_time=auth_times[0],
+        accepted_time=auth_times[1],
+        pam_time=auth_times[2],
+        logind_time=auth_times[3],
+    )
+    bundle = SshSessionActionBundle(request=request, executor=generator)
+    event = bundle._build_session_event(state, auth_state)
+    return close_time, bundle, state, event, auth_state
+
+
 def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
     from evidenceforge.generation.actions.network_connection import (
         NetworkConnectionIdentityCapture,
@@ -898,6 +1232,14 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
     restored: list[object] = []
     seen: set[str] = set()
     for row in rows:
+        if type(row) is list and len(row) == 5 and row[0] == "legacy-v1":
+            continuation = _restore_legacy_ssh_lifecycle(generator, row)
+            legacy_key = f"legacy:{continuation[2].session_obj_id}:{continuation[0].isoformat()}"
+            if legacy_key in seen:
+                raise CheckpointCorruptionError("SSH checkpoint journal row is duplicated")
+            seen.add(legacy_key)
+            restored.append(continuation)
+            continue
         if (
             type(row) is not list
             or len(row) != 31

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import random
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.generation.engine import GenerationEngine
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.timing import HawkesState
 
 from .errors import CheckpointCorruptionError
@@ -21,12 +23,12 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "3"
 _SIMPLE_FIELDS = tuple(
     field.name
     for field in GENERATION_ENGINE_CHECKPOINT_FIELDS
     if field.disposition == "bounded-live-head"
-    and field.name not in {"_dhcp_lease_state", "_hawkes_states"}
+    and field.name not in {"_dhcp_lease_state", "_hawkes_states", "_storyline_staged_archives"}
 )
 _SIMPLE_FIELD_SET = frozenset(_SIMPLE_FIELDS)
 
@@ -40,6 +42,7 @@ class _EngineHead(BaseModel):
     fields: dict[str, object] = Field(default_factory=dict)
     dhcp_leases: list[list[object]] = Field(default_factory=list)
     hawkes_states: list[list[object]] = Field(default_factory=list)
+    staged_archives: list[list[object]] = Field(default_factory=list)
 
 
 def _capture_dhcp(engine: GenerationEngine) -> list[list[object]]:
@@ -72,6 +75,100 @@ def _restore_dhcp(engine: GenerationEngine, rows: object) -> dict[str, dict[str,
             raise CheckpointCorruptionError("generation checkpoint DHCP RNG is invalid")
         decoded["system"] = system
         restored[hostname] = decoded  # type: ignore[assignment]
+    return restored
+
+
+def _capture_staged_archives(engine: GenerationEngine) -> list[list[object]]:
+    """Capture only unconsumed authored archives that can still affect exfiltration."""
+
+    rows: list[list[object]] = []
+    expected_fields = {
+        "actor",
+        "staging_host",
+        "staging_ip",
+        "source_ip",
+        "archive_path",
+        "smb_filename",
+        "staged_at",
+        "consumed",
+    }
+    for archive in getattr(engine, "_storyline_staged_archives", ()):
+        if type(archive) is not SimpleNamespace or set(vars(archive)) != expected_fields:
+            raise TypeError("generation checkpoint staged archive is invalid")
+        if archive.consumed:
+            continue
+        if (
+            type(archive.actor) is not User
+            or any(
+                type(getattr(archive, field)) is not str
+                for field in (
+                    "staging_host",
+                    "staging_ip",
+                    "source_ip",
+                    "archive_path",
+                    "smb_filename",
+                )
+            )
+            or type(archive.staged_at) is not datetime
+            or archive.staged_at.tzinfo is not UTC
+            or type(archive.consumed) is not bool
+        ):
+            raise TypeError("generation checkpoint staged archive fields are invalid")
+        rows.append(
+            [
+                archive.actor.username,
+                archive.staging_host,
+                archive.staging_ip,
+                archive.source_ip,
+                archive.archive_path,
+                archive.smb_filename,
+                archive.staged_at.isoformat(),
+            ]
+        )
+    return rows
+
+
+def _restore_staged_archives(
+    engine: GenerationEngine,
+    rows: object,
+) -> list[SimpleNamespace]:
+    """Rebind staged archive actors to the freshly compiled scenario."""
+
+    if type(rows) is not list:
+        raise CheckpointCorruptionError("generation checkpoint staged archive table is invalid")
+    users = {user.username: user for user in engine.scenario.environment.users}
+    restored: list[SimpleNamespace] = []
+    for row in rows:
+        if (
+            type(row) is not list
+            or len(row) != 7
+            or any(type(value) is not str for value in row)
+            or not row[0]
+            or row[0] not in users
+        ):
+            raise CheckpointCorruptionError("generation checkpoint staged archive row is invalid")
+        try:
+            staged_at = datetime.fromisoformat(row[6])
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "generation checkpoint staged archive timestamp is invalid"
+            ) from error
+        if staged_at.tzinfo is not UTC:
+            raise CheckpointCorruptionError(
+                "generation checkpoint staged archive timestamp must be UTC"
+            )
+        restored.append(
+            SimpleNamespace(
+                actor=users[row[0]],
+                staging_host=row[1],
+                staging_ip=row[2],
+                source_ip=row[3],
+                archive_path=row[4],
+                smb_filename=row[5],
+                staged_at=staged_at,
+                consumed=False,
+            )
+        )
     return restored
 
 
@@ -116,6 +213,7 @@ class GenerationEngineParticipant:
             },
             dhcp_leases=_capture_dhcp(self.engine),
             hawkes_states=hawkes,
+            staged_archives=_capture_staged_archives(self.engine),
         )
         return ParticipantSeal(
             head=HeadDraft(
@@ -167,3 +265,7 @@ class GenerationEngineParticipant:
             setattr(self.engine, name, value)
         self.engine._dhcp_lease_state = _restore_dhcp(self.engine, document.dhcp_leases)
         self.engine._hawkes_states = hawkes
+        self.engine._storyline_staged_archives = _restore_staged_archives(
+            self.engine,
+            document.staged_archives,
+        )
