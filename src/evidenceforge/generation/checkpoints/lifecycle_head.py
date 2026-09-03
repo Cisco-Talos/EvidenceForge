@@ -8,6 +8,7 @@ hydration path.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from evidenceforge.events.content_identity import (
@@ -33,7 +34,11 @@ from evidenceforge.events.lifecycle import (
     TransportLifecycleSnapshot,
 )
 from evidenceforge.events.network import NetworkTuple
-from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_registry import (
+    LifecycleRegistry,
+    _LifecycleState,
+    _ProcessEntry,
+)
 from evidenceforge.models.exceptions import StateError
 
 from .errors import CheckpointCorruptionError, CheckpointError
@@ -46,7 +51,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 
 def _time(value: datetime | None) -> str | None:
@@ -211,11 +216,24 @@ def _decode_ticket(value: object) -> LifecycleClosureTicket | None:
         raise CheckpointCorruptionError("lifecycle checkpoint ticket is invalid") from error
 
 
-def _state(value: object) -> list[object]:
-    if value.transition_count != len(value.transitions) or value.hold_count != len(value.holds):
-        raise CheckpointError(
-            "lifecycle checkpoint cannot yet capture an entity whose detail ledger was compacted"
-        )
+def _state(value: object, authority: object) -> list[object]:
+    commits = authority.commits
+    commit_rows = (
+        []
+        if commits is None
+        else [
+            [action_id, ordinal, transition_id]
+            for (action_id, ordinal), transition_id in sorted(commits.items())
+        ]
+    )
+    durable_ids = authority.durable_transition_ids
+    durable_rows = (
+        []
+        if durable_ids is None
+        else [durable_ids]
+        if isinstance(durable_ids, str)
+        else list(durable_ids)
+    )
     return [
         [_transition(item) for item in value.transitions],
         [_hold(item) for item in value.holds],
@@ -230,10 +248,19 @@ def _state(value: object) -> list[object]:
         value.hold_ledger_digest,
         _time(value.latest_dependent_at),
         _time(value.latest_hold_until),
+        commit_rows,
+        durable_rows,
     ]
 
 
-def _decode_state(value: object) -> dict[str, object]:
+@dataclass(frozen=True)
+class _DecodedState:
+    snapshot_fields: dict[str, object]
+    commits: tuple[tuple[str, int, str], ...]
+    durable_transition_ids: tuple[str, ...]
+
+
+def _decode_state(value: object) -> _DecodedState:
     (
         transitions,
         holds,
@@ -248,7 +275,9 @@ def _decode_state(value: object) -> dict[str, object]:
         hold_digest,
         latest_dependent_at,
         latest_hold_until,
-    ) = _record(value, 13, "entity state")
+        commits,
+        durable_transition_ids,
+    ) = _record(value, 15, "entity state")
     if type(transitions) is not list or type(holds) is not list:
         raise CheckpointCorruptionError("lifecycle checkpoint entity ledger is invalid")
     if (
@@ -260,27 +289,47 @@ def _decode_state(value: object) -> dict[str, object]:
         or type(hold_digest) is not str
     ):
         raise CheckpointCorruptionError("lifecycle checkpoint entity aggregates are invalid")
+    if type(commits) is not list or type(durable_transition_ids) is not list:
+        raise CheckpointCorruptionError("lifecycle checkpoint durable authority is invalid")
+    decoded_commits: list[tuple[str, int, str]] = []
+    for item in commits:
+        action_id, ordinal, transition_id = _record(item, 3, "durable commit")
+        if type(action_id) is not str or type(ordinal) is not int or type(transition_id) is not str:
+            raise CheckpointCorruptionError("lifecycle checkpoint durable commit is invalid")
+        decoded_commits.append((action_id, ordinal, transition_id))
+    if any(type(item) is not str for item in durable_transition_ids):
+        raise CheckpointCorruptionError("lifecycle checkpoint durable transition ID is invalid")
     decoded_transitions = tuple(_decode_transition(item) for item in transitions)
     decoded_holds = tuple(_decode_hold(item) for item in holds)
-    if transition_count != len(decoded_transitions) or hold_count != len(decoded_holds):
+    if transition_count < len(decoded_transitions) or hold_count < len(decoded_holds):
         raise CheckpointCorruptionError(
-            "lifecycle checkpoint entity aggregate does not match its detail ledger"
+            "lifecycle checkpoint entity aggregate is smaller than its detail ledger"
         )
-    return {
-        "transitions": decoded_transitions,
-        "holds": decoded_holds,
-        "close_barrier": _decode_barrier(barrier),
-        "closure_ticket": _decode_ticket(ticket),
-        "closed_at": _decode_time(closed_at, optional=True),
-        "transition_count": transition_count,
-        "compacted_transition_count": compacted_transition_count,
-        "transition_ledger_digest": transition_digest,
-        "hold_count": hold_count,
-        "compacted_hold_count": compacted_hold_count,
-        "hold_ledger_digest": hold_digest,
-        "latest_dependent_at": _decode_time(latest_dependent_at, optional=True),
-        "latest_hold_until": _decode_time(latest_hold_until, optional=True),
-    }
+    if compacted_transition_count != transition_count - len(
+        decoded_transitions
+    ) or compacted_hold_count != hold_count - len(decoded_holds):
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint compacted counts do not match retained detail"
+        )
+    return _DecodedState(
+        snapshot_fields={
+            "transitions": decoded_transitions,
+            "holds": decoded_holds,
+            "close_barrier": _decode_barrier(barrier),
+            "closure_ticket": _decode_ticket(ticket),
+            "closed_at": _decode_time(closed_at, optional=True),
+            "transition_count": transition_count,
+            "compacted_transition_count": compacted_transition_count,
+            "transition_ledger_digest": transition_digest,
+            "hold_count": hold_count,
+            "compacted_hold_count": compacted_hold_count,
+            "hold_ledger_digest": hold_digest,
+            "latest_dependent_at": _decode_time(latest_dependent_at, optional=True),
+            "latest_hold_until": _decode_time(latest_hold_until, optional=True),
+        },
+        commits=tuple(decoded_commits),
+        durable_transition_ids=tuple(durable_transition_ids),
+    )
 
 
 def _process_identity(value: ProcessLifecycleIdentity) -> list[object]:
@@ -522,11 +571,28 @@ def _decode_transport_identity(value: object) -> TransportLifecycleIdentity:
         ) from error
 
 
-def _start(snapshot: object) -> LifecycleTransition:
+def _start(snapshot: object, state: _DecodedState) -> LifecycleTransition:
     starts = [item for item in snapshot.transitions if item.kind == "started"]
-    if len(starts) != 1:
-        raise CheckpointError("lifecycle checkpoint entity lacks one retained start transition")
-    return starts[0]
+    if len(starts) == 1:
+        return starts[0]
+    if starts:
+        raise CheckpointCorruptionError("lifecycle checkpoint entity has duplicate starts")
+    if not state.durable_transition_ids:
+        raise CheckpointCorruptionError("lifecycle checkpoint entity lacks a durable start")
+    transition_id = state.durable_transition_ids[0]
+    commit = next((item for item in state.commits if item[2] == transition_id), None)
+    if commit is None:
+        raise CheckpointCorruptionError("lifecycle checkpoint start commit is missing")
+    identity = snapshot.identity
+    started_at = identity.started_at
+    return LifecycleTransition(
+        transition_id=transition_id,
+        subject=identity.ref,
+        kind="started",
+        canonical_time=started_at,
+        action_id=commit[0],
+        transition_ordinal=commit[1],
+    )
 
 
 def _unsupported_partition_state(registry: LifecycleRegistry) -> list[str]:
@@ -572,26 +638,29 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                         _process_identity(item.identity),
                         _token(item.token),
                         _membership(item.membership),
-                        _state(partition._process_snapshot(item)),
+                        _state(partition._process_snapshot(item), item.state),
                     ]
                     for item in partition._processes.iter_entries()
                 ]
                 sessions = [
-                    [_session_identity(item.identity), _state(partition._session_snapshot(item))]
+                    [
+                        _session_identity(item.identity),
+                        _state(partition._session_snapshot(item), item.state),
+                    ]
                     for item in partition._sessions.iter_entries()
                 ]
                 services = [
                     [
                         _logical_service(item.logical_identity),
                         _service_identity(item.identity),
-                        _state(partition._service_snapshot(item)),
+                        _state(partition._service_snapshot(item), item.state),
                     ]
                     for item in partition._services.iter_entries()
                 ]
                 transports = [
                     [
                         _transport_identity(item.identity),
-                        _state(partition._transport_snapshot(item)),
+                        _state(partition._transport_snapshot(item), item.state),
                     ]
                     for item in partition._transports.iter_entries()
                 ]
@@ -618,6 +687,7 @@ def _decode_snapshot_rows(
     list[SessionLifecycleSnapshot],
     list[ServiceInstanceLifecycleSnapshot],
     list[TransportLifecycleSnapshot],
+    dict[str, _DecodedState],
 ]:
     partitions = document.get("partitions")
     if type(partitions) is not list:
@@ -626,6 +696,7 @@ def _decode_snapshot_rows(
     sessions: list[SessionLifecycleSnapshot] = []
     services: list[ServiceInstanceLifecycleSnapshot] = []
     transports: list[TransportLifecycleSnapshot] = []
+    states: dict[str, _DecodedState] = {}
     for partition in partitions:
         process_rows, session_rows, service_rows, transport_rows = _record(
             partition, 4, "partition"
@@ -634,41 +705,45 @@ def _decode_snapshot_rows(
             raise CheckpointCorruptionError("lifecycle checkpoint entity table is invalid")
         for row in process_rows:  # type: ignore[union-attr]
             identity, token, membership, state = _record(row, 4, "process")
-            processes.append(
-                ProcessLifecycleSnapshot(
-                    identity=_decode_process_identity(identity),
-                    token=_decode_token(token),
-                    membership=_decode_membership(membership),
-                    **_decode_state(state),  # type: ignore[arg-type]
-                )
+            decoded = _decode_state(state)
+            snapshot = ProcessLifecycleSnapshot(
+                identity=_decode_process_identity(identity),
+                token=_decode_token(token),
+                membership=_decode_membership(membership),
+                **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            processes.append(snapshot)
+            states[snapshot.identity.object_id] = decoded
         for row in session_rows:  # type: ignore[union-attr]
             identity, state = _record(row, 2, "session")
-            sessions.append(
-                SessionLifecycleSnapshot(
-                    identity=_decode_session_identity(identity),
-                    **_decode_state(state),  # type: ignore[arg-type]
-                )
+            decoded = _decode_state(state)
+            snapshot = SessionLifecycleSnapshot(
+                identity=_decode_session_identity(identity),
+                **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            sessions.append(snapshot)
+            states[snapshot.identity.object_id] = decoded
         for row in service_rows:  # type: ignore[union-attr]
             logical, identity, state = _record(row, 3, "service")
-            services.append(
-                ServiceInstanceLifecycleSnapshot(
-                    logical_identity=_decode_logical_service(logical),
-                    identity=_decode_service_identity(identity),
-                    **_decode_state(state),  # type: ignore[arg-type]
-                )
+            decoded = _decode_state(state)
+            snapshot = ServiceInstanceLifecycleSnapshot(
+                logical_identity=_decode_logical_service(logical),
+                identity=_decode_service_identity(identity),
+                **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            services.append(snapshot)
+            states[snapshot.identity.object_id] = decoded
         for row in transport_rows:  # type: ignore[union-attr]
             identity, state = _record(row, 2, "transport")
-            transports.append(
-                TransportLifecycleSnapshot(
-                    identity=_decode_transport_identity(identity),
-                    active_binding_count=0,
-                    **_decode_state(state),  # type: ignore[arg-type]
-                )
+            decoded = _decode_state(state)
+            snapshot = TransportLifecycleSnapshot(
+                identity=_decode_transport_identity(identity),
+                active_binding_count=0,
+                **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
-    return processes, sessions, services, transports
+            transports.append(snapshot)
+            states[snapshot.identity.object_id] = decoded
+    return processes, sessions, services, transports, states
 
 
 def _register_parent_ordered(
@@ -687,6 +762,92 @@ def _register_parent_ordered(
             register(item)
             registered.add(item.identity.object_id)
             pending.remove(item)
+
+
+def _install_authority_states(
+    registry: LifecycleRegistry,
+    snapshots: list[object],
+    states: dict[str, _DecodedState],
+) -> None:
+    """Replace replay scaffolding with the exact retained authority summaries."""
+
+    for snapshot in snapshots:
+        object_id = snapshot.identity.object_id
+        decoded = states[object_id]
+        fields = decoded.snapshot_fields
+        transitions = fields["transitions"]
+        holds = fields["holds"]
+        assert isinstance(transitions, tuple)
+        assert isinstance(holds, tuple)
+        transition_details: LifecycleTransition | list[LifecycleTransition] | None = (
+            None
+            if not transitions
+            else transitions[0]
+            if len(transitions) == 1
+            else list(transitions)
+        )
+        hold_details: LifecycleHold | list[LifecycleHold] | None = (
+            None if not holds else holds[0] if len(holds) == 1 else list(holds)
+        )
+        durable_ids: str | tuple[str, ...] | None = (
+            None
+            if not decoded.durable_transition_ids
+            else decoded.durable_transition_ids[0]
+            if len(decoded.durable_transition_ids) == 1
+            else decoded.durable_transition_ids
+        )
+        try:
+            transition_digest = int(fields["transition_ledger_digest"], 16)
+            hold_digest = int(fields["hold_ledger_digest"], 16)
+        except (TypeError, ValueError) as error:
+            raise CheckpointCorruptionError(
+                "lifecycle checkpoint ledger digest is invalid"
+            ) from error
+        authority = _LifecycleState(
+            transitions=transition_details,
+            holds=hold_details,
+            close_barrier=fields["close_barrier"],  # type: ignore[arg-type]
+            closure_ticket=fields["closure_ticket"],  # type: ignore[arg-type]
+            closed_at=fields["closed_at"],  # type: ignore[arg-type]
+            transition_count=fields["transition_count"],  # type: ignore[arg-type]
+            hold_count=fields["hold_count"],  # type: ignore[arg-type]
+            transition_digest=transition_digest,
+            hold_digest=hold_digest,
+            latest_dependent_at=fields["latest_dependent_at"],  # type: ignore[arg-type]
+            latest_hold_until=fields["latest_hold_until"],  # type: ignore[arg-type]
+            commits=(
+                None
+                if not decoded.commits
+                else {
+                    (action, ordinal): transition for action, ordinal, transition in decoded.commits
+                }
+            ),
+            durable_transition_ids=durable_ids,
+        )
+        partition_id = registry._partition_id(snapshot.identity.hostname)
+        partition = registry._partitions[partition_id]
+        entry = partition._entry(snapshot.identity.ref)
+        if entry is None:
+            raise CheckpointCorruptionError("lifecycle checkpoint entity route was not rebuilt")
+        if isinstance(snapshot, ProcessLifecycleSnapshot):
+            partition._processes._store[object_id] = _ProcessEntry(
+                identity=entry.identity,
+                token=entry.token,
+                membership=entry.membership,
+                state=authority,
+            )
+        elif isinstance(snapshot, SessionLifecycleSnapshot):
+            partition._sessions._states[entry.handle] = authority
+        elif isinstance(snapshot, ServiceInstanceLifecycleSnapshot):
+            partition._services._states[entry.handle] = authority
+        else:
+            partition._transports._states[entry.handle] = authority
+        if isinstance(snapshot, (ServiceInstanceLifecycleSnapshot, TransportLifecycleSnapshot)):
+            kind = (
+                "service" if isinstance(snapshot, ServiceInstanceLifecycleSnapshot) else "transport"
+            )
+            with registry._routes.locked(((kind, object_id),)):
+                registry._routes.invalidate_snapshot_locked(kind, object_id)
 
 
 def _restore(registry: LifecycleRegistry, head: bytes) -> None:
@@ -709,11 +870,11 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
         shard_count=document["shard_count"],  # type: ignore[arg-type]
         snapshot_history_limit=document["snapshot_history_limit"],  # type: ignore[arg-type]
     )
-    processes, sessions, services, transports = _decode_snapshot_rows(document)
+    processes, sessions, services, transports, states = _decode_snapshot_rows(document)
     for snapshot in sorted(
         sessions, key=lambda item: (item.identity.started_at, item.identity.object_id)
     ):
-        start = _start(snapshot)
+        start = _start(snapshot, states[snapshot.identity.object_id])
         fresh.register_session(
             snapshot.identity,
             action_id=start.action_id,
@@ -726,15 +887,15 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
         register=lambda item: fresh.register_service_instance(
             item.logical_identity,
             item.identity,
-            action_id=_start(item).action_id,
-            transition_id=_start(item).transition_id,
-            transition_ordinal=_start(item).transition_ordinal,
+            action_id=_start(item, states[item.identity.object_id]).action_id,
+            transition_id=_start(item, states[item.identity.object_id]).transition_id,
+            transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
         ),
     )
     for snapshot in sorted(
         transports, key=lambda item: (item.identity.opened_at, item.identity.object_id)
     ):
-        start = _start(snapshot)
+        start = _start(snapshot, states[snapshot.identity.object_id])
         fresh.register_transport(
             snapshot.identity,
             action_id=start.action_id,
@@ -748,9 +909,9 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             item.identity,
             token=item.token,
             membership=item.membership,
-            action_id=_start(item).action_id,
-            transition_id=_start(item).transition_id,
-            transition_ordinal=_start(item).transition_ordinal,
+            action_id=_start(item, states[item.identity.object_id]).action_id,
+            transition_id=_start(item, states[item.identity.object_id]).transition_id,
+            transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
         ),
     )
     snapshots = [*sessions, *services, *transports, *processes]
@@ -796,6 +957,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             progressed = True
         if not progressed:
             raise CheckpointCorruptionError("lifecycle checkpoint closure graph cannot hydrate")
+    _install_authority_states(fresh, snapshots, states)
     watermark = _decode_time(document.get("watermark"), optional=True)
     if watermark is not None:
         fresh.advance_watermark(watermark)

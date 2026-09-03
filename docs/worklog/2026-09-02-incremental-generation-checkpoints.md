@@ -100,6 +100,8 @@ until every correctness and performance gate passes.
 - The first lifecycle bounded-head slice uses hard-coded field codecs and stable partition/handle
   iteration rather than a reflective graph encoder. It round-trips active and closed process and
   session authority, including dependents, holds, barriers, tickets, and ledger aggregates, while
-  retaining the registry object identity and rebuilding routes, locks, and indexes. Until the next
-  slices land, capture fails before publication when it encounters binding/lease families or an
-  entity whose bounded detail ledger has compacted; the public generator remains unwired.
+  retaining the registry object identity and rebuilding routes, locks, and indexes. The second
+  unreleased head schema retains bounded aggregate counts/digests and durable commit identities,
+  so hydration no longer needs discarded transition/hold detail and correctly reconstructs a
+  compacted entity. Until the next slices land, capture still fails before publication when it
+  encounters binding/lease families; the public generator remains unwired.

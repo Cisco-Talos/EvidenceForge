@@ -377,7 +377,7 @@ def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None
     assert restored_registry.get_session("session-1") == expected_session
 
 
-def test_lifecycle_head_rejects_detail_loss_before_publication() -> None:
+def test_lifecycle_head_round_trips_compacted_detail_as_bounded_authority() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)
     registry = LifecycleRegistry(shard_count=1, snapshot_history_limit=1)
     session = SessionLifecycleIdentity(
@@ -396,8 +396,15 @@ def test_lifecycle_head_rejects_detail_loss_before_publication() -> None:
         action_id="dependent",
     )
 
-    with pytest.raises(CheckpointError, match="detail ledger was compacted"):
-        LifecycleRegistryParticipant(registry).prepare_checkpoint(0)
+    expected = registry.get_session("session-1")
+    participant = LifecycleRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    restored_registry = LifecycleRegistry(shard_count=1, snapshot_history_limit=1)
+
+    LifecycleRegistryParticipant(restored_registry).restore_checkpoint(seal.head.payload, ())
+
+    assert restored_registry.get_session("session-1") == expected
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:
