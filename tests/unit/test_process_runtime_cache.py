@@ -204,6 +204,24 @@ def test_failed_logon_cadence_fields_have_closed_retention_policies() -> None:
     )
 
 
+def test_activity_generator_mutable_retention_inventory_is_complete() -> None:
+    """Every discovered mutable field must be live-classified or explicitly retired."""
+
+    from evidenceforge.generation.activity.generator import ActivityGenerator
+
+    discovered = {
+        row.field_name
+        for row in discover_activity_generator_mutable_fields(inspect.getsource(ActivityGenerator))
+    }
+    policy_fields = [policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES]
+    retired = set(REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS)
+
+    assert len(policy_fields) == len(set(policy_fields))
+    assert discovered <= set(policy_fields) | retired
+    assert discovered.isdisjoint(retired)
+    assert set(policy_fields).isdisjoint(retired)
+
+
 def test_dead_dns_caches_cannot_reenter_generator_retention() -> None:
     """Retired generator DNS caches cannot re-enter the mutable retention inventory."""
 

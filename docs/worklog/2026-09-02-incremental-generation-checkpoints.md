@@ -227,3 +227,11 @@ until every correctness and performance gate passes.
   indexes, deadline heaps, and owner indexes. Prepared publications and retained capabilities fail
   the barrier. Historical index backing and diagnostic high-water values are deliberately rebuilt,
   not persisted. The generation-index and incremental-checkpoint group has 112 passing tests.
+- The ActivityGenerator retention audit now classifies every mutable field discovered across the
+  whole class, including future close journals, foreground finalizers, exact SID/TTY preparation
+  state, and rebuilt aliases; two unused duration-risk maps were removed. Email artifact-manifest
+  rows now use the existing SQLite streaming spool instead of a history-growing Python list. Its
+  checkpoint adapter test seals one base plus one row delta, hydrates a fresh spool, resumes the
+  append ordinal, and publishes the same deterministic sorted JSON shape. The 10 retention/spool
+  tests and the focused slow end-to-end email generation test pass; a real hour-one barrier audit
+  classified all 72 materialized mutable fields without fallback.

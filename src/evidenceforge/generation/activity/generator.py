@@ -341,6 +341,7 @@ from evidenceforge.generation.network_runtime import (
 from evidenceforge.generation.process_runtime_cache import (
     ActivityGeneratorSessionRetentionRelease,
     BoundedRuntimeCache,
+    EmailArtifactManifestSpool,
     deadline_seconds,
 )
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
@@ -480,20 +481,6 @@ def _is_modeled_local_ip(executor: Any, ip: str) -> bool:
     if network is None and visibility is None:
         return _is_private_ip(ip)
     return False
-
-
-@dataclass(slots=True)
-class _HttpPersistentConnection:
-    close_deadline: datetime
-    uid: str
-    conn_id: str
-    src_port: int
-    next_trans_depth: int
-    orig_budget: int
-    resp_budget: int
-    used_orig: int
-    used_resp: int
-    last_request_time: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -5625,9 +5612,6 @@ class ActivityGenerator:
         )
         self._proxy_channel_window_start = proxy_window_start
         self._proxy_channel_watermark = proxy_window_start
-        self._http_persistent_connections: dict[
-            tuple[str, str, int, str, str], _HttpPersistentConnection
-        ] = {}
         self._recent_connection_tuples: ExpiringIndex[tuple[str, int, str, int, str], float] = (
             ExpiringIndex(deadline=lambda seen_at: seen_at)
         )
@@ -5711,7 +5695,6 @@ class ActivityGenerator:
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
         self._linux_shell_last_session_close: dict[tuple[str, str], datetime] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
-        self._linux_local_logind_session_ids: dict[str, int] = {}
         self._linux_sudo_tty_lock = Lock()
         self._linux_sudo_tty_assignments: dict[tuple[str, str, str], str] = {}
         self._linux_sudo_tty_owners: dict[tuple[str, str], tuple[str, str, str]] = {}
@@ -14405,7 +14388,6 @@ class ActivityGenerator:
         )
         logind_time = time - timedelta(milliseconds=rng.randint(20, 80))
         session_id = self._ensure_linux_local_session_id(user, system, time, logon_id)
-        self._linux_local_logind_session_ids[logon_id] = session_id
         system_type = (system.type or "workstation").lower()
         pam_service = (
             "login"
@@ -29087,16 +29069,19 @@ class ActivityGenerator:
         email_config = getattr(getattr(self, "_scenario_environment", None), "email", None)
         if email_config is None or email_config.artifacts.mode == "none":
             return
-        manifest = getattr(self, "_email_artifact_manifest", None)
-        if manifest is None:
-            self._email_artifact_manifest = []
-            manifest = self._email_artifact_manifest
+        spool = getattr(self, "_email_artifact_manifest_spool", None)
+        if spool is None:
+            manifest_path = getattr(self, "_artifacts_manifest_path", None)
+            if not isinstance(manifest_path, Path):
+                raise StateError("Email artifact manifest spool has no output owner")
+            spool = EmailArtifactManifestSpool(manifest_path)
+            self._email_artifact_manifest_spool = spool
         eml_path = Path(artifact_path).name if artifact_path else ""
         export_status, export_reason = self._email_artifact_export_state(
             email_ctx,
             artifact_path,
         )
-        manifest.append(
+        spool.append(
             {
                 "message_id": email_ctx.message_id,
                 "sender": email_ctx.envelope_from,
@@ -29125,30 +29110,12 @@ class ActivityGenerator:
 
     def write_artifacts_manifest(self) -> None:
         """Write the top-level artifact manifest when email artifact metadata exists."""
-        manifest = getattr(self, "_email_artifact_manifest", None)
-        manifest_path = getattr(self, "_artifacts_manifest_path", None)
-        if manifest_path is None or manifest is None:
+        spool = getattr(self, "_email_artifact_manifest_spool", None)
+        if spool is None:
             return
-        import json
-
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": ARTIFACTS_MANIFEST_SCHEMA_VERSION,
-            "email": {
-                "messages": sorted(
-                    manifest,
-                    key=lambda item: (
-                        item.get("date") or "",
-                        item.get("message_id") or "",
-                        item.get("sender") or "",
-                    ),
-                ),
-            },
-        }
-        manifest_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        if type(spool) is not EmailArtifactManifestSpool:
+            raise StateError("Email artifact manifest spool owner changed")
+        spool.write_manifest(schema_version=ARTIFACTS_MANIFEST_SCHEMA_VERSION)
 
     def generate_ssh_session(
         self,

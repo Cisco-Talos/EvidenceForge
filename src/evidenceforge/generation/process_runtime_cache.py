@@ -201,6 +201,24 @@ class EmailArtifactManifestSpool:
         self._logical_rows += 1
         self._maximum_append_work = max(self._maximum_append_work, 1)
 
+    def checkpoint_connection(self) -> sqlite3.Connection:
+        """Return the protected connection used by the incremental spool adapter."""
+
+        return self._connect()
+
+    def restore_checkpoint_state(self) -> None:
+        """Rebuild scalar append state after row-delta hydration."""
+
+        connection = self._connect()
+        count, minimum, maximum = connection.execute(
+            "SELECT COUNT(*), MIN(ordinal), MAX(ordinal) FROM manifest_rows"
+        ).fetchone()
+        logical_rows = int(count)
+        if logical_rows and (minimum != 0 or maximum != logical_rows - 1):
+            raise ValueError("Email artifact checkpoint ordinals are not contiguous")
+        self._logical_rows = logical_rows
+        self._maximum_append_work = min(logical_rows, 1)
+
     def census(self) -> EmailArtifactManifestSpoolCensus:
         """Return row and disk cardinality without loading any payload row."""
 
@@ -1238,6 +1256,7 @@ _BOUNDED_TEMPORAL_FIELDS = (
     "_top_level_browser_launch_targets",
     "_privileged_auth_occurrences",
     "_failed_logon_attempt_times",
+    "_foreground_process_finalizers",
 )
 _SCENARIO_COMPILED_FIELDS = (
     "sid_registry",
@@ -1263,6 +1282,11 @@ _OCCURRENCE_OR_DRAIN_FIELDS = (
     "_expanding_types",
     "_postfix_queue_states",
     "_failed_logon_attempt_pending",
+    "_linux_sudo_tty_capacity_claims",
+    "_prepared_rdp_lifecycle_continuations",
+    "_prepared_ssh_close_continuations",
+    "_sid_reservation_groups",
+    "_sid_reservations",
 )
 _SESSION_SCOPED_FIELDS = (
     "_bash_history_next_time",
@@ -1275,6 +1299,14 @@ _SESSION_SCOPED_FIELDS = (
     "_linux_sudo_tty_available",
     "_linux_sudo_tty_keys_by_logon_id",
     "_last_workstation_lock_time",
+    "_foreground_shell_next_time",
+    "_foreground_shell_release_groups",
+    "_pending_linux_sudo_logoffs",
+    "_pending_rdp_lifecycle_continuations",
+    "_pending_ssh_manager_closures",
+    "_pending_ssh_session_closures",
+    "_process_connection_hold_until",
+    "_singleton_application_intervals",
 )
 _EXTERNAL_SPOOL_FIELDS = ("_email_artifact_manifest_spool",)
 _BOUNDED_LEGACY_FIELDS = (
@@ -1290,13 +1322,16 @@ _BOUNDED_LEGACY_FIELDS = (
     "_ntp_last_parser_times",
     "_linux_shell_last_session_close",
     "_postfix_qmgr_pid_cache",
+    "_kerberos_cache",
+    "_next_sid_reservation_id",
+    "_terminated_process_keys",
 )
 _DEFINITE_GROWING_FIELDS: tuple[str, ...] = ()
 _CONDITIONAL_GROWING_FIELDS: tuple[str, ...] = ()
 REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS = (
     "_dns_observation_cache",
     "_dns_resolver_rrset_cache",
-    "_kerberos_cache",
+    "_http_persistent_connections",
     "_linux_local_logind_session_ids",
     "_tls_cert_validity",
     "_tls_intermediate_profiles",

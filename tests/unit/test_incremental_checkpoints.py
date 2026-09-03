@@ -175,6 +175,7 @@ from evidenceforge.generation.network_runtime import (
     _transport_lease_digest_value,
     _TransportLeaseRecord,
 )
+from evidenceforge.generation.process_runtime_cache import EmailArtifactManifestSpool
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
@@ -2225,6 +2226,48 @@ def test_timing_runtime_barrier_rejects_owner_claim() -> None:
 
     with pytest.raises(CheckpointError, match="_owner_lane"):
         TimingRuntimeParticipant(runtime).prepare_checkpoint(0)
+
+
+def test_email_manifest_spool_restores_row_deltas_and_append_cursor(tmp_path: Path) -> None:
+    """The disk-backed manifest should resume without copying or retaining prior rows."""
+
+    original = EmailArtifactManifestSpool(tmp_path / "original" / "ARTIFACTS_MANIFEST.json")
+    participant = SQLiteSpoolParticipant(
+        owner="email-artifact-manifest",
+        connection=original.checkpoint_connection,
+        tables=("manifest_rows",),
+    )
+    original.append({"date": "2026-01-02", "message_id": "later", "sender": "z"})
+    first = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    original.append({"date": "2026-01-01", "message_id": "earlier", "sender": "a"})
+    second = participant.prepare_checkpoint(1)
+    participant.checkpoint_committed(1)
+
+    restored = EmailArtifactManifestSpool(tmp_path / "restored" / "ARTIFACTS_MANIFEST.json")
+    restored_participant = SQLiteSpoolParticipant(
+        owner="email-artifact-manifest",
+        connection=restored.checkpoint_connection,
+        tables=("manifest_rows",),
+        initialize_tracking=False,
+    )
+    restored_participant.restore_checkpoint(
+        second.head.payload,
+        (first.segments[0].payload, second.segments[0].payload),
+    )
+    restored.restore_checkpoint_state()
+    restored.append({"date": "2026-01-03", "message_id": "final", "sender": "m"})
+
+    assert restored.census().logical_rows == 3
+    assert restored.write_manifest(schema_version="1.0") == 3
+    manifest = json.loads(
+        (tmp_path / "restored" / "ARTIFACTS_MANIFEST.json").read_text(encoding="utf-8")
+    )
+    assert [row["message_id"] for row in manifest["email"]["messages"]] == [
+        "earlier",
+        "later",
+        "final",
+    ]
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:
