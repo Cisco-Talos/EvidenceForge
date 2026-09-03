@@ -1928,6 +1928,12 @@ def validate(
         "--json",
         help="Emit a stable machine-readable validation envelope.",
     ),
+    checkpoint_hours: int = typer.Option(
+        _DEFAULT_CHECKPOINT_HOURS,
+        "--checkpoint-hours",
+        min=0,
+        help="Forecast checkpoints every N simulated hours (default: 24); 0 disables them",
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -2057,12 +2063,14 @@ def validate(
                 scenario,
                 scenario_root=scenario_file.parent,
                 destination=scenario_file.parent,
+                checkpoint_hours=checkpoint_hours,
             )
         else:
             forecast = _forecast_for_cli(
                 scenario,
                 scenario_root=scenario_file.parent,
                 destination=scenario_file.parent,
+                checkpoint_hours=checkpoint_hours,
             )
             forecast_error = None
 

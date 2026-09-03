@@ -120,6 +120,9 @@ Windows XML event streams. `eval` uses `--scenario` / `-s` and
 `--format text|json`; `info` and `validate-config` support `--json` for machine
 output.
 
+`validate` also accepts `--checkpoint-hours N`, so its resource forecast uses the intended
+generation cadence; it defaults to 24 and accepts `0` to model checkpointing as disabled.
+
 See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery,
 filesystem-safety, and output-state behavior.
 

@@ -48,7 +48,9 @@ def test_validate_skill_defaults_to_read_only_structured_validation() -> None:
 
     text = _read(SKILL_PATH)
     assert "read-only unless the user explicitly asks for repair" in text
-    assert "eforge validate <absolute-scenario-path> \\\n  --json" in text
+    assert "--json [--checkpoint-hours <hours>]" in text
+    assert "24-hour checkpoint default" in text
+    assert "`0` disables it" in text
     assert "current working directory" in text
     assert "omit `--project-root` unless" in text
     assert "If the user asked only to check, stop after reporting" in text

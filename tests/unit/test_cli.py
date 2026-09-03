@@ -328,6 +328,55 @@ class TestValidateCommand:
         assert "Projected peak working disk" in result.stdout
         assert "Available disk" in result.stdout
 
+    @pytest.mark.parametrize(
+        ("arguments", "expected_workspace"),
+        [([], True), (["--checkpoint-hours", "0"], False)],
+        ids=("default-24-hours", "disabled"),
+    )
+    def test_validate_forecast_matches_generation_checkpoint_cadence(
+        self,
+        tmp_path: Path,
+        arguments: list[str],
+        expected_workspace: bool,
+    ) -> None:
+        """Validation should forecast the same checkpoint workspace as generation."""
+
+        scenario_file = _write_included_minimal_scenario(tmp_path)
+        scenario_file.write_text(
+            scenario_file.read_text(encoding="utf-8").replace('duration: "1h"', 'duration: "24h"'),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--json", *arguments],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        payload = json.loads(result.stdout)
+        workspace = payload["resource_forecast"]["checkpoint_workspace"]
+        assert (workspace["expected_bytes"] > 0) is expected_workspace
+
+        text_result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), *arguments],
+        )
+        assert text_result.exit_code == EXIT_SUCCESS, text_result.stdout
+        assert ("Projected checkpoint workspace" in text_result.stdout) is expected_workspace
+
+    @pytest.mark.parametrize("value", ["-1", "1.5"])
+    def test_validate_rejects_invalid_checkpoint_cadence(self, tmp_path: Path, value: str) -> None:
+        """Validation should share generation's nonnegative integer cadence contract."""
+
+        scenario_file = _write_included_minimal_scenario(tmp_path)
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--checkpoint-hours", value],
+        )
+
+        assert result.exit_code != EXIT_SUCCESS
+
     def test_show_storage_exposes_compiled_authoring_diagnostics(self, tmp_path):
         """--show-storage should expose topology, policy, scale, and bounded samples."""
         scenario_file = _write_included_minimal_scenario(tmp_path, name="storage-cli-test")

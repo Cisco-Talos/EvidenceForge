@@ -3,6 +3,7 @@
 `eforge generate` creates crash-safe recovery points every 24 completed simulated hours by
 default. The cadence counts continuously across warm-up and collection. Override it with
 `--checkpoint-hours N`, or pass `--checkpoint-hours 0` to disable new checkpoints.
+`eforge validate` accepts the same option so its peak-disk forecast matches the intended run.
 
 Checkpointing is cadence-only. Generation does not force recovery points after initialization, at
 phase boundaries, or before finalization. If a run ends before its first cadence point, it has no

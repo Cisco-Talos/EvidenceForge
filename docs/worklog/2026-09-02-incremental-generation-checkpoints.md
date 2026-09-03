@@ -603,3 +603,7 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   SIGINT/SIGKILL, moved-root, spool, owner-inventory, skill-contract, and byte-identity suites also
   passed. The measured 60-day run serves as the relevant scalability/soak evidence; a redundant
   full soak-tier rerun was not performed.
+- Forecast parity now extends to the standalone validator. `eforge validate` defaults its resource
+  forecast to the same 24-hour checkpoint cadence as `generate`, accepts the same nonnegative
+  integer `--checkpoint-hours` override, and models zero checkpoint workspace when explicitly
+  disabled. Text and JSON callers pass the selected cadence through the same forecast path.

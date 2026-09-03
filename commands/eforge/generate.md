@@ -35,15 +35,15 @@ override to validation and generation. For resolved input, omit it.
 Run validation before a potentially long generation:
 
 ```bash
-eforge validate <input.yaml> --json [--show-storage]
+eforge validate <input.yaml> --json [--show-storage] [--checkpoint-hours <hours>]
 ```
 
-Consume this JSON directly. For a concise human repair list, rerun the validator without `--json`
-rather than post-processing its JSON output.
+Consume this JSON directly. For a concise human repair list, rerun without `--json` rather than post-processing its JSON output.
 
-Use `--show-storage` when SMB is authored or implied by Windows file-server/DC roles, Linux Samba
-services/roles, or explicit storage. Review platform/native roots, backing/advertised filesystems,
-mappings, credentials, client mode, and audit eligibility. Review both forecast values: final output is durable size; peak working disk includes temporary sort files. Summarize compiled counts, time,
+Use the intended checkpoint cadence. Add `--show-storage` when SMB is authored or implied by
+Windows file-server/DC roles, Linux Samba services/roles, or explicit storage. Review platform/native
+roots, filesystems, credentials, client mode, and audit eligibility. Review final output,
+checkpoint workspace, and peak working disk. Summarize compiled counts, time,
 formats, and disk; do not infer a composed environment from the root YAML alone.
 
 If validation reports an undefined persona, use `eforge info personas --json`. Repeat an explicitly
