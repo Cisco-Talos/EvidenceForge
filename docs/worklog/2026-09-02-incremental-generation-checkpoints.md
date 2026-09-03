@@ -442,3 +442,20 @@ until every correctness and performance gate passes.
   roots outside the checkpoint pause. Thirty-two synthetic generations collapse to one level-five
   root with a manifest below 4 KiB. All 74 incremental-checkpoint tests pass, including corruption
   fallback, and the three fresh-process moved-root SIGINT/SIGKILL cases remain byte-identical.
+- Source-timing state now uses a schema-2 base segment followed by ordered mutation segments. Its
+  live head contains only the watermark and segment count (122 bytes at hour 168), while each
+  cadence point seals only intervening sets, re-deadlines, removals, and expirations. Hydration
+  replays the authenticated base/delta chain into fresh bounded caches, and failed publication
+  leaves the pending mutations available for an exact retry.
+- Checkpoint expiry drains lifecycle deadline queues without advancing the semantic watermark or
+  compacting ledger details. The distinction is required for resumability: the first version
+  reused normal watermark advancement and incorrectly discarded start-commit detail needed by an
+  hour-one recovery. After separating those operations, all three fresh-process SIGINT/SIGKILL
+  moved-root cases pass again and remain byte-identical.
+- A fresh-process seven-day diagnostic pair at six-hour cadence is byte-identical across every
+  deterministic bundle artifact. The control completed in 82.020 seconds and the checkpoint run
+  in 82.812 seconds, or 0.97% overhead; its 29 foreground checkpoint paths totaled 5.639 seconds.
+  The hour-168 checkpoint took 0.242 seconds, with a 5,359,915-byte aggregate live head and a
+  1,298,014-byte new delta. The retained checkpoint workspace was 45,870,202 bytes versus
+  30,306,319 deterministic output bytes. This is a single diagnostic pair, not the acceptance
+  matrix or a selected default cadence.

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 try:
@@ -80,10 +81,15 @@ def _run_child(args: argparse.Namespace) -> int:
         if isinstance(log, dict) and "format" in log
     ]
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
-    with tempfile.TemporaryDirectory(
-        prefix="eforge-checkpoint-benchmark-",
-        dir=args.work_directory,
-    ) as temporary:
+    if args.child_output_root is None:
+        workspace = tempfile.TemporaryDirectory(
+            prefix="eforge-checkpoint-benchmark-",
+            dir=args.work_directory,
+        )
+    else:
+        args.child_output_root.mkdir(parents=True)
+        workspace = nullcontext(str(args.child_output_root))
+    with workspace as temporary:
         root = Path(temporary)
         progress: list[dict[str, float | int | str]] = []
         started = time.perf_counter()
@@ -268,6 +274,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--work-directory", type=Path)
     parser.add_argument("--child-checkpoint-hours", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--child-output-root", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.trials < 1:
         parser.error("--trials must be positive")
@@ -275,6 +282,10 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--cadences values must be positive")
     if args.child_checkpoint_hours is not None and args.child_checkpoint_hours < 0:
         parser.error("--child-checkpoint-hours must be non-negative")
+    if args.child_output_root is not None:
+        args.child_output_root = args.child_output_root.resolve()
+        if args.child_output_root.exists():
+            parser.error(f"child output root already exists: {args.child_output_root}")
     args.scenario = args.scenario.resolve()
     if not args.scenario.is_file():
         parser.error(f"scenario does not exist: {args.scenario}")

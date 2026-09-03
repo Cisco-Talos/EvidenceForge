@@ -2216,16 +2216,46 @@ def test_source_timing_head_round_trips_every_bounded_index_family() -> None:
         expected[family.name] = (loaded.key, value)
 
     participant = SourceTimingPlannerParticipant(planner)
-    seal = participant.prepare_checkpoint(0)
-    assert not seal.segments
+    first = participant.prepare_checkpoint(0)
+    assert len(first.head.payload) < 1_000
+    assert len(first.segments) == 1
+    participant.checkpoint_committed(0)
+
+    changed_family = planner.index_family_specs[0]
+    changed = planner.load_probe_entry(changed_family.name, 100, started + timedelta(hours=1))
+    changed_cache = dict(planner._bounded_indexes())[changed_family.name]
+    expected[changed_family.name] = (changed.key, changed_cache.raw_get(changed.key))
+    second = participant.prepare_checkpoint(1)
+    assert len(second.segments) == 1
+    participant.checkpoint_committed(1)
 
     restored = SourceTimingPlanner()
-    SourceTimingPlannerParticipant(restored).restore_checkpoint(seal.head.payload, ())
+    SourceTimingPlannerParticipant(restored).restore_checkpoint(
+        second.head.payload,
+        (first.segments[0].payload, second.segments[0].payload),
+    )
 
     assert restored._watermark == planner._watermark
     for family, cache in restored._bounded_indexes():
         key, value = expected[family]
         assert cache.raw_get(key) == value
+
+
+def test_source_timing_delta_abort_retains_pending_mutations() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    planner = SourceTimingPlanner()
+    participant = SourceTimingPlannerParticipant(planner)
+    initial = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    planner.load_probe_entry(planner.index_family_specs[0].name, 1, started)
+
+    rejected = participant.prepare_checkpoint(1)
+    participant.checkpoint_aborted(1)
+    retried = participant.prepare_checkpoint(2)
+
+    assert initial.segments
+    assert rejected.segments
+    assert retried.segments[0].payload == rejected.segments[0].payload
 
 
 def test_source_timing_barrier_rejects_open_preparation_authority() -> None:

@@ -343,6 +343,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         """Retire terminal authorities at the sealed post-hour frontier."""
 
         self.lifecycle_registry.prune_action_cohort_receipt_authorities()
+        self.lifecycle_registry.prune_checkpoint_expired_state(cutoff)
         self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
         self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
 

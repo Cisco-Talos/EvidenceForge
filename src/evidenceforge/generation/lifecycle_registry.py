@@ -4810,7 +4810,13 @@ class _LifecyclePartition:
             )
             return index.deadline(handle)
 
-    def advance_watermark(self, cutoff: datetime) -> tuple[LifecycleEntityRef, ...]:
+    def advance_watermark(
+        self,
+        cutoff: datetime,
+        *,
+        advance_semantic_watermark: bool = True,
+        compact_ledger_details: bool = True,
+    ) -> tuple[LifecycleEntityRef, ...]:
         """Expire bounded leases and evict due closed identities.
 
         Watermarks are monotonic. The method returns exact references for
@@ -4820,12 +4826,17 @@ class _LifecyclePartition:
         canonical_cutoff = ensure_utc(cutoff)
         with self._watermark_gate:
             with self._catalog_lock, self._index_lock:
-                if self._watermark is not None and canonical_cutoff < self._watermark:
+                if (
+                    advance_semantic_watermark
+                    and self._watermark is not None
+                    and canonical_cutoff < self._watermark
+                ):
                     raise StateError(
                         f"Lifecycle watermark cannot move backward: "
                         f"{canonical_cutoff.isoformat()} < {self._watermark.isoformat()}"
                     )
-                self._watermark = canonical_cutoff
+                if advance_semantic_watermark:
+                    self._watermark = canonical_cutoff
 
             evicted: list[LifecycleEntityRef] = []
             while True:
@@ -4985,13 +4996,26 @@ class _LifecyclePartition:
                             evicted.append(subject)
 
             with self._catalog_lock, self._index_lock:
-                self._compact_ledger_details(canonical_cutoff)
+                if compact_ledger_details:
+                    self._compact_ledger_details(canonical_cutoff)
                 self._process_starts.compact(max_groups=8)
                 self._session_starts.compact(max_groups=8)
                 self._service_starts.compact(max_groups=8)
                 self._transport_starts.compact(max_groups=8)
                 self._compact_indexes()
             return tuple(evicted)
+
+    def prune_checkpoint_expired_state(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain ordinary expiry queues without sealing the semantic event frontier."""
+
+        return self.advance_watermark(
+            cutoff,
+            advance_semantic_watermark=False,
+            compact_ledger_details=False,
+        )
 
     def prune_checkpoint_terminal_transports(
         self,
@@ -16654,6 +16678,24 @@ class LifecycleRegistry:
             self._watermark = canonical_cutoff
             with self._closed_transport_preparation_lock:
                 self._prune_action_cohort_reservations_locked()
+            evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
+            return tuple(evicted)
+
+    def prune_checkpoint_expired_state(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain sharded expiry queues without sealing the semantic event frontier."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        with self._gate.watermark():
+            evicted: list[LifecycleEntityRef] = []
+            removals: list[tuple[str, str]] = []
+            for partition in self._partitions:
+                evicted.extend(partition.prune_checkpoint_expired_state(canonical_cutoff))
+                removals.extend(partition.drain_route_removals())
+            self._routes.remove_many(tuple(removals))
+            self._routes.compact(max_entries=_PRIMARY_COMPACTION_PAGE)
             evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
             return tuple(evicted)
 

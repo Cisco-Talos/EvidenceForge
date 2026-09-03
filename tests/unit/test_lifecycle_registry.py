@@ -2797,6 +2797,35 @@ def test_checkpoint_prunes_terminal_transport_from_deadline_queue_without_waterm
     )
 
 
+def test_checkpoint_prunes_expired_identities_without_sealing_event_time() -> None:
+    registry = LifecycleRegistry(shard_count=8, closed_retention=timedelta(hours=48))
+    session = _register_session(registry)
+    process = _register_process(registry)
+    closed_at = _START + timedelta(minutes=5)
+    _request_and_close(registry, process, requested_at=closed_at)
+    _request_and_close(registry, session, requested_at=closed_at + timedelta(seconds=1))
+
+    assert (
+        registry.prune_checkpoint_expired_state(
+            closed_at + timedelta(hours=48) - timedelta(microseconds=1)
+        )
+        == ()
+    )
+    evicted = registry.prune_checkpoint_expired_state(closed_at + timedelta(hours=48, seconds=1))
+
+    assert evicted == (process.ref, session.ref)
+    assert registry.get_process(process.object_id) is None
+    assert registry.get_session(session.object_id) is None
+    assert registry.census().watermark is None
+    replacement = _register_session(
+        registry,
+        object_id="older-after-checkpoint-prune",
+        logon_id="0x22222",
+        started_at=closed_at + timedelta(hours=47),
+    )
+    assert registry.get_session(replacement.object_id) is not None
+
+
 def test_transport_registration_reuses_one_exact_object_route_digest(monkeypatch) -> None:
     """Prepared transport lookup and insertion should share one namespace digest."""
     registry = LifecycleRegistry()
