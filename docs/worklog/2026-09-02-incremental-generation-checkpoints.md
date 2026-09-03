@@ -95,7 +95,7 @@ until every correctness and performance gate passes.
   harnesses that intentionally do not construct a complete GenerationEngine. The hook call site
   now remains optional for those harnesses; both regressions pass.
 - The clean repeat completed with 8,030 passed, 5 skipped, and 2,009 deselected in 174.43 seconds.
-- The focused incremental checkpoint module currently has 25 passing tests, including exhaustive
+- The focused incremental checkpoint module currently has 28 passing tests, including exhaustive
   core-owner inventories and transient barrier rejection.
 - The first lifecycle bounded-head slice uses hard-coded field codecs and stable partition/handle
   iteration rather than a reflective graph encoder. It round-trips active and closed process and
@@ -103,5 +103,7 @@ until every correctness and performance gate passes.
   retaining the registry object identity and rebuilding routes, locks, and indexes. The second
   unreleased head schema retains bounded aggregate counts/digests and durable commit identities,
   so hydration no longer needs discarded transition/hold detail and correctly reconstructs a
-  compacted entity. Until the next slices land, capture still fails before publication when it
-  encounters binding/lease families; the public generator remains unwired.
+  compacted entity. The third unreleased head schema also restores active and tombstoned
+  service/process and cross-host transport/session bindings, including exact transport binding
+  counts; 77 broader lifecycle authority tests remain green. Capture still fails before
+  publication when it encounters lease families; the public generator remains unwired.

@@ -17,10 +17,16 @@ from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleHold,
     LifecycleMembership,
+    LogicalServiceIdentity,
     ProcessLifecycleIdentity,
     ProcessTokenIdentity,
+    ServiceInstanceLifecycleIdentity,
+    ServiceProcessBindingIdentity,
     SessionLifecycleIdentity,
+    TransportLifecycleIdentity,
+    TransportSessionBindingIdentity,
 )
+from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
@@ -405,6 +411,107 @@ def test_lifecycle_head_round_trips_compacted_detail_as_bounded_authority() -> N
     LifecycleRegistryParticipant(restored_registry).restore_checkpoint(seal.head.payload, ())
 
     assert restored_registry.get_session("session-1") == expected
+
+
+def test_lifecycle_head_rebuilds_service_and_cross_host_transport_bindings() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(shard_count=4)
+    session = SessionLifecycleIdentity(
+        hostname="host-2",
+        object_id="session-2",
+        logon_id="0x20001",
+        principal="bob",
+        session_kind="ssh",
+        started_at=started,
+    )
+    service = ServiceInstanceLifecycleIdentity(
+        hostname="host-1",
+        object_id="service-1",
+        logical_service_id="sshd",
+        boot_id="boot-1",
+        instance_id="instance-1",
+        started_at=started,
+    )
+    process = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="process-1",
+        pid=1000,
+        started_at=started,
+        image="/usr/sbin/sshd",
+        role="service",
+    )
+    transport = TransportLifecycleIdentity(
+        hostname="host-1",
+        object_id="transport-1",
+        transport_id="transport-id-1",
+        src_hostname="host-2",
+        dst_hostname="host-1",
+        network_tuple=NetworkTuple("10.0.0.2", 49152, "10.0.0.1", 22, "tcp"),
+        opened_at=started,
+        close_deadline=started.replace(minute=30),
+        zeek_uid="Cexample",
+        conn_id="conn-1",
+    )
+    registry.register_session(session, action_id="session", transition_id="session:start")
+    registry.register_service_instance(
+        LogicalServiceIdentity("host-1", "sshd", "sshd", "builtin"),
+        service,
+        action_id="service",
+        transition_id="service:start",
+    )
+    registry.register_process(
+        process,
+        token=ProcessTokenIdentity(principal="root"),
+        membership=LifecycleMembership("service", "service-1"),
+        action_id="process",
+        transition_id="process:start",
+    )
+    registry.register_transport(
+        transport,
+        action_id="transport",
+        transition_id="transport:start",
+    )
+    service_binding = ServiceProcessBindingIdentity(
+        binding_id="service-binding-1",
+        service_object_id="service-1",
+        process_object_id="process-1",
+        bound_at=started.replace(second=1),
+        role="worker",
+        action_id="service-bind",
+    )
+    transport_binding = TransportSessionBindingIdentity(
+        binding_id="transport-binding-1",
+        transport_object_id="transport-1",
+        session_object_id="session-2",
+        bound_at=started.replace(second=2),
+        role="session",
+        action_id="transport-bind",
+    )
+    registry.bind_service_process(service_binding)
+    registry.close_service_process_binding(
+        service_binding.binding_id,
+        expected_identity=service_binding,
+        closed_at=started.replace(minute=10),
+        action_id="service-unbind",
+    )
+    registry.bind_transport_session(transport_binding)
+    expected_service_binding = registry.service_process_binding(service_binding.binding_id)
+    expected_transport_binding = registry.transport_session_binding(transport_binding.binding_id)
+    expected_transport = registry.get_transport("transport-1")
+
+    participant = LifecycleRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    restored_registry = LifecycleRegistry(shard_count=4)
+    LifecycleRegistryParticipant(restored_registry).restore_checkpoint(seal.head.payload, ())
+
+    assert restored_registry.service_process_binding(service_binding.binding_id) == (
+        expected_service_binding
+    )
+    assert restored_registry.transport_session_binding(transport_binding.binding_id) == (
+        expected_transport_binding
+    )
+    assert restored_registry.get_transport("transport-1") == expected_transport
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

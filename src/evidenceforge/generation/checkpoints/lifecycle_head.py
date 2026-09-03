@@ -28,10 +28,14 @@ from evidenceforge.events.lifecycle import (
     ProcessTokenIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceInstanceLifecycleSnapshot,
+    ServiceProcessBindingIdentity,
+    ServiceProcessBindingSnapshot,
     SessionLifecycleIdentity,
     SessionLifecycleSnapshot,
     TransportLifecycleIdentity,
     TransportLifecycleSnapshot,
+    TransportSessionBindingIdentity,
+    TransportSessionBindingSnapshot,
 )
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.lifecycle_registry import (
@@ -51,7 +55,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 
 def _time(value: datetime | None) -> str | None:
@@ -571,6 +575,106 @@ def _decode_transport_identity(value: object) -> TransportLifecycleIdentity:
         ) from error
 
 
+def _service_binding(value: ServiceProcessBindingSnapshot) -> list[object]:
+    identity = value.identity
+    return [
+        identity.binding_id,
+        identity.service_object_id,
+        identity.process_object_id,
+        _time(identity.bound_at),
+        identity.role,
+        identity.action_id,
+        identity.transition_ordinal,
+        _time(value.closed_at),
+        value.close_action_id,
+        value.close_transition_ordinal,
+    ]
+
+
+def _decode_service_binding(value: object) -> ServiceProcessBindingSnapshot:
+    (
+        binding_id,
+        service_id,
+        process_id,
+        bound_at,
+        role,
+        action_id,
+        ordinal,
+        closed_at,
+        close_action_id,
+        close_ordinal,
+    ) = _record(value, 10, "service/process binding")
+    try:
+        return ServiceProcessBindingSnapshot(
+            identity=ServiceProcessBindingIdentity(
+                binding_id=binding_id,  # type: ignore[arg-type]
+                service_object_id=service_id,  # type: ignore[arg-type]
+                process_object_id=process_id,  # type: ignore[arg-type]
+                bound_at=_decode_time(bound_at),  # type: ignore[arg-type]
+                role=role,  # type: ignore[arg-type]
+                action_id=action_id,  # type: ignore[arg-type]
+                transition_ordinal=ordinal,  # type: ignore[arg-type]
+            ),
+            closed_at=_decode_time(closed_at, optional=True),
+            close_action_id=close_action_id,  # type: ignore[arg-type]
+            close_transition_ordinal=close_ordinal,  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint service/process binding is invalid"
+        ) from error
+
+
+def _transport_binding(value: TransportSessionBindingSnapshot) -> list[object]:
+    identity = value.identity
+    return [
+        identity.binding_id,
+        identity.transport_object_id,
+        identity.session_object_id,
+        _time(identity.bound_at),
+        identity.role,
+        identity.action_id,
+        identity.transition_ordinal,
+        _time(value.closed_at),
+        value.close_action_id,
+        value.close_transition_ordinal,
+    ]
+
+
+def _decode_transport_binding(value: object) -> TransportSessionBindingSnapshot:
+    (
+        binding_id,
+        transport_id,
+        session_id,
+        bound_at,
+        role,
+        action_id,
+        ordinal,
+        closed_at,
+        close_action_id,
+        close_ordinal,
+    ) = _record(value, 10, "transport/session binding")
+    try:
+        return TransportSessionBindingSnapshot(
+            identity=TransportSessionBindingIdentity(
+                binding_id=binding_id,  # type: ignore[arg-type]
+                transport_object_id=transport_id,  # type: ignore[arg-type]
+                session_object_id=session_id,  # type: ignore[arg-type]
+                bound_at=_decode_time(bound_at),  # type: ignore[arg-type]
+                role=role,  # type: ignore[arg-type]
+                action_id=action_id,  # type: ignore[arg-type]
+                transition_ordinal=ordinal,  # type: ignore[arg-type]
+            ),
+            closed_at=_decode_time(closed_at, optional=True),
+            close_action_id=close_action_id,  # type: ignore[arg-type]
+            close_transition_ordinal=close_ordinal,  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint transport/session binding is invalid"
+        ) from error
+
+
 def _start(snapshot: object, state: _DecodedState) -> LifecycleTransition:
     starts = [item for item in snapshot.transitions if item.kind == "started"]
     if len(starts) == 1:
@@ -598,10 +702,6 @@ def _start(snapshot: object, state: _DecodedState) -> LifecycleTransition:
 def _unsupported_partition_state(registry: LifecycleRegistry) -> list[str]:
     unsupported: list[str] = []
     names = (
-        "_service_process_bindings",
-        "_service_process_tombstones",
-        "_transport_session_bindings",
-        "_transport_session_tombstones",
         "_leases",
         "_foreground_leases",
         "_singleton_leases",
@@ -661,10 +761,36 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                     [
                         _transport_identity(item.identity),
                         _state(partition._transport_snapshot(item), item.state),
+                        item.active_binding_count,
                     ]
                     for item in partition._transports.iter_entries()
                 ]
-                partitions.append([processes, sessions, services, transports])
+                service_bindings = [
+                    _service_binding(ServiceProcessBindingSnapshot(item.identity))
+                    for item in partition._service_process_bindings.iter_values_by_handle()
+                ]
+                service_bindings.extend(
+                    _service_binding(item)
+                    for item in partition._service_process_tombstones.iter_values_by_handle()
+                )
+                transport_bindings = [
+                    _transport_binding(TransportSessionBindingSnapshot(item.identity))
+                    for item in partition._transport_session_bindings.iter_values_by_handle()
+                ]
+                transport_bindings.extend(
+                    _transport_binding(item)
+                    for item in partition._transport_session_tombstones.iter_values_by_handle()
+                )
+                partitions.append(
+                    [
+                        processes,
+                        sessions,
+                        services,
+                        transports,
+                        service_bindings,
+                        transport_bindings,
+                    ]
+                )
     return dumps(
         {
             "closed_retention_us": int(registry.closed_retention.total_seconds() * 1_000_000),
@@ -687,6 +813,8 @@ def _decode_snapshot_rows(
     list[SessionLifecycleSnapshot],
     list[ServiceInstanceLifecycleSnapshot],
     list[TransportLifecycleSnapshot],
+    list[ServiceProcessBindingSnapshot],
+    list[TransportSessionBindingSnapshot],
     dict[str, _DecodedState],
 ]:
     partitions = document.get("partitions")
@@ -696,11 +824,18 @@ def _decode_snapshot_rows(
     sessions: list[SessionLifecycleSnapshot] = []
     services: list[ServiceInstanceLifecycleSnapshot] = []
     transports: list[TransportLifecycleSnapshot] = []
+    service_bindings: list[ServiceProcessBindingSnapshot] = []
+    transport_bindings: list[TransportSessionBindingSnapshot] = []
     states: dict[str, _DecodedState] = {}
     for partition in partitions:
-        process_rows, session_rows, service_rows, transport_rows = _record(
-            partition, 4, "partition"
-        )
+        (
+            process_rows,
+            session_rows,
+            service_rows,
+            transport_rows,
+            service_binding_rows,
+            transport_binding_rows,
+        ) = _record(partition, 6, "partition")
         if not all(type(rows) is list for rows in partition):
             raise CheckpointCorruptionError("lifecycle checkpoint entity table is invalid")
         for row in process_rows:  # type: ignore[union-attr]
@@ -734,16 +869,36 @@ def _decode_snapshot_rows(
             services.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         for row in transport_rows:  # type: ignore[union-attr]
-            identity, state = _record(row, 2, "transport")
+            identity, state, active_binding_count = _record(row, 3, "transport")
+            if type(active_binding_count) is not int or active_binding_count < 0:
+                raise CheckpointCorruptionError(
+                    "lifecycle checkpoint transport binding count is invalid"
+                )
             decoded = _decode_state(state)
             snapshot = TransportLifecycleSnapshot(
                 identity=_decode_transport_identity(identity),
-                active_binding_count=0,
+                active_binding_count=active_binding_count,
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
             transports.append(snapshot)
             states[snapshot.identity.object_id] = decoded
-    return processes, sessions, services, transports, states
+        service_bindings.extend(
+            _decode_service_binding(row)
+            for row in service_binding_rows  # type: ignore[union-attr]
+        )
+        transport_bindings.extend(
+            _decode_transport_binding(row)
+            for row in transport_binding_rows  # type: ignore[union-attr]
+        )
+    return (
+        processes,
+        sessions,
+        services,
+        transports,
+        service_bindings,
+        transport_bindings,
+        states,
+    )
 
 
 def _register_parent_ordered(
@@ -870,7 +1025,15 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
         shard_count=document["shard_count"],  # type: ignore[arg-type]
         snapshot_history_limit=document["snapshot_history_limit"],  # type: ignore[arg-type]
     )
-    processes, sessions, services, transports, states = _decode_snapshot_rows(document)
+    (
+        processes,
+        sessions,
+        services,
+        transports,
+        service_bindings,
+        transport_bindings,
+        states,
+    ) = _decode_snapshot_rows(document)
     for snapshot in sorted(
         sessions, key=lambda item: (item.identity.started_at, item.identity.object_id)
     ):
@@ -914,6 +1077,26 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
         ),
     )
+    for binding in sorted(service_bindings, key=lambda item: item.identity.binding_id):
+        fresh.bind_service_process(binding.identity)
+        if binding.closed_at is not None:
+            fresh.close_service_process_binding(
+                binding.identity.binding_id,
+                expected_identity=binding.identity,
+                closed_at=binding.closed_at,
+                action_id=binding.close_action_id,
+                transition_ordinal=binding.close_transition_ordinal,
+            )
+    for binding in sorted(transport_bindings, key=lambda item: item.identity.binding_id):
+        fresh.bind_transport_session(binding.identity)
+        if binding.closed_at is not None:
+            fresh.close_transport_session_binding(
+                binding.identity.binding_id,
+                expected_identity=binding.identity,
+                closed_at=binding.closed_at,
+                action_id=binding.close_action_id,
+                transition_ordinal=binding.close_transition_ordinal,
+            )
     snapshots = [*sessions, *services, *transports, *processes]
     for snapshot in snapshots:
         for hold in snapshot.holds:
