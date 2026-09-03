@@ -5503,6 +5503,10 @@ class BaselineMixin:
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+                self._checkpoint_after_completed_hour(
+                    completed_simulated_hours=warmup_count,
+                    next_hour=next_hour,
+                )
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -5545,6 +5549,10 @@ class BaselineMixin:
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+            self._checkpoint_after_completed_hour(
+                completed_simulated_hours=warmup_hours + hour_count,
+                next_hour=next_hour,
+            )
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")

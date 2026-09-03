@@ -125,6 +125,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         workload_limits: WorkloadLimits | None = None,
         resource_forecast: ResourceForecast | None = None,
         compiled_scenario: CompiledScenario | None = None,
+        checkpoint_hour_callback: Callable[[int, datetime, str], None] | None = None,
+        checkpoint_hours: int = 0,
     ):
         """Initialize generation engine.
 
@@ -139,6 +141,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
+            checkpoint_hour_callback: Optional internal cadence hook invoked after each
+                scheduled, completely swept simulated hour at an emitter barrier. The phase
+                names the post-boundary cursor and is one of warmup, collection, or tail.
+            checkpoint_hours: Internal positive cadence for checkpoint_hour_callback. Zero
+                disables the hook.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -184,6 +191,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.output_target = normalize_output_target(output_target)
         self.oob_hosts = tuple(oob_hosts)
         self.progress_callback = progress_callback
+        if type(checkpoint_hours) is not int or checkpoint_hours < 0:
+            raise ValueError("checkpoint_hours must be a non-negative integer")
+        if checkpoint_hour_callback is not None and checkpoint_hours == 0:
+            raise ValueError("checkpoint_hour_callback requires a positive checkpoint_hours")
+        self.checkpoint_hour_callback = checkpoint_hour_callback
+        self.checkpoint_hours = checkpoint_hours
         self.state_manager = StateManager()
         self.emitters: dict = {}
         self.activity_generator: ActivityGenerator | None = None
@@ -237,6 +250,32 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         """
         if self.progress_callback:
             self.progress_callback(event_type, data)
+
+    def _checkpoint_after_completed_hour(
+        self,
+        *,
+        completed_simulated_hours: int,
+        next_hour: datetime,
+    ) -> None:
+        """Invoke the optional cadence hook with an exact post-hour cursor."""
+
+        callback = self.checkpoint_hour_callback
+        if (
+            callback is None
+            or self.checkpoint_hours == 0
+            or completed_simulated_hours % self.checkpoint_hours != 0
+        ):
+            return
+        if self.start_time is None or self.end_time is None:
+            raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
+        self._barrier_flush_all_emitters()
+        if next_hour < self.start_time:
+            phase = "warmup"
+        elif next_hour < self.end_time:
+            phase = "collection"
+        else:
+            phase = "tail"
+        callback(completed_simulated_hours, next_hour, phase)
 
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""

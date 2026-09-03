@@ -91,6 +91,62 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
 
 @pytest.mark.slow
 class TestGenerationEngine:
+    def test_checkpoint_hour_hook_is_cadence_only_and_uses_post_boundary_phase(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Checkpoint hooks should run only at exact continuous-hour multiples."""
+
+        observed: list[tuple[int, datetime, str]] = []
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hour_callback=lambda hour, next_hour, phase: observed.append(
+                (hour, next_hour, phase)
+            ),
+            checkpoint_hours=6,
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        end = start + timedelta(hours=6)
+        engine.start_time = start
+        engine.end_time = end
+        barrier = Mock()
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", barrier)
+
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=5,
+            next_hour=start - timedelta(hours=1),
+        )
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=6,
+            next_hour=start,
+        )
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=12,
+            next_hour=end,
+        )
+
+        assert observed == [(6, start, "collection"), (12, end, "tail")]
+        assert barrier.call_count == 2
+
+    def test_checkpoint_hour_hook_requires_a_nonnegative_exact_cadence(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """Internal engine cadence should reject disabled callbacks and invalid values."""
+
+        with pytest.raises(ValueError, match="requires a positive"):
+            GenerationEngine(
+                minimal_scenario,
+                tmp_path,
+                checkpoint_hour_callback=lambda *_args: None,
+            )
+        with pytest.raises(ValueError, match="non-negative integer"):
+            GenerationEngine(minimal_scenario, tmp_path, checkpoint_hours=-1)
+
     """Tests for GenerationEngine class."""
 
     @pytest.fixture(autouse=True)

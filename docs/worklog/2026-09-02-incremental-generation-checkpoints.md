@@ -68,3 +68,9 @@ until every correctness and performance gate passes.
   chunks or logical database deltas. The authoritative recovery index also authenticates each
   manifest; a semantically valid but modified newest manifest falls back to the previous point,
   while a corrupt pointer is rejected rather than guessed around.
+- The generation engine now exposes an internal cadence hook after the complete hourly sweep and
+  lifecycle/channel watermark advancement. It counts warm-up and collection continuously, runs
+  only at exact positive multiples, takes an emitter barrier only when due, and reports the
+  post-boundary cursor (`warmup`, `collection`, or `tail`). It does not add initialization,
+  phase-only, or pre-finalization recovery points; the public CLI remains intentionally unwired
+  until all required owners can hydrate safely.
