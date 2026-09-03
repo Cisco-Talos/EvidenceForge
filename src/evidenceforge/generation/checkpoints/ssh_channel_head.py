@@ -284,6 +284,7 @@ class SshApplicationChannelParticipant:
     """Persist open SSH sessions and active child operations as packed rows."""
 
     checkpoint_owner = "ssh-channels"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS
 

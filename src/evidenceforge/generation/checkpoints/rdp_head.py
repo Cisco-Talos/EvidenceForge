@@ -57,6 +57,7 @@ class RdpSessionManagerParticipant:
     """Persist live RDP semantics and rebuild all compact routing infrastructure."""
 
     checkpoint_owner = "rdp-session-manager"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = RDP_MANAGER_CHECKPOINT_FIELDS
 

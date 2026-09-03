@@ -269,6 +269,18 @@ class _FakeParticipant:
         self.restored = (loads(head), tuple(loads(segment) for segment in segments))
 
 
+class _RestoreOrderParticipant(_FakeParticipant):
+    def __init__(self, owner: str, priority: int, restored_order: list[str]) -> None:
+        super().__init__()
+        self.checkpoint_owner = owner
+        self.checkpoint_restore_priority = priority
+        self._restored_order = restored_order
+
+    def restore_checkpoint(self, head: bytes, segments: tuple[bytes, ...]) -> None:
+        super().restore_checkpoint(head, segments)
+        self._restored_order.append(self.checkpoint_owner)
+
+
 def _cursor(hour: int, *, tail: bool = False) -> CheckpointCursor:
     return CheckpointCursor(
         phase="tail" if tail else "collection",
@@ -2676,6 +2688,39 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
         {"committed": 0, "pending": 1},
         ([0], [1]),
     )
+
+
+def test_controller_restores_participants_in_dependency_order(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    controller = IncrementalCheckpointController(
+        store=store,
+        fingerprint=_FINGERPRINT,
+        checkpoint_hours=6,
+        resolved_scenario=b"schema_version: '2.0'\n",
+    )
+    committed_order: list[str] = []
+    manifest = controller.commit(
+        cursor=_cursor(6),
+        participants=(
+            _RestoreOrderParticipant("dependent", 30, committed_order),
+            _RestoreOrderParticipant("authority", 10, committed_order),
+            _RestoreOrderParticipant("registry", 20, committed_order),
+        ),
+    )
+    recovered = store.recover(expected_fingerprint=_FINGERPRINT)
+    restored_order: list[str] = []
+
+    controller.restore_participants(
+        recovery=recovered,
+        participants=(
+            _RestoreOrderParticipant("dependent", 30, restored_order),
+            _RestoreOrderParticipant("authority", 10, restored_order),
+            _RestoreOrderParticipant("registry", 20, restored_order),
+        ),
+    )
+
+    assert manifest.metadata["participant_owners"] == ["authority", "dependent", "registry"]
+    assert restored_order == ["authority", "registry", "dependent"]
 
 
 def test_controller_aborts_every_prepared_participant_on_store_failure(

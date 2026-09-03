@@ -181,6 +181,7 @@ class IntentExecutionLedgerParticipant:
     """Capture bounded reconciliation aggregates and rebuild transient batch authority."""
 
     checkpoint_owner = "intent-execution-ledger"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS
 

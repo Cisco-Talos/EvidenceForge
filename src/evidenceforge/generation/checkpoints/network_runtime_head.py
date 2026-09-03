@@ -357,6 +357,7 @@ class NetworkTransactionRuntimeParticipant:
     """Persist bounded network points and committed transport authority."""
 
     checkpoint_owner = "network-runtime"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS
 

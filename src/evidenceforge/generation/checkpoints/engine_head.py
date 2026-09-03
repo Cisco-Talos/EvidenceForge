@@ -79,6 +79,7 @@ class GenerationEngineParticipant:
     """Persist only history-sensitive engine scheduling and reporting fields."""
 
     checkpoint_owner = "generation-engine"
+    checkpoint_restore_priority = 50
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = GENERATION_ENGINE_CHECKPOINT_FIELDS
 

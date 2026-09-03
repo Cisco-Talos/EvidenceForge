@@ -108,6 +108,7 @@ class TimingRuntimeParticipant:
     """Persist timing audit semantics and rebuild deterministic clock caches."""
 
     checkpoint_owner = "timing-runtime"
+    checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = TIMING_RUNTIME_CHECKPOINT_FIELDS
 

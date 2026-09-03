@@ -320,6 +320,7 @@ class ActivityGeneratorStateParticipant:
     """Persist bounded direct activity state; shared managers remain external."""
 
     checkpoint_owner = "activity-generator"
+    checkpoint_restore_priority = 40
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = tuple(
         sorted(

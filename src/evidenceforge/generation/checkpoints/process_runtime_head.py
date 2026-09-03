@@ -190,6 +190,7 @@ class ProcessRuntimeCachesParticipant:
     """Persist bounded process cache rows once and rebuild all alias indexes."""
 
     checkpoint_owner = "process-runtime-caches"
+    checkpoint_restore_priority = 40
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS
 

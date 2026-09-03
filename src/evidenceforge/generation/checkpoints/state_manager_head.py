@@ -479,6 +479,7 @@ class StateManagerParticipant:
     """Persist bounded StateManager authority and append-only allocator deltas."""
 
     checkpoint_owner = "state-manager"
+    checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = STATE_MANAGER_CHECKPOINT_FIELDS
 

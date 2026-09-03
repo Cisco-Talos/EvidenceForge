@@ -88,6 +88,26 @@ class IncrementalCheckpointController:
             raise ValueError("incremental checkpoint participant owners must be unique")
         return ordered
 
+    @staticmethod
+    def _restore_participants(
+        participants: Iterable[IncrementalCheckpointParticipant],
+    ) -> tuple[IncrementalCheckpointParticipant, ...]:
+        """Order hydration by explicit dependency priority, then stable owner name."""
+
+        ordered = tuple(
+            sorted(
+                participants,
+                key=lambda item: (
+                    getattr(item, "checkpoint_restore_priority", 100),
+                    item.checkpoint_owner,
+                ),
+            )
+        )
+        owners = [participant.checkpoint_owner for participant in ordered]
+        if len(owners) != len(set(owners)):
+            raise ValueError("incremental checkpoint participant owners must be unique")
+        return ordered
+
     def commit(
         self,
         *,
@@ -165,7 +185,7 @@ class IncrementalCheckpointController:
     ) -> None:
         """Hydrate explicit owners from bounded heads and their immutable segments."""
 
-        ordered = self._participants(participants)
+        ordered = self._restore_participants(participants)
         expected = set(recovery.manifest.metadata.get("participant_owners", []))
         actual = {participant.checkpoint_owner for participant in ordered}
         if expected != actual:

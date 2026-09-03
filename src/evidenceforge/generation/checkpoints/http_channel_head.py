@@ -151,6 +151,7 @@ class HttpApplicationChannelParticipant:
     """Persist open HTTP transport sidecars and rebuild their packed indexes."""
 
     checkpoint_owner = "http-channels"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS
 

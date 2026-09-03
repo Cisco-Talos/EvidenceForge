@@ -73,6 +73,7 @@ class GenerationRngParticipant:
     """Persist the active generation thread's deterministic RNG stream."""
 
     checkpoint_owner = "generation-rng"
+    checkpoint_restore_priority = 60
     checkpoint_schema_version = _RNG_SCHEMA_VERSION
     checkpoint_state_fields = (
         OwnerStateField("mt19937_state", "bounded-live-head"),

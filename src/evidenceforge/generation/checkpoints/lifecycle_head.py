@@ -1410,6 +1410,7 @@ class LifecycleRegistryParticipant:
     """Persist the registry's bounded retained head without arbitrary graph traversal."""
 
     checkpoint_owner = "lifecycle-registry"
+    checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = (
         OwnerStateField("retained_entities", "bounded-live-head"),

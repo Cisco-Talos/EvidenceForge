@@ -177,6 +177,7 @@ class ExplicitProxyChannelParticipant:
     """Persist open proxy tunnels and rebuild all packed sidecar routes."""
 
     checkpoint_owner = "proxy-channels"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS
 

@@ -367,6 +367,7 @@ class LocalArtifactVersionRegistryParticipant:
     """Persist live runtime artifact payloads, deadlines, and owner leases."""
 
     checkpoint_owner = "local-artifacts"
+    checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS
 

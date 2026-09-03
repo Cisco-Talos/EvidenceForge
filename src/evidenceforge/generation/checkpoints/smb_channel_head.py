@@ -384,6 +384,7 @@ class SmbApplicationChannelParticipant:
     """Persist open SMB sessions, trees, and handles without runtime capabilities."""
 
     checkpoint_owner = "smb-channels"
+    checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
     checkpoint_state_fields = SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS
 
