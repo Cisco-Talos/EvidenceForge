@@ -244,3 +244,15 @@ until every correctness and performance gate passes.
   keys, exact UTC process identities, and reverse routes that resolve to live rows. All 71
   incremental-checkpoint and process-runtime-cache tests pass, and repository-wide Ruff checks are
   clean.
+- Direct `ActivityGenerator` runtime state now has an explicit packed participant over its bounded
+  maps, two expiring indexes, two standalone bounded caches, allocator/watermark scalars, and
+  foreground finalizers. Scenario `System` references in finalizers are stored as host identity
+  tokens and rebound against the freshly compiled scenario. Shared protocol/runtime managers and
+  the email SQLite spool remain external participants; prepared mutations and the Linux/SSH/RDP
+  deferred-close journals currently fail the barrier until their own semantic schemas land. A
+  fresh-engine hydration probe reproduced the 20,645-byte hour-one head exactly. A separate
+  48-hour probe at six-hour cadence grew from 100,181 bytes at simulated hour 6 to 539,988 bytes at
+  hour 54; most growth was in recent process-create/source-bound and termination lookup state, with
+  smaller connection-reuse and singleton-interval growth. This is not yet a performance acceptance
+  result: those owners retain a fixed recent/live window and must be probed through hours 168, 720,
+  and 1,440 before the scaling gate can pass.

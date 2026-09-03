@@ -9,6 +9,7 @@ import socket
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -49,7 +50,9 @@ from evidenceforge.events.rdp import (
     RdpSessionAffinity,
     RdpTransportPlan,
 )
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
@@ -86,6 +89,7 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
+    EXPIRING_INDEX_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
     HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS,
@@ -182,6 +186,7 @@ from evidenceforge.generation.network_runtime import (
     _TransportLeaseRecord,
 )
 from evidenceforge.generation.process_runtime_cache import (
+    ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES,
     PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
     EmailArtifactManifestSpool,
     build_production_process_runtime_caches,
@@ -209,6 +214,7 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.timing.clocks import SourceClockKey, SourceClockSpec
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.scenario import System
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
@@ -625,6 +631,124 @@ def test_process_runtime_head_rejects_changed_family_identity() -> None:
     restored = build_production_process_runtime_caches(window_end)
     with pytest.raises(CheckpointCorruptionError, match="head is invalid"):
         ProcessRuntimeCachesParticipant(restored).restore_checkpoint(dumps(document), ())
+
+
+def _activity_generator_for_checkpoint(
+    *, start: datetime, end: datetime, system: System
+) -> ActivityGenerator:
+    generator = ActivityGenerator(
+        StateManager(),
+        {},
+        generation_window_start=start,
+        generation_window_end=end,
+    )
+    generator._scenario_environment = SimpleNamespace(systems=[system])
+    return generator
+
+
+def test_activity_head_round_trips_direct_indexes_and_system_identity() -> None:
+    """Direct activity state should hydrate without retaining scenario object graphs."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    end = start + timedelta(days=2)
+    system = System(
+        hostname="WS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    generator = _activity_generator_for_checkpoint(start=start, end=end, system=system)
+    generator._user_process_history[(system.hostname, "alice")] = [(4321, "cmd.exe")]
+    generator._recent_connection_tuples.set(
+        ("10.0.0.10", 49152, "203.0.113.10", 443, "tcp"),
+        start.timestamp(),
+        (start + timedelta(minutes=5)).timestamp(),
+    )
+    generator._dns_cache.set(
+        ("10.0.0.10", "example.test", "A", "udp"),
+        (start.timestamp(), (start + timedelta(minutes=10)).timestamp()),
+        (start + timedelta(minutes=10)).timestamp(),
+    )
+    generator._failed_logon_attempt_times.set(
+        ("ws-01", "alice", 2, "10.0.0.20"),
+        (start,),
+        deadline=start + timedelta(seconds=2),
+    )
+    generator._ssh_source_ports.set(
+        ("10.0.0.10", "10.0.0.20", 49153),
+        start,
+        deadline=start + timedelta(hours=1),
+    )
+    generator._foreground_process_finalizers.set(
+        (system.hostname, 4321, start),
+        (system, "alice", "cmd.exe", "0x123", start + timedelta(minutes=15)),
+        (start + timedelta(minutes=15)).timestamp(),
+    )
+    participant = ActivityGeneratorStateParticipant(generator)
+    seal = participant.prepare_checkpoint(0)
+
+    restored = _activity_generator_for_checkpoint(start=start, end=end, system=system)
+    restored_participant = ActivityGeneratorStateParticipant(restored)
+    restored_participant.restore_checkpoint(seal.head.payload, ())
+
+    assert restored_participant.prepare_checkpoint(1).head.payload == seal.head.payload
+    restored_finalizer = restored._foreground_process_finalizers.get((system.hostname, 4321, start))
+    assert restored_finalizer is not None
+    assert restored_finalizer[0] is system
+
+
+def test_activity_head_rejects_deferred_close_journals() -> None:
+    """Until their explicit schema is installed, deferred closures must fail the barrier."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    system = System(
+        hostname="WS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    generator = _activity_generator_for_checkpoint(
+        start=start,
+        end=start + timedelta(days=2),
+        system=system,
+    )
+    generator._pending_ssh_session_closures.append(object())
+
+    with pytest.raises(CheckpointError, match="_pending_ssh_session_closures"):
+        ActivityGeneratorStateParticipant(generator).prepare_checkpoint(0)
+
+
+def test_activity_head_classifies_every_retention_audited_mutable_field() -> None:
+    """Every AST-audited mutable field must have one checkpoint strategy."""
+
+    participant_fields = ActivityGeneratorStateParticipant.checkpoint_state_fields
+    names = [field.name for field in participant_fields]
+
+    assert len(names) == len(set(names))
+    assert {policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES} <= set(
+        names
+    )
+    assert any(
+        field.name == "_email_artifact_manifest_spool"
+        and field.disposition == "immutable-incremental-segments"
+        for field in participant_fields
+    )
+    generator = _activity_generator_for_checkpoint(
+        start=datetime(2026, 8, 16, 12, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 18, 12, 0, tzinfo=UTC),
+        system=System(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            type="workstation",
+        ),
+    )
+    for name in ("_dns_cache", "_recent_connection_tuples", "_foreground_process_finalizers"):
+        assert_complete_owner_inventory(
+            getattr(generator, name),
+            EXPIRING_INDEX_CHECKPOINT_FIELDS,
+            owner_name=name,
+        )
 
 
 def _runtime_artifact_descriptor(ordinal: int) -> RuntimeArtifactDescriptor:

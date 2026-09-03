@@ -1,5 +1,6 @@
 """Crash-safe incremental generation checkpoints."""
 
+from .activity_head import ActivityGeneratorStateParticipant
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .artifact_registry_head import LocalArtifactVersionRegistryParticipant
 from .cadence import CheckpointCadence
@@ -22,6 +23,7 @@ from .owner_inventory import (
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
+    EXPIRING_INDEX_CHECKPOINT_FIELDS,
     GENERATION_ENGINE_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
@@ -78,6 +80,7 @@ from .store import IncrementalCheckpointStore, RunLock
 from .timing_runtime_head import TimingRuntimeParticipant
 
 __all__ = [
+    "ActivityGeneratorStateParticipant",
     "APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS",
     "APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS",
     "ApplicationChannelRegistryParticipant",
@@ -89,6 +92,7 @@ __all__ = [
     "CheckpointRecovery",
     "CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS",
     "CryptographicMaterialParticipant",
+    "EXPIRING_INDEX_CHECKPOINT_FIELDS",
     "GenerationRngParticipant",
     "GENERATION_ENGINE_CHECKPOINT_FIELDS",
     "GenerationEngineParticipant",

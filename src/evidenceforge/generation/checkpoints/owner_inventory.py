@@ -1148,6 +1148,24 @@ PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS = _fields(
 )
 
 
+EXPIRING_INDEX_CHECKPOINT_FIELDS = _fields(
+    live=("_items", "_protected"),
+    rebuilt=(
+        "_compaction_seconds",
+        "_compaction_work",
+        "_deadline_extractor",
+        "_deadlines",
+        "_heap",
+        "_high_water_mark",
+        "_next_order",
+        "_orders",
+        "_protected_high_water_mark",
+        "_retired_heap",
+        "_versions",
+    ),
+)
+
+
 def assert_complete_owner_inventory(
     owner: object,
     fields: tuple[OwnerStateField, ...],
