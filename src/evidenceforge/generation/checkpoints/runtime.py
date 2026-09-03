@@ -34,6 +34,7 @@ class IncrementalCheckpointController:
         next_sequence: int = 0,
         inherited_catalogs: tuple[SegmentCatalogReference, ...] = (),
         run_options: dict[str, object] | None = None,
+        last_committed_cursor: CheckpointCursor | None = None,
     ) -> None:
         self.store = store
         self.fingerprint = fingerprint
@@ -43,6 +44,7 @@ class IncrementalCheckpointController:
         self.next_sequence = next_sequence
         self.inherited_catalogs = inherited_catalogs
         self.run_options = {} if run_options is None else dict(run_options)
+        self.last_committed_cursor = last_committed_cursor
         self.resolved_scenario_reference = self.store.persist_resolved_scenario(
             self.resolved_scenario
         )
@@ -71,6 +73,7 @@ class IncrementalCheckpointController:
             next_sequence=recovery.manifest.sequence + 1,
             inherited_catalogs=recovery.manifest.segment_catalogs,
             run_options=dict(recovery.manifest.metadata.get("run_options", {})),
+            last_committed_cursor=recovery.manifest.cursor,
         )
 
     def is_due(self, completed_simulated_hours: int) -> bool:
@@ -153,6 +156,7 @@ class IncrementalCheckpointController:
                     "run_options": self.run_options,
                 },
             )
+            self.last_committed_cursor = manifest.cursor
         except BaseException:
             for participant, _ in reversed(prepared):
                 participant.checkpoint_aborted(sequence)

@@ -10,7 +10,9 @@ phase boundaries, or before finalization. If a run ends before its first cadence
 recovery point and must restart after interruption. Otherwise, recovery replays work after the
 latest committed point, including tail work or finalization when necessary. Ctrl+C and process
 termination do not attempt an emergency checkpoint; the last atomically published point remains
-authoritative.
+authoritative. On Ctrl+C or an ordinary failure, the CLI reports whether a recovery point exists,
+its simulated hour and phase, and how to resume. A resumed run reports the selected recovery cursor
+and effective cadence before continuing.
 
 ## Resume an interrupted run
 
@@ -29,7 +31,14 @@ eforge generate --output ./bundle --resume
 An unspecified resumed run retains its stored cadence. An explicit `--checkpoint-hours` overrides
 that cadence; `0` resumes from the selected point but creates no later checkpoints. The complete
 output root may be moved or copied before resume because checkpoint metadata contains only relative
-paths and its resolved input and immutable segments are self-contained.
+paths and its resolved input and immutable segments are self-contained. Stop the generator before
+copying the root; copying an active workspace can capture an inconsistent set of files.
+
+Portability is path portability, not runtime migration. Resume requires the same compatible
+EvidenceForge code/resources, Python implementation, version, and compiler, dependency versions,
+operating system, architecture, byte order, effective options, and resolved-scenario fingerprint.
+Resume an incomplete run before upgrading its environment. An incompatibility is reported rather
+than bypassed because relaxing this check could change the supposedly deterministic continuation.
 
 Interactive generation distinguishes a compatible incomplete run, an invalid or incompatible
 checkpoint, and a completed bundle before offering valid actions. Scripts and redirected input

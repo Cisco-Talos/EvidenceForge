@@ -44,6 +44,7 @@ from evidenceforge.cli.commands import (
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
+    _checkpoint_recovery_guidance,
     _generation_progress,
     _GenerationProgressTracker,
     _GenerationSpeedColumn,
@@ -53,6 +54,7 @@ from evidenceforge.composition import compile_scenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
@@ -663,6 +665,31 @@ class TestGenerateCheckpointOptions:
         assert "default: 24" in normalized
         assert "disables checkpoints" in normalized
 
+    def test_checkpoint_recovery_guidance_reports_retained_cursor(self, tmp_path: Path) -> None:
+        controller = Mock(
+            last_committed_cursor=Mock(
+                completed_simulated_hours=24,
+                phase="collection",
+            )
+        )
+
+        message = _checkpoint_recovery_guidance(controller, tmp_path / "bundle")
+
+        assert message is not None
+        assert "simulated hour 24 (collection)" in message
+        assert f"--output {tmp_path / 'bundle'} --resume" in message
+
+    def test_checkpoint_recovery_guidance_explains_missing_first_point(
+        self, tmp_path: Path
+    ) -> None:
+        controller = Mock(last_committed_cursor=None)
+
+        message = _checkpoint_recovery_guidance(controller, tmp_path / "bundle")
+
+        assert message == (
+            "No recovery point has been committed yet; restart this output with --overwrite."
+        )
+
 
 @pytest.mark.slow
 class TestGenerateCommand:
@@ -717,8 +744,9 @@ class TestGenerateCommand:
             ],
             cwd=Path.cwd(),
             env=environment,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         marker = sync_directory / f"{checkpoint_hour:020d}.ready"
         deadline = time.monotonic() + 30
@@ -726,7 +754,11 @@ class TestGenerateCommand:
             time.sleep(0.01)
         assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
         process.send_signal(interrupt_signal)
-        assert process.wait(timeout=30) != 0
+        interrupted_output, _ = process.communicate(timeout=30)
+        assert process.returncode != 0
+        if interrupt_signal == signal.SIGINT:
+            assert "Recovery point retained at simulated hour" in interrupted_output
+            assert "--resume" in interrupted_output
         interrupted.rename(moved)
 
         resumed_environment = environment.copy()
@@ -773,6 +805,219 @@ class TestGenerateCommand:
         assert uninterrupted.returncode == EXIT_SUCCESS
         assert _deterministic_bundle_files(moved) == _deterministic_bundle_files(control)
         assert not (moved / ".eforge-generation").exists()
+
+    @pytest.mark.parametrize("target", ("default", "sof-elk", "splunk"))
+    def test_all_format_targets_resume_to_byte_identical_output(
+        self,
+        target: str,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Every output family and rendering target should survive fresh-process resume."""
+
+        scenario = scenarios_dir / "checkpoint-all-formats.yaml"
+        interrupted = tmp_path / f"interrupted-{target}"
+        control = tmp_path / f"control-{target}"
+        sync_directory = tmp_path / f"checkpoint-sync-{target}"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = "1"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--target",
+                target,
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        marker = sync_directory / "00000000000000000001.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.kill()
+        assert process.wait(timeout=30) != 0
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_HOUR")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        assert "Resuming from simulated hour 1 (collection)" in resumed.stdout
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--target",
+                target,
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        emitted_names = {path.name for path in (interrupted / "data").rglob("*") if path.is_file()}
+        assert {
+            "bob.bash_history",
+            "cisco_asa.log",
+            "conn.json",
+            "ecar.json",
+            "proxy_access.log",
+            "snort_alert.log",
+            "syslog.log",
+            "web_access.log",
+        } <= emitted_names
+        assert {
+            "windows_event_security.xml",
+            "windows_event_security_snare.log",
+        } & emitted_names
+        assert {
+            "windows_event_sysmon.xml",
+            "windows_event_sysmon_snare.log",
+        } & emitted_names
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
+
+    @pytest.mark.parametrize(
+        ("stage", "expected_hour"),
+        [
+            ("heads_durable", 1),
+            ("recovery_published", 1),
+            ("index_published", 2),
+        ],
+    )
+    def test_sigkill_during_checkpoint_publication_recovers_atomic_point(
+        self,
+        stage: str,
+        expected_hour: int,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """SIGKILL around the manifest commit point should recover exact output."""
+
+        scenario = scenarios_dir / "minimal.yaml"
+        interrupted = tmp_path / f"interrupted-{stage}"
+        control = tmp_path / f"control-{stage}"
+        sync_directory = tmp_path / f"publication-sync-{stage}"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_SEQUENCE"] = "1"
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE"] = stage
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        marker = sync_directory / f"{1:020d}.{stage}.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.kill()
+        assert process.wait(timeout=30) != 0
+        recovery = IncrementalCheckpointStore(interrupted).recover()
+        assert recovery.manifest.cursor.completed_simulated_hours == expected_hour
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_SEQUENCE")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        assert f"Resuming from simulated hour {expected_hour}" in resumed.stdout
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_checkpoint_hours_zero_disables_controller(

@@ -1,7 +1,7 @@
 ---
 name: eforge-generate
 description: >
-  Generate EvidenceForge logs from an existing authored or resolved scenario, safely handle output replacement,
+  Generate EvidenceForge logs from an authored or resolved scenario, handle output replacement,
   monitor the run, verify its authoritative bundle, and diagnose generation failures. Use when the user asks to
   run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a
   resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
@@ -89,8 +89,8 @@ the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collate
 Preserve a valid `.eforge-generation/` workspace after interruption or failure. Resume with the
 original input to recompile and check it, or use `eforge generate --output <bundle-root> --resume`
 to use the stored resolved input. An unspecified resume retains its stored cadence. Explain an
-invalid/incompatible checkpoint before requesting overwrite approval. A moved complete output root
-remains resumable; success removes the workspace and leaves no checkpoint history.
+invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
+a root. Resume requires a compatible build, Python runtime/compiler, dependencies, and platform; resume before upgrading; success removes the workspace and leaves no checkpoint history.
 
 ### 5. Generate with normal output first
 

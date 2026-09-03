@@ -120,7 +120,7 @@ contains credential secrets or file payloads.
 Fresh runs checkpoint every 24 completed simulated hours unless `--checkpoint-hours 0` is passed.
 An incomplete bundle may be resumed with `--resume`; checkpoint-only resume requires an explicit
 `--output`. The protected `.eforge-generation/` workspace is portable only with the complete output
-root and is removed after success, so it is never part of an authoritative completed bundle.
+root and is removed after success, so it is never part of an authoritative completed bundle. Stop generation before copying it. Resume requires a compatible exact EvidenceForge build/resources, Python runtime/compiler, dependencies, OS/architecture/byte order, effective options, and resolved input; resume before upgrading rather than bypassing a fingerprint mismatch.
 
 An approved `--overwrite` run replaces engine-owned data, reports, manifests, generated artifacts,
 and resolved scenario as one unit. `--force` / `-f` is a deprecated alias. A format-filtered overwrite

@@ -78,6 +78,7 @@ from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.fingerprint import run_fingerprint
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.checkpoints.test_sync import (
+    checkpoint_publication_test_synchronizer_from_environment,
     checkpoint_test_synchronizer_from_environment,
 )
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
@@ -123,6 +124,23 @@ def _generation_prompt_available() -> bool:
         "click.testing",
         "typer.testing",
     }
+
+
+def _checkpoint_recovery_guidance(
+    controller: IncrementalCheckpointController | None,
+    output_root: Path,
+) -> str | None:
+    """Describe the durable recovery retained after an interrupted or failed run."""
+
+    if controller is None:
+        return None
+    cursor = controller.last_committed_cursor
+    if cursor is None:
+        return "No recovery point has been committed yet; restart this output with --overwrite."
+    return (
+        f"Recovery point retained at simulated hour {cursor.completed_simulated_hours} "
+        f"({cursor.phase}). Resume with --output {output_root} --resume."
+    )
 
 
 class AbbreviatedGroup(typer.core.TyperGroup):
@@ -1392,8 +1410,6 @@ def generate(
                 else:
                     color, icon = "cyan", "ℹ"
                 console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
-                from rich.text import Text
-
                 console.print(Text(f"    {issue.message}", style=color))
                 if issue.suggestion:
                     # Wrap in Text() (like the message above) so bracketed tokens
@@ -1589,7 +1605,14 @@ def generate(
         oob_hosts=oob_hosts,
     )
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
-    checkpoint_store = IncrementalCheckpointStore(ground_truth_dir)
+    checkpoint_store = IncrementalCheckpointStore(
+        ground_truth_dir,
+        publication_synchronization_hook=(
+            checkpoint_publication_test_synchronizer_from_environment()
+            if resume or fresh_checkpoint_enabled
+            else None
+        ),
+    )
     checkpoint_controller: IncrementalCheckpointController | None = None
     checkpoint_recovery = None
     lock_owned = False
@@ -1618,6 +1641,16 @@ def generate(
                 fingerprint=fingerprint,
                 resolved_scenario=resolved_scenario,
                 checkpoint_hours=checkpoint_hours,
+            )
+            cursor = checkpoint_recovery.manifest.cursor
+            cadence_message = (
+                "new checkpoints disabled"
+                if checkpoint_controller.cadence.hours == 0
+                else f"checkpointing every {checkpoint_controller.cadence.hours} simulated hours"
+            )
+            console.print(
+                f"[green]✓[/green] Resuming from simulated hour "
+                f"{cursor.completed_simulated_hours} ({cursor.phase}); {cadence_message}"
             )
         elif fresh_checkpoint_enabled:
             checkpoint_controller = IncrementalCheckpointController(
@@ -1751,6 +1784,12 @@ def generate(
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
+        recovery_guidance = _checkpoint_recovery_guidance(
+            checkpoint_controller,
+            ground_truth_dir,
+        )
+        if recovery_guidance is not None:
+            console.print(Text(recovery_guidance, style="yellow"))
         logger.info("Generation interrupted by user")
         raise typer.Exit(EXIT_SIGINT)
 
@@ -1759,6 +1798,12 @@ def generate(
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
+        recovery_guidance = _checkpoint_recovery_guidance(
+            checkpoint_controller,
+            ground_truth_dir,
+        )
+        if recovery_guidance is not None:
+            console.print(Text(recovery_guidance, style="yellow"))
         if verbose or debug:
             console.print_exception()
         logger.exception("Generation failed")

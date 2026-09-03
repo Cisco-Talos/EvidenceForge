@@ -595,8 +595,8 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   timings; the standalone benchmark script wraps checkpoint commits externally when performance
   diagnostics are requested. This avoids imposing measurement work on normal generation while
   preserving a reproducible benchmark path.
-- Final feature validation used the 24-hour default and passed 8,112 routine tests (5 skipped) plus
-  the 1,791-test extended tier after correcting stale test doubles exposed by its first pass. The
+- Final feature validation used the 24-hour default and passed 8,119 routine tests (5 skipped) plus
+  the 1,807-test extended tier after correcting stale test doubles exposed by its first pass. The
   two SMB integration modules were evaluated separately: their ten baseline failures occur before
   any 24-hour checkpoint and cover stale pack-fixture arguments and existing SMB/SSH lifecycle
   expectations, so they are not attributed to this feature. Focused checkpoint, fresh-process
@@ -607,3 +607,22 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   forecast to the same 24-hour checkpoint cadence as `generate`, accepts the same nonnegative
   integer `--checkpoint-hours` override, and models zero checkpoint workspace when explicitly
   disabled. Text and JSON callers pass the selected cadence through the same forecast path.
+- Recovery UX now reports the retained simulated-hour cursor and phase after Ctrl+C or an ordinary
+  generation failure, or explains that no recovery point exists yet. Checkpoint-only resume reports
+  the restored cursor and effective cadence before continuing. A fresh-process SIGINT test exercises
+  the retained-point message rather than relying only on a unit-level formatter check.
+- Portable recovery coverage now includes a bounded scenario that emits Windows, Zeek, eCAR,
+  syslog, bash history, Snort, Cisco ASA, web-access, and proxy-access evidence. Fresh-process
+  SIGKILL/resume is byte-identical to checkpoint-disabled generation for the default, SOF-ELK®, and
+  Splunk targets, including resolved input, ground truth, artifacts, and deterministic sidecars;
+  only the established generation log and time-bearing generation manifest are excluded.
+- Publication interruption tests now SIGKILL fresh generator processes after durable live heads,
+  after recovery-directory publication but before the recovery index, and after index publication.
+  Recovery selects the prior manifest before the index commit point and the new manifest after it,
+  then resumes to byte-identical output in every case. These are deterministic synchronization
+  seams, not production timing probes. Production code contains no checkpoint-stage, participant,
+  hashing, compression, or publication timers.
+- Portability documentation now distinguishes movable-root recovery from runtime migration: copy or
+  move only a stopped output root, and resume with a compatible exact EvidenceForge build/resources,
+  Python runtime/compiler, dependencies, platform, options, and resolved input. Users are directed
+  to finish an incomplete run before upgrading instead of bypassing fingerprint incompatibility.

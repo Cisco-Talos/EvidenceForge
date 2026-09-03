@@ -12,6 +12,7 @@ import stat
 import time
 import uuid
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -224,7 +225,12 @@ class RunLock:
 class IncrementalCheckpointStore:
     """Publish two recovery manifests over shared immutable content objects."""
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        publication_synchronization_hook: Callable[[str, int], None] | None = None,
+    ) -> None:
         self.output_root = Path(output_root).resolve()
         self.workspace = self.output_root / _WORKSPACE_NAME
         self.objects = self.workspace / "objects"
@@ -232,6 +238,13 @@ class IncrementalCheckpointStore:
         self.index_path = self.workspace / _INDEX_NAME
         self.lock = RunLock(self.workspace)
         self._initialized = False
+        self._publication_synchronization_hook = publication_synchronization_hook
+
+    def _synchronize_publication(self, stage: str, sequence: int) -> None:
+        """Invoke an explicitly installed test barrier at a publication seam."""
+
+        if self._publication_synchronization_hook is not None:
+            self._publication_synchronization_hook(stage, sequence)
 
     @property
     def staged_bundle(self) -> Path:
@@ -614,6 +627,7 @@ class IncrementalCheckpointStore:
                     )
                 )
             _sync_directory(heads_directory)
+            self._synchronize_publication("heads_durable", sequence)
             manifest = CheckpointManifest(
                 sequence=sequence,
                 run_id=run_id,
@@ -631,7 +645,9 @@ class IncrementalCheckpointStore:
             _sync_directory(pending)
             os.replace(pending, final)
             _sync_directory(self.recovery)
+            self._synchronize_publication("recovery_published", sequence)
             self._publish_index(manifest, manifest_payload)
+            self._synchronize_publication("index_published", sequence)
             try:
                 self._rotate_recoveries()
             except OSError as error:

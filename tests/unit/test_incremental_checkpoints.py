@@ -183,6 +183,7 @@ from evidenceforge.generation.checkpoints.store import (
     SegmentDraft,
 )
 from evidenceforge.generation.checkpoints.test_sync import (
+    checkpoint_publication_test_synchronizer_from_environment,
     checkpoint_test_synchronizer_from_environment,
 )
 from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
@@ -3084,6 +3085,38 @@ def test_checkpoint_test_synchronizer_blocks_after_durable_cursor_until_acknowle
     assert completed == [True]
 
 
+def test_checkpoint_publication_synchronizer_blocks_at_selected_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync_directory = tmp_path / "publication-sync"
+    sync_directory.mkdir()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "checkpoint publication synchronization")
+    monkeypatch.setenv(
+        "EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_DIR",
+        str(sync_directory),
+    )
+    monkeypatch.setenv("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_SEQUENCE", "3")
+    monkeypatch.setenv("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE", "recovery_published")
+    hook = checkpoint_publication_test_synchronizer_from_environment()
+    assert hook is not None
+    completed: list[bool] = []
+    worker = Thread(target=lambda: (hook("recovery_published", 3), completed.append(True)))
+    worker.start()
+    marker = sync_directory / "00000000000000000003.recovery_published.ready"
+    deadline = time.monotonic() + 2
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert json.loads(marker.read_text(encoding="utf-8")) == {
+        "sequence": 3,
+        "stage": "recovery_published",
+    }
+    assert completed == []
+    (sync_directory / "00000000000000000003.recovery_published.continue").touch()
+    worker.join(timeout=2)
+    assert completed == [True]
+
+
 def _checkpoint_snort_event(second: int, *, candidate: bool) -> dict[str, object]:
     event: dict[str, object] = {
         "timestamp": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=second),
@@ -3380,6 +3413,7 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
     assert second.sequence == 1
     assert participant.committed_sequence == 1
     assert participant.prepared_sequence is None
+    assert controller.last_committed_cursor == _cursor(12)
     first_segments = store.segment_references(first)
     second_segments = store.segment_references(second)
     assert len(second_segments) == 2
@@ -3394,6 +3428,7 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
         resolved_scenario=store.read_resolved_scenario(recovered),
     )
     assert resumed.cadence.hours == 6
+    assert resumed.last_committed_cursor == recovered.manifest.cursor
     resumed.restore_participants(recovery=recovered, participants=(fresh,))
     assert fresh.restored == (
         {"committed": 0, "pending": 1},
