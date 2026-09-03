@@ -46,6 +46,7 @@ from evidenceforge.generation.checkpoints.models import (
 from evidenceforge.generation.checkpoints.owner_inventory import (
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
     assert_transient_owner_state_empty,
@@ -61,6 +62,9 @@ from evidenceforge.generation.checkpoints.rng import (
     encode_random_state,
 )
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+from evidenceforge.generation.checkpoints.source_timing_head import (
+    SourceTimingPlannerParticipant,
+)
 from evidenceforge.generation.checkpoints.spools import (
     AppendOnlySpoolParticipant,
     ImmutableSpoolFilesParticipant,
@@ -78,6 +82,7 @@ from evidenceforge.generation.checkpoints.store import (
     SegmentDraft,
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
@@ -278,6 +283,7 @@ def test_rng_numeric_schema_rejects_invalid_word() -> None:
 def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
     manager = StateManager()
     registry = LifecycleRegistry()
+    source_timing = SourceTimingPlanner()
 
     assert_complete_owner_inventory(
         manager,
@@ -288,6 +294,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         registry,
         LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
         owner_name="lifecycle-registry",
+    )
+    assert_complete_owner_inventory(
+        source_timing,
+        SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
+        owner_name="source-timing",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -759,6 +770,38 @@ def test_state_manager_head_seals_only_new_allocator_records_and_restores() -> N
     assert restored._linux_logind_session_used_ids == manager._linux_logind_session_used_ids
     assert restored.materialization_version == manager.materialization_version
     assert restored.next_semantic_peer_ordinal("process", "peer-1") == 2
+
+
+def test_source_timing_head_round_trips_every_bounded_index_family() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    planner = SourceTimingPlanner()
+    expected: dict[str, tuple[object, object]] = {}
+    for ordinal, family in enumerate(planner.index_family_specs):
+        loaded = planner.load_probe_entry(family.name, ordinal, started)
+        cache = dict(planner._bounded_indexes())[family.name]
+        value = cache.raw_get(loaded.key)
+        assert value is not None
+        expected[family.name] = (loaded.key, value)
+
+    participant = SourceTimingPlannerParticipant(planner)
+    seal = participant.prepare_checkpoint(0)
+    assert not seal.segments
+
+    restored = SourceTimingPlanner()
+    SourceTimingPlannerParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored._watermark == planner._watermark
+    for family, cache in restored._bounded_indexes():
+        key, value = expected[family]
+        assert cache.raw_get(key) == value
+
+
+def test_source_timing_barrier_rejects_open_preparation_authority() -> None:
+    planner = SourceTimingPlanner()
+    planner._active_preparation_claims = 1
+
+    with pytest.raises(CheckpointError, match="_active_preparation_claims"):
+        SourceTimingPlannerParticipant(planner).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

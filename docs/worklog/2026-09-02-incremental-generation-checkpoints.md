@@ -124,3 +124,10 @@ until every correctness and performance gate passes.
   boundary. Those capability families are therefore classified as transient-empty and fail the
   barrier if they ever leak, instead of persisting stale secrets. The focused module has 31
   passing tests and 214 broader StateManager/lifecycle/transport-lease tests pass.
+- The source-timing planner now has its own exhaustive inventory and bounded live-head
+  participant. All 17 cross-event cache families export only visible semantic key/value/deadline
+  rows; compact handles, expiry tombstones, cache metrics, source-clock memoization, audit
+  counters, locks, secrets, and preparation infrastructure are rebuilt. Every capability,
+  detached binding, claim, and retained receipt must be absent at the barrier. The complete
+  family-shape round trip is green, a real hour-one generation barrier produced an 895-byte head
+  with no immutable delta, and 158 checkpoint/source-timing regression tests pass.

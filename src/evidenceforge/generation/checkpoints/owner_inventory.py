@@ -124,6 +124,67 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
 )
 
 
+SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_admitted_ecar_remote_transports",
+        "_admitted_ecar_smb_transports",
+        "_admitted_ecar_ssh_transports",
+        "_admitted_ecar_transport_transactions",
+        "_admitted_process_create_frontiers",
+        "_admitted_windows_remote_transports",
+        "_admitted_windows_transport_transactions",
+        "_ecar_process_create_times",
+        "_ecar_transport_close_deadlines",
+        "_kerberos_service_times",
+        "_latest_session_dependent_descriptions",
+        "_latest_session_dependent_times",
+        "_latest_session_start_times",
+        "_process_dependent_create_times",
+        "_runtime_cross_source_sysmon_create_times",
+        "_runtime_process_create_times",
+        "_sysmon_process_render_create_times",
+        "_watermark",
+    ),
+    rebuilt=(
+        "_detached_binding_capacity",
+        "_detached_binding_high_water",
+        "_detached_binding_owner_marker",
+        "_detached_binding_semantic_bytes",
+        "_next_preparation_id",
+        "_preparation_admission_lock",
+        "_preparation_authority_capacity",
+        "_preparation_authority_high_water",
+        "_preparation_authority_lock",
+        "_preparation_claim_semantic_bytes",
+        "_preparation_generation_semantic_bytes",
+        "_preparation_lane_epoch",
+        "_preparation_lock",
+        "_preparation_receipt_high_water",
+        "_preparation_receipt_semantic_bytes",
+        "_preparation_secret",
+        "_retained_preparation_plan_operations",
+        "_terminal_preparations",
+        "clock_profile_name",
+        "timing_runtime",
+    ),
+    transient=(
+        "_action_capacity_by_action",
+        "_action_capacity_records",
+        "_active_preparation_claims",
+        "_committed_preparation_receipts",
+        "_detached_binding_by_context",
+        "_detached_bindings",
+        "_preparation_claim_records",
+        "_preparation_lane",
+        "_preparation_lane_generation",
+        "_preparation_lane_marker",
+        "_reserved_detached_binding_slots",
+        "_reserved_preparation_claim_slots",
+        "_reserved_preparation_receipt_slots",
+    ),
+)
+
+
 LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS = _fields(
     live=(
         "_action_cohort_committed_provenance",

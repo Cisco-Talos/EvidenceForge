@@ -718,6 +718,38 @@ class BoundedRuntimeCache(Generic[K, V]):
             except KeyError:
                 return None
 
+    def checkpoint_records(self) -> tuple[tuple[K, V, float], ...]:
+        """Return visible semantic rows for an explicit checkpoint participant.
+
+        This deliberately omits lookup counters, compact-store handles, expiry-heap
+        tombstones, and other derived index state. The participant is responsible for
+        encoding the key and value through an allowlisted inert schema.
+        """
+
+        with self._lock:
+            return tuple(
+                (key, record.value, record.deadline_seconds)
+                for key, record in self._records.items()
+                if self._visible(record)
+            )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, V, float], ...],
+        *,
+        watermark: datetime | None,
+    ) -> None:
+        """Replace this fresh cache with validated semantic checkpoint rows."""
+
+        with self._lock:
+            if self._records:
+                raise ValueError("checkpoint cache hydration requires a fresh empty cache")
+            self._watermark_seconds = None if watermark is None else deadline_seconds(watermark)
+            for key, value, deadline in records:
+                if self._watermark_seconds is not None and deadline < self._watermark_seconds:
+                    raise ValueError("checkpoint cache row predates its logical watermark")
+                self.set(key, value, deadline=deadline)
+
     def get(self, key: K, default: V | None = None) -> V | None:
         """Return one exact visible entry and account one candidate at most."""
 
