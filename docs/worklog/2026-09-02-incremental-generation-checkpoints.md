@@ -270,3 +270,15 @@ until every correctness and performance gate passes.
   fails closed. The safe value codec gained explicit fixed schemas for process/session/thread
   identities and network transactions, with no generic dataclass path. All 201 SSH/RDP deferred
   production tests and all 63 incremental checkpoint tests pass.
+- Untouched SSH close continuations now use the same bounded semantic treatment. The activity
+  head records the immutable close plan, transport, source process identity, source-native auth
+  times, and the small set of terminal phases already completed before deferral. Recovery creates
+  a fresh transaction capture and reauthenticates the plan against the restored common application
+  and SSH managers plus fresh dispatcher/emitter owners. Legacy tuple entries, retained receipts,
+  active phase bindings, descendant schedules, and application-retirement progress fail closed.
+  A real production-bundle test restores the continuation into fresh State/application/SSH owners
+  and reproduces its head exactly; the complete 202-test SSH/RDP deferred suite and 63 checkpoint
+  tests pass. This testing also exposed a separate blocker for full participant wiring: ordinary
+  recent SSH activity leaves source-timing preparation receipt authorities and lifecycle closed-
+  transport receipts live at a cadence barrier. Those owners need semantic receipt compaction or
+  explicit durable summaries before the production coordinator can accept the barrier.

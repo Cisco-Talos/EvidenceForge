@@ -35,6 +35,15 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
+from evidenceforge.generation.checkpoints.application_channel_head import (
+    ApplicationChannelRegistryParticipant,
+)
+from evidenceforge.generation.checkpoints.packed import loads
+from evidenceforge.generation.checkpoints.ssh_channel_head import (
+    SshApplicationChannelParticipant,
+)
+from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
 from evidenceforge.generation.emitters.base import ExactPublicationAuthority, ExactPublicationBatch
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
@@ -333,6 +342,63 @@ def _assert_no_dispatcher_residue(dispatcher: EventDispatcher) -> None:
     assert action.prepared_projections == 0
     assert action.projection_groups == 0
     assert action.projection_retained_bytes == 0
+
+
+def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path) -> None:
+    """Hydration reconstructs untouched SSH close work against fresh runtime owners."""
+
+    original = _fixture(tmp_path / "original")
+    request = replace(
+        original.request(),
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+    SshSessionActionBundle(request, original.generator).execute()
+    original.generator._scenario_environment = SimpleNamespace(
+        systems=[original.source, original.target],
+        users=[original.user],
+    )
+    state_seal = StateManagerParticipant(original.state).prepare_checkpoint(0)
+    application_seal = ApplicationChannelRegistryParticipant(
+        original.generator._application_channel_registry
+    ).prepare_checkpoint(0)
+    ssh_seal = SshApplicationChannelParticipant(
+        original.generator._ssh_channel_manager
+    ).prepare_checkpoint(0)
+    activity_seal = ActivityGeneratorStateParticipant(original.generator).prepare_checkpoint(0)
+
+    fresh = _fixture(tmp_path / "fresh")
+    fresh.generator._scenario_environment = SimpleNamespace(
+        systems=[fresh.source, fresh.target],
+        users=[fresh.user],
+    )
+    StateManagerParticipant(fresh.state).restore_checkpoint(
+        state_seal.head.payload,
+        tuple(segment.payload for segment in state_seal.segments),
+    )
+    ApplicationChannelRegistryParticipant(
+        fresh.generator._application_channel_registry
+    ).restore_checkpoint(application_seal.head.payload, ())
+    SshApplicationChannelParticipant(fresh.generator._ssh_channel_manager).restore_checkpoint(
+        ssh_seal.head.payload,
+        (),
+    )
+    restored_activity = ActivityGeneratorStateParticipant(fresh.generator)
+    restored_activity.restore_checkpoint(activity_seal.head.payload, ())
+
+    original_document = loads(activity_seal.head.payload)
+    restored_document = loads(restored_activity.prepare_checkpoint(1).head.payload)
+    assert isinstance(original_document, dict)
+    assert isinstance(restored_document, dict)
+    assert restored_document["ssh_lifecycles"] == original_document["ssh_lifecycles"]
+    assert fresh.generator.ssh_close_journal_census().exact_pending == 1
+    restored = fresh.generator._pending_ssh_session_closures[0]
+    assert restored.prepared.ssh_manager_owner is fresh.generator._ssh_channel_manager
+    assert restored.prepared.dispatcher_owner is fresh.generator.dispatcher
+
+    original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
+    original.close_and_read()
+    fresh.close_and_read()
 
 
 def _execute_real_caller(
