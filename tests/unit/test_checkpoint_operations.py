@@ -144,6 +144,7 @@ def test_status_json_validates_recovery_and_reports_nonoverlapping_storage(
     assert payload["checkpoint_hours"] == 6
     assert payload["storage"]["generated_bytes"] == len(b"generated")
     assert payload["storage"]["checkpoint_bytes"] > 0
+    assert "active_spool_bytes" not in payload["storage"]
     assert payload["storage"]["total_managed_bytes"] == (
         payload["storage"]["generated_bytes"] + payload["storage"]["recovery_overhead_bytes"]
     )
@@ -164,10 +165,12 @@ def test_status_human_output_keeps_developer_details_verbose(tmp_path: Path) -> 
     assert ordinary.exit_code == 0, ordinary.stdout
     assert "Recovery point:" in ordinary.stdout
     assert "Total known managed working footprint:" in ordinary.stdout
+    assert "spool" not in ordinary.stdout.lower()
     assert "Developer diagnostics" not in ordinary.stdout
     assert verbose.exit_code == 0, verbose.stdout
     assert "Recovery generations" in verbose.stdout
     assert "Developer diagnostics" in verbose.stdout
+    assert "spool" not in verbose.stdout.lower()
 
 
 def test_suspend_command_requires_live_owner_and_is_idempotent(tmp_path: Path) -> None:

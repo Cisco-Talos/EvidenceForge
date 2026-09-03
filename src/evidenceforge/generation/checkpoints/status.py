@@ -45,14 +45,9 @@ class StorageUsage(BaseModel):
 
     generated_bytes: int = Field(ge=0, description="Generated staged or published bundle bytes")
     checkpoint_bytes: int = Field(ge=0, description="Checkpoint workspace bytes excluding staging")
-    active_spool_bytes: int | None = Field(
-        default=None,
-        ge=0,
-        description="Externally located active spool bytes when safely discoverable",
-    )
     recovery_overhead_bytes: int = Field(
         ge=0,
-        description="Known checkpoint plus active spool recovery overhead",
+        description="Checkpoint recovery overhead within the output root",
     )
     prior_bundle_bytes: int = Field(
         ge=0,
@@ -62,7 +57,6 @@ class StorageUsage(BaseModel):
     available_bytes: int | None = Field(default=None, ge=0)
     managed_file_count: int = Field(ge=0)
     unrelated_entry_count: int = Field(ge=0)
-    active_spools_note: str | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -189,18 +183,12 @@ def _storage_usage(store: IncrementalCheckpointStore) -> tuple[StorageUsage, tup
     usage = StorageUsage(
         generated_bytes=generated,
         checkpoint_bytes=checkpoint,
-        active_spool_bytes=None,
         recovery_overhead_bytes=checkpoint,
         prior_bundle_bytes=prior_bundle,
         total_managed_bytes=known_total,
         available_bytes=available,
         managed_file_count=len(all_files),
         unrelated_entry_count=unrelated_count,
-        active_spools_note=(
-            "Active protected spools remain outside the output root and cannot be attributed "
-            "safely by an out-of-process inspector. Their checkpointed durable content is "
-            "included in checkpoint_bytes."
-        ),
     )
     return usage, tuple(warnings)
 
@@ -377,11 +365,6 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
         errors.append(str(error))
 
     active = lock.state in {"active", "remote"}
-    if active and storage.active_spool_bytes is None:
-        warnings.append(
-            "total managed footprint excludes active external spools that cannot be safely "
-            "attributed out of process"
-        )
     if selected is None:
         if entries:
             errors.append("no valid generation checkpoint remains")

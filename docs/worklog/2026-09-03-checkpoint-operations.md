@@ -14,8 +14,8 @@ next completed simulated-hour barrier after publishing an explicit recovery poin
   compatibility, storage, warnings, and the resume command. `--verbose` adds implementation
   diagnostics, while `--json` always returns the full structured report.
 - Storage totals count unique managed regular files, exclude unrelated user files, and distinguish
-  staged generated data, recovery overhead, active external spools when discoverable, and the
-  complete managed working footprint.
+  staged generated data, checkpoint recovery overhead, and the complete known managed working
+  footprint. Categories that cannot be measured safely are omitted rather than shown as unknown.
 - Suspension is cooperative rather than signal-based. The requesting command immediately warns
   that suspension is not immediate. The generator finishes the current simulated hour, uses the
   existing quiescent checkpoint barrier to publish an off-cadence recovery, and exits cleanly.
@@ -41,10 +41,9 @@ results, Ruff results, and status-validation timing observations here.
   input and reproduces the complete runtime fingerprint without hydrating generation state.
 - Storage accounting deduplicates managed files by device/inode and excludes unrelated root entries.
   It separates the current staged/generated bundle, checkpoint workspace, retained prior published
-  bundle, available disk, and total known managed footprint. Active protected spools intentionally
-  remain external and cannot be safely attributed to one output root by another process; status
-  reports that limitation explicitly while counting their imported durable copies as checkpoint
-  storage.
+  bundle, available disk, and total known managed footprint. Durable spool copies imported into the
+  checkpoint are included in checkpoint storage; external runtime spools are not exposed as a
+  status field.
 - A protected controller capability, idempotent suspension request, and durable suspension
   acknowledgement live in the hidden workspace. Control records are canonical Pydantic JSON,
   owner-only, no-symlink files published with atomic replacement and directory synchronization.

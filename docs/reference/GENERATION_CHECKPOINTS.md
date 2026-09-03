@@ -30,9 +30,8 @@ overhead, total known managed working footprint, and the exact resume command. `
 recovery generations, lock ownership, schema/run identities, participant and segment counts,
 fingerprint components, detailed storage categories, and validation work. `--json` always emits the
 complete structured report, independent of `--verbose`. Status is read-only and excludes unrelated
-files from all managed totals. Active protected spools live outside the output root and cannot be
-safely attributed by another process; the report says so explicitly, while their durable imported
-content is included in checkpoint storage.
+files from all managed totals. Checkpoint storage includes durable spool content already imported
+into the hidden workspace.
 
 Request a planned stop from another terminal:
 

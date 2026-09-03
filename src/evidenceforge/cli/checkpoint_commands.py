@@ -83,7 +83,6 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
     for label, value in (
         ("Staged/current generated data", storage.generated_bytes),
         ("Checkpoint recovery objects", storage.checkpoint_bytes),
-        ("Active external spools", storage.active_spool_bytes),
         ("Prior published bundle", storage.prior_bundle_bytes),
         ("Available disk", storage.available_bytes),
     ):
@@ -91,8 +90,6 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
     storage_table.add_row("Managed files", f"{storage.managed_file_count:,}")
     storage_table.add_row("Unrelated root entries excluded", str(storage.unrelated_entry_count))
     console.print(storage_table)
-    if storage.active_spools_note:
-        console.print(f"[dim]{storage.active_spools_note}[/dim]")
 
     if report.recovery_points:
         console.print("\n[bold]Recovery generations[/bold]")
