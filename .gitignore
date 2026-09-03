@@ -53,6 +53,8 @@ htmlcov/
 output/
 *.log
 checkpoints/
+!src/evidenceforge/generation/checkpoints/
+!src/evidenceforge/generation/checkpoints/*.py
 
 # Claude Code sessions
 .claude/
