@@ -16,7 +16,7 @@ from evidenceforge.generation.indexes import (
 )
 from evidenceforge.generation.state_manager import StateManager
 
-from .errors import CheckpointCorruptionError, CheckpointError
+from .errors import CheckpointCorruptionError
 from .owner_inventory import STATE_MANAGER_CHECKPOINT_FIELDS, assert_transient_owner_state_empty
 from .packed import dumps, loads
 from .participants import ParticipantSeal
@@ -65,13 +65,6 @@ _DERIVED_CONNECTION_FIELDS = frozenset(
         "_terminal_connection_ids",
     }
 )
-_UNSUPPORTED_SMB_FIELDS = frozenset(
-    {
-        "_smb_connection_authority_by_conn_id",
-        "_smb_connection_conn_id_by_logon_id",
-        "_smb_connection_retained_bytes",
-    }
-)
 _SPECIAL_FIELDS = frozenset(
     {
         "state",
@@ -81,7 +74,6 @@ _SPECIAL_FIELDS = frozenset(
         *_EXPIRING_FIELDS,
         *_PROCESS_REFERENCE_FIELDS,
         *_DERIVED_CONNECTION_FIELDS,
-        *_UNSUPPORTED_SMB_FIELDS,
     }
 )
 _LIVE_FIELDS = frozenset(
@@ -296,11 +288,6 @@ def _capture_head(manager: StateManager) -> bytes:
             STATE_MANAGER_CHECKPOINT_FIELDS,
             owner_name="state-manager",
         )
-        unsupported = [name for name in sorted(_UNSUPPORTED_SMB_FIELDS) if getattr(manager, name)]
-        if unsupported:
-            raise CheckpointError(
-                "StateManager checkpoint has no hydration adapter for: " + ", ".join(unsupported)
-            )
         stores = {name: _encoded_items(getattr(manager, name)) for name in _STORE_FIELDS}
         expiring = {name: _capture_expiring(getattr(manager, name)) for name in _EXPIRING_FIELDS}
         grouped = {

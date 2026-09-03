@@ -313,6 +313,15 @@ def test_checkpoint_barrier_rejects_transient_state() -> None:
             owner_name="state-manager",
         )
 
+    smb_manager = StateManager()
+    smb_manager._smb_connection_authority_by_conn_id["conn-1"] = object()  # type: ignore[assignment]
+    with pytest.raises(CheckpointError, match="_smb_connection_authority_by_conn_id"):
+        assert_transient_owner_state_empty(
+            smb_manager,
+            STATE_MANAGER_CHECKPOINT_FIELDS,
+            owner_name="state-manager",
+        )
+
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)

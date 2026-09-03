@@ -117,6 +117,10 @@ until every correctness and performance gate passes.
   history-growing identity/ordinal ledgers use an opt-in mutation recorder that is dormant when
   checkpointing is disabled and emits only last-write-wins changes since the prior durable point.
   A two-generation test proves allocator-only changes leave the head byte-identical and produce a
-  two-record second delta; hydration applies both generations and resumes the next ordinal. SMB
-  connection-pin authority remains an explicit fail-fast gap before public wiring. The focused
-  module has 31 passing tests and 214 broader StateManager/lifecycle/transport-lease tests pass.
+  two-record second delta; hydration applies both generations and resumes the next ordinal. An
+  hourly-barrier probe of both the minimal fixture and the dedicated two-hour SMB calibration
+  fixture observed zero active/terminal pin capabilities, install receipts, acknowledgements,
+  session owners, reserved bytes, and retained bytes at every warm-up, collection, and tail
+  boundary. Those capability families are therefore classified as transient-empty and fail the
+  barrier if they ever leak, instead of persisting stale secrets. The focused module has 31
+  passing tests and 214 broader StateManager/lifecycle/transport-lease tests pass.
