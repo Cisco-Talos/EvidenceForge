@@ -8,7 +8,7 @@ hydration path.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from evidenceforge.events.content_identity import (
@@ -19,8 +19,11 @@ from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleClosureTicket,
     LifecycleEntityRef,
+    LifecycleForegroundLease,
     LifecycleHold,
     LifecycleMembership,
+    LifecycleRetentionLease,
+    LifecycleSingletonLease,
     LifecycleTransition,
     LogicalServiceIdentity,
     ProcessLifecycleIdentity,
@@ -40,8 +43,10 @@ from evidenceforge.events.lifecycle import (
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleRegistry,
+    _ForegroundLeaseEntry,
     _LifecycleState,
     _ProcessEntry,
+    _SingletonLeaseEntry,
 )
 from evidenceforge.models.exceptions import StateError
 
@@ -55,7 +60,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 
 
 def _time(value: datetime | None) -> str | None:
@@ -675,6 +680,193 @@ def _decode_transport_binding(value: object) -> TransportSessionBindingSnapshot:
         ) from error
 
 
+def _retention_lease(value: LifecycleRetentionLease) -> list[object]:
+    return [value.lease_id, _ref(value.subject), _time(value.retain_until), value.reason]
+
+
+def _decode_retention_lease(value: object) -> LifecycleRetentionLease:
+    lease_id, subject, retain_until, reason = _record(value, 4, "retention lease")
+    if type(lease_id) is not str or type(reason) is not str:
+        raise CheckpointCorruptionError("lifecycle checkpoint retention lease is invalid")
+    try:
+        return LifecycleRetentionLease(
+            lease_id=lease_id,
+            subject=_decode_ref(subject),
+            retain_until=_decode_time(retain_until),  # type: ignore[arg-type]
+            reason=reason,
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint retention lease is invalid"
+        ) from error
+
+
+def _foreground_lease(value: _ForegroundLeaseEntry) -> list[object]:
+    lease = value.lease
+    return [
+        lease.lease_id,
+        lease.hostname,
+        lease.principal,
+        lease.session_object_id,
+        lease.process_object_id,
+        _time(lease.acquired_at),
+        _time(lease.lease_until),
+        lease.action_id,
+        lease.concurrency_group_id,
+        lease.transition_ordinal,
+        _time(value.commit_time),
+        value.commit_action_id,
+        value.commit_ordinal,
+    ]
+
+
+def _decode_foreground_lease(value: object) -> _ForegroundLeaseEntry:
+    (
+        lease_id,
+        hostname,
+        principal,
+        session_object_id,
+        process_object_id,
+        acquired_at,
+        lease_until,
+        action_id,
+        concurrency_group_id,
+        transition_ordinal,
+        commit_time,
+        commit_action_id,
+        commit_ordinal,
+    ) = _record(value, 13, "foreground lease")
+    strings = (
+        lease_id,
+        hostname,
+        principal,
+        session_object_id,
+        process_object_id,
+        action_id,
+        concurrency_group_id,
+        commit_action_id,
+    )
+    if not all(type(item) is str for item in strings):
+        raise CheckpointCorruptionError("lifecycle checkpoint foreground lease is invalid")
+    try:
+        entry = _ForegroundLeaseEntry(
+            lease=LifecycleForegroundLease(
+                lease_id=lease_id,
+                hostname=hostname,
+                principal=principal,
+                session_object_id=session_object_id,
+                process_object_id=process_object_id,
+                acquired_at=_decode_time(acquired_at),  # type: ignore[arg-type]
+                lease_until=_decode_time(lease_until),  # type: ignore[arg-type]
+                action_id=action_id,
+                concurrency_group_id=concurrency_group_id,
+                transition_ordinal=transition_ordinal,  # type: ignore[arg-type]
+            ),
+            commit_time=_decode_time(commit_time),  # type: ignore[arg-type]
+            commit_action_id=commit_action_id,
+            commit_ordinal=commit_ordinal,  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint foreground lease is invalid"
+        ) from error
+    if (
+        type(entry.commit_ordinal) is not int
+        or entry.commit_ordinal < 0
+        or not entry.commit_action_id
+        or entry.lease.action_id != entry.commit_action_id
+        or entry.lease.transition_ordinal != entry.commit_ordinal
+        or not entry.lease.acquired_at <= entry.commit_time <= entry.lease.lease_until
+    ):
+        raise CheckpointCorruptionError("lifecycle checkpoint foreground lease is invalid")
+    return entry
+
+
+def _singleton_lease(value: _SingletonLeaseEntry) -> list[object]:
+    lease = value.lease
+    return [
+        lease.lease_id,
+        lease.hostname,
+        lease.principal,
+        lease.session_object_id,
+        lease.logon_id,
+        lease.canonical_image,
+        lease.process_object_id,
+        _time(lease.acquired_at),
+        _time(lease.lease_until),
+        lease.action_id,
+        lease.transition_ordinal,
+        _time(value.commit_time),
+        value.commit_action_id,
+        value.commit_ordinal,
+    ]
+
+
+def _decode_singleton_lease(value: object) -> _SingletonLeaseEntry:
+    (
+        lease_id,
+        hostname,
+        principal,
+        session_object_id,
+        logon_id,
+        canonical_image,
+        process_object_id,
+        acquired_at,
+        lease_until,
+        action_id,
+        transition_ordinal,
+        commit_time,
+        commit_action_id,
+        commit_ordinal,
+    ) = _record(value, 14, "singleton lease")
+    strings = (
+        lease_id,
+        hostname,
+        principal,
+        session_object_id,
+        logon_id,
+        canonical_image,
+        process_object_id,
+        action_id,
+        commit_action_id,
+    )
+    if not all(type(item) is str for item in strings):
+        raise CheckpointCorruptionError("lifecycle checkpoint singleton lease is invalid")
+    try:
+        entry = _SingletonLeaseEntry(
+            lease=LifecycleSingletonLease(
+                lease_id=lease_id,
+                hostname=hostname,
+                principal=principal,
+                session_object_id=session_object_id,
+                logon_id=logon_id,
+                canonical_image=canonical_image,
+                process_object_id=process_object_id,
+                acquired_at=_decode_time(acquired_at),  # type: ignore[arg-type]
+                lease_until=_decode_time(lease_until),  # type: ignore[arg-type]
+                action_id=action_id,
+                transition_ordinal=transition_ordinal,  # type: ignore[arg-type]
+            ),
+            commit_time=_decode_time(commit_time),  # type: ignore[arg-type]
+            commit_action_id=commit_action_id,
+            commit_ordinal=commit_ordinal,  # type: ignore[arg-type]
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint singleton lease is invalid"
+        ) from error
+    if (
+        type(entry.commit_ordinal) is not int
+        or entry.commit_ordinal < 0
+        or not entry.commit_action_id
+        or entry.lease.action_id != entry.commit_action_id
+        or entry.lease.transition_ordinal != entry.commit_ordinal
+        or not entry.lease.acquired_at <= entry.commit_time <= entry.lease.lease_until
+    ):
+        raise CheckpointCorruptionError("lifecycle checkpoint singleton lease is invalid")
+    return entry
+
+
 def _start(snapshot: object, state: _DecodedState) -> LifecycleTransition:
     starts = [item for item in snapshot.transitions if item.kind == "started"]
     if len(starts) == 1:
@@ -699,31 +891,12 @@ def _start(snapshot: object, state: _DecodedState) -> LifecycleTransition:
     )
 
 
-def _unsupported_partition_state(registry: LifecycleRegistry) -> list[str]:
-    unsupported: list[str] = []
-    names = (
-        "_leases",
-        "_foreground_leases",
-        "_singleton_leases",
-    )
-    for partition_id, partition in enumerate(registry._partitions):
-        for name in names:
-            if len(getattr(partition, name)):
-                unsupported.append(f"partition[{partition_id}].{name}")
-    return unsupported
-
-
 def _capture(registry: LifecycleRegistry) -> bytes:
     assert_transient_owner_state_empty(
         registry,
         LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
         owner_name="lifecycle-registry",
     )
-    unsupported = _unsupported_partition_state(registry)
-    if unsupported:
-        raise CheckpointError(
-            "lifecycle checkpoint has no hydration adapter for: " + ", ".join(unsupported)
-        )
     partitions: list[list[object]] = []
     with registry._gate.watermark():
         for partition_id, partition in enumerate(registry._partitions):
@@ -781,6 +954,17 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                     _transport_binding(item)
                     for item in partition._transport_session_tombstones.iter_values_by_handle()
                 )
+                retention_leases = [
+                    _retention_lease(item) for item in partition._leases.iter_values_by_handle()
+                ]
+                foreground_leases = [
+                    _foreground_lease(item)
+                    for item in partition._foreground_leases.iter_values_by_handle()
+                ]
+                singleton_leases = [
+                    _singleton_lease(item)
+                    for item in partition._singleton_leases.iter_values_by_handle()
+                ]
                 partitions.append(
                     [
                         processes,
@@ -789,6 +973,9 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                         transports,
                         service_bindings,
                         transport_bindings,
+                        retention_leases,
+                        foreground_leases,
+                        singleton_leases,
                     ]
                 )
     return dumps(
@@ -815,6 +1002,9 @@ def _decode_snapshot_rows(
     list[TransportLifecycleSnapshot],
     list[ServiceProcessBindingSnapshot],
     list[TransportSessionBindingSnapshot],
+    list[LifecycleRetentionLease],
+    list[_ForegroundLeaseEntry],
+    list[_SingletonLeaseEntry],
     dict[str, _DecodedState],
 ]:
     partitions = document.get("partitions")
@@ -826,6 +1016,9 @@ def _decode_snapshot_rows(
     transports: list[TransportLifecycleSnapshot] = []
     service_bindings: list[ServiceProcessBindingSnapshot] = []
     transport_bindings: list[TransportSessionBindingSnapshot] = []
+    retention_leases: list[LifecycleRetentionLease] = []
+    foreground_leases: list[_ForegroundLeaseEntry] = []
+    singleton_leases: list[_SingletonLeaseEntry] = []
     states: dict[str, _DecodedState] = {}
     for partition in partitions:
         (
@@ -835,7 +1028,10 @@ def _decode_snapshot_rows(
             transport_rows,
             service_binding_rows,
             transport_binding_rows,
-        ) = _record(partition, 6, "partition")
+            retention_lease_rows,
+            foreground_lease_rows,
+            singleton_lease_rows,
+        ) = _record(partition, 9, "partition")
         if not all(type(rows) is list for rows in partition):
             raise CheckpointCorruptionError("lifecycle checkpoint entity table is invalid")
         for row in process_rows:  # type: ignore[union-attr]
@@ -890,6 +1086,18 @@ def _decode_snapshot_rows(
             _decode_transport_binding(row)
             for row in transport_binding_rows  # type: ignore[union-attr]
         )
+        retention_leases.extend(
+            _decode_retention_lease(row)
+            for row in retention_lease_rows  # type: ignore[union-attr]
+        )
+        foreground_leases.extend(
+            _decode_foreground_lease(row)
+            for row in foreground_lease_rows  # type: ignore[union-attr]
+        )
+        singleton_leases.extend(
+            _decode_singleton_lease(row)
+            for row in singleton_lease_rows  # type: ignore[union-attr]
+        )
     return (
         processes,
         sessions,
@@ -897,6 +1105,9 @@ def _decode_snapshot_rows(
         transports,
         service_bindings,
         transport_bindings,
+        retention_leases,
+        foreground_leases,
+        singleton_leases,
         states,
     )
 
@@ -1005,6 +1216,38 @@ def _install_authority_states(
                 registry._routes.invalidate_snapshot_locked(kind, object_id)
 
 
+def _install_resource_lease_entry(
+    registry: LifecycleRegistry,
+    entry: _ForegroundLeaseEntry | _SingletonLeaseEntry,
+) -> None:
+    """Rebuild derived lease indexes, then install the exact latest commit key."""
+
+    lease = entry.lease
+    if isinstance(entry, _ForegroundLeaseEntry):
+        registry.acquire_foreground_lease(lease)
+        route_kind = "foreground_lease"
+        store_name = "_foreground_leases"
+    else:
+        if lease.process_object_id:
+            registry.acquire_singleton_lease(replace(lease, process_object_id=""))
+            registry.bind_singleton_lease(
+                lease.lease_id,
+                process_object_id=lease.process_object_id,
+                canonical_time=entry.commit_time,
+                action_id=entry.commit_action_id,
+                transition_ordinal=entry.commit_ordinal,
+            )
+        else:
+            registry.acquire_singleton_lease(lease)
+        route_kind = "singleton_lease"
+        store_name = "_singleton_leases"
+    partition_id = registry._routes.get(route_kind, lease.lease_id)
+    if not isinstance(partition_id, int):
+        raise CheckpointCorruptionError("lifecycle checkpoint lease route was not rebuilt")
+    store = getattr(registry._partitions[partition_id], store_name)
+    store[lease.lease_id] = entry
+
+
 def _restore(registry: LifecycleRegistry, head: bytes) -> None:
     document = loads(head)
     if type(document) is not dict or document.get("schema_version") != _SCHEMA_VERSION:
@@ -1032,6 +1275,9 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
         transports,
         service_bindings,
         transport_bindings,
+        retention_leases,
+        foreground_leases,
+        singleton_leases,
         states,
     ) = _decode_snapshot_rows(document)
     for snapshot in sorted(
@@ -1097,6 +1343,18 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
                 action_id=binding.close_action_id,
                 transition_ordinal=binding.close_transition_ordinal,
             )
+    for lease in sorted(retention_leases, key=lambda item: item.lease_id):
+        fresh.add_retention_lease(lease)
+    for entry in sorted(
+        foreground_leases,
+        key=lambda item: (item.lease.acquired_at, item.lease.lease_id),
+    ):
+        _install_resource_lease_entry(fresh, entry)
+    for entry in sorted(
+        singleton_leases,
+        key=lambda item: (item.lease.acquired_at, item.lease.lease_id),
+    ):
+        _install_resource_lease_entry(fresh, entry)
     snapshots = [*sessions, *services, *transports, *processes]
     for snapshot in snapshots:
         for hold in snapshot.holds:

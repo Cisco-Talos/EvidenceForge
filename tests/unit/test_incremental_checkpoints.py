@@ -7,7 +7,7 @@ import os
 import random
 import socket
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,8 +15,11 @@ from pydantic import ValidationError
 
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
+    LifecycleForegroundLease,
     LifecycleHold,
     LifecycleMembership,
+    LifecycleRetentionLease,
+    LifecycleSingletonLease,
     LogicalServiceIdentity,
     ProcessLifecycleIdentity,
     ProcessTokenIdentity,
@@ -512,6 +515,144 @@ def test_lifecycle_head_rebuilds_service_and_cross_host_transport_bindings() -> 
         expected_transport_binding
     )
     assert restored_registry.get_transport("transport-1") == expected_transport
+
+
+def test_lifecycle_head_restores_lease_values_indexes_and_commit_keys() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(shard_count=2)
+    session = SessionLifecycleIdentity(
+        hostname="host-1",
+        object_id="session-1",
+        logon_id="0x10001",
+        principal="alice",
+        session_kind="interactive",
+        started_at=started,
+    )
+    shell = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="shell-1",
+        pid=1001,
+        started_at=started + timedelta(seconds=1),
+        image="/bin/bash",
+        role="shell",
+    )
+    singleton_process = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="singleton-process-1",
+        pid=1002,
+        started_at=started + timedelta(seconds=2),
+        image="/usr/bin/python",
+        role="application",
+    )
+    registry.register_session(session, action_id="session", transition_id="session:start")
+    for identity in (shell, singleton_process):
+        registry.register_process(
+            identity,
+            token=ProcessTokenIdentity(principal="alice", logon_id=session.logon_id),
+            membership=LifecycleMembership(
+                "session",
+                session.object_id,
+                session_object_id=session.object_id,
+            ),
+            action_id=f"{identity.object_id}:start",
+            transition_id=f"{identity.object_id}:start",
+        )
+    registry.add_retention_lease(
+        LifecycleRetentionLease(
+            lease_id="retention-1",
+            subject=shell.ref,
+            retain_until=started + timedelta(hours=5),
+            reason="checkpoint-test",
+        )
+    )
+    foreground = registry.acquire_foreground_lease(
+        LifecycleForegroundLease(
+            lease_id="foreground-1",
+            hostname=session.hostname,
+            principal=session.principal,
+            session_object_id=session.object_id,
+            process_object_id=shell.object_id,
+            acquired_at=started + timedelta(seconds=3),
+            lease_until=started + timedelta(hours=1),
+            action_id="foreground:acquire",
+            concurrency_group_id="pipeline-1",
+        )
+    )
+    foreground = registry.renew_foreground_lease(
+        foreground.lease_id,
+        expected_lease_until=foreground.lease_until,
+        lease_until=started + timedelta(hours=2),
+        canonical_time=started + timedelta(minutes=1),
+        action_id="foreground:renew",
+        transition_ordinal=7,
+    )
+    singleton = registry.acquire_singleton_lease(
+        LifecycleSingletonLease(
+            lease_id="singleton-1",
+            hostname=session.hostname,
+            principal=session.principal,
+            session_object_id=session.object_id,
+            logon_id=session.logon_id,
+            canonical_image=singleton_process.image,
+            process_object_id="",
+            acquired_at=started + timedelta(seconds=4),
+            lease_until=started + timedelta(hours=3),
+            action_id="singleton:acquire",
+        )
+    )
+    singleton = registry.bind_singleton_lease(
+        singleton.lease_id,
+        process_object_id=singleton_process.object_id,
+        canonical_time=started + timedelta(minutes=2),
+        action_id="singleton:bind",
+        transition_ordinal=3,
+    )
+    singleton = registry.renew_singleton_lease(
+        singleton.lease_id,
+        expected_lease_until=singleton.lease_until,
+        lease_until=started + timedelta(hours=4),
+        canonical_time=started + timedelta(minutes=3),
+        action_id="singleton:renew",
+        transition_ordinal=9,
+    )
+    foreground_partition = registry._routes.get("foreground_lease", foreground.lease_id)
+    singleton_partition = registry._routes.get("singleton_lease", singleton.lease_id)
+    assert isinstance(foreground_partition, int)
+    assert isinstance(singleton_partition, int)
+    expected_foreground_entry = registry._partitions[foreground_partition]._foreground_leases.get(
+        foreground.lease_id
+    )
+    expected_singleton_entry = registry._partitions[singleton_partition]._singleton_leases.get(
+        singleton.lease_id
+    )
+
+    participant = LifecycleRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    restored = LifecycleRegistry(shard_count=2)
+    LifecycleRegistryParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.foreground_lease(foreground.lease_id) == foreground
+    assert restored.singleton_lease(singleton.lease_id) == singleton
+    restored_foreground_partition = restored._routes.get("foreground_lease", foreground.lease_id)
+    restored_singleton_partition = restored._routes.get("singleton_lease", singleton.lease_id)
+    assert isinstance(restored_foreground_partition, int)
+    assert isinstance(restored_singleton_partition, int)
+    assert (
+        restored._partitions[restored_foreground_partition]._foreground_leases.get(
+            foreground.lease_id
+        )
+        == expected_foreground_entry
+    )
+    assert (
+        restored._partitions[restored_singleton_partition]._singleton_leases.get(singleton.lease_id)
+        == expected_singleton_entry
+    )
+    census = restored.census()
+    assert census.retention_leases == 1
+    assert census.foreground_leases == 1
+    assert census.singleton_leases == 1
+    assert restored.release_retention_lease("retention-1")
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:
