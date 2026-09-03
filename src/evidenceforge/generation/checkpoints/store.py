@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import socket
@@ -39,6 +40,8 @@ _WORKSPACE_NAME = ".eforge-generation"
 _MANIFEST_NAME = "manifest.json"
 _INDEX_NAME = "CURRENT.json"
 _LOCK_NAME = "run.lock"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -635,7 +638,12 @@ class IncrementalCheckpointStore:
         pending = self.recovery / f".pending-{sequence:020d}-{uuid.uuid4().hex}"
         final = self.recovery / f"{sequence:020d}"
         if final.exists():
-            raise CheckpointFilesystemError(f"checkpoint sequence already exists: {sequence}")
+            indexed_sequences = {item_sequence for item_sequence, _ in self._read_index()}
+            if sequence in indexed_sequences:
+                raise CheckpointFilesystemError(f"checkpoint sequence already exists: {sequence}")
+            self._validate_protected_directory(final)
+            shutil.rmtree(final)
+            _sync_directory(self.recovery)
         pending.mkdir(mode=0o700)
         head_refs: list[ParticipantHead] = []
         try:
@@ -689,7 +697,13 @@ class IncrementalCheckpointStore:
             self._publish_index(manifest, manifest_payload)
             accounting.index_publish_seconds = time.perf_counter() - index_started
             rotation_started = time.perf_counter()
-            self._rotate_recoveries()
+            try:
+                self._rotate_recoveries()
+            except OSError as error:
+                # CURRENT.json is the atomic commit point. Once it names this recovery,
+                # participant watermarks must advance even if best-effort cleanup of an
+                # older, now-unreferenced directory fails. A later checkpoint retries it.
+                logger.warning("Deferred checkpoint recovery rotation after failure: %s", error)
             accounting.rotation_seconds = time.perf_counter() - rotation_started
             accounting.commit_seconds = time.perf_counter() - store_started
             return manifest

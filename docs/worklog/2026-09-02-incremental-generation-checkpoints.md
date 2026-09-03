@@ -515,3 +515,9 @@ until every correctness and performance gate passes.
   18-hour cadence cost 3.47% (2.206 seconds across ten checkpoint paths). These are single-pair
   diagnostics, not cadence selection results; the rotated three-pair representative matrix is
   still required.
+- Store fault injection now covers partial content writes, failure before recovery-index
+  publication, interrupted size-tier catalog compaction, and failure while rotating obsolete
+  recoveries after the index commit point. An unindexed recovery directory is safely discarded
+  when the same sequence retries; after `CURRENT.json` is durable, cleanup failure is warned and
+  cannot roll back participant watermarks. Recovery also rejects rehashed path-traversal metadata
+  and externally writable segment objects. The focused checkpoint module has 81 passing tests.

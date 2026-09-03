@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+import evidenceforge.generation.checkpoints.store as checkpoint_store_module
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
     ApplicationChannelIdentity,
@@ -3296,6 +3297,140 @@ def test_controller_aborts_every_prepared_participant_on_store_failure(
     assert participant.aborted == [0]
     assert participant.committed_sequence == -1
     assert participant.prepared_sequence is None
+
+
+def test_store_retries_sequence_after_failure_before_index_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    original_publish = store._publish_index
+
+    def fail_publish(_manifest: CheckpointManifest, _payload: bytes) -> None:
+        raise OSError("injected index publication failure")
+
+    monkeypatch.setattr(store, "_publish_index", fail_publish)
+    with pytest.raises(OSError, match="index publication"):
+        _commit(store, sequence=0, hour=6, payload=b"first attempt")
+    assert (store.recovery / "00000000000000000000").exists()
+    assert not store.index_path.exists()
+
+    monkeypatch.setattr(store, "_publish_index", original_publish)
+    retried = _commit(store, sequence=0, hour=6, payload=b"first attempt")
+
+    assert store.recover(expected_fingerprint=_FINGERPRINT).manifest == retried
+
+
+def test_store_treats_rotation_failure_after_index_as_committed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+
+    def fail_rotation() -> None:
+        raise OSError("injected recovery rotation failure")
+
+    monkeypatch.setattr(store, "_rotate_recoveries", fail_rotation)
+    with caplog.at_level("WARNING"):
+        manifest = _commit(store, sequence=0, hour=6, payload=b"durable")
+
+    assert store.recover(expected_fingerprint=_FINGERPRINT).manifest == manifest
+    assert "Deferred checkpoint recovery rotation" in caplog.text
+
+
+def test_store_cleans_partial_content_write_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    original_write = checkpoint_store_module._write_new_file
+    failed = False
+
+    def partial_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
+        nonlocal failed
+        if not failed and ".pending-" in path.name and path.parent.parent.name == "segments":
+            failed = True
+            path.write_bytes(payload[: max(1, len(payload) // 2)])
+            raise OSError("injected partial segment write")
+        original_write(path, payload, mode=mode)
+
+    monkeypatch.setattr(checkpoint_store_module, "_write_new_file", partial_write)
+    with pytest.raises(OSError, match="partial segment"):
+        _commit(store, sequence=0, hour=6, payload=b"segment payload")
+    assert not store.index_path.exists()
+    assert not list(store.objects.rglob("*.pending-*"))
+
+    manifest = _commit(store, sequence=0, hour=6, payload=b"segment payload")
+    assert store.recover(expected_fingerprint=_FINGERPRINT).manifest == manifest
+
+
+def test_store_retries_after_interrupted_catalog_compaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    first = _commit(store, sequence=0, hour=6, payload=b"first")
+    original_write = store._write_catalog_node
+    calls = 0
+
+    def fail_parent(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected catalog compaction failure")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_write_catalog_node", fail_parent)
+    with pytest.raises(OSError, match="catalog compaction"):
+        _commit(
+            store,
+            sequence=1,
+            hour=12,
+            inherited=first.segment_catalogs,
+            payload=b"second",
+        )
+
+    monkeypatch.setattr(store, "_write_catalog_node", original_write)
+    second = _commit(
+        store,
+        sequence=1,
+        hour=12,
+        inherited=first.segment_catalogs,
+        payload=b"second",
+    )
+    assert store.recover(expected_fingerprint=_FINGERPRINT).manifest == second
+
+
+def test_store_rejects_checkpoint_path_traversal_even_with_rehashed_manifest(
+    tmp_path: Path,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    manifest = _commit(store, sequence=0, hour=6, payload=b"first")
+    manifest_path = store.recovery / f"{manifest.sequence:020d}" / "manifest.json"
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document["participant_heads"][0]["relative_path"] = "../outside.bin"
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    manifest_path.write_bytes(payload)
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    index["recoveries"][0]["manifest_sha256"] = hashlib.sha256(payload).hexdigest()
+    store.index_path.write_text(
+        json.dumps(index, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CheckpointCorruptionError, match="unsafe checkpoint relative path"):
+        store.recover(expected_fingerprint=_FINGERPRINT)
+
+
+def test_store_rejects_externally_writable_segment(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    manifest = _commit(store, sequence=0, hour=6, payload=b"first")
+    segment_path = store.workspace / store.segment_references(manifest)[0].relative_path
+    segment_path.chmod(0o666)
+
+    with pytest.raises(CheckpointCorruptionError, match="externally writable"):
+        store.recover(expected_fingerprint=_FINGERPRINT)
 
 
 def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Path) -> None:
