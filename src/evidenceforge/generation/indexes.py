@@ -1349,6 +1349,56 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
         """Return the current deadline for a key."""
         return self._deadlines.get(key)
 
+    def checkpoint_records(self) -> tuple[tuple[K, V, float, int, bool], ...]:
+        """Return live semantic rows in stable insertion order for checkpointing."""
+
+        return tuple(
+            (
+                key,
+                self._items[key],
+                self._deadlines[key],
+                self._orders[key],
+                key in self._protected,
+            )
+            for key in sorted(self._items, key=self._orders.__getitem__)
+        )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, V, float, int, bool], ...],
+    ) -> None:
+        """Hydrate semantic rows into a fresh index and rebuild its expiry heap."""
+
+        if self._items:
+            raise ValueError("checkpoint index hydration requires a fresh empty index")
+        prior_order = -1
+        for key, value, deadline, order, protected in records:
+            hash(key)
+            if (
+                key in self._items
+                or type(order) is not int
+                or order < 0
+                or order <= prior_order
+                or type(deadline) not in {int, float}
+                or type(protected) is not bool
+            ):
+                raise ValueError("checkpoint index row is invalid or out of order")
+            canonical_deadline = float(deadline)
+            if math.isnan(canonical_deadline):
+                raise ValueError("checkpoint index deadline cannot be NaN")
+            self._items[key] = value
+            self._deadlines[key] = canonical_deadline
+            self._orders[key] = order
+            self._versions[key] = 1
+            if protected:
+                self._protected.add(key)
+            else:
+                heapq.heappush(self._heap, (canonical_deadline, order, 1, key))
+            prior_order = order
+        self._next_order = prior_order + 1
+        self._high_water_mark = len(self._items)
+        self._protected_high_water_mark = len(self._protected)
+
     def set(self, key: K, value: V, deadline: float) -> None:
         """Insert or update a value and its sortable deadline."""
         if key not in self._orders:

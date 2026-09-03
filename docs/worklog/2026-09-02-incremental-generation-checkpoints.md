@@ -167,3 +167,9 @@ until every correctness and performance gate passes.
   LRU and rebuilds cache diagnostics, locks, samplers, and ownership lanes; a retained owner claim
   fails the barrier. The 105-test core timing/checkpoint group passes, and a real minimal
   hour-one barrier produced a 7,928-byte head with no immutable segments.
+- `ExpiringIndex` now exports stable live semantic rows and hydrates them into a fresh index while
+  rebuilding expiry/protection authority. Stale heap nodes, obsolete versions, and compaction
+  diagnostics are intentionally excluded, so activity and protocol owners can checkpoint bounded
+  expiry-backed state without turning internal maintenance history into durable history. Hydration
+  rejects duplicate/out-of-order rows and non-orderable NaN deadlines. The generation-index and
+  incremental-checkpoint group has 95 passing tests.
