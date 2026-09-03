@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import random
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import TypeAdapter, ValidationError
 
+from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import DirectionalTrafficLedger, NetworkTrafficLedger
+from evidenceforge.events.rdp import (
+    RdpLogicalSessionIdentity,
+    RdpRetentionLease,
+    RdpSessionAffinity,
+    RdpSessionSnapshot,
+    RdpSessionState,
+    RdpTransportGeneration,
+)
 from evidenceforge.models.state import (
     ActiveSession,
     OpenConnection,
@@ -132,14 +141,86 @@ _SMB_FILE_STATE_FIELDS = (
 _SESSION_END_PLAN_FIELDS = ("canonical_end", "authority", "storyline_event_id")
 _DIRECTIONAL_TRAFFIC_FIELDS = ("payload_bytes", "packets", "ip_bytes")
 _NETWORK_TRAFFIC_FIELDS = ("orig", "resp", "missed_orig_bytes", "missed_resp_bytes")
+_APPLICATION_CHANNEL_BUDGET_FIELDS = ("initiator_bytes", "responder_bytes", "operations")
+_APPLICATION_TRANSPORT_BINDING_FIELDS = ("transport_id", "opened_at", "closes_at")
+_RDP_SESSION_AFFINITY_FIELDS = (
+    "source_host",
+    "source_address",
+    "target_host",
+    "target_address",
+    "principal",
+    "logon_id",
+    "session_id",
+    "digest",
+)
+_RDP_LOGICAL_SESSION_IDENTITY_FIELDS = (
+    "logical_session_id",
+    "affinity",
+    "started_at",
+    "idle_timeout",
+    "reconnect_timeout",
+    "hard_deadline",
+    "budget",
+)
+_RDP_TRANSPORT_GENERATION_FIELDS = (
+    "ordinal",
+    "channel_id",
+    "binding",
+    "connected_at",
+    "idle_deadline",
+    "disconnected_at",
+)
+_RDP_RETENTION_LEASE_FIELDS = (
+    "lease_id",
+    "logical_session_id",
+    "acquired_at",
+    "retain_until",
+    "reason",
+)
+_RDP_SESSION_SNAPSHOT_FIELDS = (
+    "identity",
+    "state",
+    "generation",
+    "last_transition_at",
+    "reconnect_deadline",
+    "logged_out_at",
+    "retention_deadline",
+    "reserved_initiator_bytes",
+    "reserved_responder_bytes",
+    "reserved_operations",
+    "completed_operations",
+    "active_operations",
+    "member_admissions",
+    "dependent_admissions",
+    "active_leases",
+)
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "active-session": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "application-channel-budget": (
+        ApplicationChannelBudget,
+        _APPLICATION_CHANNEL_BUDGET_FIELDS,
+    ),
+    "application-transport-binding": (
+        ApplicationTransportBinding,
+        _APPLICATION_TRANSPORT_BINDING_FIELDS,
+    ),
     "directional-traffic": (DirectionalTrafficLedger, _DIRECTIONAL_TRAFFIC_FIELDS),
     "network-traffic": (NetworkTrafficLedger, _NETWORK_TRAFFIC_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
+    "rdp-logical-session-identity": (
+        RdpLogicalSessionIdentity,
+        _RDP_LOGICAL_SESSION_IDENTITY_FIELDS,
+    ),
+    "rdp-retention-lease": (RdpRetentionLease, _RDP_RETENTION_LEASE_FIELDS),
+    "rdp-session-affinity": (RdpSessionAffinity, _RDP_SESSION_AFFINITY_FIELDS),
+    "rdp-session-snapshot": (RdpSessionSnapshot, _RDP_SESSION_SNAPSHOT_FIELDS),
+    "rdp-transport-generation": (
+        RdpTransportGeneration,
+        _RDP_TRANSPORT_GENERATION_FIELDS,
+    ),
     "session-end-plan": (SessionEndPlan, _SESSION_END_PLAN_FIELDS),
     "smb-file-state": (SmbFileState, _SMB_FILE_STATE_FIELDS),
 }
@@ -162,6 +243,10 @@ def encode_state_value(value: object) -> object:
         return value
     if type(value) is datetime:
         return ["datetime", value.isoformat()]
+    if type(value) is timedelta:
+        return ["timedelta", value.days, value.seconds, value.microseconds]
+    if type(value) is RdpSessionState:
+        return ["rdp-session-state", value.value]
     value_type = type(value)
     record_tag = _TAGS_BY_TYPE.get(value_type)
     if record_tag is not None:
@@ -217,6 +302,25 @@ def decode_state_value(value: object) -> object:
         if decoded.tzinfo is None or decoded.utcoffset() is None:
             raise CheckpointCorruptionError("StateManager checkpoint datetime lacks an offset")
         return decoded
+    if tag == "timedelta":
+        _tag, days, seconds, microseconds = _tagged(tagged, length=4)
+        if (
+            type(days) is not int
+            or type(seconds) is not int
+            or type(microseconds) is not int
+            or not 0 <= seconds < 86_400
+            or not 0 <= microseconds < 1_000_000
+        ):
+            raise CheckpointCorruptionError("StateManager checkpoint timedelta is invalid")
+        return timedelta(days=days, seconds=seconds, microseconds=microseconds)
+    if tag == "rdp-session-state":
+        _tag, state = _tagged(tagged, length=2)
+        if type(state) is not str:
+            raise CheckpointCorruptionError("RDP checkpoint session state is invalid")
+        try:
+            return RdpSessionState(state)
+        except ValueError as error:
+            raise CheckpointCorruptionError("RDP checkpoint session state is invalid") from error
     if tag == "record":
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:

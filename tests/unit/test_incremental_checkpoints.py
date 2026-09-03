@@ -37,6 +37,12 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
 )
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.rdp import (
+    RdpLogicalSessionIdentity,
+    RdpRetentionLease,
+    RdpSessionAffinity,
+    RdpTransportPlan,
+)
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
@@ -73,6 +79,7 @@ from evidenceforge.generation.checkpoints.participants import (
     OwnerStateField,
     ParticipantSeal,
 )
+from evidenceforge.generation.checkpoints.rdp_head import RdpSessionManagerParticipant
 from evidenceforge.generation.checkpoints.rng import (
     GenerationRngParticipant,
     decode_random_state,
@@ -100,6 +107,7 @@ from evidenceforge.generation.checkpoints.store import (
 )
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -977,6 +985,104 @@ def test_intent_execution_barrier_rejects_prepared_batch_authority() -> None:
 
     with pytest.raises(CheckpointError, match="_batch_claimed_reservations"):
         IntentExecutionLedgerParticipant(ledger).prepare_checkpoint(0)
+
+
+def test_rdp_head_restores_sessions_operations_leases_and_application_bindings() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(hours=2)
+    application = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    manager = RdpReconnectStateManager(
+        application_registry=application,
+        window_start=started,
+        window_end=ended,
+    )
+    identity = RdpLogicalSessionIdentity(
+        logical_session_id="rdp-logical-1",
+        affinity=RdpSessionAffinity(
+            source_host="client.example.test",
+            source_address="10.0.0.1",
+            target_host="server.example.test",
+            target_address="10.0.0.2",
+            principal="EXAMPLE\\user",
+            logon_id="0x100",
+            session_id=1,
+        ),
+        started_at=started,
+        idle_timeout=timedelta(minutes=20),
+        reconnect_timeout=timedelta(minutes=10),
+        hard_deadline=ended,
+        budget=ApplicationChannelBudget(10_000, 20_000, 10),
+    )
+    transport = RdpTransportPlan(
+        channel_id="rdp-channel-1",
+        binding=ApplicationTransportBinding(
+            transport_id="rdp-transport-1",
+            opened_at=started,
+            closes_at=ended,
+        ),
+        connected_at=started,
+        budget=ApplicationChannelBudget(5_000, 10_000, 5),
+    )
+    manager.open_session(identity, transport)
+    operation = manager.reserve_operation(
+        identity.logical_session_id,
+        started_at=started + timedelta(seconds=1),
+        ended_at=started + timedelta(minutes=1),
+        initiator_bytes=100,
+        responder_bytes=200,
+    )
+    lease = RdpRetentionLease(
+        lease_id="lease-1",
+        logical_session_id=identity.logical_session_id,
+        acquired_at=started + timedelta(seconds=2),
+        retain_until=started + timedelta(minutes=30),
+        reason="checkpoint test",
+    )
+    manager.add_retention_lease(lease)
+    expected = manager.get(identity.logical_session_id)
+
+    application_seal = ApplicationChannelRegistryParticipant(application).prepare_checkpoint(0)
+    rdp_seal = RdpSessionManagerParticipant(manager).prepare_checkpoint(0)
+    restored_application = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    ApplicationChannelRegistryParticipant(restored_application).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    restored = RdpReconnectStateManager(
+        application_registry=restored_application,
+        window_start=started,
+        window_end=ended,
+    )
+    RdpSessionManagerParticipant(restored).restore_checkpoint(rdp_seal.head.payload, ())
+
+    assert restored.get(identity.logical_session_id) == expected
+    assert restored.census().active_operations == 1
+    assert restored.census().active_leases == 1
+    assert restored.finalize_operation(
+        identity.logical_session_id, operation.reservation.operation_id
+    )
+    assert restored.release_retention_lease(
+        identity.logical_session_id,
+        lease.lease_id,
+        released_at=started + timedelta(minutes=2),
+    )
+
+
+def test_rdp_barrier_rejects_active_mutation_claim() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    application = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=1),
+    )
+    manager = RdpReconnectStateManager(
+        application_registry=application,
+        window_start=started,
+        window_end=started + timedelta(hours=1),
+    )
+    manager._mutating_logical_session_ids["rdp-logical-1"] = 1
+
+    with pytest.raises(CheckpointError, match="_mutating_logical_session_ids"):
+        RdpSessionManagerParticipant(manager).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

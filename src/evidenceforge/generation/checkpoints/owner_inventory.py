@@ -291,6 +291,85 @@ INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS = _fields(
 )
 
 
+RDP_MANAGER_CHECKPOINT_FIELDS = _fields(
+    live=("_shards", "_watermark"),
+    rebuilt=(
+        "_admission_secret",
+        "_affinity_partitions",
+        "_application",
+        "_directory_lock",
+        "_expiry_compaction_cursor",
+        "_gate",
+        "_manager_id",
+        "_max_leases_per_session",
+        "_next_prepared_reservation_id",
+        "_post_logout_grace",
+        "_prepared_lock",
+        "_retention_horizon",
+        "_route_compaction_cursor",
+        "_shard_compaction_cursor",
+        "_shard_count",
+        "_watermark_lane",
+        "_window_end",
+        "_window_start",
+    ),
+    transient=(
+        "_admission_receipts",
+        "_claimed_admissions",
+        "_mutating_logical_session_ids",
+        "_prepared_admissions",
+        "_prepared_affinity_routes",
+        "_prepared_capabilities",
+        "_prepared_logical_session_ids",
+    ),
+)
+
+
+RDP_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "generation_high_water_mark",
+        "leases",
+        "maximum_lease_bucket",
+        "operations",
+        "sessions",
+    ),
+    rebuilt=(
+        "active_leases",
+        "active_operations",
+        "blocker_expiry",
+        "compaction_cursor",
+        "connected_sessions",
+        "disconnected_sessions",
+        "estimated_value_bytes",
+        "expiry_compaction_cursor",
+        "lease_expiry",
+        "lease_route_deletions",
+        "lease_routes",
+        "lock",
+        "logged_out_sessions",
+        "logical_lookup_candidates_inspected",
+        "operation_deletions",
+        "session_expiry",
+        "session_route_deletions",
+        "session_routes",
+        "shard_id",
+        "snapshot_cache",
+        "snapshot_cache_value_bytes",
+    ),
+)
+
+
+RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
+    rebuilt=(
+        "deletions",
+        "lock",
+        "lookup_candidates_inspected",
+        "partition_id",
+        "routes",
+    ),
+)
+
+
 GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
     live=(
         "_ambient_registry_state",

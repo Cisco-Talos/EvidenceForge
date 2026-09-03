@@ -153,3 +153,10 @@ until every correctness and performance gate passes.
   prepared reservation, retained receipt, or mutation claim fails the checkpoint barrier. The
   64-test ledger/checkpoint regression group passes, and a real minimal hour-one barrier produced
   a 236-byte head with no immutable segments.
+- The reconnectable RDP manager now exports only retained logical-session snapshots, active
+  operation identities, active retention leases, scalar high-water diagnostics, and its canonical
+  watermark. Hydration runs after application-channel hydration and rebuilds packed handles,
+  logical/affinity routes, expiry and blocker indexes, close tokens, counters, caches, locks, and
+  capability authority. Prepared admissions and mutation claims must be empty. A populated
+  session/operation/lease round trip continues through finalization and lease release, 62 focused
+  RDP/checkpoint regressions pass, and a real minimal barrier produced a 260-byte empty head.

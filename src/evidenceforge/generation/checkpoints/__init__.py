@@ -20,6 +20,9 @@ from .owner_inventory import (
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS,
+    RDP_MANAGER_CHECKPOINT_FIELDS,
+    RDP_SHARD_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
@@ -27,6 +30,7 @@ from .owner_inventory import (
     assert_transient_owner_state_empty,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
+from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
 from .source_timing_head import SourceTimingPlannerParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
@@ -59,6 +63,10 @@ __all__ = [
     "ParticipantSeal",
     "ParticipantHead",
     "RunLock",
+    "RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS",
+    "RDP_MANAGER_CHECKPOINT_FIELDS",
+    "RDP_SHARD_CHECKPOINT_FIELDS",
+    "RdpSessionManagerParticipant",
     "SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS",
     "STATE_MANAGER_CHECKPOINT_FIELDS",
     "StateManagerParticipant",
