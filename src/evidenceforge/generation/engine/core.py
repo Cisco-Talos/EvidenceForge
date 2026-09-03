@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
+_RUNTIME_RETIREMENT_HOURS = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,9 +295,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         callback = self.checkpoint_hour_callback
         controller = self._checkpoint_controller
-        if (callback is None and controller is None) or (
-            self.checkpoint_hours == 0 or completed_simulated_hours % self.checkpoint_hours != 0
-        ):
+        checkpoint_due = (
+            (callback is not None or controller is not None)
+            and self.checkpoint_hours > 0
+            and completed_simulated_hours % self.checkpoint_hours == 0
+        )
+        retirement_due = completed_simulated_hours % _RUNTIME_RETIREMENT_HOURS == 0
+        if not checkpoint_due and not retirement_due:
             return
         if self.start_time is None or self.end_time is None:
             raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
@@ -305,10 +310,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._barrier_flush_all_emitters()
         emitter_quiesce_seconds = time.perf_counter() - quiesce_started
         barrier_prepare_seconds = 0.0
-        if controller is not None:
+        if retirement_due or controller is not None:
             barrier_prepare_started = time.perf_counter()
             self._prepare_incremental_checkpoint_barrier(next_hour)
             barrier_prepare_seconds = time.perf_counter() - barrier_prepare_started
+        if not checkpoint_due:
+            return
         if next_hour < self.start_time:
             phase = "warmup"
         elif next_hour < self.end_time:

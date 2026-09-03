@@ -16,7 +16,7 @@ from .participants import OwnerStateField, ParticipantSeal
 from .spools import AppendOnlySpoolParticipant
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 _BLOB_MAGIC = b"EFORGE-EMITTER-SPOOL-2\n"
 _EMPTY_CHAIN = "0" * 64
 
@@ -31,18 +31,10 @@ class _FileState:
 
 
 @dataclass(frozen=True)
-class _RunState:
-    size: int
-    sha256: str
-    device: int
-    inode: int
-
-
-@dataclass(frozen=True)
 class _SortedWriterState:
     event_count: int
     run_sequence: int
-    runs: tuple[_RunState, ...]
+    run_count: int
 
 
 @dataclass(frozen=True)
@@ -303,50 +295,29 @@ class EmitterSpoolParticipant:
             sorted_writer = getattr(writer, "_sorted_writer", None)
             output_path = getattr(writer, "output_path", None)
             if isinstance(sorted_writer, ExternalSortedLineWriter):
-                event_count, run_sequence, paths = sorted_writer.checkpoint_snapshot()
                 prior = self._committed_sorted.get((format_name, route))
-                prior_runs = () if prior is None else prior.runs
-                runs: list[_RunState] = []
-                run_documents: list[dict[str, object]] = []
-                for index, path in enumerate(paths):
+                prior_run_count = 0 if prior is None else prior.run_count
+                event_count, run_sequence, run_count, paths = (
+                    sorted_writer.checkpoint_snapshot_since(prior_run_count)
+                )
+                for index, path in enumerate(paths, start=prior_run_count):
                     key = f"{format_name}\n{route}\n{index}"
-                    if index < len(prior_runs):
-                        retained = prior_runs[index]
-                        info = path.lstat()
-                        if (info.st_size, info.st_dev, info.st_ino) != (
-                            retained.size,
-                            retained.device,
-                            retained.inode,
-                        ):
-                            raise CheckpointFilesystemError(
-                                f"committed external-sort run changed: {path}"
-                            )
-                        state = retained
-                    else:
-                        body, info = _read_file(path)
-                        state = _RunState(
-                            size=len(body),
-                            sha256=hashlib.sha256(body).hexdigest(),
-                            device=info.st_dev,
-                            inode=info.st_ino,
+                    body, _info = _read_file(path)
+                    self.last_bytes_read += len(body)
+                    segments.append(
+                        SegmentDraft(
+                            owner=self.checkpoint_owner,
+                            schema_version=self.checkpoint_schema_version,
+                            payload=_encode_blob(
+                                kind="sorted-run", key=key, offset=0, payload=body
+                            ),
+                            record_count=1,
                         )
-                        self.last_bytes_read += len(body)
-                        segments.append(
-                            SegmentDraft(
-                                owner=self.checkpoint_owner,
-                                schema_version=self.checkpoint_schema_version,
-                                payload=_encode_blob(
-                                    kind="sorted-run", key=key, offset=0, payload=body
-                                ),
-                                record_count=1,
-                            )
-                        )
-                    runs.append(state)
-                    run_documents.append({"key": key, "sha256": state.sha256, "size": state.size})
+                    )
                 state = _SortedWriterState(
                     event_count=event_count,
                     run_sequence=run_sequence,
-                    runs=tuple(runs),
+                    run_count=run_count,
                 )
                 projected_sorted[(format_name, route)] = state
                 checkpoint_writers.append(sorted_writer)
@@ -355,8 +326,8 @@ class EmitterSpoolParticipant:
                         "event_count": event_count,
                         "format": format_name,
                         "route": route,
+                        "run_count": run_count,
                         "run_sequence": run_sequence,
-                        "runs": run_documents,
                     }
                 )
                 continue
@@ -517,12 +488,13 @@ class EmitterSpoolParticipant:
 
         restored_sorted: dict[tuple[str, str], _SortedWriterState] = {}
         for raw in document["sorted"]:
-            if type(raw) is not dict or type(raw.get("runs")) is not list:
+            if type(raw) is not dict:
                 raise CheckpointCorruptionError("emitter sorted head entry is invalid")
             format_name = raw.get("format")
             route = raw.get("route")
             event_count = raw.get("event_count")
             run_sequence = raw.get("run_sequence")
+            run_count = raw.get("run_count")
             if (
                 type(format_name) is not str
                 or format_name not in self.emitters
@@ -531,6 +503,8 @@ class EmitterSpoolParticipant:
                 or event_count < 0
                 or type(run_sequence) is not int
                 or run_sequence < 0
+                or type(run_count) is not int
+                or run_count < 0
                 or (format_name, route) in restored_sorted
             ):
                 raise CheckpointCorruptionError("emitter sorted head entry changed")
@@ -544,36 +518,14 @@ class EmitterSpoolParticipant:
                 raise CheckpointCorruptionError("checkpoint emitter sorting strategy changed")
             spool_dir = sorted_writer._ensure_spool_dir_unlocked()
             paths: list[Path] = []
-            run_states: list[_RunState] = []
-            for index, run in enumerate(raw["runs"]):
-                if type(run) is not dict:
-                    raise CheckpointCorruptionError("external-sort run head is invalid")
-                key = run.get("key")
-                size = run.get("size")
-                digest = run.get("sha256")
-                body = sorted_bodies.pop(key, None) if type(key) is str else None
-                if (
-                    key != f"{format_name}\n{route}\n{index}"
-                    or type(size) is not int
-                    or size < 0
-                    or type(digest) is not str
-                    or body is None
-                    or len(body) != size
-                    or hashlib.sha256(body).hexdigest() != digest
-                ):
-                    raise CheckpointCorruptionError("external-sort run head changed")
+            for index in range(run_count):
+                key = f"{format_name}\n{route}\n{index}"
+                body = sorted_bodies.pop(key, None)
+                if body is None:
+                    raise CheckpointCorruptionError("external-sort run segment is missing")
                 path = spool_dir / f"checkpoint-{index:08d}.ndjson"
                 AppendOnlySpoolParticipant._replace_file(path, [body])
-                info = path.lstat()
                 paths.append(path)
-                run_states.append(
-                    _RunState(
-                        size=size,
-                        sha256=digest,
-                        device=info.st_dev,
-                        inode=info.st_ino,
-                    )
-                )
             sorted_writer.restore_checkpoint_runs(
                 paths=tuple(paths),
                 event_count=event_count,
@@ -583,7 +535,7 @@ class EmitterSpoolParticipant:
             restored_sorted[(format_name, route)] = _SortedWriterState(
                 event_count=event_count,
                 run_sequence=run_sequence,
-                runs=tuple(run_states),
+                run_count=run_count,
             )
         if sorted_bodies:
             raise CheckpointCorruptionError("checkpoint contains an unknown external-sort run")

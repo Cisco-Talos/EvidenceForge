@@ -459,3 +459,24 @@ until every correctness and performance gate passes.
   1,298,014-byte new delta. The retained checkpoint workspace was 45,870,202 bytes versus
   30,306,319 deterministic output bytes. This is a single diagnostic pair, not the acceptance
   matrix or a selected default cadence.
+- The first 60-day incremental scale probe at six-hour cadence produced the exact prior
+  checkpoint-disabled digest and all per-artifact hashes. It completed in 726.033 seconds, with
+  241 checkpoint paths totaling 80.858 seconds and a 316,543,528-byte retained workspace. The
+  comparable full-snapshot experiment required 1,152.141 seconds and 493,403,050 bytes. Live-head
+  size grew only from 5,359,915 bytes at hour 168 to 6,400,585 at hour 720 and 7,144,862 at hour
+  1,440, but the single observed pauses of 0.247, 0.392, and 0.637 seconds require a rotated median
+  before satisfying the two-times scaling gate. No inherited segment bytes were read or hashed.
+- The same-commit checkpoint-disabled 60-day diagnostic completed in 837.322 seconds with a
+  1,571,094,528-byte peak RSS, versus 959,004,672 bytes for the checkpoint run. Because retirement
+  previously ran only at checkpoint barriers, safe pruning more than offset publication work and
+  made this an unfair negative-overhead comparison. A fixed internal six-hour retirement barrier
+  now applies the same safe lifecycle/network pruning to checkpoint-disabled and enabled runs; it
+  is not a user-visible cadence option.
+- External-sort checkpoint metadata now records only bounded per-writer counters and the durable
+  run count. The writer exposes only the suffix after that count, so later checkpoints neither
+  reopen nor stat old immutable runs. Recovery derives run size and hash from the already
+  authenticated immutable segment. In a fair seven-day pair with identical retirement policy,
+  all deterministic artifacts were byte-identical, control was 78.229 seconds, and six-hour
+  checkpointing was 79.253 seconds (1.31% overhead). The hour-168 emitter-spool head fell from
+  160,091 bytes to 1,626 bytes. All 156 focused tests and all three moved-root fresh-process
+  interruption cases pass.

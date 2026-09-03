@@ -2754,6 +2754,13 @@ def test_emitter_spool_imports_each_sorted_run_once_and_resumes_final_merge(
     assert len(first.segments) == 1
     assert len(second.segments) == 1
     assert participant.last_bytes_read == len("1|first\n")
+    first_head = loads(first.head.payload)
+    second_head = loads(second.head.payload)
+    assert type(first_head) is dict and type(second_head) is dict
+    assert first_head["sorted"][0]["run_count"] == 1
+    assert second_head["sorted"][0]["run_count"] == 2
+    assert "runs" not in second_head["sorted"][0]
+    assert len(second.head.payload) < 1_000
 
     restored_root = tmp_path / "restored"
     restored_emitter, _restored_route, restored_writer = checkpoint_emitter(restored_root)

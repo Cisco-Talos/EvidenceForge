@@ -390,8 +390,19 @@ class ExternalSortedLineWriter:
     def checkpoint_snapshot(self) -> tuple[int, int, tuple[Path, ...]]:
         """Return the immutable run set after a checkpoint-mode barrier."""
 
+        event_count, run_sequence, _run_count, paths = self.checkpoint_snapshot_since(0)
+        return event_count, run_sequence, paths
+
+    def checkpoint_snapshot_since(
+        self,
+        committed_run_count: int,
+    ) -> tuple[int, int, int, tuple[Path, ...]]:
+        """Return only runs sealed after an already durable checkpoint prefix."""
+
         if not self._checkpoint_mode:
             raise RuntimeError("external sorted writer is not in checkpoint mode")
+        if committed_run_count < 0:
+            raise ValueError("external sorted checkpoint run count cannot be negative")
         with self._exact_publication_condition:
             if self._active_exact_publication_keys:
                 raise ExactPublicationError(
@@ -400,7 +411,15 @@ class ExternalSortedLineWriter:
             with self._lock:
                 if self._buffer:
                     raise RuntimeError("external sorted checkpoint retains an unsealed buffer")
-                return self.event_count, self._run_sequence, tuple(self._run_paths)
+                run_count = len(self._run_paths)
+                if committed_run_count > run_count:
+                    raise RuntimeError("external sorted checkpoint lost a committed run")
+                return (
+                    self.event_count,
+                    self._run_sequence,
+                    run_count,
+                    tuple(self._run_paths[committed_run_count:]),
+                )
 
     def checkpoint_committed(self) -> None:
         """Retire exact row journals after their immutable runs become durable."""

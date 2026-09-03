@@ -101,12 +101,17 @@ def test_checkpoint_mode_seals_only_new_runs_until_final_merge(tmp_path: Path) -
     writer.write("2|second")
     writer.flush()
     second_count, second_sequence, second_runs = writer.checkpoint_snapshot()
+    delta_count, delta_sequence, total_runs, delta_runs = writer.checkpoint_snapshot_since(
+        len(first_runs)
+    )
 
     assert not output.exists()
     assert second_count == 3
     assert second_sequence == 2
     assert second_runs[:1] == first_runs
     assert len(second_runs) == 2
+    assert (delta_count, delta_sequence, total_runs) == (second_count, second_sequence, 2)
+    assert delta_runs == second_runs[1:]
 
     writer.close()
     assert output.read_text(encoding="utf-8").splitlines() == [
