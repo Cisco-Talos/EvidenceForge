@@ -28,6 +28,10 @@ from evidenceforge.generation.checkpoints.participants import (
     ParticipantSeal,
 )
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+from evidenceforge.generation.checkpoints.spools import (
+    AppendOnlySpoolParticipant,
+    ImmutableSpoolFilesParticipant,
+)
 from evidenceforge.generation.checkpoints.store import (
     HeadDraft,
     IncrementalCheckpointStore,
@@ -198,6 +202,111 @@ def test_packed_primitive_codec_is_deterministic_and_inert() -> None:
         loads(encoded + b"x")
     with pytest.raises(TypeError, match="unsupported"):
         dumps(Path("unsafe"))
+
+
+def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:
+    first_path = tmp_path / "active" / "first.log"
+    second_path = tmp_path / "active" / "second.log"
+    first_path.parent.mkdir()
+    first_path.write_bytes(b"abcdef")
+    second_path.write_bytes(b"123")
+    participant = AppendOnlySpoolParticipant(
+        owner="emitter-append",
+        files={"first": first_path, "second": second_path},
+        chunk_size=2,
+    )
+
+    first = participant.prepare_checkpoint(0)
+    assert participant.last_bytes_read == 9
+    participant.checkpoint_committed(0)
+    with first_path.open("ab") as stream:
+        stream.write(b"ghi")
+    with second_path.open("ab") as stream:
+        stream.write(b"45")
+    second = participant.prepare_checkpoint(1)
+    assert participant.last_bytes_read == 5
+    participant.checkpoint_committed(1)
+
+    restored_first = tmp_path / "restored" / "first.log"
+    restored_second = tmp_path / "restored" / "second.log"
+    restored = AppendOnlySpoolParticipant(
+        owner="emitter-append",
+        files={"first": restored_first, "second": restored_second},
+        chunk_size=2,
+    )
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+    assert restored_first.read_bytes() == b"abcdefghi"
+    assert restored_second.read_bytes() == b"12345"
+
+
+def test_append_spool_aborted_delta_is_resealed_without_advancing(tmp_path: Path) -> None:
+    path = tmp_path / "spool.log"
+    path.write_bytes(b"first")
+    participant = AppendOnlySpoolParticipant(owner="append", files={"main": path})
+    prepared = participant.prepare_checkpoint(0)
+    participant.checkpoint_aborted(0)
+    retry = participant.prepare_checkpoint(0)
+
+    assert retry == prepared
+    assert participant.last_bytes_read == len(b"first")
+
+
+def test_append_spool_rejects_replacement_and_corrupt_chain(tmp_path: Path) -> None:
+    path = tmp_path / "spool.log"
+    path.write_bytes(b"first")
+    participant = AppendOnlySpoolParticipant(owner="append", files={"main": path})
+    prepared = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    replacement = tmp_path / "replacement.log"
+    replacement.write_bytes(b"first-more")
+    os.replace(replacement, path)
+
+    with pytest.raises(Exception, match="identity changed"):
+        participant.prepare_checkpoint(1)
+
+    restored_path = tmp_path / "restored.log"
+    restored = AppendOnlySpoolParticipant(owner="append", files={"main": restored_path})
+    corrupt = bytearray(prepared.segments[0].payload)
+    corrupt[-1] ^= 1
+    with pytest.raises(CheckpointCorruptionError, match="metadata changed"):
+        restored.restore_checkpoint(prepared.head.payload, (bytes(corrupt),))
+
+
+def test_immutable_spool_files_are_imported_once_and_restored(tmp_path: Path) -> None:
+    source = tmp_path / "active"
+    source.mkdir()
+    files = {"run-0": source / "run-0.ndjson"}
+    files["run-0"].write_bytes(b"b\na\n")
+    participant = ImmutableSpoolFilesParticipant(
+        owner="sort-runs",
+        source_files=lambda: files,
+        restore_path=lambda name: tmp_path / "restored" / f"{name}.ndjson",
+    )
+
+    first = participant.prepare_checkpoint(0)
+    assert participant.last_bytes_read == 4
+    participant.checkpoint_committed(0)
+    files["run-1"] = source / "run-1.ndjson"
+    files["run-1"].write_bytes(b"d\nc\n")
+    second = participant.prepare_checkpoint(1)
+    assert participant.last_bytes_read == 4
+    assert len(second.segments) == 1
+    participant.checkpoint_committed(1)
+
+    restored = ImmutableSpoolFilesParticipant(
+        owner="sort-runs",
+        source_files=lambda: {},
+        restore_path=lambda name: tmp_path / "restored" / f"{name}.ndjson",
+    )
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+    assert (tmp_path / "restored" / "run-0.ndjson").read_bytes() == b"b\na\n"
+    assert (tmp_path / "restored" / "run-1.ndjson").read_bytes() == b"d\nc\n"
 
 
 def test_controller_commits_only_due_transactional_participants(tmp_path: Path) -> None:

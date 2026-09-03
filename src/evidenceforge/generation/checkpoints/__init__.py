@@ -10,6 +10,7 @@ from .models import (
     SegmentReference,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
+from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
 from .store import IncrementalCheckpointStore, RunLock
 
 __all__ = [
@@ -18,7 +19,9 @@ __all__ = [
     "CheckpointCursor",
     "CheckpointManifest",
     "CheckpointRecovery",
+    "AppendOnlySpoolParticipant",
     "IncrementalCheckpointStore",
+    "ImmutableSpoolFilesParticipant",
     "IncrementalCheckpointParticipant",
     "OwnerStateField",
     "ParticipantSeal",

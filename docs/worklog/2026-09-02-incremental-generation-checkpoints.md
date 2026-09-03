@@ -39,3 +39,21 @@ Record implementation commits, schema decisions, fault results, byte-identity co
 checkpoint-time growth at simulated hours 6/24/168/720/1440, codec/store trials, resource forecast
 calibration, and the final three-pair performance matrix here. Do not reconcile the durable TODO
 until every correctness and performance gate passes.
+
+## Implementation record
+
+- The initial store publishes canonical bounded heads and content-addressed immutable segments,
+  retains two manifests, garbage-collects only unreferenced objects, validates recovery hashes,
+  and falls back from a corrupt newest generation. Inherited segments are carried by reference
+  and are not reopened or rehashed during a later commit.
+- The cadence coordinator transactionally prepares explicit participants and advances their delta
+  watermarks only after the manifest is durable. Failed publication aborts every prepared owner.
+  No general object-graph encoder or fallback exists.
+- Append-only spool adapters use logical names, committed lengths, fixed maximum chunk sizes, and
+  chained SHA-256 records. A later checkpoint reads strictly from the prior committed length;
+  focused coverage observed nine bytes on the initial seal and only five newly appended bytes on
+  the next seal. Recovery validates the complete chain and recreates fresh files without storing
+  runtime paths.
+- Immutable external-sort run adapters import each logical run once. Later checkpoints skip every
+  imported run without reopening it; recovery validates the content index and recreates the runs
+  at fresh owner-selected locations.
