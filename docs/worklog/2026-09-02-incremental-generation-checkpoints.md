@@ -328,3 +328,16 @@ until every correctness and performance gate passes.
   supplied scenario is recompiled and fingerprint checked. The pre-benchmark unspecified default
   intentionally remains disabled until the acceptance matrix selects a supported cadence. All 39
   slow generation CLI tests, 84 focused checkpoint tests, and repository-wide Ruff gates pass.
+- Cadence barriers now retain a disconnected RDP generation that has durably published its 4779
+  and source-process termination but is still waiting for its reconnect/logout deadline. The head
+  stores the current disconnected manager snapshot, canonical source projection frontiers and
+  disposition, and the completed terminal-ledger timing proof; hydration rebinds it to fresh
+  authorities without repeating the published rows. Split or unacknowledged publication still
+  fails closed. Snort candidate journals now seal only rows beyond the prior SQLite sequence,
+  including empty sequence ranges consumed by already-published raw rows, and rebuild a fresh
+  protected journal on resume. Raw-alert evaluation summaries use a numeric-state SHA-256 whose
+  output matches standard SHA-256, allowing constant-time digest hydration without replaying
+  historical alerts. A two-generation Snort continuation test produces byte-identical evidence
+  and evaluation digests; all 69 incremental tests, 197 focused Snort exact-publication tests, 63
+  IDS tests, and the focused RDP checkpoint tests pass. The next topology-heavy full-participant
+  probe now reaches a separate legacy SSH close entry that still needs an explicit bounded schema.

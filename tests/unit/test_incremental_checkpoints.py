@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -23,6 +24,7 @@ from evidenceforge.events.application import (
 )
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.ids_evaluation import IdsDigest
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleForegroundLease,
@@ -52,6 +54,7 @@ from evidenceforge.events.rdp import (
     RdpSessionAffinity,
     RdpTransportPlan,
 )
+from evidenceforge.formats import load_format
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
@@ -149,6 +152,7 @@ from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointCo
 from evidenceforge.generation.checkpoints.smb_channel_head import (
     SmbApplicationChannelParticipant,
 )
+from evidenceforge.generation.checkpoints.snort_spool import SnortSpoolParticipant
 from evidenceforge.generation.checkpoints.source_timing_head import (
     SourceTimingPlannerParticipant,
 )
@@ -177,6 +181,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
@@ -2770,6 +2775,112 @@ def test_emitter_spool_seals_only_new_append_bytes_and_restores_file(tmp_path: P
     )
 
     assert (restored_root / "host" / "events.log").read_bytes() == b"first\nsecond\n"
+
+
+def _checkpoint_snort_event(second: int, *, candidate: bool) -> dict[str, object]:
+    event: dict[str, object] = {
+        "timestamp": datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=second),
+        "gid": 1,
+        "sid": 1001,
+        "rev": 1,
+        "message": f"checkpoint row {second}",
+        "classification": "misc-activity",
+        "priority": 2,
+        "protocol": "TCP",
+        "src_ip": "10.0.0.1",
+        "src_port": 50_000 + second,
+        "dst_ip": "10.0.0.2",
+        "dst_port": 443,
+        "_cluster_id": "checkpoint-cluster",
+        "_occurrence_id": f"checkpoint-occurrence-{second}",
+        "_ids_origin": "built_in" if candidate else "raw",
+    }
+    if candidate:
+        event["_ids_candidate"] = True
+    return event
+
+
+def _emit_checkpoint_snort_pair(emitter: SnortEmitter, first_second: int) -> None:
+    emitter.emit_event(_checkpoint_snort_event(first_second, candidate=True))
+    emitter.emit_raw(_checkpoint_snort_event(first_second + 1, candidate=False))
+    emitter.barrier_flush()
+
+
+def test_resumable_ids_digest_matches_standard_sha256_across_restore() -> None:
+    """Numeric digest state remains byte-compatible with standard SHA-256."""
+
+    payloads = (b"first", b"-second" * 20, b"-tail")
+    digest = IdsDigest()
+    digest.update(payloads[0])
+    digest.update(payloads[1])
+    restored = IdsDigest.from_checkpoint_state(digest.checkpoint_state())
+    digest.update(payloads[2])
+    restored.update(payloads[2])
+
+    expected = hashlib.sha256(b"".join(payloads)).hexdigest()
+    assert digest.hexdigest() == expected
+    assert restored.hexdigest() == expected
+
+
+def test_snort_spool_seals_only_new_candidates_and_resumes_digest_state(
+    tmp_path: Path,
+) -> None:
+    """Candidate segments and numeric SHA state resume without replaying old alerts."""
+
+    source_output = tmp_path / "source" / "snort.log"
+    source = SnortEmitter(load_format("snort_alert"), source_output, threaded=False)
+    participant = SnortSpoolParticipant(source)
+
+    _emit_checkpoint_snort_pair(source, 0)
+    first = participant.prepare_checkpoint(0)
+    assert participant.last_rows_read == 1
+    assert len(first.segments) == 1
+    participant.checkpoint_committed(0)
+
+    _emit_checkpoint_snort_pair(source, 2)
+    second = participant.prepare_checkpoint(1)
+    assert participant.last_rows_read == 1
+    assert len(second.segments) == 1
+    participant.checkpoint_committed(1)
+    unchanged = participant.prepare_checkpoint(2)
+    assert participant.last_rows_read == 0
+    assert unchanged.segments == ()
+    participant.checkpoint_aborted(2)
+
+    restored_output = tmp_path / "restored" / "snort.log"
+    restored_output.parent.mkdir(parents=True)
+    restored_output.write_bytes(source_output.read_bytes())
+    restored = SnortEmitter(load_format("snort_alert"), restored_output, threaded=False)
+    restored_participant = SnortSpoolParticipant(restored)
+    restored_participant.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+
+    _emit_checkpoint_snort_pair(source, 4)
+    _emit_checkpoint_snort_pair(restored, 4)
+    source.close()
+    restored.close()
+
+    assert restored_output.read_bytes() == source_output.read_bytes()
+    assert restored.ids_evaluation_summary == source.ids_evaluation_summary
+
+
+def test_snort_spool_rejects_missing_candidate_segment() -> None:
+    """A head cannot claim a candidate sequence absent from its immutable chain."""
+
+    document = {
+        "candidate_sequence": 1,
+        "evaluation": [],
+        "known_sensors": ["__direct__"],
+        "next_epoch": 1,
+        "schema_version": "1",
+        "spool_state": [1, *([0] * 20), ""],
+    }
+    participant = SnortSpoolParticipant(SimpleNamespace())
+
+    with pytest.raises(CheckpointCorruptionError, match="segments are incomplete"):
+        participant.restore_checkpoint(dumps(document), ())
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ from .proxy_channel_head import ExplicitProxyChannelParticipant
 from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
 from .smb_channel_head import SmbApplicationChannelParticipant
+from .snort_spool import SnortSpoolParticipant
 from .source_timing_head import SourceTimingPlannerParticipant
 from .sqlite_spool import SQLiteSpoolParticipant
 from .ssh_channel_head import SshApplicationChannelParticipant
@@ -93,6 +94,9 @@ def production_checkpoint_participants(
             participants.append(
                 DeferredSourceSpoolParticipant(format_name=format_name, emitter=emitter)
             )
+    snort = engine.emitters.get("snort_alert")
+    if snort is not None:
+        participants.append(SnortSpoolParticipant(snort))
     process_caches = getattr(generator, "_production_process_runtime_caches", None)
     if process_caches is not None:
         participants.append(ProcessRuntimeCachesParticipant(process_caches))

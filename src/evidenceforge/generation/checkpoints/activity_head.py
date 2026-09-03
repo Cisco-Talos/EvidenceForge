@@ -28,7 +28,7 @@ from .participants import OwnerStateField, ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 # These are the bounded, output-affecting leaves owned directly by ActivityGenerator. Shared
 # managers and protocol registries have separate participants; scenario indexes are rebuilt.
@@ -305,6 +305,7 @@ def _restore_foreground(generator: ActivityGenerator, rows: object) -> None:
 
 
 def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
+    from evidenceforge.events.rdp import RdpSessionState
     from evidenceforge.generation.actions.rdp_session import _RdpLifecycleContinuation
     from evidenceforge.generation.activity.generator import _RdpLifecycleJournalEntry
 
@@ -326,20 +327,75 @@ def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
         prepared = continuation.prepared
         ledger = prepared.projection_ledger
         with ledger._lock:
-            ledger_dirty = bool(ledger._completed or ledger._recoveries or ledger._timing_proofs)
+            completed_phases = sorted(ledger._completed)
+            recoveries = dict(ledger._recoveries)
+            timing_proofs = dict(ledger._timing_proofs)
+        if recoveries:
+            raise CheckpointError(
+                "RDP checkpoint barrier retains an unacknowledged publication recovery"
+            )
         if (
-            entry.disconnect_published
-            or entry.source_terminated
-            or entry.source_termination_at is not None
-            or entry.source_projection_frontiers
-            or entry.source_projection_disposition is not None
-            or entry.manager_logged_out
+            entry.manager_logged_out
             or entry.target_terminations is not None
             or entry.logout_published
-            or ledger_dirty
         ):
-            raise CheckpointError(
-                "RDP checkpoint barrier retains a partially published lifecycle continuation"
+            raise CheckpointError("RDP checkpoint barrier split one terminal logout operation")
+        if entry.disconnect_published != entry.source_terminated:
+            raise CheckpointError("RDP checkpoint barrier split one disconnect operation")
+        if entry.source_terminated != (entry.source_termination_at is not None):
+            raise CheckpointError("RDP checkpoint source termination state is incomplete")
+        current_session = generator._rdp_session_manager.get(
+            continuation.session.identity.logical_session_id
+        )
+        if current_session is None or (
+            current_session.identity != continuation.session.identity
+            or current_session.generation.ordinal != continuation.session.generation.ordinal
+            or current_session.generation.binding.transport_id
+            != continuation.session.generation.binding.transport_id
+        ):
+            raise CheckpointError("RDP checkpoint continuation lost manager generation authority")
+        expected_state = (
+            RdpSessionState.DISCONNECTED
+            if entry.disconnect_published
+            else RdpSessionState.CONNECTED
+        )
+        if current_session.state is not expected_state:
+            raise CheckpointError("RDP checkpoint continuation changed manager lifecycle state")
+        if entry.disconnect_published:
+            if (
+                current_session.generation.disconnected_at != continuation.disconnect_at
+                or entry.source_termination_at != continuation.disconnect_at
+                or not generator._rdp_source_projection_proof_complete(
+                    entry,
+                    prepared.source_identity,
+                )
+            ):
+                raise CheckpointError("RDP checkpoint disconnect progress lost its durable proof")
+        elif entry.source_projection_frontiers or entry.source_projection_disposition is not None:
+            raise CheckpointError("RDP checkpoint pristine continuation retained source progress")
+        expected_phases = (
+            {"disconnect", f"process:{prepared.source_identity.object_id}"}
+            if entry.disconnect_published and prepared.source_identity is not None
+            else {"disconnect"}
+            if entry.disconnect_published
+            else set()
+        )
+        if set(completed_phases) != expected_phases or set(timing_proofs) != (
+            expected_phases - {"disconnect"}
+        ):
+            raise CheckpointError("RDP checkpoint terminal ledger disagrees with journal progress")
+        proof_rows: list[list[object]] = []
+        for phase, proof in sorted(timing_proofs.items()):
+            proof_rows.append(
+                [
+                    phase,
+                    encode_state_value(proof.canonical_time),
+                    [
+                        [format_name, source_ordinal, encode_state_value(timestamp)]
+                        for format_name, source_ordinal, timestamp in proof.source_frontiers
+                    ],
+                    proof.disposition.value,
+                ]
             )
         rows.append(
             [
@@ -355,7 +411,21 @@ def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 prepared.expected_generation,
                 prepared.source_tag,
                 encode_state_value(continuation.transaction),
-                encode_state_value(continuation.session),
+                encode_state_value(current_session),
+                entry.disconnect_published,
+                entry.source_terminated,
+                encode_state_value(entry.source_termination_at),
+                [
+                    [format_name, source_ordinal, encode_state_value(timestamp)]
+                    for format_name, source_ordinal, timestamp in entry.source_projection_frontiers
+                ],
+                (
+                    entry.source_projection_disposition.value
+                    if entry.source_projection_disposition is not None
+                    else None
+                ),
+                completed_phases,
+                proof_rows,
             ]
         )
     return rows
@@ -392,12 +462,15 @@ def _canonical_session_identity(
 
 
 def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
+    from evidenceforge.events.dispatcher import ActionCohortProjectionDisposition
+    from evidenceforge.events.rdp import RdpSessionState
     from evidenceforge.generation.actions.network_connection import (
         NetworkConnectionIdentityCapture,
     )
     from evidenceforge.generation.actions.rdp_session import (
         _PreparedRdpLifecycleContinuation,
         _RdpLifecycleContinuation,
+        _RdpTerminalProjectionTimingProof,
     )
     from evidenceforge.generation.activity.generator import _RdpLifecycleJournalEntry
 
@@ -410,7 +483,7 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
     for row in rows:
         if (
             type(row) is not list
-            or len(row) != 13
+            or len(row) != 20
             or type(row[0]) is not str
             or not row[0]
             or type(row[2]) is not str
@@ -420,6 +493,14 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             or row[9] < 0
             or type(row[10]) is not str
             or not row[10]
+            or type(row[13]) is not bool
+            or type(row[14]) is not bool
+            or type(row[16]) is not list
+            or (row[17] is not None and type(row[17]) is not str)
+            or type(row[18]) is not list
+            or any(type(phase) is not str or not phase for phase in row[18])
+            or len(row[18]) != len(set(row[18]))
+            or type(row[19]) is not list
             or row[0] in restored
         ):
             raise CheckpointCorruptionError("RDP checkpoint journal row is invalid")
@@ -433,6 +514,7 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
         action_source_deadline = decode_state_value(row[8])
         transaction = decode_state_value(row[11])
         stored_session = decode_state_value(row[12])
+        source_termination_at = decode_state_value(row[15])
         if (
             not isinstance(target_system, System)
             or not isinstance(user, User)
@@ -449,6 +531,13 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             )
             or type(transaction) is not NetworkTransactionPlan
             or type(stored_session) is not RdpSessionSnapshot
+            or (
+                source_termination_at is not None
+                and (
+                    type(source_termination_at) is not datetime
+                    or source_termination_at.tzinfo is not UTC
+                )
+            )
         ):
             raise CheckpointCorruptionError("RDP checkpoint journal row changed type")
         manager_session = generator._rdp_session_manager.get(
@@ -478,9 +567,110 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             transaction=transaction,
             session=manager_session,
         )
+        try:
+            disposition = (
+                ActionCohortProjectionDisposition(row[17]) if row[17] is not None else None
+            )
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "RDP checkpoint source projection disposition is invalid"
+            ) from error
+        source_frontiers: list[tuple[str, int, datetime]] = []
+        for frontier_row in row[16]:
+            if (
+                type(frontier_row) is not list
+                or len(frontier_row) != 3
+                or type(frontier_row[0]) is not str
+                or type(frontier_row[1]) is not int
+                or frontier_row[1] < 0
+            ):
+                raise CheckpointCorruptionError("RDP checkpoint source frontier is invalid")
+            timestamp = decode_state_value(frontier_row[2])
+            if type(timestamp) is not datetime or timestamp.tzinfo is not UTC:
+                raise CheckpointCorruptionError("RDP checkpoint source frontier is invalid")
+            source_frontiers.append((frontier_row[0], frontier_row[1], timestamp))
+        proofs: dict[str, _RdpTerminalProjectionTimingProof] = {}
+        for proof_row in row[19]:
+            if (
+                type(proof_row) is not list
+                or len(proof_row) != 4
+                or type(proof_row[0]) is not str
+                or proof_row[0] in proofs
+                or type(proof_row[2]) is not list
+                or type(proof_row[3]) is not str
+            ):
+                raise CheckpointCorruptionError("RDP checkpoint timing proof is invalid")
+            canonical_time = decode_state_value(proof_row[1])
+            proof_frontiers: list[tuple[str, int, datetime]] = []
+            for proof_frontier in proof_row[2]:
+                if (
+                    type(proof_frontier) is not list
+                    or len(proof_frontier) != 3
+                    or type(proof_frontier[0]) is not str
+                    or type(proof_frontier[1]) is not int
+                ):
+                    raise CheckpointCorruptionError("RDP checkpoint timing proof is invalid")
+                proof_time = decode_state_value(proof_frontier[2])
+                if type(proof_time) is not datetime or proof_time.tzinfo is not UTC:
+                    raise CheckpointCorruptionError("RDP checkpoint timing proof is invalid")
+                proof_frontiers.append((proof_frontier[0], proof_frontier[1], proof_time))
+            if type(canonical_time) is not datetime or canonical_time.tzinfo is not UTC:
+                raise CheckpointCorruptionError("RDP checkpoint timing proof is invalid")
+            try:
+                proofs[proof_row[0]] = _RdpTerminalProjectionTimingProof(
+                    canonical_time=canonical_time,
+                    source_frontiers=tuple(proof_frontiers),
+                    disposition=ActionCohortProjectionDisposition(proof_row[3]),
+                )
+            except (StateError, ValueError) as error:
+                raise CheckpointCorruptionError("RDP checkpoint timing proof is invalid") from error
+        expected_phases = (
+            {"disconnect", f"process:{source_identity.object_id}"}
+            if row[13] and source_identity is not None
+            else {"disconnect"}
+            if row[13]
+            else set()
+        )
+        if set(row[18]) != expected_phases or set(proofs) != (expected_phases - {"disconnect"}):
+            raise CheckpointCorruptionError(
+                "RDP checkpoint terminal ledger disagrees with journal progress"
+            )
+        for phase in row[18]:
+            prepared.mark_terminal_projection_complete(phase, timing_proof=proofs.get(phase))
         if continuation.disconnect_at < generator._rdp_lifecycle_watermark:
             raise CheckpointCorruptionError("RDP checkpoint continuation predates its watermark")
-        restored[row[0]] = _RdpLifecycleJournalEntry(continuation)
+        if row[13] != row[14] or row[14] != (source_termination_at is not None):
+            raise CheckpointCorruptionError("RDP checkpoint disconnect progress is inconsistent")
+        expected_state = RdpSessionState.DISCONNECTED if row[13] else RdpSessionState.CONNECTED
+        if manager_session.state is not expected_state:
+            raise CheckpointCorruptionError(
+                "RDP checkpoint manager lifecycle state is inconsistent"
+            )
+        restored_entry = _RdpLifecycleJournalEntry(
+            continuation,
+            disconnect_published=row[13],
+            source_terminated=row[14],
+            source_termination_at=source_termination_at,
+            source_projection_frontiers=tuple(source_frontiers),
+            source_projection_disposition=disposition,
+        )
+        if row[13]:
+            if (
+                manager_session.generation.disconnected_at != continuation.disconnect_at
+                or source_termination_at != continuation.disconnect_at
+                or not generator._rdp_source_projection_proof_complete(
+                    restored_entry,
+                    source_identity,
+                )
+            ):
+                raise CheckpointCorruptionError(
+                    "RDP checkpoint disconnect progress lost its durable proof"
+                )
+        elif source_frontiers or disposition is not None:
+            raise CheckpointCorruptionError(
+                "RDP checkpoint pristine continuation retained source progress"
+            )
+        restored[row[0]] = restored_entry
     if len(restored) > generator._rdp_lifecycle_journal_capacity:
         raise CheckpointCorruptionError("RDP checkpoint journal exceeds its bounded capacity")
     with generator._rdp_lifecycle_journal_lock:
