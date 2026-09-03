@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import socket
 import sqlite3
 from datetime import UTC, datetime
@@ -28,6 +29,11 @@ from evidenceforge.generation.checkpoints.participants import (
     OwnerStateField,
     ParticipantSeal,
 )
+from evidenceforge.generation.checkpoints.rng import (
+    GenerationRngParticipant,
+    decode_random_state,
+    encode_random_state,
+)
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.checkpoints.spools import (
     AppendOnlySpoolParticipant,
@@ -40,6 +46,7 @@ from evidenceforge.generation.checkpoints.store import (
     RunLock,
     SegmentDraft,
 )
+from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
 _FINGERPRINT = "1" * 64
 
@@ -204,6 +211,34 @@ def test_packed_primitive_codec_is_deterministic_and_inert() -> None:
         loads(encoded + b"x")
     with pytest.raises(TypeError, match="unsupported"):
         dumps(Path("unsafe"))
+
+
+def test_rng_numeric_schema_restores_exact_stream() -> None:
+    with generation_seed_scope(8675309):
+        reset_thread_rng()
+        rng = _get_rng()
+        _ = [rng.random() for _ in range(10)]
+        state = rng.getstate()
+        document = encode_random_state(state)
+        assert decode_random_state(document) == state
+        participant = GenerationRngParticipant()
+        seal = participant.prepare_checkpoint(0)
+        participant.checkpoint_committed(0)
+        expected = [rng.getrandbits(64) for _ in range(20)]
+        _ = [rng.random() for _ in range(10)]
+
+        participant.restore_checkpoint(seal.head.payload, ())
+
+        assert [rng.getrandbits(64) for _ in range(20)] == expected
+
+
+def test_rng_numeric_schema_rejects_invalid_word() -> None:
+    state = encode_random_state(random.Random(1).getstate())
+    words = state["state"]
+    assert isinstance(words, list)
+    words[0] = -1
+    with pytest.raises(CheckpointCorruptionError, match="unsupported or corrupt"):
+        decode_random_state(state)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

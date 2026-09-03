@@ -10,6 +10,7 @@ from .models import (
     SegmentReference,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
+from .rng import GenerationRngParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
 from .sqlite_spool import SQLiteSpoolParticipant
 from .store import IncrementalCheckpointStore, RunLock
@@ -20,6 +21,7 @@ __all__ = [
     "CheckpointCursor",
     "CheckpointManifest",
     "CheckpointRecovery",
+    "GenerationRngParticipant",
     "AppendOnlySpoolParticipant",
     "IncrementalCheckpointStore",
     "ImmutableSpoolFilesParticipant",

@@ -74,3 +74,9 @@ until every correctness and performance gate passes.
   post-boundary cursor (`warmup`, `collection`, or `tail`). It does not add initialization,
   phase-only, or pre-finalization recovery points; the public CLI remains intentionally unwired
   until all required owners can hydrate safely.
+- The active generation RNG has a portable, explicit MT19937 schema: 624 unsigned state words,
+  the bounded index, algorithm/version tags, and optional Gaussian cache. An exact-stream test
+  advances the generator, restores the numeric head, and reproduces the next twenty 64-bit values.
+- Warm-up boundary ordering is explicit. When cadence lands exactly at collection start, the
+  warm-up-only texture state is reset and sensor startup evidence is emitted before the single
+  post-transition collection cursor is offered to the checkpoint controller.

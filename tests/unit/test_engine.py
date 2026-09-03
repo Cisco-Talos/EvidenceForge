@@ -147,6 +147,29 @@ class TestGenerationEngine:
         with pytest.raises(ValueError, match="non-negative integer"):
             GenerationEngine(minimal_scenario, tmp_path, checkpoint_hours=-1)
 
+    def test_warmup_boundary_checkpoint_contains_post_transition_state(self):
+        """A cadence point at collection start should follow reset and sensor startup."""
+
+        engine = object.__new__(GenerationEngine)
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        engine.warmup_start_time = start - timedelta(hours=1)
+        engine.warmup_duration = timedelta(hours=1)
+        engine.scenario = Mock(environment=Mock(users=[]))
+        engine.state_manager = Mock()
+        engine.activity_generator = Mock()
+        engine._report_progress = Mock()
+        engine._emit_dhcp_leases = Mock()
+        engine._generate_hour = Mock()
+        order: list[str] = []
+        engine._emit_sensor_startup = lambda: order.append("sensor-startup")
+        engine._checkpoint_after_completed_hour = lambda **_kwargs: order.append("checkpoint")
+
+        engine._generate_baseline()
+
+        assert order[:2] == ["sensor-startup", "checkpoint"]
+
     """Tests for GenerationEngine class."""
 
     @pytest.fixture(autouse=True)

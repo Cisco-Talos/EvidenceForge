@@ -5503,10 +5503,11 @@ class BaselineMixin:
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
-                self._checkpoint_after_completed_hour(
-                    completed_simulated_hours=warmup_count,
-                    next_hour=next_hour,
-                )
+                if next_hour < self.start_time:
+                    self._checkpoint_after_completed_hour(
+                        completed_simulated_hours=warmup_count,
+                        next_hour=next_hour,
+                    )
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -5522,6 +5523,14 @@ class BaselineMixin:
 
         # --- Real baseline: emit sensor startup and begin output ---
         self._emit_sensor_startup()
+        if warmup_hours > 0:
+            # A cadence point coincident with this phase boundary must contain the
+            # post-transition state: warm-up-only texture is reset and sensor startup
+            # has already been emitted before the collection cursor is published.
+            self._checkpoint_after_completed_hour(
+                completed_simulated_hours=warmup_hours,
+                next_hour=self.start_time,
+            )
 
         current_hour = self.start_time
         hour_count = 0
