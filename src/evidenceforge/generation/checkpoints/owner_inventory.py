@@ -258,6 +258,39 @@ APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS = _fields(
 )
 
 
+INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_aggregates",
+        "_hot_identities",
+        "_watermark_us",
+    ),
+    rebuilt=(
+        "_authored",
+        "_authored_ids",
+        "_batch_ledger_id",
+        "_batch_prepared_delta_capacity",
+        "_batch_prepared_intent_capacity",
+        "_batch_reservation_capacity",
+        "_hot_identity_capacity",
+        "_hot_identity_heap",
+        "_identity_sample_limit",
+        "_lock",
+        "_next_batch_preparation_id",
+    ),
+    transient=(
+        "_batch_capability_locators",
+        "_batch_claimed_preparation_id",
+        "_batch_claimed_reservations",
+        "_batch_committed_receipts",
+        "_batch_prepared_commit_plans",
+        "_batch_prepared_deltas",
+        "_batch_reservations",
+        "_batch_reserved_intents",
+        "_batch_retained_bytes",
+    ),
+)
+
+
 GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
     live=(
         "_ambient_registry_state",

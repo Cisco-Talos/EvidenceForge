@@ -146,3 +146,10 @@ until every correctness and performance gate passes.
   focused round trip is green, and a real minimal hour-one barrier produced a 7,473-byte head
   with no immutable segments. Scenario-dependent Linux, protocol, and activity caches remain to
   be classified before the engine participant can be wired into production cadence checkpoints.
+- The authored-intent execution ledger now has an exhaustive owner inventory and a bounded
+  semantic head for lifetime count/digest aggregates, deterministic identity samples, 30-day
+  reporting buckets, the seven-day/capacity-limited exact identity cache, and its watermark.
+  Hydration rebuilds the eviction heap and all locks, secrets, and batch infrastructure; any
+  prepared reservation, retained receipt, or mutation claim fails the checkpoint barrier. The
+  64-test ledger/checkpoint regression group passes, and a real minimal hour-one barrier produced
+  a 236-byte head with no immutable segments.

@@ -19,6 +19,7 @@ from evidenceforge.events.application import (
     ApplicationOperationReservation,
     ApplicationTransportBinding,
 )
+from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleForegroundLease,
@@ -47,6 +48,9 @@ from evidenceforge.generation.checkpoints.errors import (
     CheckpointError,
     CheckpointLockError,
 )
+from evidenceforge.generation.checkpoints.intent_ledger_head import (
+    IntentExecutionLedgerParticipant,
+)
 from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.models import (
     CheckpointCursor,
@@ -56,6 +60,7 @@ from evidenceforge.generation.checkpoints.models import (
 from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
@@ -93,6 +98,7 @@ from evidenceforge.generation.checkpoints.store import (
     RunLock,
     SegmentDraft,
 )
+from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
@@ -301,6 +307,7 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         window_start=datetime(2026, 1, 1, tzinfo=UTC),
         window_end=datetime(2026, 1, 2, tzinfo=UTC),
     )
+    intent_execution = IntentExecutionLedger(AuthoredIntentLedger("checkpoint-test", ()))
 
     assert_complete_owner_inventory(
         manager,
@@ -321,6 +328,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         application_channels,
         APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
         owner_name="application-channels",
+    )
+    assert_complete_owner_inventory(
+        intent_execution,
+        INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
+        owner_name="intent-execution-ledger",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -926,6 +938,45 @@ def test_application_channel_barrier_rejects_retained_capabilities() -> None:
 
     with pytest.raises(CheckpointError, match="_recoverable_admission_slots"):
         ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
+
+
+def test_intent_execution_head_round_trips_bounded_aggregates_and_hot_identity() -> None:
+    authored = AuthoredIntentLedger("checkpoint-test", ())
+    ledger = IntentExecutionLedger(authored, hot_identity_capacity=16)
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    occurrence = SemanticOccurrenceKey(
+        action_id="action-1",
+        role=OccurrenceRole.PRIMARY,
+        instance_key="instance-1",
+    )
+    ledger.mark_planned("unexpected-intent")
+    ledger.record_occurrence("unexpected-intent", occurrence, timestamp)
+    ledger.record_occurrence("unexpected-intent", occurrence, timestamp + timedelta(seconds=1))
+    ledger.record_observation(
+        "unexpected-intent",
+        "windows_security",
+        "visible",
+        timestamp + timedelta(seconds=2),
+    )
+
+    seal = IntentExecutionLedgerParticipant(ledger).prepare_checkpoint(0)
+    assert not seal.segments
+    restored = IntentExecutionLedger(authored, hot_identity_capacity=16)
+    IntentExecutionLedgerParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.snapshot() == ledger.snapshot()
+    assert restored.diagnostics() == ledger.diagnostics()
+    ledger.record_occurrence("unexpected-intent", occurrence, timestamp + timedelta(hours=1))
+    restored.record_occurrence("unexpected-intent", occurrence, timestamp + timedelta(hours=1))
+    assert restored.snapshot() == ledger.snapshot()
+
+
+def test_intent_execution_barrier_rejects_prepared_batch_authority() -> None:
+    ledger = IntentExecutionLedger(AuthoredIntentLedger("checkpoint-test", ()))
+    ledger._batch_claimed_reservations = 1
+
+    with pytest.raises(CheckpointError, match="_batch_claimed_reservations"):
+        IntentExecutionLedgerParticipant(ledger).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

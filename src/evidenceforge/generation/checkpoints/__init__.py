@@ -3,6 +3,7 @@
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .cadence import CheckpointCadence
 from .engine_head import GenerationEngineParticipant
+from .intent_ledger_head import IntentExecutionLedgerParticipant
 from .lifecycle_head import LifecycleRegistryParticipant
 from .models import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -16,6 +17,7 @@ from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     GENERATION_ENGINE_CHECKPOINT_FIELDS,
+    INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
@@ -44,6 +46,8 @@ __all__ = [
     "GenerationRngParticipant",
     "GENERATION_ENGINE_CHECKPOINT_FIELDS",
     "GenerationEngineParticipant",
+    "INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS",
+    "IntentExecutionLedgerParticipant",
     "AppendOnlySpoolParticipant",
     "IncrementalCheckpointStore",
     "ImmutableSpoolFilesParticipant",
