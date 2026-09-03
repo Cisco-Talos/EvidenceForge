@@ -8,10 +8,13 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
+from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.events.rdp import RdpSessionSnapshot
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.process_runtime_cache import BoundedRuntimeCache
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
 
 from .errors import CheckpointCorruptionError, CheckpointError
 from .owner_inventory import (
@@ -99,12 +102,12 @@ _BOUNDED_CACHE_FIELDS = (
     "_ssh_source_ports",
 )
 _FOREGROUND_FINALIZERS = "_foreground_process_finalizers"
+_RDP_LIFECYCLE_JOURNAL = "_pending_rdp_lifecycle_continuations"
 _TRANSIENT_EMPTY_FIELDS = (
     "_expanding_types",
     "_failed_logon_attempt_pending",
     "_linux_sudo_tty_capacity_claims",
     "_pending_linux_sudo_logoffs",
-    "_pending_rdp_lifecycle_continuations",
     "_pending_ssh_manager_closures",
     "_pending_ssh_session_closures",
     "_postfix_queue_states",
@@ -134,7 +137,7 @@ _INCREMENTAL_FIELDS = ("_email_artifact_manifest_spool",)
 
 _ALL_FIELD_GROUPS = (
     (*_DIRECT_FIELDS, *_SCALAR_FIELDS, *_EXPIRING_FIELDS, *_BOUNDED_CACHE_FIELDS),
-    (_FOREGROUND_FINALIZERS,),
+    (_FOREGROUND_FINALIZERS, _RDP_LIFECYCLE_JOURNAL),
     _TRANSIENT_EMPTY_FIELDS,
     _REBUILT_FIELDS,
     _INCREMENTAL_FIELDS,
@@ -155,6 +158,7 @@ class _ActivityHead(BaseModel):
     expiring: dict[str, list[list[object]]] = Field(default_factory=dict)
     bounded_caches: dict[str, list[object]] = Field(default_factory=dict)
     foreground_finalizers: list[list[object]] = Field(default_factory=list)
+    rdp_lifecycles: list[list[object]] = Field(default_factory=list)
 
 
 def _capture_expiring(index: ExpiringIndex[Hashable, object]) -> list[list[object]]:
@@ -298,6 +302,191 @@ def _restore_foreground(generator: ActivityGenerator, rows: object) -> None:
     generator._foreground_process_finalizers.restore_checkpoint_records(tuple(records))
 
 
+def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
+    from evidenceforge.generation.actions.rdp_session import _RdpLifecycleContinuation
+    from evidenceforge.generation.activity.generator import _RdpLifecycleJournalEntry
+
+    rows: list[list[object]] = []
+    with generator._rdp_lifecycle_journal_lock:
+        entries = tuple(generator._pending_rdp_lifecycle_continuations.values())
+    for entry in sorted(
+        entries,
+        key=lambda item: (
+            item.continuation.disconnect_at,
+            item.continuation.continuation_id,
+        ),
+    ):
+        if type(entry) is not _RdpLifecycleJournalEntry:
+            raise CheckpointError("RDP checkpoint journal contains a foreign entry")
+        continuation = entry.continuation
+        if type(continuation) is not _RdpLifecycleContinuation:
+            raise CheckpointError("RDP checkpoint journal contains a foreign continuation")
+        prepared = continuation.prepared
+        ledger = prepared.projection_ledger
+        with ledger._lock:
+            ledger_dirty = bool(ledger._completed or ledger._recoveries or ledger._timing_proofs)
+        if (
+            entry.disconnect_published
+            or entry.source_terminated
+            or entry.source_termination_at is not None
+            or entry.source_projection_frontiers
+            or entry.source_projection_disposition is not None
+            or entry.manager_logged_out
+            or entry.target_terminations is not None
+            or entry.logout_published
+            or ledger_dirty
+        ):
+            raise CheckpointError(
+                "RDP checkpoint barrier retains a partially published lifecycle continuation"
+            )
+        rows.append(
+            [
+                continuation.continuation_id,
+                encode_state_value(prepared.session_identity),
+                prepared.target_system.hostname,
+                prepared.user.username,
+                prepared.source_system.hostname if prepared.source_system is not None else None,
+                encode_state_value(prepared.source_identity),
+                encode_state_value(prepared.source_session_identity),
+                encode_state_value(prepared.hard_deadline),
+                encode_state_value(prepared.action_source_deadline),
+                prepared.expected_generation,
+                prepared.source_tag,
+                encode_state_value(continuation.transaction),
+                encode_state_value(continuation.session),
+            ]
+        )
+    return rows
+
+
+def _canonical_process_identity(
+    generator: ActivityGenerator,
+    value: object,
+) -> ProcessIdentity | None:
+    decoded = decode_state_value(value)
+    if decoded is None:
+        return None
+    if type(decoded) is not ProcessIdentity:
+        raise CheckpointCorruptionError("RDP checkpoint process identity is invalid")
+    canonical = generator.state_manager.get_process_identity_by_object_id(decoded.object_id)
+    if canonical != decoded:
+        raise CheckpointCorruptionError("RDP checkpoint process identity lost State authority")
+    return canonical
+
+
+def _canonical_session_identity(
+    generator: ActivityGenerator,
+    value: object,
+) -> SessionIdentity | None:
+    decoded = decode_state_value(value)
+    if decoded is None:
+        return None
+    if type(decoded) is not SessionIdentity:
+        raise CheckpointCorruptionError("RDP checkpoint session identity is invalid")
+    canonical = generator.state_manager.get_session_identity(decoded.logon_id)
+    if canonical != decoded:
+        raise CheckpointCorruptionError("RDP checkpoint session identity lost State authority")
+    return canonical
+
+
+def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
+    from evidenceforge.generation.actions.network_connection import (
+        NetworkConnectionIdentityCapture,
+    )
+    from evidenceforge.generation.actions.rdp_session import (
+        _PreparedRdpLifecycleContinuation,
+        _RdpLifecycleContinuation,
+    )
+    from evidenceforge.generation.activity.generator import _RdpLifecycleJournalEntry
+
+    if type(rows) is not list:
+        raise CheckpointCorruptionError("RDP checkpoint journal table is invalid")
+    environment = generator._scenario_environment
+    systems = {system.hostname: system for system in environment.systems}
+    users = {user.username: user for user in getattr(environment, "users", ())}
+    restored: dict[str, _RdpLifecycleJournalEntry] = {}
+    for row in rows:
+        if (
+            type(row) is not list
+            or len(row) != 13
+            or type(row[0]) is not str
+            or not row[0]
+            or type(row[2]) is not str
+            or type(row[3]) is not str
+            or (row[4] is not None and type(row[4]) is not str)
+            or type(row[9]) is not int
+            or row[9] < 0
+            or type(row[10]) is not str
+            or not row[10]
+            or row[0] in restored
+        ):
+            raise CheckpointCorruptionError("RDP checkpoint journal row is invalid")
+        target_system = systems.get(row[2])
+        user = users.get(row[3])
+        source_system = systems.get(row[4]) if row[4] is not None else None
+        session_identity = _canonical_session_identity(generator, row[1])
+        source_identity = _canonical_process_identity(generator, row[5])
+        source_session_identity = _canonical_session_identity(generator, row[6])
+        hard_deadline = decode_state_value(row[7])
+        action_source_deadline = decode_state_value(row[8])
+        transaction = decode_state_value(row[11])
+        stored_session = decode_state_value(row[12])
+        if (
+            not isinstance(target_system, System)
+            or not isinstance(user, User)
+            or (row[4] is not None and not isinstance(source_system, System))
+            or session_identity is None
+            or type(hard_deadline) is not datetime
+            or hard_deadline.tzinfo is not UTC
+            or (
+                action_source_deadline is not None
+                and (
+                    type(action_source_deadline) is not datetime
+                    or action_source_deadline.tzinfo is not UTC
+                )
+            )
+            or type(transaction) is not NetworkTransactionPlan
+            or type(stored_session) is not RdpSessionSnapshot
+        ):
+            raise CheckpointCorruptionError("RDP checkpoint journal row changed type")
+        manager_session = generator._rdp_session_manager.get(
+            stored_session.identity.logical_session_id
+        )
+        if manager_session != stored_session:
+            raise CheckpointCorruptionError("RDP checkpoint journal lost manager authority")
+        identity_capture = NetworkConnectionIdentityCapture()
+        identity_capture.publish(transaction, lifecycle_mode="deferred_session")
+        prepared = _PreparedRdpLifecycleContinuation(
+            continuation_id=row[0],
+            identity_capture=identity_capture,
+            manager=generator._rdp_session_manager,
+            session_identity=session_identity,
+            target_system=target_system,
+            user=user,
+            source_system=source_system,
+            source_identity=source_identity,
+            source_session_identity=source_session_identity,
+            hard_deadline=hard_deadline,
+            action_source_deadline=action_source_deadline,
+            expected_generation=row[9],
+            source_tag=row[10],
+        )
+        continuation = _RdpLifecycleContinuation(
+            prepared=prepared,
+            transaction=transaction,
+            session=manager_session,
+        )
+        if continuation.disconnect_at < generator._rdp_lifecycle_watermark:
+            raise CheckpointCorruptionError("RDP checkpoint continuation predates its watermark")
+        restored[row[0]] = _RdpLifecycleJournalEntry(continuation)
+    if len(restored) > generator._rdp_lifecycle_journal_capacity:
+        raise CheckpointCorruptionError("RDP checkpoint journal exceeds its bounded capacity")
+    with generator._rdp_lifecycle_journal_lock:
+        if generator._pending_rdp_lifecycle_continuations:
+            raise ValueError("RDP checkpoint hydration requires an empty lifecycle journal")
+        generator._pending_rdp_lifecycle_continuations.update(restored)
+
+
 def _assert_transient_empty(generator: ActivityGenerator) -> None:
     nonempty: list[str] = []
     for name in _TRANSIENT_EMPTY_FIELDS:
@@ -333,6 +522,7 @@ class ActivityGeneratorStateParticipant:
                         *_EXPIRING_FIELDS,
                         *_BOUNDED_CACHE_FIELDS,
                         _FOREGROUND_FINALIZERS,
+                        _RDP_LIFECYCLE_JOURNAL,
                     )
                 ),
                 *(
@@ -391,6 +581,7 @@ class ActivityGeneratorStateParticipant:
             expiring=expiring,
             bounded_caches=bounded,
             foreground_finalizers=_capture_foreground(self.generator),
+            rdp_lifecycles=_capture_rdp_lifecycles(self.generator),
         )
         return ParticipantSeal(
             head=HeadDraft(
@@ -436,6 +627,7 @@ class ActivityGeneratorStateParticipant:
                 cache = getattr(self.generator, name)
                 cache.restore_checkpoint_records(records, watermark=watermark)
             _restore_foreground(self.generator, document.foreground_finalizers)
+            _restore_rdp_lifecycles(self.generator, document.rdp_lifecycles)
         except CheckpointCorruptionError:
             raise
         except (AttributeError, TypeError, ValueError, ValidationError) as error:

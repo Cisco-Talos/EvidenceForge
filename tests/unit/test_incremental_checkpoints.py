@@ -21,6 +21,7 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleForegroundLease,
@@ -2051,8 +2052,63 @@ def test_state_value_codec_round_trips_only_explicit_runtime_records() -> None:
         start_time=started,
         source_ip="10.0.0.5",
     )
+    thread_identity = ThreadIdentity(
+        hostname="host-1",
+        process_object_id="process-1",
+        pid=100,
+        tid=101,
+        object_id="thread-1",
+        started_at=started,
+    )
+    process_identity = ProcessIdentity(
+        hostname="host-1",
+        object_id="process-1",
+        pid=100,
+        parent_pid=4,
+        image="/usr/bin/example",
+        command_line="/usr/bin/example --serve",
+        principal="alice",
+        logon_id="0x10001",
+        started_at=started,
+        lifecycle_group_id="process-group-1",
+        primary_thread=thread_identity,
+    )
+    session_identity = SessionIdentity(
+        hostname="host-1",
+        object_id="session-1",
+        logon_id="0x10001",
+        session_id=1,
+        principal="alice",
+        session_kind="ssh",
+        started_at=started,
+        lifecycle_group_id="session-group-1",
+    )
+    transaction = NetworkTransactionPlan(
+        stable_id="transport-1",
+        hostname="host-1",
+        outcome="success",
+        phase_times=(("attempt", started),),
+        started_at=started,
+        closed_at=started + timedelta(seconds=1),
+        src_ip="10.0.0.5",
+        src_port=50_000,
+        dst_ip="10.0.0.10",
+        dst_port=22,
+        protocol="tcp",
+        service="ssh",
+        zeek_uid="C1",
+        conn_id="conn-1",
+        duration=1.0,
+        conn_state="SF",
+        history="ShADadfF",
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(payload_bytes=10, packets=1, ip_bytes=50),
+            resp=DirectionalTrafficLedger(payload_bytes=20, packets=1, ip_bytes=60),
+        ),
+    )
 
-    assert decode_state_value(encode_state_value(session)) == session
+    for value in (session, thread_identity, process_identity, session_identity, transaction):
+        assert decode_state_value(encode_state_value(value)) == value
     with pytest.raises(TypeError, match="unsupported"):
         encode_state_value(StateManager())
     with pytest.raises(CheckpointCorruptionError, match="unsupported"):

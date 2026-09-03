@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pydantic import TypeAdapter, ValidationError
 
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -20,6 +21,7 @@ from evidenceforge.events.network import (
     NatSensorObservation,
     NetworkSensorObservation,
     NetworkTrafficLedger,
+    NetworkTransactionPlan,
     NetworkTuple,
 )
 from evidenceforge.events.rdp import (
@@ -246,6 +248,68 @@ _RDP_SESSION_SNAPSHOT_FIELDS = (
     "active_leases",
 )
 _RUNTIME_PROCESS_BINDING_FIELDS = ("pid", "process_key")
+_THREAD_IDENTITY_FIELDS = (
+    "hostname",
+    "process_object_id",
+    "pid",
+    "tid",
+    "object_id",
+    "started_at",
+    "kind",
+)
+_PROCESS_IDENTITY_FIELDS = (
+    "hostname",
+    "object_id",
+    "pid",
+    "parent_pid",
+    "image",
+    "command_line",
+    "principal",
+    "logon_id",
+    "started_at",
+    "lifecycle_group_id",
+    "parent_lifecycle_group_id",
+    "primary_thread",
+)
+_SESSION_IDENTITY_FIELDS = (
+    "hostname",
+    "object_id",
+    "logon_id",
+    "session_id",
+    "principal",
+    "session_kind",
+    "started_at",
+    "lifecycle_group_id",
+    "logon_guid",
+    "parent_lifecycle_group_id",
+)
+_NETWORK_TRANSACTION_PLAN_FIELDS = (
+    "stable_id",
+    "hostname",
+    "outcome",
+    "phase_times",
+    "started_at",
+    "closed_at",
+    "src_ip",
+    "src_port",
+    "dst_ip",
+    "dst_port",
+    "protocol",
+    "service",
+    "zeek_uid",
+    "conn_id",
+    "duration",
+    "conn_state",
+    "history",
+    "traffic",
+    "initiating_pid",
+    "responding_pid",
+    "local_orig",
+    "local_resp",
+    "ip_proto",
+    "link_local",
+    "application_layer_only",
+)
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "active-session": (ActiveSession, _ACTIVE_SESSION_FIELDS),
@@ -265,6 +329,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         _NETWORK_SENSOR_OBSERVATION_FIELDS,
     ),
     "network-traffic": (NetworkTrafficLedger, _NETWORK_TRAFFIC_FIELDS),
+    "network-transaction-plan": (NetworkTransactionPlan, _NETWORK_TRANSACTION_PLAN_FIELDS),
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
@@ -284,8 +349,11 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
+    "process-identity": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "session-identity": (SessionIdentity, _SESSION_IDENTITY_FIELDS),
     "session-end-plan": (SessionEndPlan, _SESSION_END_PLAN_FIELDS),
     "smb-file-state": (SmbFileState, _SMB_FILE_STATE_FIELDS),
+    "thread-identity": (ThreadIdentity, _THREAD_IDENTITY_FIELDS),
 }
 _TAGS_BY_TYPE = {value_type: tag for tag, (value_type, _names) in _SCHEMAS.items()}
 _ADAPTERS = {tag: TypeAdapter(value_type) for tag, (value_type, _names) in _SCHEMAS.items()}

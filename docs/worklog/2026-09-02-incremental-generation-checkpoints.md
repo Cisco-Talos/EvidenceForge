@@ -256,3 +256,17 @@ until every correctness and performance gate passes.
   smaller connection-reuse and singleton-interval growth. This is not yet a performance acceptance
   result: those owners retain a fixed recent/live window and must be probed through hours 168, 720,
   and 1,440 before the scaling gate can pass.
+- Recovery now uses explicit dependency priorities rather than owner-name order: State, timing,
+  cryptographic, and shared-registry authorities hydrate before protocol/runtime dependents, with
+  activity, engine, and the generation RNG following them. Publication order remains stable by
+  owner name. A coordinator test proves the two orders independently, and all 63 incremental
+  checkpoint tests pass.
+- Installed RDP terminal continuations now discard one-shot network/application publication
+  receipts after their authenticated handoff, removing a hidden capability edge that previously
+  kept the application and RDP receipt registries non-quiescent. The activity head stores only an
+  untouched future continuation's stable scenario tokens, State identities, canonical network
+  transaction, manager snapshot, deadlines, generation, and source tag. Hydration rebinds those
+  facts to fresh State, application, and RDP owners; any partially published terminal phase still
+  fails closed. The safe value codec gained explicit fixed schemas for process/session/thread
+  identities and network transactions, with no generic dataclass path. All 201 SSH/RDP deferred
+  production tests and all 63 incremental checkpoint tests pass.

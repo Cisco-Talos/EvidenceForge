@@ -6599,6 +6599,9 @@ class ActivityGenerator:
                 _RdpLifecycleJournalEntry(continuation)
             )
             self._prepared_rdp_lifecycle_continuations.pop(continuation.continuation_id)
+        continuation.prepared.identity_capture.release_committed_publication_proofs(
+            continuation.transaction
+        )
 
     def _rdp_bundle_for_continuation(self, continuation: Any) -> RdpSessionActionBundle:
         """Materialize the exact RDP terminal publisher from frozen journal facts."""
@@ -7200,6 +7203,9 @@ class ActivityGenerator:
             # fails, the same exact payload remains retryable.
             self._pending_ssh_session_closures.append(continuation)
             self._prepared_ssh_close_continuations.pop(continuation.continuation_id)
+        continuation.prepared.identity_capture.release_committed_publication_proofs(
+            continuation.transaction
+        )
 
     def _installed_exact_ssh_close_continuation(self, continuation: Any) -> Any:
         """Return the canonical installed entry authenticated by exact identities."""
