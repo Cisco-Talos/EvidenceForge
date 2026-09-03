@@ -62,7 +62,9 @@ until every correctness and performance gate passes.
   contain only the final value or deletion for rowids changed since the preceding durable point.
   Focused coverage updates, deletes, and inserts between checkpoints, observes four dirty rows,
   emits no segment when the next point is unchanged, and rebuilds an equivalent fresh database
-  with its indexes. SQLite database files and prior logical segments are never copied again.
+  with its indexes. Hydration also accepts a freshly initialized emitter database with the exact
+  schema, clears its bootstrap rows, and applies checkpoint rows before installing new dirty-row
+  triggers. SQLite database files and prior logical segments are never copied again.
 - Segment references now carry authenticated per-owner ordinals. Publication preserves append
   order and hydration sorts by that ordinal, so content hashes cannot accidentally reorder file
   chunks or logical database deltas. The authoritative recovery index also authenticates each

@@ -384,6 +384,14 @@ def test_sqlite_spool_seals_only_dirty_rows_and_rebuilds_fresh_database(
     participant.checkpoint_committed(2)
 
     target = sqlite3.connect(tmp_path / "target.sqlite3")
+    target.execute(
+        "CREATE TABLE events (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL, phase TEXT)"
+    )
+    target.execute("CREATE INDEX events_phase ON events (phase)")
+    target.execute("CREATE TABLE state (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+    target.execute("INSERT INTO events VALUES (99, 'discard', 'candidate')")
+    target.execute("INSERT INTO state VALUES ('count', 99)")
+    target.commit()
     restored = SQLiteSpoolParticipant(
         owner="sqlite-spool",
         connection=lambda: target,

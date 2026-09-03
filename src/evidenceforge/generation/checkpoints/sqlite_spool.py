@@ -357,21 +357,34 @@ class SQLiteSpoolParticipant:
         connection = self._connection()
         if connection.in_transaction:
             raise RuntimeError("SQLite checkpoint restore requires a quiescent connection")
-        existing = connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-        if existing:
-            raise RuntimeError("SQLite checkpoint restore requires a fresh empty database")
+        existing = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            if row[0] != _CHANGE_TABLE
+        }
+        if existing and existing != set(self._tables):
+            raise RuntimeError("SQLite checkpoint restore found an incompatible table set")
+        create_schema = not existing
+        if not create_schema:
+            current_schema = self._schema_document(connection)
+            if hashlib.sha256(dumps(current_schema)).hexdigest() != schema_sha256:
+                raise RuntimeError("SQLite checkpoint restore found an incompatible schema")
         connection.execute("BEGIN IMMEDIATE")
         try:
-            for raw in schema:
-                if type(raw) is not dict or raw.get("type") not in {"table", "index"}:
-                    raise CheckpointCorruptionError("SQLite spool schema entry is invalid")
-                sql = raw.get("sql")
-                table = raw.get("table")
-                if type(sql) is not str or table not in self._tables:
-                    raise CheckpointCorruptionError("SQLite spool schema entry changed")
-                connection.execute(sql)
+            if create_schema:
+                for raw in schema:
+                    if type(raw) is not dict or raw.get("type") not in {"table", "index"}:
+                        raise CheckpointCorruptionError("SQLite spool schema entry is invalid")
+                    sql = raw.get("sql")
+                    table = raw.get("table")
+                    if type(sql) is not str or table not in self._tables:
+                        raise CheckpointCorruptionError("SQLite spool schema entry changed")
+                    connection.execute(sql)
+            else:
+                for table in reversed(self._tables):
+                    connection.execute(f"DELETE FROM {_identifier(table)}")
             for segment in decoded:
                 for raw in segment["changes"]:
                     if type(raw) is not dict:
