@@ -309,3 +309,12 @@ until every correctness and performance gate passes.
   beyond their committed length and restore through a validated hash chain. A real Zeek-family
   engine run restores six sensor files from a tail checkpoint with byte-identical evidence; direct
   adapter tests prove that the second checkpoint reads only its new sorted run or appended suffix.
+- Windows Security and Sysmon now export only SQLite candidate rows appended since the preceding
+  checkpoint, plus a bounded head containing candidate/high-water accounting and Sysmon's live
+  source-native allocator caches. Recovery creates fresh protected journals, imports the immutable
+  row segments in contiguous sequence order, and restores allocator state before later generation.
+  Fully released exact-publication retry receipts are authenticated and replaced at the barrier by
+  a durable journal sequence watermark, preventing those process-local receipts from growing with
+  scenario history while preserving terminal source validation. A production tail resume now
+  produces byte-identical Windows Security, Sysmon, and Zeek evidence; 84 focused incremental/spool
+  tests and 271 Windows/Sysmon emitter regressions pass.

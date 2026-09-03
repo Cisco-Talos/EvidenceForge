@@ -221,6 +221,18 @@ class TestGenerationEngine:
         assert resumed._generation_complete is True
         assert resumed.malicious_events == engine.malicious_events
         assert resumed.red_herring_events == engine.red_herring_events
+        source_files = {
+            path.relative_to(tmp_path / "data"): path.read_bytes()
+            for path in (tmp_path / "data").rglob("*")
+            if path.is_file()
+        }
+        resumed_files = {
+            path.relative_to(tmp_path / "resumed" / "data"): path.read_bytes()
+            for path in (tmp_path / "resumed" / "data").rglob("*")
+            if path.is_file()
+        }
+        assert source_files
+        assert resumed_files == source_files
 
     def test_checkpoint_hour_hook_is_cadence_only_and_uses_post_boundary_phase(
         self,

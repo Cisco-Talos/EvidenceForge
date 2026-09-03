@@ -9,6 +9,7 @@ import socket
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -63,6 +64,9 @@ from evidenceforge.generation.checkpoints.artifact_registry_head import (
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.cryptographic_material_head import (
     CryptographicMaterialParticipant,
+)
+from evidenceforge.generation.checkpoints.deferred_source_spool import (
+    DeferredSourceSpoolParticipant,
 )
 from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
 from evidenceforge.generation.checkpoints.errors import (
@@ -2534,6 +2538,142 @@ def test_email_manifest_spool_restores_row_deltas_and_append_cursor(tmp_path: Pa
         "earlier",
         "later",
         "final",
+    ]
+
+
+def _fake_deferred_source_emitter() -> SimpleNamespace:
+    emitter = SimpleNamespace(
+        _source_finalization_bound=True,
+        _file_lock=Lock(),
+        _spool_conn=None,
+        _spool_sequence=0,
+        _spooled_count=0,
+        _candidate_admitted_rows=0,
+        _candidate_admitted_bytes=0,
+        _candidate_high_water_rows=0,
+        _candidate_high_water_bytes=0,
+        _source_high_water_rows=0,
+        _source_high_water_bytes=0,
+        _source_high_water_routes=0,
+        _exact_candidate_high_water_rows=0,
+        _exact_candidate_high_water_bytes=0,
+        _exact_candidate_high_water_participants=0,
+        _checkpoint_pruned_exact_sequence=0,
+    )
+
+    def get_connection() -> sqlite3.Connection:
+        if emitter._spool_conn is None:
+            connection = sqlite3.connect(":memory:")
+            connection.execute(
+                """CREATE TABLE events (
+                    sequence INTEGER PRIMARY KEY,
+                    sort_key TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    payload_bytes INTEGER NOT NULL,
+                    ordinal INTEGER,
+                    route_kind TEXT,
+                    route_key TEXT,
+                    payload_digest TEXT
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE finalization_state (
+                    singleton INTEGER PRIMARY KEY,
+                    phase TEXT NOT NULL,
+                    candidate_rows INTEGER NOT NULL,
+                    candidate_bytes INTEGER NOT NULL,
+                    final_rows INTEGER NOT NULL,
+                    final_bytes INTEGER NOT NULL,
+                    routes INTEGER NOT NULL,
+                    published_rows INTEGER NOT NULL,
+                    epoch INTEGER NOT NULL,
+                    high_water_rows INTEGER NOT NULL,
+                    high_water_bytes INTEGER NOT NULL,
+                    high_water_routes INTEGER NOT NULL
+                )"""
+            )
+            connection.execute(
+                "INSERT INTO finalization_state VALUES (1, 'candidate', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)"
+            )
+            connection.commit()
+            emitter._spool_conn = connection
+        return emitter._spool_conn
+
+    emitter._get_spool_conn_unlocked = get_connection
+    emitter._validate_spool_file_unlocked = lambda: None
+    emitter._commit_journal_unlocked = lambda: emitter._spool_conn.commit()
+    emitter.prune_checkpoint_terminal_receipts = lambda: None
+    return emitter
+
+
+def _append_fake_deferred_row(emitter: SimpleNamespace, payload: str) -> None:
+    sequence = emitter._spool_sequence
+    payload_bytes = len(payload.encode("utf-8"))
+    connection = emitter._get_spool_conn_unlocked()
+    connection.execute(
+        "INSERT INTO events VALUES (?, ?, 'candidate', ?, ?, NULL, NULL, NULL, NULL)",
+        (sequence, f"2026-01-01T{sequence:02}:00:00+00:00", payload, payload_bytes),
+    )
+    emitter._spool_sequence += 1
+    emitter._spooled_count += 1
+    emitter._candidate_admitted_rows += 1
+    emitter._candidate_admitted_bytes += payload_bytes
+    emitter._candidate_high_water_rows = emitter._candidate_admitted_rows
+    emitter._candidate_high_water_bytes = emitter._candidate_admitted_bytes
+    emitter._source_high_water_rows = emitter._candidate_admitted_rows
+    emitter._source_high_water_bytes = emitter._candidate_admitted_bytes
+    connection.execute(
+        """UPDATE finalization_state
+           SET candidate_rows = ?, candidate_bytes = ?,
+               high_water_rows = ?, high_water_bytes = ? WHERE singleton = 1""",
+        (
+            emitter._candidate_admitted_rows,
+            emitter._candidate_admitted_bytes,
+            emitter._candidate_high_water_rows,
+            emitter._candidate_high_water_bytes,
+        ),
+    )
+    connection.commit()
+
+
+def test_deferred_source_spool_seals_only_new_sqlite_rows_and_restores() -> None:
+    source = _fake_deferred_source_emitter()
+    participant = DeferredSourceSpoolParticipant(
+        format_name="windows_event_security",
+        emitter=source,
+    )
+    _append_fake_deferred_row(source, '{"event":"first"}')
+    _append_fake_deferred_row(source, '{"event":"second"}')
+    first = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    _append_fake_deferred_row(source, '{"event":"third"}')
+    second = participant.prepare_checkpoint(1)
+    participant.checkpoint_committed(1)
+
+    assert len(first.segments) == 1
+    assert len(second.segments) == 1
+    assert participant.last_rows_read == 1
+    assert participant.last_payload_bytes_read == len('{"event":"third"}')
+
+    restored_emitter = _fake_deferred_source_emitter()
+    restored = DeferredSourceSpoolParticipant(
+        format_name="windows_event_security",
+        emitter=restored_emitter,
+    )
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+
+    assert restored_emitter._spool_sequence == 3
+    assert restored_emitter._spooled_count == 3
+    assert restored_emitter._spool_conn.execute(
+        "SELECT payload FROM events ORDER BY sequence"
+    ).fetchall() == [
+        ('{"event":"first"}',),
+        ('{"event":"second"}',),
+        ('{"event":"third"}',),
     ]
 
 

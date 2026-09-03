@@ -10,6 +10,7 @@ from .activity_head import ActivityGeneratorStateParticipant
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .artifact_registry_head import LocalArtifactVersionRegistryParticipant
 from .cryptographic_material_head import CryptographicMaterialParticipant
+from .deferred_source_spool import DeferredSourceSpoolParticipant
 from .emitter_spools import EmitterSpoolParticipant
 from .engine_head import GenerationEngineParticipant
 from .http_channel_head import HttpApplicationChannelParticipant
@@ -86,6 +87,12 @@ def production_checkpoint_participants(
         GenerationEngineParticipant(engine),
         GenerationRngParticipant(),
     ]
+    for format_name in ("windows_event_security", "windows_event_sysmon"):
+        emitter = engine.emitters.get(format_name)
+        if emitter is not None:
+            participants.append(
+                DeferredSourceSpoolParticipant(format_name=format_name, emitter=emitter)
+            )
     process_caches = getattr(generator, "_production_process_runtime_caches", None)
     if process_caches is not None:
         participants.append(ProcessRuntimeCachesParticipant(process_caches))
