@@ -370,6 +370,52 @@ RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
 )
 
 
+TIMING_RUNTIME_CHECKPOINT_FIELDS = _fields(
+    rebuilt=("_owner_lane_epoch", "_owner_lane_lock", "clocks", "sampler"),
+    live=("audit",),
+    transient=("_owner_lane",),
+)
+
+
+TIMING_AUDIT_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_distribution_counts",
+        "_fallback_counts",
+        "_mutation_version",
+        "_repair_counts",
+        "_sample_counts",
+        "_saturation_counts",
+    ),
+    rebuilt=("_lock", "_owner_runtime"),
+)
+
+
+TIMING_RELATIONSHIP_COUNTER_CHECKPOINT_FIELDS = _fields(
+    live=("_slots", "_total"),
+    rebuilt=("_capacity", "_estimated_slot_bytes"),
+)
+
+
+SOURCE_CLOCK_REGISTRY_CHECKPOINT_FIELDS = _fields(
+    rebuilt=(
+        "_cache_entry_estimated_bytes",
+        "_cache_hit_count",
+        "_cache_miss_count",
+        "_eviction_count",
+        "_high_water_mark",
+        "_lock",
+        "_lookup_count",
+        "_max_cache_entries",
+        "_mutation_version",
+        "_owner_runtime",
+        "_reference_time",
+        "_sampler",
+        "_states",
+        "_value_sampler",
+    ),
+)
+
+
 GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
     live=(
         "_ambient_registry_state",
@@ -708,6 +754,17 @@ def _owner_attributes(owner: object) -> Mapping[str, object]:
     except TypeError:
         if is_dataclass(owner) and not isinstance(owner, type):
             return {field.name: getattr(owner, field.name) for field in fields(owner)}
+        slot_names: list[str] = []
+        for owner_type in reversed(type(owner).__mro__):
+            declared = owner_type.__dict__.get("__slots__", ())
+            names = (declared,) if isinstance(declared, str) else declared
+            slot_names.extend(
+                name
+                for name in names
+                if name not in {"__dict__", "__weakref__"} and hasattr(owner, name)
+            )
+        if slot_names:
+            return {name: getattr(owner, name) for name in slot_names}
         raise CheckpointError(
             f"checkpoint owner {type(owner).__name__} exposes no inspectable stored fields"
         ) from None

@@ -105,11 +105,14 @@ from evidenceforge.generation.checkpoints.store import (
     RunLock,
     SegmentDraft,
 )
+from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
+from evidenceforge.generation.timing.clocks import SourceClockKey, SourceClockSpec
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
@@ -1083,6 +1086,40 @@ def test_rdp_barrier_rejects_active_mutation_claim() -> None:
 
     with pytest.raises(CheckpointError, match="_mutating_logical_session_ids"):
         RdpSessionManagerParticipant(manager).prepare_checkpoint(0)
+
+
+def test_timing_runtime_head_restores_exact_audit_and_rebuilds_clock_cache() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    runtime = TimingRuntime(reference_time=started, max_audit_relationship_keys=8)
+    key = SourceClockKey(kind="sensor", identity="zeek-1", profile="default")
+    spec = SourceClockSpec()
+    expected_adjustment = runtime.clocks.adjustment(
+        started + timedelta(hours=1), key=key, spec=spec
+    )
+    runtime.audit.record_repair("network.connection.order")
+    runtime.audit.record_saturation("network.connection.window")
+    runtime.audit.record_fallback("network.connection.fallback")
+
+    seal = TimingRuntimeParticipant(runtime).prepare_checkpoint(0)
+    restored = TimingRuntime(reference_time=started, max_audit_relationship_keys=8)
+    TimingRuntimeParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.audit.snapshot() == runtime.audit.snapshot()
+    assert restored.clocks.cache_size == 0
+    assert (
+        restored.clocks.adjustment(started + timedelta(hours=1), key=key, spec=spec)
+        == expected_adjustment
+    )
+    runtime.clocks.adjustment(started + timedelta(hours=1), key=key, spec=spec)
+    assert restored.audit.snapshot() == runtime.audit.snapshot()
+
+
+def test_timing_runtime_barrier_rejects_owner_claim() -> None:
+    runtime = TimingRuntime(reference_time=datetime(2026, 1, 1, tzinfo=UTC))
+    runtime._owner_lane = object()
+
+    with pytest.raises(CheckpointError, match="_owner_lane"):
+        TimingRuntimeParticipant(runtime).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

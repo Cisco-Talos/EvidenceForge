@@ -160,3 +160,10 @@ until every correctness and performance gate passes.
   capability authority. Prepared admissions and mutation claims must be empty. A populated
   session/operation/lease round trip continues through finalization and lease release, 62 focused
   RDP/checkpoint regressions pass, and a real minimal barrier produced a 260-byte empty head.
+- The shared timing runtime now has explicit inventories for its runtime, audit, bounded
+  relationship counters, and source-clock registry. Exact audit slots (including collision
+  labels), distribution counts, totals, and mutation version persist in one bounded head. The
+  stateless source-clock values remain reproducible from semantic keys, so hydration clears the
+  LRU and rebuilds cache diagnostics, locks, samplers, and ownership lanes; a retained owner claim
+  fails the barrier. The 105-test core timing/checkpoint group passes, and a real minimal
+  hour-one barrier produced a 7,928-byte head with no immutable segments.
