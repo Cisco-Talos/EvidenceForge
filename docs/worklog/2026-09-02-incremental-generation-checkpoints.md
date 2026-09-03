@@ -97,3 +97,9 @@ until every correctness and performance gate passes.
 - The clean repeat completed with 8,030 passed, 5 skipped, and 2,009 deselected in 174.43 seconds.
 - The focused incremental checkpoint module currently has 25 passing tests, including exhaustive
   core-owner inventories and transient barrier rejection.
+- The first lifecycle bounded-head slice uses hard-coded field codecs and stable partition/handle
+  iteration rather than a reflective graph encoder. It round-trips active and closed process and
+  session authority, including dependents, holds, barriers, tickets, and ledger aggregates, while
+  retaining the registry object identity and rebuilding routes, locks, and indexes. Until the next
+  slices land, capture fails before publication when it encounters binding/lease families or an
+  entity whose bounded detail ledger has compacted; the public generator remains unwired.

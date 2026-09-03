@@ -13,6 +13,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from evidenceforge.events.lifecycle import (
+    LifecycleCloseBarrier,
+    LifecycleHold,
+    LifecycleMembership,
+    ProcessLifecycleIdentity,
+    ProcessTokenIdentity,
+    SessionLifecycleIdentity,
+)
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
@@ -20,6 +28,7 @@ from evidenceforge.generation.checkpoints.errors import (
     CheckpointError,
     CheckpointLockError,
 )
+from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.models import (
     CheckpointCursor,
     CheckpointManifest,
@@ -288,6 +297,107 @@ def test_checkpoint_barrier_rejects_transient_state() -> None:
             STATE_MANAGER_CHECKPOINT_FIELDS,
             owner_name="state-manager",
         )
+
+
+def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(shard_count=4)
+    session = SessionLifecycleIdentity(
+        hostname="host-1",
+        object_id="session-1",
+        logon_id="0x10001",
+        principal="alice",
+        session_kind="interactive",
+        started_at=started,
+    )
+    process = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="process-1",
+        pid=4100,
+        started_at=started,
+        image=r"C:\Windows\System32\cmd.exe",
+    )
+    registry.register_session(session, action_id="session", transition_id="session:start")
+    registry.register_process(
+        process,
+        token=ProcessTokenIdentity(principal="alice", logon_id="0x10001"),
+        membership=LifecycleMembership("session", "session-1", "session-1"),
+        action_id="process",
+        transition_id="process:start",
+    )
+    registry.record_dependent(
+        process.ref,
+        transition_id="process:dependent",
+        canonical_time=started.replace(minute=1),
+        action_id="dependent",
+    )
+    registry.add_hold(
+        LifecycleHold(
+            hold_id="process:hold",
+            subject=process.ref,
+            acquired_at=started.replace(minute=2),
+            hold_until=started.replace(minute=5),
+            action_id="hold",
+            reason="child output",
+        )
+    )
+    process_ticket = registry.request_close(
+        LifecycleCloseBarrier(
+            barrier_id="process:barrier",
+            subject=process.ref,
+            requested_at=started.replace(minute=3),
+            authority="generated",
+            action_id="process-close",
+        ),
+        ticket_id="process:ticket",
+    )
+    registry.close(process_ticket.ticket_id)
+    session_ticket = registry.request_close(
+        LifecycleCloseBarrier(
+            barrier_id="session:barrier",
+            subject=session.ref,
+            requested_at=started.replace(minute=6),
+            authority="generated",
+            action_id="session-close",
+        ),
+        ticket_id="session:ticket",
+    )
+    registry.close(session_ticket.ticket_id)
+    expected_process = registry.get_process("process-1")
+    expected_session = registry.get_session("session-1")
+
+    participant = LifecycleRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    restored_registry = LifecycleRegistry(shard_count=4)
+    restored = LifecycleRegistryParticipant(restored_registry)
+    restored.restore_checkpoint(seal.head.payload, ())
+
+    assert restored_registry.get_process("process-1") == expected_process
+    assert restored_registry.get_session("session-1") == expected_session
+
+
+def test_lifecycle_head_rejects_detail_loss_before_publication() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(shard_count=1, snapshot_history_limit=1)
+    session = SessionLifecycleIdentity(
+        hostname="host-1",
+        object_id="session-1",
+        logon_id="0x10001",
+        principal="alice",
+        session_kind="interactive",
+        started_at=started,
+    )
+    registry.register_session(session, action_id="session", transition_id="session:start")
+    registry.record_dependent(
+        session.ref,
+        transition_id="session:dependent",
+        canonical_time=started.replace(minute=1),
+        action_id="dependent",
+    )
+
+    with pytest.raises(CheckpointError, match="detail ledger was compacted"):
+        LifecycleRegistryParticipant(registry).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

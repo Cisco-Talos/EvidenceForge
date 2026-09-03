@@ -1,6 +1,7 @@
 """Crash-safe incremental generation checkpoints."""
 
 from .cadence import CheckpointCadence
+from .lifecycle_head import LifecycleRegistryParticipant
 from .models import (
     CHECKPOINT_SCHEMA_VERSION,
     CheckpointCursor,
@@ -35,6 +36,7 @@ __all__ = [
     "IncrementalCheckpointParticipant",
     "LIFECYCLE_PARTITION_CHECKPOINT_FIELDS",
     "LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS",
+    "LifecycleRegistryParticipant",
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",

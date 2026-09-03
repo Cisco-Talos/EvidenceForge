@@ -660,6 +660,13 @@ class CompactIndexedStore(MutableMapping[K, V], Generic[K, V]):
             raise KeyError(handle)
         return cast(V, value)
 
+    def iter_values_by_handle(self) -> Iterator[V]:
+        """Yield live values in stable compact-handle order."""
+
+        for value in self._slot_values:
+            if value is not _MISSING:
+                yield cast(V, value)
+
     def key_by_handle(self, handle: int) -> K:
         """Return a live semantic key by its compact handle."""
         if handle < 0 or handle >= len(self._slot_keys):

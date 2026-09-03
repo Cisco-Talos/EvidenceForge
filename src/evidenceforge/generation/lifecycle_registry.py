@@ -1658,6 +1658,11 @@ class _ProcessIndex:
 
         return self._store.compact_primary(max_slots=max_slots)
 
+    def iter_entries(self) -> Iterator[_ProcessEntry]:
+        """Yield every current process entry in stable handle order."""
+
+        yield from self._store.iter_values_by_handle()
+
     def __len__(self) -> int:
         return len(self._store)
 
@@ -1847,6 +1852,14 @@ class _SessionIndex:
             max_entries=max_slots - handles_page,
             force=not self._states,
         )
+
+    def iter_entries(self) -> Iterator[_SessionEntry]:
+        """Yield every current session entry in stable handle order."""
+
+        for handle in range(len(self._rows)):
+            entry = self.get_by_handle(handle)
+            if entry is not None:
+                yield entry
 
     def __len__(self) -> int:
         return self._live_count
@@ -8775,6 +8788,12 @@ class LifecycleRegistry:
         """Return the exact-detail horizon behind the sealed watermark."""
 
         return self._ledger_detail_retention
+
+    @property
+    def shard_count(self) -> int:
+        """Return the fixed number of lifecycle owner partitions."""
+
+        return self._shard_count
 
     def _partition_id(self, hostname: str) -> int:
         digest = sha256(f"lifecycle-state\0{hostname}".encode()).digest()
