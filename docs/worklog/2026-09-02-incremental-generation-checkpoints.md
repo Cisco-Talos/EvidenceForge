@@ -196,3 +196,11 @@ until every correctness and performance gate passes.
   then rebuilds packed rows, channel/affinity digest routes, decode caches, and exact reuse-expiry
   heaps. Prepared coupled admissions and receipts fail the barrier. A populated application+HTTP
   restore successfully reuses the original channel, and all 97 checkpoint/HTTP tests pass.
+- The explicit-proxy protocol manager now has exhaustive manager, shard, and packed-tunnel-store
+  inventories plus a bounded head containing only open proxy tunnel sidecars. The restored shared
+  application registry authenticates owner, affinity, client-transport, and interval identity;
+  hydration rebuilds fresh packed rows, affinity/origin routes, caches, and expiry authority. The
+  expiry is derived from the earlier of the tunnel reuse cutoff and application idle deadline,
+  matching the production manager rather than storing duplicate authority. Prepared admission
+  capabilities fail the barrier. A populated application+proxy restore reuses the original tunnel,
+  and all 91 incremental-checkpoint/proxy tests pass.

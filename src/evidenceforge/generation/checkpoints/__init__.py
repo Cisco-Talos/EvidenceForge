@@ -28,6 +28,9 @@ from .owner_inventory import (
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
+    PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
+    PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS,
     RDP_MANAGER_CHECKPOINT_FIELDS,
     RDP_SHARD_CHECKPOINT_FIELDS,
@@ -42,6 +45,7 @@ from .owner_inventory import (
     assert_transient_owner_state_empty,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
+from .proxy_channel_head import ExplicitProxyChannelParticipant
 from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
 from .source_timing_head import SourceTimingPlannerParticipant
@@ -80,6 +84,10 @@ __all__ = [
     "LifecycleRegistryParticipant",
     "NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS",
     "NetworkTransactionRuntimeParticipant",
+    "PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
+    "PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS",
+    "PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS",
+    "ExplicitProxyChannelParticipant",
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",

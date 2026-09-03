@@ -83,6 +83,9 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
+    PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
+    PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
@@ -92,6 +95,9 @@ from evidenceforge.generation.checkpoints.packed import dumps, loads
 from evidenceforge.generation.checkpoints.participants import (
     OwnerStateField,
     ParticipantSeal,
+)
+from evidenceforge.generation.checkpoints.proxy_channel_head import (
+    ExplicitProxyChannelParticipant,
 )
 from evidenceforge.generation.checkpoints.rdp_head import RdpSessionManagerParticipant
 from evidenceforge.generation.checkpoints.rng import (
@@ -134,6 +140,10 @@ from evidenceforge.generation.network_runtime import (
     _network_transport_occurrence_stable_id,
     _transport_lease_digest_value,
     _TransportLeaseRecord,
+)
+from evidenceforge.generation.proxy_channels import (
+    ExplicitProxyChannelAffinity,
+    ExplicitProxyChannelManager,
 )
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -397,6 +407,17 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         http,
         HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
         owner_name="http-channels",
+    )
+    proxy = ExplicitProxyChannelManager(
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+        registry=application_channels,
+        shard_count=application_channels.shard_count,
+    )
+    assert_complete_owner_inventory(
+        proxy,
+        PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="proxy-channels",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -785,6 +806,140 @@ def test_http_channel_head_rejects_prepared_admission() -> None:
 
     with pytest.raises(CheckpointError, match="_prepared_admissions"):
         HttpApplicationChannelParticipant(manager).prepare_checkpoint(0)
+
+    assert manager.cancel_prepared_admission(token)
+
+
+def test_proxy_channel_head_round_trips_open_tunnel_and_reuses_it() -> None:
+    """Proxy hydration should rebuild channel, affinity, origin, and expiry routes."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(days=1)
+    registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    manager = ExplicitProxyChannelManager(
+        window_start=started,
+        window_end=ended,
+        registry=registry,
+        shard_count=registry.shard_count,
+    )
+    affinity = ExplicitProxyChannelAffinity(
+        client_ip="10.0.0.10",
+        proxy_ip="10.0.3.10",
+        proxy_port=8080,
+        origin_host="checkpoint.example.test",
+        origin_ip="203.0.113.20",
+        origin_port=443,
+        user_agent="Mozilla/5.0",
+        auth_identity="EXAMPLE\\Alice",
+        policy_id="checkpoint-policy",
+    )
+    opened = manager.open_tunnel(
+        affinity,
+        client_transport_id="checkpoint-client-transport",
+        origin_transport_id="checkpoint-origin-transport",
+        client_zeek_uid="CHECKPOINT-CLIENT",
+        origin_zeek_uid="CHECKPOINT-ORIGIN",
+        tunnel_group_id="checkpoint-tunnel-group",
+        client_source_port=50_010,
+        origin_source_port=40_010,
+        opened_at=started,
+        closes_at=started + timedelta(minutes=30),
+        setup_started_at=started + timedelta(milliseconds=10),
+        setup_completed_at=started + timedelta(milliseconds=30),
+        setup_request_wire_bytes=120,
+        setup_response_wire_bytes=240,
+        planned_request_count=2,
+        aggregate_request_wire_bytes=1_000,
+        aggregate_response_wire_bytes=5_000,
+    )
+    assert opened is not None
+    application_seal = ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
+    proxy_seal = ExplicitProxyChannelParticipant(manager).prepare_checkpoint(0)
+
+    restored_registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    ApplicationChannelRegistryParticipant(restored_registry).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    restored = ExplicitProxyChannelManager(
+        window_start=started,
+        window_end=ended,
+        registry=restored_registry,
+        shard_count=restored_registry.shard_count,
+    )
+    ExplicitProxyChannelParticipant(restored).restore_checkpoint(proxy_seal.head.payload, ())
+
+    assert restored.get_tunnel(opened.tunnel.channel_id) == opened.tunnel
+    reused = restored.reserve_request(
+        affinity,
+        requested_at=started + timedelta(seconds=1),
+        completed_at=started + timedelta(seconds=2),
+        request_wire_bytes=100,
+        response_wire_bytes=500,
+    )
+    assert reused is not None
+    assert reused.tunnel.channel_id == opened.tunnel.channel_id
+    shard = next(iter(restored._shards.values()))
+    assert_complete_owner_inventory(
+        shard,
+        PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
+        owner_name="proxy-sidecar-shard",
+    )
+    assert_complete_owner_inventory(
+        shard.tunnels,
+        PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
+        owner_name="proxy-packed-tunnel-store",
+    )
+
+
+def test_proxy_channel_head_rejects_prepared_admission() -> None:
+    """A coupled proxy/application admission cannot cross the barrier."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager = ExplicitProxyChannelManager(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+        registry=registry,
+        shard_count=registry.shard_count,
+    )
+    affinity = ExplicitProxyChannelAffinity(
+        client_ip="10.0.0.10",
+        proxy_ip="10.0.3.10",
+        proxy_port=8080,
+        origin_host="checkpoint.example.test",
+        origin_ip="203.0.113.20",
+        origin_port=443,
+        user_agent="Mozilla/5.0",
+        auth_identity="",
+        policy_id="checkpoint-policy",
+    )
+    token = manager.prepare_open_tunnel(
+        affinity,
+        client_transport_id="checkpoint-prepared-client",
+        origin_transport_id="checkpoint-prepared-origin",
+        client_zeek_uid="CHECKPOINT-PREPARED-CLIENT",
+        origin_zeek_uid="CHECKPOINT-PREPARED-ORIGIN",
+        tunnel_group_id="checkpoint-prepared-group",
+        client_source_port=50_011,
+        origin_source_port=40_011,
+        opened_at=started,
+        closes_at=started + timedelta(minutes=5),
+        setup_started_at=started + timedelta(milliseconds=10),
+        setup_completed_at=started + timedelta(milliseconds=30),
+        setup_request_wire_bytes=120,
+        setup_response_wire_bytes=240,
+        planned_request_count=1,
+        aggregate_request_wire_bytes=1_000,
+        aggregate_response_wire_bytes=5_000,
+    )
+    assert token is not None
+
+    with pytest.raises(CheckpointError, match="_prepared_admissions"):
+        ExplicitProxyChannelParticipant(manager).prepare_checkpoint(0)
 
     assert manager.cancel_prepared_admission(token)
 

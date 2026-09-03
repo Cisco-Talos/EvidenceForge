@@ -517,6 +517,55 @@ HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS = _fields(
 )
 
 
+PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS = _fields(
+    live=("_next_admission_id", "_shards", "_watermark"),
+    rebuilt=(
+        "_close_guard",
+        "_directory_lock",
+        "_gate",
+        "_idle_timeout",
+        "_manager_id",
+        "_owns_registry",
+        "_prepared_lock",
+        "_registry",
+        "_shard_count",
+        "_window_end",
+        "_window_start",
+    ),
+    transient=(
+        "_admission_receipts",
+        "_claimed_admissions",
+        "_estimated_prepared_bytes",
+        "_prepared_admissions",
+        "_prepared_affinity_keys",
+        "_prepared_capabilities",
+        "_prepared_channel_ids",
+        "_prepared_origin_transport_ids",
+        "_request_snapshots",
+    ),
+)
+
+
+PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("tunnels",),
+    rebuilt=("expiry", "lock", "shard_id"),
+)
+
+
+PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_rows",),
+    rebuilt=(
+        "_affinity_routes",
+        "_channel_routes",
+        "_compaction_rotations",
+        "_decoded",
+        "_decoded_bytes",
+        "_lookup_candidates_inspected",
+        "_origin_transport_routes",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",
