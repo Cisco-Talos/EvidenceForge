@@ -916,6 +916,8 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "authored_intent_ledger",
         "checkpoint_hour_callback",
         "checkpoint_hours",
+        "_checkpoint_controller",
+        "_checkpoint_participants",
         "compiled_scenario",
         "dispatcher",
         "emitters",

@@ -65,6 +65,7 @@ from .owner_inventory import (
     assert_owner_inventory_covers,
     assert_transient_owner_state_empty,
 )
+from .participant_set import production_checkpoint_participants
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
 from .process_runtime_head import ProcessRuntimeCachesParticipant
 from .proxy_channel_head import ExplicitProxyChannelParticipant
@@ -127,6 +128,7 @@ __all__ = [
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",
+    "production_checkpoint_participants",
     "RunLock",
     "RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS",
     "RDP_MANAGER_CHECKPOINT_FIELDS",

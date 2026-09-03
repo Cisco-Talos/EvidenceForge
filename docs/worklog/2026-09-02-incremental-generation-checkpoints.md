@@ -289,3 +289,10 @@ until every correctness and performance gate passes.
   source-timing receipts, zero terminal preparation records, and zero lifecycle closed-transport
   weak receipts without a cyclic-GC scan. The complete 202-test SSH/RDP deferred suite and all 63
   incremental-checkpoint tests pass.
+- The initialized engine now assembles the production checkpoint participant set explicitly and
+  hands exact post-hour cursors to the incremental controller at cadence barriers. The first real
+  end-to-end run exposed a dead weak lifecycle action-cohort authority; the barrier now prunes that
+  owner-local terminal locator without graph traversal or garbage collection. The minimal fixture
+  publishes nine hourly recoveries across its eight-hour warm-up and one-hour collection window;
+  the final recovery is a tail cursor with all 16 initialized participant heads and 15 immutable
+  segments. A dedicated slow production-wiring test and all 63 incremental tests pass.

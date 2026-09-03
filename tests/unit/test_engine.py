@@ -31,7 +31,11 @@ import pytest
 
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
-from evidenceforge.generation.checkpoints import GenerationEngineParticipant
+from evidenceforge.generation.checkpoints import (
+    GenerationEngineParticipant,
+    IncrementalCheckpointStore,
+)
+from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
@@ -94,6 +98,42 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
 
 @pytest.mark.slow
 class TestGenerationEngine:
+    def test_incremental_controller_commits_real_production_participants(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """A real cadence barrier should publish every initialized mutable owner."""
+
+        controller = IncrementalCheckpointController(
+            store=IncrementalCheckpointStore(tmp_path),
+            fingerprint="a" * 64,
+            checkpoint_hours=1,
+            resolved_scenario=b"resolved\n",
+        )
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path / "data",
+            ground_truth_dir=tmp_path,
+            artifact_dir=tmp_path / "artifacts",
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+        )
+
+        engine.generate()
+
+        recovery = controller.store.recover(expected_fingerprint="a" * 64)
+        expected_hours = int((engine.end_time - engine.warmup_start_time).total_seconds() // 3600)
+        assert recovery.manifest.cursor.phase == "tail"
+        assert recovery.manifest.cursor.completed_simulated_hours == expected_hours
+        assert {head.owner for head in recovery.manifest.participant_heads} == {
+            participant.checkpoint_owner for participant in engine._checkpoint_participants
+        }
+        assert (
+            engine.lifecycle_registry.action_cohort_preparation_census().committed_receipt_authorities
+            == 0
+        )
+
     def test_checkpoint_hour_hook_is_cadence_only_and_uses_post_boundary_phase(
         self,
         minimal_scenario,
