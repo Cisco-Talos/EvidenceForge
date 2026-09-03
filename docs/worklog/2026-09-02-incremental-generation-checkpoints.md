@@ -527,3 +527,12 @@ until every correctness and performance gate passes.
   an invalid one, and retains the existing overwrite/abort prompt for completed output. Redirected
   input must provide explicit `--resume` or `--overwrite`; focused CLI coverage confirms these
   branches without weakening the run-lock checks.
+- The first normalized 60-day pair at 18-hour cadence remains byte-identical across every
+  deterministic artifact, but does not pass the production gate: control took 639.140 seconds and
+  checkpointed generation took 689.828 seconds, or 7.93% overhead. Eighty foreground checkpoints
+  totaled 30.963 seconds; the remaining 19.725-second difference is checkpoint-mode work outside
+  the measured barrier and must be attributed before cadence selection. Workspace retention was
+  311,734,718 bytes for 258,046,108 output bytes (1.208×). Hour-720 and hour-1,440 pauses were
+  0.281 and 0.644 seconds respectively; that single 2.29× observation does not satisfy the
+  scaling gate and requires rotated medians. Both points reread and rehashed zero inherited
+  segment bytes.

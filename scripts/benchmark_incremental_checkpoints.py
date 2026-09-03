@@ -92,6 +92,20 @@ def _run_child(args: argparse.Namespace) -> int:
     with workspace as temporary:
         root = Path(temporary)
         progress: list[dict[str, float | int | str]] = []
+        phase_started: dict[str, float] = {}
+        phase_seconds: dict[str, float] = {}
+
+        def record_phase(event_type: str, data: dict[str, object]) -> None:
+            phase = data.get("phase")
+            if type(phase) is not str:
+                return
+            if event_type == "phase_start":
+                phase_started[phase] = time.perf_counter()
+            elif event_type == "phase_end" and phase in phase_started:
+                phase_seconds[phase] = phase_seconds.get(phase, 0.0) + (
+                    time.perf_counter() - phase_started.pop(phase)
+                )
+
         started = time.perf_counter()
         controller = None
         store = None
@@ -119,6 +133,7 @@ def _run_child(args: argparse.Namespace) -> int:
             checkpoint_hours=args.child_checkpoint_hours,
             checkpoint_controller=controller,
             allow_large_workload=True,
+            progress_callback=record_phase,
         )
         engine.generate()
         wall_seconds = time.perf_counter() - started
@@ -139,6 +154,7 @@ def _run_child(args: argparse.Namespace) -> int:
             "output_digest": output_digest,
             "output_hashes": output_hashes,
             "peak_rss_bytes": _peak_rss_bytes(),
+            "phase_seconds": phase_seconds,
             "scale_points": scale_points,
             "wall_seconds": wall_seconds,
             "workspace_bytes": workspace_bytes,
