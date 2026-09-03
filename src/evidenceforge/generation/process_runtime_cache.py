@@ -313,6 +313,23 @@ class ProcessRuntimeCacheExpiryPage:
     has_more: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeCacheCheckpointFamily:
+    """Live semantic rows for one fixed process-runtime cache family."""
+
+    name: str
+    watermark: datetime | None
+    records: tuple[tuple[Hashable, object, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeCacheCheckpoint:
+    """Bounded process-cache rows plus exact process-to-family reverse routes."""
+
+    families: tuple[ProcessRuntimeCacheCheckpointFamily, ...]
+    reverse_routes: tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...]
+
+
 def deadline_seconds(value: datetime | float | int) -> float:
     """Return a platform-independent sortable UTC deadline."""
 
@@ -1512,6 +1529,28 @@ class _ProcessRuntimeReverseIndex:
         self._reset_empty_backing()
         return True
 
+    def checkpoint_records(
+        self,
+    ) -> tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...]:
+        """Return live semantic routes without compact handle/index backing."""
+
+        return tuple(
+            (route.process_key, route.cache_name, route.cache_key)
+            for _route_key, route in self._routes.items()
+        )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...],
+    ) -> None:
+        """Rebuild exact reverse ownership in original route insertion order."""
+
+        if self._routes:
+            raise ValueError("process-runtime reverse hydration requires a fresh index")
+        for process_key, cache_name, cache_key in records:
+            if not self.bind(process_key, cache_name, cache_key):
+                raise ValueError("process-runtime reverse checkpoint route is duplicated")
+
     def pop_subject_page(
         self,
         process_key: tuple[str, int, datetime | None],
@@ -1592,6 +1631,38 @@ class ProductionProcessRuntimeCaches:
             return self._by_name[name]
         except KeyError as exc:
             raise KeyError(f"Unknown process-runtime cache family: {name}") from exc
+
+    def checkpoint_records(self) -> ProcessRuntimeCacheCheckpoint:
+        """Capture bounded semantic rows once, excluding alias and index backing."""
+
+        return ProcessRuntimeCacheCheckpoint(
+            families=tuple(
+                ProcessRuntimeCacheCheckpointFamily(
+                    name=name,
+                    watermark=cache.watermark,
+                    records=cache.checkpoint_records(),
+                )
+                for name, cache in self._items
+            ),
+            reverse_routes=self._reverse.checkpoint_records(),
+        )
+
+    def restore_checkpoint_records(self, checkpoint: ProcessRuntimeCacheCheckpoint) -> None:
+        """Hydrate every fixed family and rebuild validated process reverse routes."""
+
+        if type(checkpoint) is not ProcessRuntimeCacheCheckpoint:
+            raise TypeError("process-runtime checkpoint has an invalid snapshot type")
+        expected = tuple(name for name, _cache in self._items)
+        actual = tuple(family.name for family in checkpoint.families)
+        if actual != expected:
+            raise ValueError("process-runtime checkpoint family order changed")
+        for family, (_name, cache) in zip(checkpoint.families, self._items, strict=True):
+            cache.restore_checkpoint_records(family.records, watermark=family.watermark)
+        for _process_key, cache_name, cache_key in checkpoint.reverse_routes:
+            cache = self._by_name.get(cache_name)
+            if cache is None or cache.raw_get(cache_key) is None:
+                raise ValueError("process-runtime checkpoint reverse route has no live cache row")
+        self._reverse.restore_checkpoint_records(checkpoint.reverse_routes)
 
     def census(
         self,

@@ -30,6 +30,7 @@ from evidenceforge.events.rdp import (
     RdpSessionState,
     RdpTransportGeneration,
 )
+from evidenceforge.generation.process_runtime_cache import RuntimeProcessBinding
 from evidenceforge.models.state import (
     ActiveSession,
     OpenConnection,
@@ -244,6 +245,7 @@ _RDP_SESSION_SNAPSHOT_FIELDS = (
     "dependent_admissions",
     "active_leases",
 )
+_RUNTIME_PROCESS_BINDING_FIELDS = ("pid", "process_key")
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "active-session": (ActiveSession, _ACTIVE_SESSION_FIELDS),
@@ -277,6 +279,10 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "rdp-transport-generation": (
         RdpTransportGeneration,
         _RDP_TRANSPORT_GENERATION_FIELDS,
+    ),
+    "runtime-process-binding": (
+        RuntimeProcessBinding,
+        _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
     "session-end-plan": (SessionEndPlan, _SESSION_END_PLAN_FIELDS),
     "smb-file-state": (SmbFileState, _SMB_FILE_STATE_FIELDS),

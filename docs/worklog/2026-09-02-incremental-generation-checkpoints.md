@@ -235,3 +235,12 @@ until every correctness and performance gate passes.
   append ordinal, and publishes the same deterministic sorted JSON shape. The 10 retention/spool
   tests and the focused slow end-to-end email generation test pass; a real hour-one barrier audit
   classified all 72 materialized mutable fields without fallback.
+- The 17-family process-runtime cache bundle now has one explicit bounded checkpoint participant.
+  It encodes only visible semantic key/value/deadline rows, per-family watermarks, and the three
+  exact process-to-cache reverse-route families; compact handles, expiry heaps, locks, metrics,
+  retained-size accounting, and ActivityGenerator aliases are rebuilt. The inert value allowlist
+  now includes the two-field `RuntimeProcessBinding` record, with no generic dataclass fallback.
+  Hydration requires the canonical family order, validates finite deadlines, duplicate/hashable
+  keys, exact UTC process identities, and reverse routes that resolve to live rows. All 71
+  incremental-checkpoint and process-runtime-cache tests pass, and repository-wide Ruff checks are
+  clean.

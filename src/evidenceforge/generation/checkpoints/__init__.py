@@ -20,6 +20,7 @@ from .network_runtime_head import NetworkTransactionRuntimeParticipant
 from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     GENERATION_ENGINE_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
@@ -34,6 +35,8 @@ from .owner_inventory import (
     LOCAL_ARTIFACT_ROUTE_CHECKPOINT_FIELDS,
     LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS,
     NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
+    PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS,
+    PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS,
     PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
     PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
@@ -61,6 +64,7 @@ from .owner_inventory import (
     assert_transient_owner_state_empty,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
+from .process_runtime_head import ProcessRuntimeCachesParticipant
 from .proxy_channel_head import ExplicitProxyChannelParticipant
 from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
@@ -77,6 +81,7 @@ __all__ = [
     "APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS",
     "APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS",
     "ApplicationChannelRegistryParticipant",
+    "BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS",
     "CHECKPOINT_SCHEMA_VERSION",
     "CheckpointCadence",
     "CheckpointCursor",
@@ -108,6 +113,9 @@ __all__ = [
     "LocalArtifactVersionRegistryParticipant",
     "NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS",
     "NetworkTransactionRuntimeParticipant",
+    "PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS",
+    "PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS",
+    "ProcessRuntimeCachesParticipant",
     "PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
     "PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS",
     "PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS",

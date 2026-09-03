@@ -84,6 +84,7 @@ from evidenceforge.generation.checkpoints.network_runtime_head import (
 from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
@@ -97,6 +98,8 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     LOCAL_ARTIFACT_ROUTE_CHECKPOINT_FIELDS,
     LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS,
     NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
+    PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS,
+    PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS,
     PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
     PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
@@ -119,6 +122,9 @@ from evidenceforge.generation.checkpoints.packed import dumps, loads
 from evidenceforge.generation.checkpoints.participants import (
     OwnerStateField,
     ParticipantSeal,
+)
+from evidenceforge.generation.checkpoints.process_runtime_head import (
+    ProcessRuntimeCachesParticipant,
 )
 from evidenceforge.generation.checkpoints.proxy_channel_head import (
     ExplicitProxyChannelParticipant,
@@ -175,7 +181,11 @@ from evidenceforge.generation.network_runtime import (
     _transport_lease_digest_value,
     _TransportLeaseRecord,
 )
-from evidenceforge.generation.process_runtime_cache import EmailArtifactManifestSpool
+from evidenceforge.generation.process_runtime_cache import (
+    PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
+    EmailArtifactManifestSpool,
+    build_production_process_runtime_caches,
+)
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyChannelAffinity,
     ExplicitProxyChannelManager,
@@ -411,6 +421,7 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         window_end=datetime(2026, 1, 2, tzinfo=UTC),
     )
     artifacts = LocalArtifactVersionRegistry(capacity=8, shard_count=2)
+    process_caches = build_production_process_runtime_caches(datetime(2026, 1, 2, tzinfo=UTC))
 
     assert_complete_owner_inventory(
         manager,
@@ -451,6 +462,22 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         artifacts,
         LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS,
         owner_name="local-artifacts",
+    )
+    assert_complete_owner_inventory(
+        process_caches,
+        PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS,
+        owner_name="process-runtime-caches",
+    )
+    for family_name, cache in process_caches.items():
+        assert_complete_owner_inventory(
+            cache,
+            BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
+            owner_name=f"process-runtime-cache-{family_name}",
+        )
+    assert_complete_owner_inventory(
+        process_caches._reverse,
+        PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS,
+        owner_name="process-runtime-reverse",
     )
     for shard in artifacts._shards:
         assert_complete_owner_inventory(
@@ -552,6 +579,52 @@ def test_checkpoint_barrier_rejects_transient_state() -> None:
             STATE_MANAGER_CHECKPOINT_FIELDS,
             owner_name="state-manager",
         )
+
+
+def test_process_runtime_head_round_trips_every_cache_family_and_reverse_route() -> None:
+    """Hydration should rebuild all fixed cache families from one bounded head."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    window_end = start + timedelta(days=30)
+    caches = build_production_process_runtime_caches(window_end)
+    for ordinal, family in enumerate(PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES):
+        caches.load_probe_entry(
+            family.name,
+            ordinal,
+            start + timedelta(hours=1),
+            owner=f"owner-{ordinal}",
+        )
+    participant = ProcessRuntimeCachesParticipant(caches)
+    seal = participant.prepare_checkpoint(0)
+
+    restored = build_production_process_runtime_caches(window_end)
+    restored_participant = ProcessRuntimeCachesParticipant(restored)
+    restored_participant.restore_checkpoint(seal.head.payload, ())
+
+    assert restored_participant.prepare_checkpoint(1).head.payload == seal.head.payload
+    census = restored.census(watermark=None)
+    assert census.cache_count == 17
+    assert census.live_entries == 17
+    assert census.reverse_bindings == 3
+
+
+def test_process_runtime_head_rejects_changed_family_identity() -> None:
+    """A valid packed document must not remap rows to another cache family."""
+
+    window_end = datetime(2026, 9, 15, 12, 0, tzinfo=UTC)
+    caches = build_production_process_runtime_caches(window_end)
+    seal = ProcessRuntimeCachesParticipant(caches).prepare_checkpoint(0)
+    document = loads(seal.head.payload)
+    assert isinstance(document, dict)
+    families = document["families"]
+    assert isinstance(families, list)
+    first = families[0]
+    assert isinstance(first, list)
+    first[0] = "changed-family"
+
+    restored = build_production_process_runtime_caches(window_end)
+    with pytest.raises(CheckpointCorruptionError, match="head is invalid"):
+        ProcessRuntimeCachesParticipant(restored).restore_checkpoint(dumps(document), ())
 
 
 def _runtime_artifact_descriptor(ordinal: int) -> RuntimeArtifactDescriptor:

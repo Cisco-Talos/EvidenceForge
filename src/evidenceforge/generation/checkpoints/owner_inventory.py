@@ -1122,6 +1122,32 @@ LIFECYCLE_PARTITION_CHECKPOINT_FIELDS = _fields(
 )
 
 
+PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS = _fields(
+    live=("_items", "_reverse"),
+    rebuilt=("_by_name",),
+)
+
+
+BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS = _fields(
+    live=("_records", "_watermark_seconds"),
+    rebuilt=(
+        "_deadlines",
+        "_default_deadline",
+        "_estimated_payload_bytes",
+        "_expiry_work",
+        "_high_water_entries",
+        "_lock",
+        "_lookup_candidates_inspected",
+    ),
+)
+
+
+PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS = _fields(
+    live=("_routes",),
+    rebuilt=("_estimated_payload_bytes", "_lookup_candidates_inspected"),
+)
+
+
 def assert_complete_owner_inventory(
     owner: object,
     fields: tuple[OwnerStateField, ...],
