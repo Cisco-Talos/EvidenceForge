@@ -2,6 +2,7 @@
 
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .cadence import CheckpointCadence
+from .cryptographic_material_head import CryptographicMaterialParticipant
 from .engine_head import GenerationEngineParticipant
 from .intent_ledger_head import IntentExecutionLedgerParticipant
 from .lifecycle_head import LifecycleRegistryParticipant
@@ -17,6 +18,7 @@ from .network_runtime_head import NetworkTransactionRuntimeParticipant
 from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     GENERATION_ENGINE_CHECKPOINT_FIELDS,
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
@@ -54,6 +56,8 @@ __all__ = [
     "CheckpointCursor",
     "CheckpointManifest",
     "CheckpointRecovery",
+    "CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS",
+    "CryptographicMaterialParticipant",
     "GenerationRngParticipant",
     "GENERATION_ENGINE_CHECKPOINT_FIELDS",
     "GenerationEngineParticipant",

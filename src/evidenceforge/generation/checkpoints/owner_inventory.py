@@ -420,6 +420,58 @@ NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS = _fields(
 )
 
 
+CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS = _fields(
+    live=("_next_tls_preparation_id",),
+    incremental=(
+        "_authorities",
+        "_certificates",
+        "_dkim_keys",
+        "_public_keys",
+        "_tls_point_generations",
+        "_tls_point_tombstones",
+    ),
+    rebuilt=(
+        "_checkpoint_incremental_recorder",
+        "_dkim_key_byte_high_water",
+        "_dkim_key_estimated_bytes",
+        "_dkim_key_high_water",
+        "_dkim_key_state_xor",
+        "_tls_canonical_state_xor",
+        "_tls_material_capacity",
+        "_tls_material_generation_high_water",
+        "_tls_material_high_water_bytes",
+        "_tls_material_high_water_points",
+        "_tls_material_lock",
+        "_tls_point_retained_bytes",
+        "_tls_preparation_high_water_bytes",
+        "_tls_preparation_high_water_overlays",
+        "_tls_preparation_secret",
+        "_tls_retained_material_bytes",
+    ),
+    transient=(
+        "_tls_claimed_preparations",
+        "_tls_claimed_state_components",
+        "_tls_claimed_state_xor",
+        "_tls_claimed_transactions",
+        "_tls_committed_receipts",
+        "_tls_dead_claims",
+        "_tls_dead_preparations",
+        "_tls_new_slot_reservations",
+        "_tls_point_reservations",
+        "_tls_preparation_retained_bytes",
+        "_tls_prepared_capabilities",
+        "_tls_prepared_state_components",
+        "_tls_prepared_state_xor",
+        "_tls_prepared_tokens",
+        "_tls_reservation_byte_deltas",
+        "_tls_reservation_state_components",
+        "_tls_reservation_state_xor",
+        "_tls_reserved_material_bytes",
+        "_tls_retained_preparation_bytes",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",

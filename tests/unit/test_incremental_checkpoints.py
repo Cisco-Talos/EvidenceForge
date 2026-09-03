@@ -48,6 +48,9 @@ from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
+from evidenceforge.generation.checkpoints.cryptographic_material_head import (
+    CryptographicMaterialParticipant,
+)
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
     CheckpointCorruptionError,
@@ -69,6 +72,7 @@ from evidenceforge.generation.checkpoints.network_runtime_head import (
 from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
@@ -369,6 +373,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
         owner_name="network-runtime",
     )
+    assert_complete_owner_inventory(
+        network_runtime.cryptographic_material,
+        CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
+        owner_name="cryptographic-material",
+    )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
             partition,
@@ -565,6 +574,90 @@ def test_network_runtime_head_rejects_modified_semantic_row() -> None:
 
     with pytest.raises(CheckpointCorruptionError, match="state digest changed"):
         NetworkTransactionRuntimeParticipant(restored).restore_checkpoint(dumps(modified), ())
+
+
+def test_cryptographic_material_uses_only_new_identity_segments() -> None:
+    """Material checkpoints should rebuild values while sealing only new identities."""
+
+    registry = CryptographicMaterialRegistry()
+    participant = CryptographicMaterialParticipant(registry)
+    authority = registry.resolve_authority(
+        subject_name="CN=Checkpoint Root",
+        issuer_name="CN=Checkpoint Root",
+        key_type="ecdsa",
+        key_size=256,
+    )
+    certificate = registry.resolve_certificate(
+        backend_identity="checkpoint-backend",
+        subject_name="CN=checkpoint.example.test",
+        issuer_name="CN=Checkpoint Root",
+        not_valid_before=1_700_000_000,
+        not_valid_after=1_800_000_000,
+        key_type="ecdsa",
+        key_size=256,
+        signature_algorithm="ecdsa-with-SHA256",
+        san_dns=("checkpoint.example.test",),
+    )
+    dkim = registry.resolve_dkim_key("example.test", "selector-a")
+
+    first = participant.prepare_checkpoint(0)
+    assert len(first.segments) == 1
+    participant.checkpoint_committed(0)
+    registry.public_key_spki("second-key", key_type="rsa", key_size=2048)
+    second = participant.prepare_checkpoint(1)
+    assert len(second.segments) == 1
+    assert second.segments[0].record_count == 1
+    participant.checkpoint_committed(1)
+
+    restored = CryptographicMaterialRegistry()
+    restored_participant = CryptographicMaterialParticipant(restored)
+    restored_participant.restore_checkpoint(
+        second.head.payload,
+        (first.segments[0].payload, second.segments[0].payload),
+    )
+
+    assert restored.state_digest() == registry.state_digest()
+    assert (
+        restored.resolve_authority(
+            subject_name="CN=Checkpoint Root",
+            issuer_name="CN=Checkpoint Root",
+            key_type="ecdsa",
+            key_size=256,
+        )
+        == authority
+    )
+    assert (
+        restored.resolve_certificate(
+            backend_identity="checkpoint-backend",
+            subject_name="CN=checkpoint.example.test",
+            issuer_name="CN=Checkpoint Root",
+            not_valid_before=1_700_000_000,
+            not_valid_after=1_800_000_000,
+            key_type="ecdsa",
+            key_size=256,
+            signature_algorithm="ecdsa-with-SHA256",
+            san_dns=("checkpoint.example.test",),
+        )
+        == certificate
+    )
+    assert restored.resolve_dkim_key("example.test", "selector-a") == dkim
+    unchanged = restored_participant.prepare_checkpoint(2)
+    assert not unchanged.segments
+
+
+def test_cryptographic_material_rejects_prepared_overlay() -> None:
+    """A sealed TLS overlay cannot cross a checkpoint barrier."""
+
+    registry = CryptographicMaterialRegistry()
+    participant = CryptographicMaterialParticipant(registry)
+    preparation = registry.begin_tls_preparation()
+    preparation.public_key_spki("prepared-key", key_type="ecdsa", key_size=256)
+    preparation.seal()
+
+    with pytest.raises(CheckpointError, match="_tls_point_reservations"):
+        participant.prepare_checkpoint(0)
+
+    assert preparation.cancel()
 
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:

@@ -181,3 +181,12 @@ until every correctness and performance gate passes.
   fail the barrier. A populated round trip continues watermark pruning after restore, and semantic
   row tampering is rejected by the participant digest. The 101-test checkpoint/network-runtime/
   transport-lease group passes. Cryptographic material remains a separate unresolved participant.
+- Cryptographic material is now a separate incremental participant. The mutation tail records
+  only newly published point identities/generations and DKIM cache identities; checkpoint segments
+  do not copy DER public keys, authority material, certificates, or wrapper payloads. Recovery
+  validates each inert identity, deterministically rebuilds its value using the exact production
+  builders, reconstructs capacity accounting and order-independent digests, and then attaches a
+  fresh recorder. Prepared overlays, claims, receipts, reservations, and retained capability bytes
+  must be empty at the barrier. A two-generation test proves the second segment contains only its
+  one new key and the cumulative restore reproduces TLS/CA/certificate/DKIM values and the registry
+  digest; 117 checkpoint and cryptographic-material regressions pass.
