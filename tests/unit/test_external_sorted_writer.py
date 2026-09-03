@@ -4,6 +4,7 @@
 """Tests for bounded, atomic external line sorting."""
 
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -80,6 +81,77 @@ def test_external_writer_flushes_at_byte_cap(tmp_path: Path) -> None:
     assert len(writer._run_paths) == 1
     assert writer._buffer == []
     writer.close()
+
+
+def test_checkpoint_mode_seals_only_new_runs_until_final_merge(tmp_path: Path) -> None:
+    output = tmp_path / "zeek.json"
+    writer = ExternalSortedLineWriter(output, sort_key=_key, checkpoint_mode=True)
+
+    writer.write("3|third")
+    writer.write("1|first")
+    writer.flush()
+    first_count, first_sequence, first_runs = writer.checkpoint_snapshot()
+    writer.checkpoint_committed()
+
+    assert not output.exists()
+    assert first_count == 2
+    assert first_sequence == 1
+    assert len(first_runs) == 1
+
+    writer.write("2|second")
+    writer.flush()
+    second_count, second_sequence, second_runs = writer.checkpoint_snapshot()
+
+    assert not output.exists()
+    assert second_count == 3
+    assert second_sequence == 2
+    assert second_runs[:1] == first_runs
+    assert len(second_runs) == 2
+
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "1|first",
+        "2|second",
+        "3|third",
+    ]
+
+
+def test_checkpoint_mode_restores_immutable_runs_into_fresh_writer(tmp_path: Path) -> None:
+    source = ExternalSortedLineWriter(
+        tmp_path / "source.log",
+        sort_key=_key,
+        checkpoint_mode=True,
+    )
+    source.write("3|third")
+    source.write("1|first")
+    source.flush()
+    event_count, run_sequence, source_runs = source.checkpoint_snapshot()
+
+    restored_output = tmp_path / "restored.log"
+    restored = ExternalSortedLineWriter(
+        restored_output,
+        sort_key=_key,
+        checkpoint_mode=True,
+    )
+    restored_spool = tmp_path / "restored-runs"
+    restored_spool.mkdir()
+    restored_runs = tuple(restored_spool / path.name for path in source_runs)
+    for source_path, restored_path in zip(source_runs, restored_runs, strict=True):
+        shutil.copyfile(source_path, restored_path)
+    restored.restore_checkpoint_runs(
+        paths=restored_runs,
+        event_count=event_count,
+        run_sequence=run_sequence,
+    )
+    restored.write("2|second")
+    restored.close()
+
+    assert restored_output.read_text(encoding="utf-8").splitlines() == [
+        "1|first",
+        "2|second",
+        "3|third",
+    ]
+    source.close()
 
 
 def test_external_writer_is_thread_safe_and_deterministic(tmp_path: Path) -> None:

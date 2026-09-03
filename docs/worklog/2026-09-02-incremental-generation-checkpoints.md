@@ -302,3 +302,10 @@ until every correctness and performance gate passes.
   count; a tail recovery skips the baseline completely and deterministically re-enters remaining
   scheduled work/finalization. The production slow test now creates a real tail recovery, restores
   it into a second initialized engine, and completes with matching ground-truth event state.
+- Checkpoint-enabled external-sort emitters now seal per-barrier immutable runs and defer the
+  cumulative merge until finalization. Their production spool participant imports each run once,
+  retains prior content by manifest reference without rereading or rehashing it, and rebuilds a
+  fresh protected run spool on recovery. Append-oriented writer files similarly seal only bytes
+  beyond their committed length and restore through a validated hash chain. A real Zeek-family
+  engine run restores six sensor files from a tail checkpoint with byte-identical evidence; direct
+  adapter tests prove that the second checkpoint reads only its new sorted run or appended suffix.

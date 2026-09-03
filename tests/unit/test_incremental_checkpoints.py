@@ -64,6 +64,7 @@ from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.cryptographic_material_head import (
     CryptographicMaterialParticipant,
 )
+from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
     CheckpointCorruptionError,
@@ -172,6 +173,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAffinity,
@@ -2533,6 +2535,101 @@ def test_email_manifest_spool_restores_row_deltas_and_append_cursor(tmp_path: Pa
         "later",
         "final",
     ]
+
+
+def test_emitter_spool_imports_each_sorted_run_once_and_resumes_final_merge(
+    tmp_path: Path,
+) -> None:
+    def checkpoint_emitter(root: Path) -> tuple[object, object, ExternalSortedLineWriter]:
+        output = root / "sensor" / "conn.json"
+        sorted_writer = ExternalSortedLineWriter(
+            output,
+            sort_key=lambda line: line,
+            checkpoint_mode=True,
+        )
+        route_writer = SimpleNamespace(
+            _sorted_writer=sorted_writer,
+            event_count=0,
+            output_path=output,
+        )
+        emitter = SimpleNamespace(_writers={"sensor": route_writer})
+        emitter._get_writer = lambda route: emitter._writers[route]
+        return emitter, route_writer, sorted_writer
+
+    source_root = tmp_path / "source"
+    source_emitter, _source_route, source_writer = checkpoint_emitter(source_root)
+    participant = EmitterSpoolParticipant(
+        emitters={"zeek_conn": source_emitter},
+        output_root=source_root,
+    )
+    source_writer.write("3|third")
+    source_writer.flush()
+    first = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    source_writer.write("1|first")
+    source_writer.flush()
+    second = participant.prepare_checkpoint(1)
+    participant.checkpoint_committed(1)
+
+    assert len(first.segments) == 1
+    assert len(second.segments) == 1
+    assert participant.last_bytes_read == len("1|first\n")
+
+    restored_root = tmp_path / "restored"
+    restored_emitter, _restored_route, restored_writer = checkpoint_emitter(restored_root)
+    restored = EmitterSpoolParticipant(
+        emitters={"zeek_conn": restored_emitter},
+        output_root=restored_root,
+    )
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+
+    source_writer.write("2|second")
+    restored_writer.write("2|second")
+    source_writer.close()
+    restored_writer.close()
+
+    assert (restored_root / "sensor" / "conn.json").read_bytes() == (
+        source_root / "sensor" / "conn.json"
+    ).read_bytes()
+
+
+def test_emitter_spool_seals_only_new_append_bytes_and_restores_file(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_path = source_root / "host" / "events.log"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"first\n")
+    source_writer = SimpleNamespace(_sorted_writer=None, output_path=source_path)
+    source_emitter = SimpleNamespace(_writers={"host": source_writer})
+    participant = EmitterSpoolParticipant(
+        emitters={"syslog": source_emitter},
+        output_root=source_root,
+    )
+
+    first = participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    with source_path.open("ab") as stream:
+        stream.write(b"second\n")
+    second = participant.prepare_checkpoint(1)
+    participant.checkpoint_committed(1)
+
+    assert len(first.segments) == 1
+    assert len(second.segments) == 1
+    assert participant.last_bytes_read == len(b"second\n")
+
+    restored_root = tmp_path / "restored"
+    restored = EmitterSpoolParticipant(
+        emitters={"syslog": SimpleNamespace(_writers={})},
+        output_root=restored_root,
+    )
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+
+    assert (restored_root / "host" / "events.log").read_bytes() == b"first\nsecond\n"
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

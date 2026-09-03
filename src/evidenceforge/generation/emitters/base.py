@@ -1165,6 +1165,7 @@ class LogEmitter(ABC):
         self._queue_admissions = 0
         self._footer_pending: tuple[str, int, int] | None = None
         self._footer_written = False
+        self._incremental_checkpointing = False
 
         # Threading support (Phase 2.1)
         self.threaded = threaded
@@ -1185,6 +1186,15 @@ class LogEmitter(ABC):
             )
             self._thread.start()
             logger.debug(f"Started emitter thread for {format_def.name}")
+
+    def enable_incremental_checkpointing(self) -> None:
+        """Enable checkpoint-aware spool behavior before the first emitted event."""
+
+        if self.event_count or self.buffer:
+            raise RuntimeError(
+                f"{self.format_def.name} incremental checkpointing started after output"
+            )
+        self._incremental_checkpointing = True
 
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Configure the generated-output target for this emitter."""

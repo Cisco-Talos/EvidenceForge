@@ -5,6 +5,7 @@ from .application_channel_head import ApplicationChannelRegistryParticipant
 from .artifact_registry_head import LocalArtifactVersionRegistryParticipant
 from .cadence import CheckpointCadence
 from .cryptographic_material_head import CryptographicMaterialParticipant
+from .emitter_spools import EmitterSpoolParticipant
 from .engine_head import GenerationEngineParticipant
 from .http_channel_head import HttpApplicationChannelParticipant
 from .intent_ledger_head import IntentExecutionLedgerParticipant
@@ -97,6 +98,7 @@ __all__ = [
     "GenerationRngParticipant",
     "GENERATION_ENGINE_CHECKPOINT_FIELDS",
     "GenerationEngineParticipant",
+    "EmitterSpoolParticipant",
     "HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
     "HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS",
     "HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS",

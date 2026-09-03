@@ -10,6 +10,7 @@ from .activity_head import ActivityGeneratorStateParticipant
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .artifact_registry_head import LocalArtifactVersionRegistryParticipant
 from .cryptographic_material_head import CryptographicMaterialParticipant
+from .emitter_spools import EmitterSpoolParticipant
 from .engine_head import GenerationEngineParticipant
 from .http_channel_head import HttpApplicationChannelParticipant
 from .intent_ledger_head import IntentExecutionLedgerParticipant
@@ -64,6 +65,8 @@ def production_checkpoint_participants(
     source_timing = engine.source_timing_planner
     if generator is None or timing is None or source_timing is None:
         raise RuntimeError("checkpoint participants require a fully initialized engine")
+    for emitter in engine.emitters.values():
+        emitter.enable_incremental_checkpointing()
     participants: list[IncrementalCheckpointParticipant] = [
         StateManagerParticipant(engine.state_manager),
         TimingRuntimeParticipant(timing),
@@ -79,6 +82,7 @@ def production_checkpoint_participants(
         RdpSessionManagerParticipant(generator._rdp_session_manager),
         IntentExecutionLedgerParticipant(engine.intent_execution_ledger),
         ActivityGeneratorStateParticipant(generator),
+        EmitterSpoolParticipant(emitters=engine.emitters, output_root=engine.output_dir),
         GenerationEngineParticipant(engine),
         GenerationRngParticipant(),
     ]

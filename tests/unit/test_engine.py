@@ -25,10 +25,12 @@
 import json
 import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.composition import compile_scenario, with_runtime_scenario
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.checkpoints import (
@@ -98,6 +100,70 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
 
 @pytest.mark.slow
 class TestGenerationEngine:
+    def test_incremental_tail_resume_is_byte_identical_for_external_sorted_emitters(
+        self,
+        tmp_path,
+    ):
+        """A restored immutable-run set should produce identical final sensor evidence."""
+
+        scenario_path = Path("tests/fixtures/scenarios/minimal.yaml")
+        compiled = compile_scenario(scenario_path)
+        compiled.scenario.output.logs = [{"format": "zeek"}]
+        compiled = with_runtime_scenario(compiled, compiled.scenario)
+        source_root = tmp_path / "source"
+        store = IncrementalCheckpointStore(source_root)
+        controller = IncrementalCheckpointController(
+            store=store,
+            fingerprint="a" * 64,
+            checkpoint_hours=1,
+            resolved_scenario=b"resolved\n",
+        )
+        source = GenerationEngine(
+            compiled.scenario,
+            source_root / "data",
+            ground_truth_dir=source_root,
+            artifact_dir=source_root / "artifacts",
+            scenario_root=scenario_path.parent,
+            compiled_scenario=compiled,
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+        )
+        source.generate()
+        recovery = store.recover(expected_fingerprint="a" * 64)
+
+        resumed_root = tmp_path / "resumed"
+        resumed_controller = IncrementalCheckpointController.for_recovery(
+            store=store,
+            recovery=recovery,
+            fingerprint="a" * 64,
+            resolved_scenario=store.read_resolved_scenario(recovery),
+        )
+        resumed = GenerationEngine(
+            compiled.scenario,
+            resumed_root / "data",
+            ground_truth_dir=resumed_root,
+            artifact_dir=resumed_root / "artifacts",
+            scenario_root=scenario_path.parent,
+            compiled_scenario=compiled,
+            checkpoint_hours=1,
+            checkpoint_controller=resumed_controller,
+            checkpoint_recovery=recovery,
+        )
+        resumed.generate()
+
+        source_files = {
+            path.relative_to(source_root / "data"): path.read_bytes()
+            for path in (source_root / "data").rglob("*")
+            if path.is_file()
+        }
+        resumed_files = {
+            path.relative_to(resumed_root / "data"): path.read_bytes()
+            for path in (resumed_root / "data").rglob("*")
+            if path.is_file()
+        }
+        assert source_files
+        assert resumed_files == source_files
+
     def test_incremental_controller_commits_real_production_participants(
         self,
         minimal_scenario,

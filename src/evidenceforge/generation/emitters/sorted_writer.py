@@ -71,6 +71,7 @@ class ExternalSortedLineWriter:
         merge_fan_in: int = 64,
         exact_journal_row_capacity: int = 1_000_000,
         exact_journal_byte_capacity: int = 4 * 1024 * 1024 * 1024,
+        checkpoint_mode: bool = False,
     ) -> None:
         if buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
@@ -110,6 +111,7 @@ class ExternalSortedLineWriter:
         self._exact_high_water_rows = 0
         self._exact_high_water_bytes = 0
         self._exact_export_generation = 0
+        self._checkpoint_mode = checkpoint_mode
         self._exact_publication_condition = Condition(Lock())
         self._active_exact_publication_keys: set[ExactPublicationParticipantKey] = set()
         self._close_state = "open"
@@ -339,6 +341,8 @@ class ExternalSortedLineWriter:
             self._require_open_locked()
             with self._lock:
                 self._spill_unlocked()
+                if self._checkpoint_mode:
+                    return
                 self._publish_runs_unlocked()
                 self._mark_exact_rows_exported_unlocked()
                 self._normalize_exported_runs_unlocked()
@@ -362,6 +366,7 @@ class ExternalSortedLineWriter:
             with self._lock:
                 self._spill_unlocked()
                 if self._run_paths:
+                    self._compact_runs_unlocked()
                     self._publish_runs_unlocked()
                     self._mark_exact_rows_exported_unlocked()
                     self._normalize_exported_runs_unlocked()
@@ -381,6 +386,51 @@ class ExternalSortedLineWriter:
             self._close_state = "closed"
             self._close_thread = None
             self._exact_publication_condition.notify_all()
+
+    def checkpoint_snapshot(self) -> tuple[int, int, tuple[Path, ...]]:
+        """Return the immutable run set after a checkpoint-mode barrier."""
+
+        if not self._checkpoint_mode:
+            raise RuntimeError("external sorted writer is not in checkpoint mode")
+        with self._exact_publication_condition:
+            if self._active_exact_publication_keys:
+                raise ExactPublicationError(
+                    "External sorted checkpoint retains an exact publication"
+                )
+            with self._lock:
+                if self._buffer:
+                    raise RuntimeError("external sorted checkpoint retains an unsealed buffer")
+                return self.event_count, self._run_sequence, tuple(self._run_paths)
+
+    def checkpoint_committed(self) -> None:
+        """Retire exact row journals after their immutable runs become durable."""
+
+        if not self._checkpoint_mode:
+            raise RuntimeError("external sorted writer is not in checkpoint mode")
+        with self._lock:
+            self._mark_exact_rows_exported_unlocked()
+
+    def restore_checkpoint_runs(
+        self,
+        *,
+        paths: tuple[Path, ...],
+        event_count: int,
+        run_sequence: int,
+    ) -> None:
+        """Install validated immutable runs into a fresh checkpoint-mode writer."""
+
+        if not self._checkpoint_mode:
+            raise RuntimeError("external sorted writer is not in checkpoint mode")
+        if event_count < 0 or run_sequence < 0:
+            raise ValueError("external sorted checkpoint counters cannot be negative")
+        with self._exact_publication_condition:
+            with self._lock:
+                if self._buffer or self._run_paths or self.event_count or self._run_sequence:
+                    raise RuntimeError("external sorted writer is not fresh during recovery")
+                self._run_paths = list(paths)
+                self.event_count = event_count
+                self._run_sequence = run_sequence
+                self._spool_dir = paths[0].parent if paths else None
 
     def _publish_runs_unlocked(self) -> None:
         """Atomically export every admitted run without consuming journal truth."""
@@ -537,7 +587,8 @@ class ExternalSortedLineWriter:
         self._run_paths.append(run_path)
         self._buffer.clear()
         self._buffer_bytes = 0
-        self._compact_runs_unlocked()
+        if not self._checkpoint_mode:
+            self._compact_runs_unlocked()
 
     def _compact_runs_unlocked(self) -> None:
         while len(self._run_paths) > self.merge_fan_in:
