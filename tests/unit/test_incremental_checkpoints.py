@@ -36,7 +36,13 @@ from evidenceforge.events.lifecycle import (
     TransportLifecycleIdentity,
     TransportSessionBindingIdentity,
 )
-from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTransactionPlan,
+    NetworkTuple,
+)
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpRetentionLease,
@@ -86,6 +92,10 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
     PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
+    SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    SMB_SESSION_RECORD_CHECKPOINT_FIELDS,
+    SMB_SESSION_STORE_CHECKPOINT_FIELDS,
+    SMB_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS,
@@ -111,6 +121,9 @@ from evidenceforge.generation.checkpoints.rng import (
     encode_random_state,
 )
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+from evidenceforge.generation.checkpoints.smb_channel_head import (
+    SmbApplicationChannelParticipant,
+)
 from evidenceforge.generation.checkpoints.source_timing_head import (
     SourceTimingPlannerParticipant,
 )
@@ -154,6 +167,7 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyChannelManager,
 )
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
+from evidenceforge.generation.smb_channels import SmbApplicationChannelManager, SmbChannelAffinity
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.ssh_channels import (
     SshApplicationChannelManager,
@@ -444,6 +458,16 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         ssh,
         SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
         owner_name="ssh-channels",
+    )
+    smb = SmbApplicationChannelManager(
+        application_registry=application_channels,
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    assert_complete_owner_inventory(
+        smb,
+        SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="smb-channels",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -1114,6 +1138,169 @@ def test_ssh_channel_head_rejects_prepared_admission_state() -> None:
 
     with pytest.raises(CheckpointError, match="_prepared_admissions"):
         SshApplicationChannelParticipant(manager).prepare_checkpoint(0)
+
+
+def test_smb_channel_head_round_trips_reusable_session_and_sensor_view() -> None:
+    """SMB hydration should rebuild open session/tree state and exact sensor views."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(days=1)
+    closes_at = started + timedelta(hours=1)
+    registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    manager = SmbApplicationChannelManager(
+        application_registry=registry,
+        window_start=started,
+        window_end=ended,
+    )
+    affinity = SmbChannelAffinity(
+        client_identity="CLIENT01",
+        client_ip="10.0.0.10",
+        client_session="0x1001",
+        server_identity="FILE01",
+        server_ip="10.0.0.20",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="Kerberos",
+        account_scope="EXAMPLE",
+        dialect="3.1.1",
+        signing_policy="required",
+        encryption_policy="off",
+        server_policy="windows:file-server",
+        share_policy="disk:standard",
+        client_access="windows_native",
+    )
+    traffic = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=100, packets=1, ip_bytes=140),
+        resp=DirectionalTrafficLedger(payload_bytes=200, packets=1, ip_bytes=240),
+    )
+    plan = NetworkTransactionPlan(
+        stable_id="checkpoint-smb-transport",
+        hostname="file01.example.test",
+        outcome="success",
+        phase_times=(("attempt", started), ("close", closes_at)),
+        started_at=started,
+        closed_at=closes_at,
+        src_ip="10.0.0.10",
+        src_port=50_445,
+        dst_ip="10.0.0.20",
+        dst_port=445,
+        protocol="tcp",
+        service="smb",
+        zeek_uid="CHECKPOINT-SMB",
+        conn_id="checkpoint-smb-connection",
+        duration=timedelta(hours=1).total_seconds(),
+        conn_state="SF",
+        history="ShADadfF",
+        traffic=traffic,
+    )
+    observation = NetworkSensorObservation(
+        sensor_identity="checkpoint-sensor",
+        path_role="internal",
+        capture_profile="full",
+        tuple_view=NetworkTuple("10.0.0.10", 50_445, "10.0.0.20", 445, "tcp"),
+        connection_uid="CHECKPOINT-SMB",
+        connection_ids=((plan.stable_id, plan.conn_id),),
+        file_ids=(),
+        local_orig=True,
+        local_resp=True,
+        observed_start_time=started,
+        observed_close_time=closes_at,
+        traffic=traffic,
+        visible_formats=frozenset({"zeek"}),
+        history="ShADadfF",
+    )
+    lease = manager.open_session(
+        affinity,
+        transport_plan=plan,
+        sensor_observations=(observation,),
+        ground_truth_transport_uid=plan.zeek_uid,
+        logon_id="0xA1",
+        auth_session_ref="checkpoint-smb-auth",
+        principal="EXAMPLE\\analyst",
+        auth_protocol="kerberos",
+        account_scope="EXAMPLE",
+        effective_uid=None,
+        effective_gid=None,
+        client_access="windows_native",
+        server_hostname="FILE01",
+        client_ip="10.0.0.10",
+        lifecycle_group_id=plan.stable_id,
+        share_ref="FILE01.Documents",
+        semantic_operation_id="checkpoint-operation-1",
+        operation_started_at=started + timedelta(milliseconds=100),
+        operation_ended_at=started + timedelta(seconds=1),
+        operation_initiator_bytes=100,
+        operation_responder_bytes=200,
+        idle_timeout=timedelta(minutes=15),
+        initiator_budget=10_000,
+        responder_budget=100_000,
+        operation_budget=10,
+        operation_completes_immediately=True,
+    )
+    expected = manager.session_view(lease.channel_id)
+    application_seal = ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
+    smb_seal = SmbApplicationChannelParticipant(manager).prepare_checkpoint(0)
+
+    restored_registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    ApplicationChannelRegistryParticipant(restored_registry).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    restored = SmbApplicationChannelManager(
+        application_registry=restored_registry,
+        window_start=started,
+        window_end=ended,
+    )
+    SmbApplicationChannelParticipant(restored).restore_checkpoint(smb_seal.head.payload, ())
+
+    assert restored.session_view(lease.channel_id) == expected
+    reuse = restored.reserve_reuse(
+        affinity,
+        share_ref="file01.documents",
+        semantic_operation_id="checkpoint-operation-2",
+        requested_at=started + timedelta(seconds=2),
+        required_until=started + timedelta(seconds=3),
+        initiator_bytes=110,
+        responder_bytes=220,
+    ).lease
+    assert reuse is not None
+    assert reuse.reused_session
+    assert restored.finalize_operation(reuse)
+    shard = next(iter(restored._shards.values()))
+    assert_complete_owner_inventory(
+        shard,
+        SMB_SIDECAR_SHARD_CHECKPOINT_FIELDS,
+        owner_name="smb-sidecar-shard",
+    )
+    assert_complete_owner_inventory(
+        shard.sessions,
+        SMB_SESSION_STORE_CHECKPOINT_FIELDS,
+        owner_name="smb-session-store",
+    )
+    record = next(iter(shard.sessions.values()))
+    assert_complete_owner_inventory(
+        record,
+        SMB_SESSION_RECORD_CHECKPOINT_FIELDS,
+        owner_name="smb-session-record",
+    )
+
+
+def test_smb_channel_head_rejects_prepared_admission_state() -> None:
+    """Prepared SMB capability state cannot cross the checkpoint barrier."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager = SmbApplicationChannelManager(
+        application_registry=registry,
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager._prepared_admissions[1] = object()  # type: ignore[assignment]
+
+    with pytest.raises(CheckpointError, match="_prepared_admissions"):
+        SmbApplicationChannelParticipant(manager).prepare_checkpoint(0)
 
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:

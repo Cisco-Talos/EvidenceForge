@@ -14,7 +14,14 @@ from pydantic import TypeAdapter, ValidationError
 
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.events.network import DirectionalTrafficLedger, NetworkTrafficLedger
+from evidenceforge.events.network import (
+    DirectionalTrafficLedger,
+    FileSensorObservation,
+    NatSensorObservation,
+    NetworkSensorObservation,
+    NetworkTrafficLedger,
+    NetworkTuple,
+)
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpRetentionLease,
@@ -141,6 +148,49 @@ _SMB_FILE_STATE_FIELDS = (
 _SESSION_END_PLAN_FIELDS = ("canonical_end", "authority", "storyline_event_id")
 _DIRECTIONAL_TRAFFIC_FIELDS = ("payload_bytes", "packets", "ip_bytes")
 _NETWORK_TRAFFIC_FIELDS = ("orig", "resp", "missed_orig_bytes", "missed_resp_bytes")
+_NETWORK_TUPLE_FIELDS = ("src_ip", "src_port", "dst_ip", "dst_port", "protocol")
+_NAT_SENSOR_OBSERVATION_FIELDS = (
+    "nat_type",
+    "direction",
+    "local_ip",
+    "local_port",
+    "global_ip",
+    "global_port",
+    "built_time",
+    "teardown_time",
+)
+_FILE_SENSOR_OBSERVATION_FIELDS = (
+    "canonical_id",
+    "seen_bytes",
+    "total_bytes",
+    "missing_bytes",
+    "analyzers_visible",
+)
+_NETWORK_SENSOR_OBSERVATION_FIELDS = (
+    "sensor_identity",
+    "path_role",
+    "capture_profile",
+    "tuple_view",
+    "connection_uid",
+    "connection_ids",
+    "file_ids",
+    "local_orig",
+    "local_resp",
+    "observed_start_time",
+    "observed_close_time",
+    "traffic",
+    "visible_formats",
+    "history",
+    "file_observations",
+    "http_request_body_len",
+    "http_response_body_len",
+    "firewall_teardown_reason",
+    "firewall_teardown_time",
+    "firewall_teardown_observed",
+    "nat",
+    "source_times",
+    "source_durations",
+)
 _APPLICATION_CHANNEL_BUDGET_FIELDS = ("initiator_bytes", "responder_bytes", "operations")
 _APPLICATION_TRANSPORT_BINDING_FIELDS = ("transport_id", "opened_at", "closes_at")
 _RDP_SESSION_AFFINITY_FIELDS = (
@@ -206,7 +256,14 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         _APPLICATION_TRANSPORT_BINDING_FIELDS,
     ),
     "directional-traffic": (DirectionalTrafficLedger, _DIRECTIONAL_TRAFFIC_FIELDS),
+    "file-sensor-observation": (FileSensorObservation, _FILE_SENSOR_OBSERVATION_FIELDS),
+    "nat-sensor-observation": (NatSensorObservation, _NAT_SENSOR_OBSERVATION_FIELDS),
+    "network-sensor-observation": (
+        NetworkSensorObservation,
+        _NETWORK_SENSOR_OBSERVATION_FIELDS,
+    ),
     "network-traffic": (NetworkTrafficLedger, _NETWORK_TRAFFIC_FIELDS),
+    "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),

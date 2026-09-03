@@ -34,6 +34,10 @@ from .owner_inventory import (
     RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS,
     RDP_MANAGER_CHECKPOINT_FIELDS,
     RDP_SHARD_CHECKPOINT_FIELDS,
+    SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    SMB_SESSION_RECORD_CHECKPOINT_FIELDS,
+    SMB_SESSION_STORE_CHECKPOINT_FIELDS,
+    SMB_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     SOURCE_CLOCK_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
@@ -53,6 +57,7 @@ from .participants import IncrementalCheckpointParticipant, OwnerStateField, Par
 from .proxy_channel_head import ExplicitProxyChannelParticipant
 from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
+from .smb_channel_head import SmbApplicationChannelParticipant
 from .source_timing_head import SourceTimingPlannerParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
 from .sqlite_spool import SQLiteSpoolParticipant
@@ -104,6 +109,11 @@ __all__ = [
     "RdpSessionManagerParticipant",
     "SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS",
     "SOURCE_CLOCK_REGISTRY_CHECKPOINT_FIELDS",
+    "SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
+    "SMB_SESSION_RECORD_CHECKPOINT_FIELDS",
+    "SMB_SESSION_STORE_CHECKPOINT_FIELDS",
+    "SMB_SIDECAR_SHARD_CHECKPOINT_FIELDS",
+    "SmbApplicationChannelParticipant",
     "SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
     "SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS",
     "SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS",

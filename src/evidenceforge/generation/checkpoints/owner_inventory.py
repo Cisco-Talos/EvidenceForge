@@ -633,6 +633,86 @@ SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS = _fields(
 )
 
 
+SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS = _fields(
+    live=("_next_prepared_reservation_id", "_shards"),
+    rebuilt=(
+        "_admission_secret",
+        "_compaction_cursor",
+        "_directory_lock",
+        "_exact_route_cache",
+        "_gate",
+        "_manager_id",
+        "_prepared_lock",
+        "_registry",
+        "_watermark_lane",
+        "_window_end",
+        "_window_start",
+    ),
+    transient=(
+        "_admission_receipts",
+        "_cancelling_admissions",
+        "_claimed_admissions",
+        "_prepared_admissions",
+        "_prepared_capabilities",
+    ),
+)
+
+
+SMB_SIDECAR_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("sessions",),
+    rebuilt=(
+        "deletions",
+        "estimated_value_bytes",
+        "exact_lookup_candidates_inspected",
+        "expiry",
+        "lock",
+        "maximum_handles_per_operation",
+        "maximum_trees_per_session",
+        "open_handles",
+        "open_trees",
+        "shard_id",
+        "snapshot_cache",
+    ),
+)
+
+
+SMB_SESSION_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_slot_keys", "_slot_values"),
+    rebuilt=(
+        "_free_handles",
+        "_handles",
+        "_high_water_mark",
+        "_indexers",
+        "_indexes",
+        "_live_count",
+        "_lookup_candidates_inspected",
+        "_primary_compaction_cursor",
+        "_primary_compaction_rotations",
+        "_primary_compaction_seconds",
+        "_primary_compaction_work",
+        "_primary_peak_entries",
+        "_retired_handles",
+        "_track_lookup_candidates",
+    ),
+)
+
+
+SMB_SESSION_RECORD_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "additional_handles",
+        "additional_trees",
+        "affinity_key",
+        "first_handle",
+        "first_tree",
+        "handle_count",
+        "metadata_payload",
+        "plan_payload",
+        "sensor_observations",
+        "tree_count",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",

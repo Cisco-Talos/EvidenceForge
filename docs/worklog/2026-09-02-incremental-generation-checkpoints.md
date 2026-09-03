@@ -211,3 +211,12 @@ until every correctness and performance gate passes.
   packed generations, and decode/hot caches. Prepared admission capabilities are transient-empty.
   A populated restore can finalize the recovered child and close its session, and the 80-test
   incremental/SSH manager/prepared-admission/source-port regression group passes.
+- The reusable SMB channel manager now has explicit manager, shard, compact-store, and mutable
+  session-record inventories. Its bounded head retains packed transport plans, semantic session
+  metadata, exact sensor observations, trees, and active handles, but strips process-local common
+  close locators. Hydration reauthenticates each channel and active handle against the restored
+  application registry, installs a fresh close token, and rebuilds expiry, affinity indexes,
+  counters, caches, and packed-store bookkeeping. A restored session reuses its original tree and
+  exact sensor view. The incremental/SMB/persistent-projection regression group has 188 passing
+  tests (29 slow tests excluded by the routine marker policy). Persistent SMB projection and
+  continuation authorities remain separate owners to classify.
