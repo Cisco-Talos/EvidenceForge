@@ -20,6 +20,36 @@ _PUBLICATION_STAGE_ENV = "EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE"
 _PUBLICATION_STAGES = frozenset({"heads_durable", "recovery_published", "index_published"})
 
 
+def _publish_ready_marker(directory: Path, marker: Path, payload: bytes) -> None:
+    """Atomically publish a durable test marker with complete contents."""
+
+    pending = marker.with_name(f".{marker.name}.pending")
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written == 0:
+                raise OSError("checkpoint test marker write made no progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.replace(pending, marker)
+    except OSError:
+        pending.unlink(missing_ok=True)
+        raise
+    directory_descriptor = os.open(
+        directory,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
 def checkpoint_test_synchronizer_from_environment() -> Callable[[CheckpointCursor], None] | None:
     """Build the explicit subprocess-test barrier requested through the environment."""
 
@@ -64,20 +94,7 @@ def checkpoint_test_synchronizer_from_environment() -> Callable[[CheckpointCurso
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(descriptor, payload)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        directory_descriptor = os.open(
-            directory,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-        )
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _publish_ready_marker(directory, marker, payload)
         deadline = time.monotonic() + timeout
         while not acknowledgement.exists():
             if time.monotonic() >= deadline:
@@ -139,20 +156,7 @@ def checkpoint_publication_test_synchronizer_from_environment() -> (
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(descriptor, payload)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        directory_descriptor = os.open(
-            directory,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-        )
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _publish_ready_marker(directory, marker, payload)
         deadline = time.monotonic() + timeout
         while not acknowledgement.exists():
             if time.monotonic() >= deadline:

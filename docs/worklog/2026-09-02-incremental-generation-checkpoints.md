@@ -626,3 +626,8 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   move only a stopped output root, and resume with a compatible exact EvidenceForge build/resources,
   Python runtime/compiler, dependencies, platform, options, and resolved input. Users are directed
   to finish an incomplete run before upgrading instead of bypassing fingerprint incompatibility.
+- Linux CI exposed a race confined to the pytest-only interruption barrier: the `.ready` marker was
+  visible after creation but before its small JSON payload had been written. Both hour-boundary and
+  publication-stage barriers now write and sync a private pending marker, atomically publish it, and
+  sync the directory before waiting for acknowledgement. The CI-equivalent default suite then
+  passed all 8,119 tests (5 skipped), and Ruff checks remained clean.
