@@ -63,3 +63,8 @@ until every correctness and performance gate passes.
   Focused coverage updates, deletes, and inserts between checkpoints, observes four dirty rows,
   emits no segment when the next point is unchanged, and rebuilds an equivalent fresh database
   with its indexes. SQLite database files and prior logical segments are never copied again.
+- Segment references now carry authenticated per-owner ordinals. Publication preserves append
+  order and hydration sorts by that ordinal, so content hashes cannot accidentally reorder file
+  chunks or logical database deltas. The authoritative recovery index also authenticates each
+  manifest; a semantically valid but modified newest manifest falls back to the previous point,
+  while a corrupt pointer is rejected rather than guessed around.

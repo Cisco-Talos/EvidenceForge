@@ -35,6 +35,7 @@ class SegmentReference(BaseModel):
 
     owner: str = Field(min_length=1, max_length=128, pattern=r"^[a-z0-9_.-]+$")
     schema_version: str = Field(min_length=1, max_length=32)
+    owner_ordinal: int = Field(ge=0)
     sha256: str = Field(pattern=SHA256_PATTERN)
     relative_path: str = Field(min_length=1)
     size: int = Field(ge=0)
@@ -93,10 +94,15 @@ class CheckpointManifest(BaseModel):
         if len(paths) != len(set(paths)):
             raise ValueError("checkpoint object paths must be unique")
         by_digest: dict[str, SegmentReference] = {}
+        owner_ordinals: dict[str, list[int]] = {}
         for segment in self.segments:
             previous = by_digest.setdefault(segment.sha256, segment)
             if previous != segment:
                 raise ValueError("one segment digest cannot describe conflicting objects")
+            owner_ordinals.setdefault(segment.owner, []).append(segment.owner_ordinal)
+        for owner, ordinals in owner_ordinals.items():
+            if len(ordinals) != len(set(ordinals)) or ordinals != sorted(ordinals):
+                raise ValueError(f"checkpoint participant {owner!r} has invalid segment ordinals")
         known = set(by_digest)
         for head in self.participant_heads:
             missing = set(head.referenced_segments) - known

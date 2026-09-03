@@ -173,12 +173,16 @@ class IncrementalCheckpointController:
                 "checkpoint participant set is incompatible: "
                 f"stored={sorted(expected)}, runtime={sorted(actual)}"
             )
-        by_owner: dict[str, list[bytes]] = {owner: [] for owner in actual}
-        for reference in recovery.manifest.segments:
-            if reference.owner in by_owner:
-                by_owner[reference.owner].append(self.store.read_segment(reference))
         for participant in ordered:
+            references = sorted(
+                (
+                    reference
+                    for reference in recovery.manifest.segments
+                    if reference.owner == participant.checkpoint_owner
+                ),
+                key=lambda reference: reference.owner_ordinal,
+            )
             participant.restore_checkpoint(
                 self.store.read_head(recovery, participant.checkpoint_owner),
-                tuple(by_owner[participant.checkpoint_owner]),
+                tuple(self.store.read_segment(reference) for reference in references),
             )

@@ -461,14 +461,13 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
     assert second_metrics.reused_segment_bytes == first_segment.size
     assert second_metrics.bytes_read == 0
     assert second_metrics.bytes_hashed < sum(segment.size for segment in second.segments)
+    assert [segment.owner_ordinal for segment in second.segments] == [0, 1]
     assert first_path.stat().st_ino == first_stat.st_ino
     assert first_path.stat().st_mtime_ns == first_stat.st_mtime_ns
     recovery = store.recover(expected_fingerprint=_FINGERPRINT)
     assert recovery.manifest.sequence == 1
-    assert store.read_segment(recovery.manifest.segments[0]) in {
-        b"first delta" * 100,
-        b"second delta" * 100,
-    }
+    assert store.read_segment(recovery.manifest.segments[0]) == b"first delta" * 100
+    assert store.read_segment(recovery.manifest.segments[1]) == b"second delta" * 100
 
 
 def test_store_rotates_manifests_and_collects_unreferenced_segments(tmp_path: Path) -> None:
@@ -508,6 +507,32 @@ def test_store_falls_back_when_newest_head_is_corrupt(tmp_path: Path) -> None:
     assert recovery.manifest.sequence == 0
     assert recovery.warning is not None
     assert "newest generation checkpoint was corrupt" in recovery.warning
+
+
+def test_store_authenticates_manifest_through_recovery_index(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    first = _commit(store, sequence=0, hour=6, payload=b"first")
+    second = _commit(store, sequence=1, hour=12, inherited=first.segments, payload=b"second")
+    newest_manifest = store.workspace / "recovery" / f"{second.sequence:020d}" / "manifest.json"
+    document = json.loads(newest_manifest.read_text(encoding="utf-8"))
+    document["metadata"] = {"tampered": True}
+    newest_manifest.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+    recovery = store.recover(expected_fingerprint=_FINGERPRINT)
+
+    assert recovery.used_fallback
+    assert recovery.manifest.sequence == 0
+    assert recovery.warning is not None
+    assert "manifest failed index validation" in recovery.warning
+
+
+def test_store_rejects_corrupt_authoritative_recovery_index(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    _commit(store, sequence=0, hour=6, payload=b"first")
+    store.index_path.write_text('{"recoveries": []}', encoding="utf-8")
+
+    with pytest.raises(CheckpointCorruptionError, match="invalid entry set"):
+        store.recover(expected_fingerprint=_FINGERPRINT)
 
 
 def test_store_rejects_fingerprint_mismatch_without_falling_back(tmp_path: Path) -> None:

@@ -370,6 +370,12 @@ class IncrementalCheckpointStore:
         accounting = metrics or CheckpointStoreMetrics()
         inherited_by_digest = {segment.sha256: segment for segment in inherited_segments}
         segment_refs = list(inherited_segments)
+        next_owner_ordinal: dict[str, int] = {}
+        for segment in inherited_segments:
+            next_owner_ordinal[segment.owner] = max(
+                next_owner_ordinal.get(segment.owner, 0),
+                segment.owner_ordinal + 1,
+            )
         accounting.reused_segment_bytes = sum(segment.size for segment in inherited_segments)
         segment_started = time.perf_counter()
         for draft in new_segments:
@@ -391,6 +397,7 @@ class IncrementalCheckpointStore:
                 SegmentReference(
                     owner=draft.owner,
                     schema_version=draft.schema_version,
+                    owner_ordinal=next_owner_ordinal.get(draft.owner, 0),
                     sha256=digest,
                     relative_path=relative,
                     size=len(encoded),
@@ -398,6 +405,7 @@ class IncrementalCheckpointStore:
                     compression=draft.compression,
                 )
             )
+            next_owner_ordinal[draft.owner] = next_owner_ordinal.get(draft.owner, 0) + 1
         accounting.segment_write_seconds = time.perf_counter() - segment_started
 
         resolved_digest = _sha256(resolved_scenario)
@@ -446,7 +454,7 @@ class IncrementalCheckpointStore:
                 cursor=cursor,
                 resolved_scenario_sha256=resolved_digest,
                 resolved_scenario_relative_path=resolved_path,
-                segments=tuple(sorted(segment_refs, key=lambda item: (item.owner, item.sha256))),
+                segments=tuple(segment_refs),
                 participant_heads=tuple(head_refs),
                 metadata={} if metadata is None else metadata,
             )
@@ -469,20 +477,54 @@ class IncrementalCheckpointStore:
             {"manifest_sha256": _sha256(payload), "sequence": manifest.sequence}
         ]
         if self.index_path.exists():
-            try:
-                current = json.loads(self.index_path.read_bytes())
-            except (OSError, json.JSONDecodeError):
-                current = {}
-            for entry in current.get("recoveries", []) if isinstance(current, dict) else []:
-                if not isinstance(entry, dict) or entry.get("sequence") == manifest.sequence:
+            for sequence, manifest_sha256 in self._read_index():
+                if sequence == manifest.sequence:
                     continue
-                if isinstance(entry.get("sequence"), int) and isinstance(
-                    entry.get("manifest_sha256"), str
-                ):
-                    entries.append(entry)
+                entries.append({"manifest_sha256": manifest_sha256, "sequence": sequence})
                 if len(entries) == 2:
                     break
         _atomic_replace(self.index_path, _canonical_json({"recoveries": entries}))
+
+    def _read_index(self) -> list[tuple[int, str]]:
+        """Read the authoritative ordered recovery pointer without following links."""
+
+        try:
+            info = self.index_path.lstat()
+            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise CheckpointCorruptionError("checkpoint recovery index is not a regular file")
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                raise CheckpointCorruptionError("checkpoint recovery index has an unsafe owner")
+            if info.st_mode & 0o022:
+                raise CheckpointCorruptionError("checkpoint recovery index is externally writable")
+            document = json.loads(self.index_path.read_bytes())
+        except FileNotFoundError:
+            return []
+        except (OSError, json.JSONDecodeError) as error:
+            raise CheckpointCorruptionError("checkpoint recovery index is corrupt") from error
+        if type(document) is not dict or set(document) != {"recoveries"}:
+            raise CheckpointCorruptionError("checkpoint recovery index has an invalid schema")
+        raw_entries = document["recoveries"]
+        if type(raw_entries) is not list or not 1 <= len(raw_entries) <= 2:
+            raise CheckpointCorruptionError("checkpoint recovery index has an invalid entry set")
+        entries: list[tuple[int, str]] = []
+        for raw in raw_entries:
+            if type(raw) is not dict or set(raw) != {"manifest_sha256", "sequence"}:
+                raise CheckpointCorruptionError("checkpoint recovery index entry is invalid")
+            sequence = raw["sequence"]
+            digest = raw["manifest_sha256"]
+            if (
+                type(sequence) is not int
+                or sequence < 0
+                or type(digest) is not str
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+            ):
+                raise CheckpointCorruptionError("checkpoint recovery index entry changed")
+            entries.append((sequence, digest))
+        sequences = [sequence for sequence, _ in entries]
+        if len(sequences) != len(set(sequences)) or sequences != sorted(sequences, reverse=True):
+            raise CheckpointCorruptionError("checkpoint recovery index order changed")
+        return entries
 
     def _rotate_and_collect(self) -> None:
         directories = self._recovery_directories()
@@ -525,13 +567,20 @@ class IncrementalCheckpointStore:
         ]
         return sorted(directories, key=lambda path: int(path.name), reverse=True)
 
-    def _load_manifest(self, directory: Path) -> CheckpointManifest:
+    def _load_manifest(
+        self,
+        directory: Path,
+        *,
+        expected_sha256: str | None = None,
+    ) -> CheckpointManifest:
         manifest_path = directory / _MANIFEST_NAME
         try:
             info = manifest_path.lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                 raise CheckpointCorruptionError("checkpoint manifest is not a regular file")
             payload = manifest_path.read_bytes()
+            if expected_sha256 is not None and _sha256(payload) != expected_sha256:
+                raise CheckpointCorruptionError("checkpoint manifest failed index validation")
             value = json.loads(payload)
             manifest = CheckpointManifest.model_validate(value)
         except (OSError, json.JSONDecodeError, ValidationError) as error:
@@ -585,9 +634,14 @@ class IncrementalCheckpointStore:
 
         self.initialize()
         failures: list[str] = []
-        for index, directory in enumerate(self._recovery_directories()[:2]):
+        entries = self._read_index()
+        for index, (sequence, manifest_sha256) in enumerate(entries):
+            directory = self.recovery / f"{sequence:020d}"
             try:
-                manifest = self._load_manifest(directory)
+                manifest = self._load_manifest(
+                    directory,
+                    expected_sha256=manifest_sha256,
+                )
                 if expected_fingerprint is not None and (
                     manifest.run_fingerprint != expected_fingerprint
                 ):
