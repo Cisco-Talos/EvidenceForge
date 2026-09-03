@@ -813,7 +813,10 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             raise CheckpointCorruptionError("SSH checkpoint completed phase is duplicated")
         with prepared._progress._lock:
             prepared._progress._completed.update(row[29])
-        capture.release_committed_publication_proofs(transaction)
+        capture.release_committed_publication_proofs(
+            transaction,
+            lifecycle_authority=generator._lifecycle_authority,
+        )
         restored.append(continuation)
     if len(restored) > generator._ssh_close_journal_capacity:
         raise CheckpointCorruptionError("SSH checkpoint journal exceeds its bounded capacity")

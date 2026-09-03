@@ -282,3 +282,10 @@ until every correctness and performance gate passes.
   recent SSH activity leaves source-timing preparation receipt authorities and lifecycle closed-
   transport receipts live at a cadence barrier. Those owners need semantic receipt compaction or
   explicit durable summaries before the production coordinator can accept the barrier.
+- Deferred SSH/RDP handoff now explicitly retires the acknowledged one-shot prepared-network and
+  source-timing receipt authorities after the exact future continuation has copied its semantic
+  transaction. Dispatcher exact-recovery completion severs its retired owner graph at the same
+  terminal boundary. A real SSH checkpoint probe now reaches the barrier with zero committed
+  source-timing receipts, zero terminal preparation records, and zero lifecycle closed-transport
+  weak receipts without a cyclic-GC scan. The complete 202-test SSH/RDP deferred suite and all 63
+  incremental-checkpoint tests pass.

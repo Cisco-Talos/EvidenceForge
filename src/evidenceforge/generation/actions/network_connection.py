@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from math import isfinite
 from threading import Lock
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -2092,6 +2092,8 @@ class NetworkConnectionIdentityCapture:
     def release_committed_publication_proofs(
         self,
         transaction: NetworkTransactionPlan,
+        *,
+        lifecycle_authority: Any,
     ) -> None:
         """Drop one-shot commit capabilities after a durable semantic owner takes over.
 
@@ -2105,6 +2107,9 @@ class NetworkConnectionIdentityCapture:
                 raise StateError("Network identity capture cannot release foreign commit proofs")
             if self._source_timing_preparation is not None or self._prepared_dispatch is not None:
                 raise StateError("Network identity capture still owns deferred publication work")
+            receipt = self._receipt
+            if receipt is not None:
+                lifecycle_authority.retire_acknowledged_prepared_network_receipt(receipt)
             self._prepared_root = None
             self._persistent_smb_root_handoff = None
             self._receipt = None

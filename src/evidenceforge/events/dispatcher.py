@@ -1178,7 +1178,7 @@ class DeferredSessionPublicationResult:
     """Terminal exact source result for a committed deferred-session root."""
 
     receipt: DeferredSessionPublicationReceipt
-    materialization_receipt: object
+    materialization_receipt: object | None
     identifiers: tuple[tuple[tuple[str, str], ...], ...]
     projections: tuple[ActionCohortProjectionOutcome, ...]
     target_proofs: tuple[DeferredSessionExactTargetProof, ...]
@@ -1208,12 +1208,12 @@ class _PreparedDeferredSessionPublicationRecord:
 
     batch_id: int
     carrier: PreparedDeferredSessionPublicationBatch
-    composition: object
-    coordinator: object
+    composition: object | None
+    coordinator: object | None
     composition_token: str
     physical_transport_id: str
     root: object
-    source_timing_preparation: SourceTimingPreparation
+    source_timing_preparation: SourceTimingPreparation | None
     dispatches: tuple[PreparedDispatch, ...]
     member_locks: tuple[object, ...]
     member_integrity_tokens: tuple[str, ...]
@@ -13481,6 +13481,19 @@ class EventDispatcher:
                         record,
                         terminal_state="published",
                     )
+                    # The exact recovery is now released and the terminal receipt
+                    # contains the scalar materialization token needed for audit.
+                    # Sever the retired owner graph so one-shot source-timing and
+                    # lifecycle receipts die by reference counting instead of a
+                    # later process-wide cyclic-GC pass.
+                    record.exact_recovery = None
+                    record.publication_result = None
+                    record.materialization_receipt = None
+                    record.materialization_receipt_shell = None
+                    record.source_timing_preparation = None
+                    record.composition = None
+                    record.coordinator = None
+                    record.dispatches = ()
 
     def _complete_deferred_session_owner_tail(
         self,

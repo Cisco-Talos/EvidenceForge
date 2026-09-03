@@ -39,7 +39,9 @@ from evidenceforge.generation.checkpoints.activity_head import ActivityGenerator
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
+from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.packed import loads
+from evidenceforge.generation.checkpoints.source_timing_head import SourceTimingPlannerParticipant
 from evidenceforge.generation.checkpoints.ssh_channel_head import (
     SshApplicationChannelParticipant,
 )
@@ -354,6 +356,10 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
         defer_session_close=True,
     )
     SshSessionActionBundle(request, original.generator).execute()
+    SourceTimingPlannerParticipant(original.generator._source_timing_planner).prepare_checkpoint(0)
+    LifecycleRegistryParticipant(
+        original.generator._lifecycle_authority.registry
+    ).prepare_checkpoint(0)
     original.generator._scenario_environment = SimpleNamespace(
         systems=[original.source, original.target],
         users=[original.user],

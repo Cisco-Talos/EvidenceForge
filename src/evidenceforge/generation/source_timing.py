@@ -2138,6 +2138,47 @@ class SourceTimingPlanner:
                     authority,
                 )
 
+    def _retire_committed_preparation_receipt(
+        self,
+        receipt: SourceTimingPreparationReceipt,
+    ) -> None:
+        """Retire an acknowledged one-shot receipt and its terminal preparation.
+
+        The outer lifecycle authority calls this only after replacing its exact
+        receipt graph with an authenticated scalar acknowledgement.  At that
+        point neither the receipt nor its preparation can authorize another
+        mutation, so retaining them would only keep a cyclic capability graph
+        alive until a process-wide cyclic-GC pass.
+        """
+
+        receipt_identity = id(receipt)
+        with self._preparation_authority_lock:
+            authority = self._committed_preparation_receipts.get(receipt_identity)
+            if (
+                authority is None
+                or not authority.committed
+                or authority.receipt_ref() is not receipt
+            ):
+                raise StateError("Source timing receipt is not committed for retirement")
+            matching = tuple(
+                (preparation_identity, record)
+                for preparation_identity, record in self._preparation_claim_records.items()
+                if record.state == "committed" and record.expected_receipt is receipt
+            )
+            if len(matching) > 1:
+                raise StateError("Source timing receipt has duplicate terminal preparations")
+            if matching:
+                preparation_identity, record = matching[0]
+                removed_record = self._preparation_claim_records.pop(preparation_identity, None)
+                if removed_record is not record:
+                    raise StateError("Source timing terminal preparation changed during retirement")
+                self._remove_preparation_record_counts_locked(record)
+            if not self._remove_preparation_receipt_authority_locked(
+                receipt_identity,
+                authority,
+            ):
+                raise StateError("Source timing receipt changed during retirement")
+
     def preparation_authority_census(self) -> SourceTimingPreparationAuthorityCensus:
         """Return exact bounded preparation and terminal-receipt counts."""
 
