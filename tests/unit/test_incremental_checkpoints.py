@@ -17,12 +17,20 @@ from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
     CheckpointCorruptionError,
+    CheckpointError,
     CheckpointLockError,
 )
 from evidenceforge.generation.checkpoints.models import (
     CheckpointCursor,
     CheckpointManifest,
     CheckpointStoreMetrics,
+)
+from evidenceforge.generation.checkpoints.owner_inventory import (
+    LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
+    LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    STATE_MANAGER_CHECKPOINT_FIELDS,
+    assert_complete_owner_inventory,
+    assert_transient_owner_state_empty,
 )
 from evidenceforge.generation.checkpoints.packed import dumps, loads
 from evidenceforge.generation.checkpoints.participants import (
@@ -46,6 +54,8 @@ from evidenceforge.generation.checkpoints.store import (
     RunLock,
     SegmentDraft,
 )
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
 _FINGERPRINT = "1" * 64
@@ -239,6 +249,45 @@ def test_rng_numeric_schema_rejects_invalid_word() -> None:
     words[0] = -1
     with pytest.raises(CheckpointCorruptionError, match="unsupported or corrupt"):
         decode_random_state(state)
+
+
+def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
+    manager = StateManager()
+    registry = LifecycleRegistry()
+
+    assert_complete_owner_inventory(
+        manager,
+        STATE_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="state-manager",
+    )
+    assert_complete_owner_inventory(
+        registry,
+        LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+        owner_name="lifecycle-registry",
+    )
+    for index, partition in enumerate(registry._partitions):
+        assert_complete_owner_inventory(
+            partition,
+            LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
+            owner_name=f"lifecycle-partition-{index}",
+        )
+
+
+def test_checkpoint_barrier_rejects_transient_state() -> None:
+    manager = StateManager()
+    assert_transient_owner_state_empty(
+        manager,
+        STATE_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="state-manager",
+    )
+
+    manager._active_connection_preparations[1] = object()  # type: ignore[assignment]
+    with pytest.raises(CheckpointError, match="_active_connection_preparations"):
+        assert_transient_owner_state_empty(
+            manager,
+            STATE_MANAGER_CHECKPOINT_FIELDS,
+            owner_name="state-manager",
+        )
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

@@ -82,3 +82,18 @@ until every correctness and performance gate passes.
 - Warm-up boundary ordering is explicit. When cadence lands exactly at collection start, the
   warm-up-only texture state is reset and sensor startup evidence is emitted before the single
   post-transition collection cursor is offered to the checkpoint controller.
+- StateManager, the outer lifecycle registry, and every lifecycle partition now have exhaustive
+  field inventories covering bounded live authority, derived/rebuilt indexes and infrastructure,
+  and transient owners that must be empty at a checkpoint barrier. Structural tests compare the
+  inventories with the runtime objects so adding an unclassified field fails the checkpoint test
+  gate. The barrier validator also rejects an in-flight prepared mutation instead of capturing an
+  unsafe capability graph.
+
+## Validation record
+
+- After adding the cadence hook, the first default-suite run found two minimal BaselineMixin test
+  harnesses that intentionally do not construct a complete GenerationEngine. The hook call site
+  now remains optional for those harnesses; both regressions pass.
+- The clean repeat completed with 8,030 passed, 5 skipped, and 2,009 deselected in 174.43 seconds.
+- The focused incremental checkpoint module currently has 25 passing tests, including exhaustive
+  core-owner inventories and transient barrier rejection.

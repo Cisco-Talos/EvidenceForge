@@ -9,6 +9,13 @@ from .models import (
     ParticipantHead,
     SegmentReference,
 )
+from .owner_inventory import (
+    LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
+    LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    STATE_MANAGER_CHECKPOINT_FIELDS,
+    assert_complete_owner_inventory,
+    assert_transient_owner_state_empty,
+)
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
 from .rng import GenerationRngParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
@@ -26,10 +33,15 @@ __all__ = [
     "IncrementalCheckpointStore",
     "ImmutableSpoolFilesParticipant",
     "IncrementalCheckpointParticipant",
+    "LIFECYCLE_PARTITION_CHECKPOINT_FIELDS",
+    "LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS",
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",
     "RunLock",
+    "STATE_MANAGER_CHECKPOINT_FIELDS",
     "SegmentReference",
     "SQLiteSpoolParticipant",
+    "assert_complete_owner_inventory",
+    "assert_transient_owner_state_empty",
 ]
