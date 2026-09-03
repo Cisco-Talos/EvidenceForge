@@ -190,3 +190,9 @@ until every correctness and performance gate passes.
   must be empty at the barrier. A two-generation test proves the second segment contains only its
   one new key and the cumulative restore reproduces TLS/CA/certificate/DKIM values and the registry
   digest; 117 checkpoint and cryptographic-material regressions pass.
+- The HTTP protocol manager now has explicit manager, shard, and packed-store inventories plus a
+  bounded live head containing only open transport sidecars. The shared application registry is
+  authoritative for owner/channel/binding identity; HTTP hydration validates those stable tokens,
+  then rebuilds packed rows, channel/affinity digest routes, decode caches, and exact reuse-expiry
+  heaps. Prepared coupled admissions and receipts fail the barrier. A populated application+HTTP
+  restore successfully reuses the original channel, and all 97 checkpoint/HTTP tests pass.

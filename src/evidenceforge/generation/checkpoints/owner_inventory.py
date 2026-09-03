@@ -472,6 +472,51 @@ CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS = _fields(
 )
 
 
+HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS = _fields(
+    live=("_next_prepared_reservation_id", "_shards", "_watermark"),
+    rebuilt=(
+        "_admission_secret",
+        "_compaction_cursor",
+        "_directory_lock",
+        "_gate",
+        "_manager_id",
+        "_operation_budget",
+        "_owns_registry",
+        "_prepared_lock",
+        "_registry",
+        "_reuse_guard",
+        "_watermark_lane",
+    ),
+    transient=(
+        "_admission_receipts",
+        "_claimed_admissions",
+        "_prepared_admissions",
+        "_prepared_affinity_digests",
+        "_prepared_capabilities",
+        "_prepared_channel_ids",
+    ),
+)
+
+
+HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("transports",),
+    rebuilt=("lock", "shard_id", "transport_deletions", "transport_expiry"),
+)
+
+
+HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_rows",),
+    rebuilt=(
+        "_affinity_routes",
+        "_channel_routes",
+        "_compaction_rotations",
+        "_decoded",
+        "_decoded_bytes",
+        "_lookup_candidates_inspected",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",

@@ -4,6 +4,7 @@ from .application_channel_head import ApplicationChannelRegistryParticipant
 from .cadence import CheckpointCadence
 from .cryptographic_material_head import CryptographicMaterialParticipant
 from .engine_head import GenerationEngineParticipant
+from .http_channel_head import HttpApplicationChannelParticipant
 from .intent_ledger_head import IntentExecutionLedgerParticipant
 from .lifecycle_head import LifecycleRegistryParticipant
 from .models import (
@@ -20,6 +21,9 @@ from .owner_inventory import (
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     GENERATION_ENGINE_CHECKPOINT_FIELDS,
+    HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
+    HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS,
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
@@ -61,6 +65,10 @@ __all__ = [
     "GenerationRngParticipant",
     "GENERATION_ENGINE_CHECKPOINT_FIELDS",
     "GenerationEngineParticipant",
+    "HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
+    "HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS",
+    "HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS",
+    "HttpApplicationChannelParticipant",
     "INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS",
     "IntentExecutionLedgerParticipant",
     "AppendOnlySpoolParticipant",

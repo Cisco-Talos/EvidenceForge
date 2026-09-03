@@ -57,6 +57,9 @@ from evidenceforge.generation.checkpoints.errors import (
     CheckpointError,
     CheckpointLockError,
 )
+from evidenceforge.generation.checkpoints.http_channel_head import (
+    HttpApplicationChannelParticipant,
+)
 from evidenceforge.generation.checkpoints.intent_ledger_head import (
     IntentExecutionLedgerParticipant,
 )
@@ -73,6 +76,9 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
+    HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
+    HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS,
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
@@ -115,6 +121,10 @@ from evidenceforge.generation.checkpoints.store import (
 )
 from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.http_channels import (
+    HttpApplicationChannelManager,
+    HttpChannelAffinity,
+)
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.network_runtime import (
@@ -377,6 +387,16 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         network_runtime.cryptographic_material,
         CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
         owner_name="cryptographic-material",
+    )
+    http = HttpApplicationChannelManager(
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+        registry=application_channels,
+    )
+    assert_complete_owner_inventory(
+        http,
+        HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="http-channels",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -658,6 +678,115 @@ def test_cryptographic_material_rejects_prepared_overlay() -> None:
         participant.prepare_checkpoint(0)
 
     assert preparation.cancel()
+
+
+def test_http_channel_head_round_trips_open_transport_and_reuses_it() -> None:
+    """HTTP hydration should rebuild packed sidecar indexes against shared authority."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(days=1)
+    registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    manager = HttpApplicationChannelManager(
+        window_start=started,
+        window_end=ended,
+        registry=registry,
+    )
+    affinity = HttpChannelAffinity.from_request(
+        src_ip="10.0.0.10",
+        dst_ip="203.0.113.20",
+        dst_port=443,
+        http_host="checkpoint.example.test",
+        user_agent="Mozilla/5.0",
+        transport_security="tls",
+    )
+    transport = manager.open_transport(
+        affinity,
+        transport_id="checkpoint-http-transport",
+        zeek_uid="CHECKPOINT-UID",
+        conn_id="checkpoint-conn",
+        src_port=50_001,
+        opened_at=started,
+        closes_at=started + timedelta(minutes=30),
+        initial_request_time=started + timedelta(seconds=1),
+        orig_budget=1_000,
+        resp_budget=10_000,
+    )
+    assert transport is not None
+    application_seal = ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
+    http_seal = HttpApplicationChannelParticipant(manager).prepare_checkpoint(0)
+    assert not http_seal.segments
+
+    restored_registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    ApplicationChannelRegistryParticipant(restored_registry).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    restored = HttpApplicationChannelManager(
+        window_start=started,
+        window_end=ended,
+        registry=restored_registry,
+    )
+    HttpApplicationChannelParticipant(restored).restore_checkpoint(http_seal.head.payload, ())
+
+    assert restored.get_transport(transport.channel_id) == transport
+    reused = restored.reserve_reuse(
+        affinity,
+        requested_at=started + timedelta(seconds=10),
+        request_body_bytes=20,
+        response_body_bytes=200,
+    )
+    assert reused is not None
+    assert reused.channel_id == transport.channel_id
+    shard = next(iter(restored._shards.values()))
+    assert_complete_owner_inventory(
+        shard,
+        HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS,
+        owner_name="http-transport-shard",
+    )
+    assert_complete_owner_inventory(
+        shard.transports,
+        HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
+        owner_name="http-packed-transport-store",
+    )
+
+
+def test_http_channel_head_rejects_prepared_admission() -> None:
+    """A coupled HTTP/application admission cannot cross the barrier."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager = HttpApplicationChannelManager(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+        registry=registry,
+    )
+    affinity = HttpChannelAffinity.from_request(
+        src_ip="10.0.0.10",
+        dst_ip="203.0.113.20",
+        dst_port=80,
+        http_host="checkpoint.example.test",
+    )
+    token = manager.prepare_open_transport(
+        affinity,
+        transport_id="checkpoint-http-prepared",
+        zeek_uid="CHECKPOINT-PREPARED",
+        conn_id="checkpoint-prepared",
+        src_port=50_002,
+        opened_at=started,
+        closes_at=started + timedelta(minutes=5),
+        initial_request_time=started + timedelta(seconds=1),
+        orig_budget=1_000,
+        resp_budget=10_000,
+    )
+    assert token is not None
+
+    with pytest.raises(CheckpointError, match="_prepared_admissions"):
+        HttpApplicationChannelParticipant(manager).prepare_checkpoint(0)
+
+    assert manager.cancel_prepared_admission(token)
 
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:
