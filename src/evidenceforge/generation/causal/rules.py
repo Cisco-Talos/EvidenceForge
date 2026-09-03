@@ -28,6 +28,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from evidenceforge.utils.rng import _stable_seed
+
 if TYPE_CHECKING:
     from evidenceforge.generation.causal.engine import ExpandedEvent, ExpansionContext
 
@@ -289,23 +291,33 @@ class SupplementaryAuditEvents(ExpansionRule):
         )
 
         def _domain_sid_prefix() -> str:
-            for sid in ctx.sid_registry.values():
-                if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
-                    return "-".join(sid.split("-")[:7])
-            import random as _rng
+            prefixes = sorted(
+                {
+                    "-".join(sid.split("-")[:7])
+                    for sid in ctx.sid_registry.values()
+                    if sid.startswith("S-1-5-21-") and sid.count("-") == 7
+                }
+            )
+            if prefixes:
+                return prefixes[0]
+            import random
 
+            rng = random.Random(_stable_seed(f"causal-domain-sid:{ctx.ad_domain}"))
             return (
-                f"S-1-5-21-{_rng.randint(100000000, 999999999)}"
-                f"-{_rng.randint(100000000, 999999999)}"
-                f"-{_rng.randint(100000000, 999999999)}"
+                f"S-1-5-21-{rng.randint(100000000, 999999999)}"
+                f"-{rng.randint(100000000, 999999999)}"
+                f"-{rng.randint(100000000, 999999999)}"
             )
 
-        def _make_sid(rid: int | None = None) -> str:
+        def _make_sid(*, identity: str, rid: int | None = None) -> str:
             prefix = _domain_sid_prefix()
             if rid is None:
-                import random as _rng
+                import random
 
-                rid = _rng.randint(1100, 9999)
+                rng = random.Random(
+                    _stable_seed(f"causal-domain-rid:{ctx.ad_domain}:{identity.casefold()}")
+                )
+                rid = rng.randint(1100, 9999)
             return f"{prefix}-{rid}"
 
         # net user <name> <password> /add -> 4720 (account created)
@@ -313,7 +325,7 @@ class SupplementaryAuditEvents(ExpansionRule):
         if match and "account_created" not in skip:
             orig_match = re.search(r"net\s+user\s+(\S+)\s+\S+\s+/add", cmd, re.IGNORECASE)
             target_name = orig_match.group(1) if orig_match else match.group(1)
-            target_sid = _make_sid()
+            target_sid = _make_sid(identity=f"account:{target_name}")
             ctx.created_account_sids[target_name] = target_sid
             expanded.append(
                 ExpandedEvent(
@@ -367,7 +379,7 @@ class SupplementaryAuditEvents(ExpansionRule):
         if match and "account_deleted" not in skip:
             orig_match = re.search(r"net\s+user\s+(\S+)\s+/delete", cmd, re.IGNORECASE)
             target_name = orig_match.group(1) if orig_match else match.group(1)
-            target_sid = _make_sid()
+            target_sid = _make_sid(identity=f"account:{target_name}")
             expanded.append(
                 ExpandedEvent(
                     method="generate_account_deleted",
@@ -388,11 +400,11 @@ class SupplementaryAuditEvents(ExpansionRule):
             group_name = match.group(1)
             member_name = match.group(2)
             group_rid = 512 if "admin" in group_name.lower() else None
-            group_sid = _make_sid(group_rid)
+            group_sid = _make_sid(identity=f"group:{group_name}", rid=group_rid)
             member_sid = (
                 ctx.created_account_sids.get(member_name)
                 or ctx.sid_registry.get(member_name)
-                or _make_sid()
+                or _make_sid(identity=f"account:{member_name}")
             )
             expanded.append(
                 ExpandedEvent(

@@ -381,3 +381,11 @@ until every correctness and performance gate passes.
   it does not add external-sort transients a second time. These coefficients remain explicitly
   provisional until the 60-day matrix calibrates them. All 48 resource-forecast and routine CLI
   tests pass.
+- Two independent topology-heavy recovery runs at the same commit matched 57 of 59 compared
+  artifacts byte-for-byte. The only differences were equal-length Windows Security files whose
+  causal account SIDs varied while every other field remained identical. The causal supplementary-
+  audit rule was consuming the process-global `random` stream for domain/RID allocation, allowing
+  unrelated threaded RNG consumption to change those two values. Domain and account/group SID
+  fallbacks now use scoped stable seeds over domain plus semantic identity, and an explicit test
+  proves the result is invariant under unrelated global-RNG advancement. This root-cause fix is
+  required before repeating the full byte-identity gate.
