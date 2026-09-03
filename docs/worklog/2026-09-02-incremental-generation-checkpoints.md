@@ -536,3 +536,15 @@ until every correctness and performance gate passes.
   0.281 and 0.644 seconds respectively; that single 2.29× observation does not satisfy the
   scaling gate and requires rotated medians. Both points reread and rehashed zero inherited
   segment bytes.
+- A normalized 60-day pair at 48-hour cadence is also byte-identical but remains above the
+  production gate: control took 655.207 seconds and checkpointed generation took 707.892 seconds,
+  or 8.04% overhead. The complete pair consumed 1,363.099 seconds (22 minutes 43 seconds) of
+  measured generator wall time. Thirty foreground checkpoints totaled 18.771 seconds, only 2.86%
+  of control runtime; an additional 21.844 seconds accrued during baseline work outside measured
+  pauses and 11.732 seconds during finalization. This establishes a cadence-independent overhead
+  floor of about 5.2% in the observed pair, so widening cadence cannot satisfy the gate by itself.
+  The hour-720 and hour-1,440 checkpoints took 0.627 and 0.880 seconds (1.40×), with essentially
+  stable 5.67 MB live heads and 10.47/10.10 MB deltas. Neither reread nor rehashed inherited
+  segments. Workspace retention was 311,146,907 bytes for 258,046,108 output bytes (1.206×),
+  within the recalibrated forecast. The next optimization should remove checkpoint-mode mutation
+  and final-sort overhead before selecting a cadence or running the three-pair acceptance matrix.
