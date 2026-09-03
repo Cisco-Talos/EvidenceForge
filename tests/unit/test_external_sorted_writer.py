@@ -180,6 +180,65 @@ def test_checkpoint_mode_restores_immutable_runs_into_fresh_writer(tmp_path: Pat
     source.close()
 
 
+def test_checkpoint_close_balances_many_immutable_runs(tmp_path: Path) -> None:
+    output = tmp_path / "balanced.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=3,
+        checkpoint_mode=True,
+    )
+
+    for value in reversed(range(25)):
+        writer.write(f"{value % 5}|record-{value:02d}")
+        writer.flush()
+
+    assert len(writer._run_paths) == 25
+    writer.close()
+
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert lines == sorted(lines, key=_key)
+    assert not list(tmp_path.glob(".balanced.json.sort-*"))
+
+
+def test_checkpoint_balanced_close_preserves_runs_for_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "retry-balanced.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=2,
+        checkpoint_mode=True,
+    )
+    for value in reversed(range(5)):
+        writer.write(f"{value}|record-{value}")
+        writer.flush()
+    original_paths = tuple(writer._run_paths)
+    original_merge = writer._merge_runs_unlocked
+    calls = 0
+
+    def fail_second_merge(paths: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected balanced merge failure")
+        original_merge(paths, destination)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(writer, "_merge_runs_unlocked", fail_second_merge)
+    with pytest.raises(OSError, match="balanced merge failure"):
+        writer.close()
+
+    assert tuple(writer._run_paths) == original_paths
+    assert all(path.exists() for path in original_paths)
+    monkeypatch.setattr(writer, "_merge_runs_unlocked", original_merge)
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"{value}|record-{value}" for value in range(5)
+    ]
+
+
 def test_external_writer_is_thread_safe_and_deterministic(tmp_path: Path) -> None:
     output = tmp_path / "zeek.json"
     writer = ExternalSortedLineWriter(output, sort_key=_key, buffer_size=7)

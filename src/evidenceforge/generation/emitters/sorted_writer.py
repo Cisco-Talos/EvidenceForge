@@ -370,7 +370,7 @@ class ExternalSortedLineWriter:
             with self._lock:
                 self._spill_unlocked()
                 if self._run_paths:
-                    self._compact_runs_unlocked()
+                    self._compact_runs_for_close_unlocked()
                     self._publish_runs_unlocked()
                     self._mark_exact_rows_exported_unlocked()
                     self._normalize_exported_runs_unlocked()
@@ -622,6 +622,33 @@ class ExternalSortedLineWriter:
                 if path != self.output_path:
                     path.unlink(missing_ok=True)
             self._run_paths = [merged, *self._run_paths[self.merge_fan_in :]]
+
+    def _compact_runs_for_close_unlocked(self) -> None:
+        """Reduce all terminal runs with balanced, retryable merge levels."""
+
+        while len(self._run_paths) > self.merge_fan_in:
+            original = tuple(self._run_paths)
+            compacted: list[Path] = []
+            created: list[Path] = []
+            try:
+                for offset in range(0, len(original), self.merge_fan_in):
+                    group = original[offset : offset + self.merge_fan_in]
+                    if len(group) == 1:
+                        compacted.append(group[0])
+                        continue
+                    merged = self._next_run_path_unlocked()
+                    created.append(merged)
+                    self._merge_runs_unlocked(group, merged)
+                    compacted.append(merged)
+            except BaseException:
+                for path in created:
+                    path.unlink(missing_ok=True)
+                raise
+            retained = set(compacted)
+            for path in original:
+                if path not in retained and path != self.output_path:
+                    path.unlink(missing_ok=True)
+            self._run_paths = compacted
 
     @staticmethod
     def _read_line(stream: TextIO) -> str | None:

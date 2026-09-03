@@ -14,8 +14,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
+from typing import cast
 
 try:
     import resource
@@ -94,12 +96,80 @@ def _run_child(args: argparse.Namespace) -> int:
         progress: list[dict[str, float | int | str]] = []
         phase_started: dict[str, float] = {}
         phase_seconds: dict[str, float] = {}
+        engine: GenerationEngine | None = None
+        finalization_instrumented = False
+
+        def measured_call(
+            phase_name: str,
+            operation: Callable[..., object],
+        ) -> Callable[..., object]:
+            def measured(*call_args: object, **call_kwargs: object) -> object:
+                operation_started = time.perf_counter()
+                try:
+                    return operation(*call_args, **call_kwargs)
+                finally:
+                    phase_seconds[phase_name] = phase_seconds.get(phase_name, 0.0) + (
+                        time.perf_counter() - operation_started
+                    )
+
+            return measured
+
+        def instrument_finalization() -> None:
+            nonlocal finalization_instrumented
+            if finalization_instrumented or engine is None:
+                return
+            finalization_instrumented = True
+            engine._drain_terminal_stages_before_close = cast(
+                Callable[..., None],
+                measured_call(
+                    "finalize.terminal_stages",
+                    engine._drain_terminal_stages_before_close,
+                ),
+            )
+            engine._close_emitters = cast(
+                Callable[..., None],
+                measured_call("finalize.close_emitters", engine._close_emitters),
+            )
+            coordinator = engine._source_finalization_coordinator
+            if coordinator is not None:
+                coordinator.finalize = cast(
+                    Callable[[], None],
+                    measured_call("finalize.source_publication", coordinator.finalize),
+                )
+            generator = engine.activity_generator
+            if generator is not None:
+                generator.write_artifacts_manifest = cast(
+                    Callable[[], None],
+                    measured_call(
+                        "finalize.artifacts_manifest",
+                        generator.write_artifacts_manifest,
+                    ),
+                )
+            for format_name, emitter in engine.emitters.items():
+                original_close = cast(Callable[[], None], emitter.close)
+                phase_name = f"finalize.emitter.{format_name}"
+
+                def measured_close(
+                    _original: Callable[[], None] = original_close,
+                    _phase: str = phase_name,
+                ) -> None:
+                    close_started = time.perf_counter()
+                    try:
+                        _original()
+                    finally:
+                        phase_seconds[_phase] = phase_seconds.get(_phase, 0.0) + (
+                            time.perf_counter() - close_started
+                        )
+
+                emitter.close = measured_close
 
         def record_phase(event_type: str, data: dict[str, object]) -> None:
             phase = data.get("phase")
             if type(phase) is not str:
                 return
             if event_type == "phase_start":
+                if phase == "finalize":
+                    instrument_finalization()
                 phase_started[phase] = time.perf_counter()
             elif event_type == "phase_end" and phase in phase_started:
                 phase_seconds[phase] = phase_seconds.get(phase, 0.0) + (

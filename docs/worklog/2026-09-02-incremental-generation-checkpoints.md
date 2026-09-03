@@ -548,3 +548,34 @@ until every correctness and performance gate passes.
   segments. Workspace retention was 311,146,907 bytes for 258,046,108 output bytes (1.206×),
   within the recalibrated forecast. The next optimization should remove checkpoint-mode mutation
   and final-sort overhead before selecting a cadence or running the three-pair acceptance matrix.
+- A full-live-head source-timing experiment is rejected. Although its first seven-day 18-hour
+  pair happened to report only 0.22% total overhead, the 60-day pair regressed to 11.53%: control
+  took 641.626 seconds, checkpointed generation took 715.618 seconds, and the 30 checkpoint paths
+  totaled 49.847 seconds. Source timing alone grew to a 40.22 MB live head and 2.307-second prepare
+  at hour 1,440; retained workspace reached 377,720,422 bytes. This confirms that source-timing
+  caches cannot be recopied in full at each cadence point even when terminal lifecycle state is
+  bounded.
+- Source-timing schema 3 instead coalesces intervening mutations by family and key before sealing
+  an ordered delta. Repeated sets, re-deadlines, and removals therefore retain only the last
+  semantic change for each key, while the planner's existing preparation lane provides the
+  capture/commit mutation boundary. Terminal external-sort publication now uses balanced,
+  copy-on-write merge levels so close no longer repeatedly rereads the earliest cadence runs;
+  injected merge failure preserves every original run for an exact retry.
+- Three normalized seven-day screens at 18-hour cadence remained byte-identical. Their observed
+  overheads were 3.89%, 1.10%, and 4.25% (3.89% median), while checkpoint paths totaled 2.150,
+  2.098, and 1.965 seconds (2.098-second median). Detailed finalization attribution showed source
+  publication at about 12.6 seconds in both arms, terminal-stage draining unchanged, and only
+  about 0.15 second of added emitter-close work. The earlier large finalization deltas were run
+  variance, not a checkpoint-specific optimization target.
+- The corresponding 60-day, 48-hour-cadence screen is byte-identical and passes the single-pair
+  performance and scaling diagnostics. Control took 686.122 seconds and checkpointed generation
+  took 674.879 seconds, an observed -1.64% overhead caused by favorable baseline variance. The 30
+  foreground checkpoint paths totaled 16.254 seconds, or 2.37% of control wall time, versus
+  18.771 seconds before coalescing. Hour-720 and hour-1,440 checkpoints took 0.569 and 0.769 seconds
+  (1.35x); each sealed about 10 MB of new data, and neither read nor rehashed inherited segments.
+  Source-timing deltas stayed bounded at 1.55 MB/6,584 records and 1.45 MB/6,081 records. Retained
+  workspace fell to 306,274,489 bytes (1.187x the 258,046,108-byte deterministic bundle), and the
+  checkpoint arm's 916,652,032-byte peak RSS did not exceed the control's 929,054,720 bytes. This
+  is strong evidence for retaining coalesced deltas and balanced final merges, but a rotated
+  three-pair matrix is still required before selecting the default cadence or accepting the 5%
+  production gate.

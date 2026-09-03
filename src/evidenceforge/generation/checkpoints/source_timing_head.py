@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from threading import RLock
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -21,7 +20,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 
 class _SourceTimingHead(BaseModel):
@@ -35,7 +34,7 @@ class _SourceTimingHead(BaseModel):
 
 
 class _SourceTimingSegment(BaseModel):
-    """One initial base or ordered mutation delta across timing families."""
+    """One initial base or ordered coalesced delta across timing families."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -44,18 +43,13 @@ class _SourceTimingSegment(BaseModel):
     families: dict[str, list[object]] = Field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class _TimingMutation:
-    kind: Literal["set", "pop"]
-    key: object
-    value: object | None
-    deadline: float | None
+_TimingMutation = tuple[Literal["set", "pop"], object | None, float | None]
 
 
 @dataclass(frozen=True)
 class _PreparedTimingDelta:
     sequence: int
-    pending_counts: dict[str, int]
+    pending: dict[str, dict[object, _TimingMutation]]
     seal: ParticipantSeal
     initial: bool
 
@@ -73,24 +67,27 @@ def _decode_time(value: str | None) -> datetime | None:
 
 
 def _capture_cache(cache: _SourceTimingCache) -> list[object]:
-    rows = [
-        [encode_state_value(key), encode_state_value(value), deadline]
-        for key, value, deadline in cache._cache.checkpoint_records()
-    ]
+    with cache._lock:
+        rows = [
+            [encode_state_value(key), encode_state_value(value), deadline]
+            for key, value, deadline in cache._cache.checkpoint_records()
+        ]
     rows.sort(key=dumps)
     return rows
 
 
-def _encode_mutations(mutations: tuple[_TimingMutation, ...]) -> list[object]:
-    return [
+def _encode_mutations(mutations: dict[object, _TimingMutation]) -> list[object]:
+    rows = [
         [
-            mutation.kind,
-            encode_state_value(mutation.key),
-            None if mutation.kind == "pop" else encode_state_value(mutation.value),
-            mutation.deadline,
+            kind,
+            encode_state_value(key),
+            None if kind == "pop" else encode_state_value(value),
+            deadline,
         ]
-        for mutation in mutations
+        for key, (kind, value, deadline) in mutations.items()
     ]
+    rows.sort(key=dumps)
+    return rows
 
 
 def _restore_cache(
@@ -163,9 +160,8 @@ class SourceTimingPlannerParticipant:
 
     def __init__(self, planner: SourceTimingPlanner) -> None:
         self.planner = planner
-        self._lock = RLock()
-        self._pending: dict[str, list[_TimingMutation]] = {
-            name: [] for name, _cache in planner._bounded_indexes()
+        self._pending: dict[str, dict[object, _TimingMutation]] = {
+            name: {} for name, _cache in planner._bounded_indexes()
         }
         self._prepared: _PreparedTimingDelta | None = None
         self._committed = False
@@ -184,22 +180,19 @@ class SourceTimingPlannerParticipant:
             ) -> None:
                 if kind not in {"set", "pop"}:
                     raise RuntimeError("source timing checkpoint mutation kind is invalid")
-                with self._lock:
-                    self._pending[family].append(
-                        _TimingMutation(kind, key, value, deadline)  # type: ignore[arg-type]
-                    )
+                self._pending[family][key] = (kind, value, deadline)  # type: ignore[assignment]
 
             cache._checkpoint_recorder = record
 
     def prepare_checkpoint(self, sequence: int) -> ParticipantSeal:
-        """Capture visible cache rows after rejecting in-flight timing authority."""
+        """Capture visible state or coalesced changes under the planner mutation lane."""
 
-        assert_transient_owner_state_empty(
-            self.planner,
-            self.checkpoint_state_fields,
-            owner_name="SourceTimingPlanner",
-        )
-        with self._lock:
+        with self.planner._preparation_lock:
+            assert_transient_owner_state_empty(
+                self.planner,
+                self.checkpoint_state_fields,
+                owner_name="SourceTimingPlanner",
+            )
             if self._prepared is not None:
                 if self._prepared.sequence != sequence:
                     raise RuntimeError(
@@ -207,17 +200,13 @@ class SourceTimingPlannerParticipant:
                     )
                 return self._prepared.seal
             initial = not self._committed
-            pending_counts = {name: len(rows) for name, rows in self._pending.items()}
+            pending = {name: dict(rows) for name, rows in self._pending.items()}
             if initial:
                 families = {
                     name: _capture_cache(cache) for name, cache in self.planner._bounded_indexes()
                 }
             else:
-                families = {
-                    name: _encode_mutations(tuple(self._pending[name][:count]))
-                    for name, count in pending_counts.items()
-                    if count
-                }
+                families = {name: _encode_mutations(rows) for name, rows in pending.items() if rows}
             segments = (
                 (
                     SegmentDraft(
@@ -237,13 +226,12 @@ class SourceTimingPlannerParticipant:
                 if initial or families
                 else ()
             )
-            segment_count = self._segment_count + len(segments)
             head = _SourceTimingHead(
                 schema_version=self.checkpoint_schema_version,
                 watermark=(
                     None if self.planner._watermark is None else self.planner._watermark.isoformat()
                 ),
-                segment_count=segment_count,
+                segment_count=self._segment_count + len(segments),
             )
             seal = ParticipantSeal(
                 head=HeadDraft(
@@ -255,30 +243,35 @@ class SourceTimingPlannerParticipant:
             )
             self._prepared = _PreparedTimingDelta(
                 sequence=sequence,
-                pending_counts=pending_counts,
+                pending=pending,
                 seal=seal,
                 initial=initial,
             )
             return seal
 
     def checkpoint_committed(self, sequence: int) -> None:
-        """A bounded head has no participant-local delta watermark."""
+        """Advance each coalesced family watermark after durable publication."""
 
-        with self._lock:
-            if self._prepared is None or self._prepared.sequence != sequence:
+        with self.planner._preparation_lock:
+            prepared = self._prepared
+            if prepared is None or prepared.sequence != sequence:
                 raise RuntimeError("source timing commit does not match its prepared sequence")
-            for family, count in self._prepared.pending_counts.items():
-                del self._pending[family][:count]
-            self._segment_count += len(self._prepared.seal.segments)
+            for family, records in prepared.pending.items():
+                current = self._pending[family]
+                for key, mutation in records.items():
+                    if current.get(key) == mutation:
+                        current.pop(key)
+            self._segment_count += len(prepared.seal.segments)
             self._committed = True
             self._prepared = None
 
     def checkpoint_aborted(self, sequence: int) -> None:
-        """A bounded head has no prepared mutable publication state."""
+        """Retain every coalesced mutation after failed publication."""
 
-        with self._lock:
-            if self._prepared is not None and self._prepared.sequence == sequence:
-                self._prepared = None
+        with self.planner._preparation_lock:
+            if self._prepared is None or self._prepared.sequence != sequence:
+                raise RuntimeError("source timing abort does not match its prepared sequence")
+            self._prepared = None
 
     def restore_checkpoint(self, head: bytes, segments: tuple[bytes, ...]) -> None:
         """Restore bounded semantic indexes into a freshly constructed planner."""
@@ -320,8 +313,8 @@ class SourceTimingPlannerParticipant:
                 elif rows:
                     _apply_mutations(cache, rows, family=name)
         self.planner._watermark = watermark
-        with self._lock:
-            self._pending = {name: [] for name in expected}
+        with self.planner._preparation_lock:
+            self._pending = {name: {} for name in expected}
             self._segment_count = len(segments)
             self._committed = True
             self._prepared = None

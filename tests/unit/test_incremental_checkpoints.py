@@ -2259,6 +2259,25 @@ def test_source_timing_delta_abort_retains_pending_mutations() -> None:
     assert retried.segments[0].payload == rejected.segments[0].payload
 
 
+def test_source_timing_delta_coalesces_repeated_key_mutations() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    planner = SourceTimingPlanner()
+    participant = SourceTimingPlannerParticipant(planner)
+    participant.prepare_checkpoint(0)
+    participant.checkpoint_committed(0)
+    family = planner.index_family_specs[0]
+    loaded = planner.load_probe_entry(family.name, 1, started)
+    cache = dict(planner._bounded_indexes())[family.name]
+    cache.redeadline(loaded.key, deadline=started + timedelta(hours=2))
+    cache.redeadline(loaded.key, deadline=started + timedelta(hours=3))
+
+    delta = participant.prepare_checkpoint(1)
+    assert len(delta.segments) == 1
+    document = loads(delta.segments[0].payload)
+    assert isinstance(document, dict)
+    assert len(document["families"][family.name]) == 1
+
+
 def test_source_timing_barrier_rejects_open_preparation_authority() -> None:
     planner = SourceTimingPlanner()
     planner._active_preparation_claims = 1

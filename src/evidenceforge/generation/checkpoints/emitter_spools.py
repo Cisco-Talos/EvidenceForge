@@ -187,10 +187,10 @@ class EmitterSpoolParticipant:
 
         discovered: list[tuple[object, Path, bool]] = []
         for _format_name, emitter in sorted(self.emitters.items()):
-            snapshot = getattr(emitter, "checkpoint_output_files", None)
+            snapshot = getattr(type(emitter), "checkpoint_output_files", None)
             if not callable(snapshot):
                 continue
-            rows = snapshot()
+            rows = snapshot(emitter)
             if type(rows) is not tuple:
                 raise RuntimeError("emitter checkpoint output inventory is malformed")
             for row in rows:
