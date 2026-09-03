@@ -660,6 +660,13 @@ class CompactIndexedStore(MutableMapping[K, V], Generic[K, V]):
             raise KeyError(handle)
         return cast(V, value)
 
+    def iter_values_by_handle(self) -> Iterator[V]:
+        """Yield live values in stable compact-handle order."""
+
+        for value in self._slot_values:
+            if value is not _MISSING:
+                yield cast(V, value)
+
     def key_by_handle(self, handle: int) -> K:
         """Return a live semantic key by its compact handle."""
         if handle < 0 or handle >= len(self._slot_keys):
@@ -1341,6 +1348,56 @@ class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
     def deadline(self, key: K) -> float | None:
         """Return the current deadline for a key."""
         return self._deadlines.get(key)
+
+    def checkpoint_records(self) -> tuple[tuple[K, V, float, int, bool], ...]:
+        """Return live semantic rows in stable insertion order for checkpointing."""
+
+        return tuple(
+            (
+                key,
+                self._items[key],
+                self._deadlines[key],
+                self._orders[key],
+                key in self._protected,
+            )
+            for key in sorted(self._items, key=self._orders.__getitem__)
+        )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, V, float, int, bool], ...],
+    ) -> None:
+        """Hydrate semantic rows into a fresh index and rebuild its expiry heap."""
+
+        if self._items:
+            raise ValueError("checkpoint index hydration requires a fresh empty index")
+        prior_order = -1
+        for key, value, deadline, order, protected in records:
+            hash(key)
+            if (
+                key in self._items
+                or type(order) is not int
+                or order < 0
+                or order <= prior_order
+                or type(deadline) not in {int, float}
+                or type(protected) is not bool
+            ):
+                raise ValueError("checkpoint index row is invalid or out of order")
+            canonical_deadline = float(deadline)
+            if math.isnan(canonical_deadline):
+                raise ValueError("checkpoint index deadline cannot be NaN")
+            self._items[key] = value
+            self._deadlines[key] = canonical_deadline
+            self._orders[key] = order
+            self._versions[key] = 1
+            if protected:
+                self._protected.add(key)
+            else:
+                heapq.heappush(self._heap, (canonical_deadline, order, 1, key))
+            prior_order = order
+        self._next_order = prior_order + 1
+        self._high_water_mark = len(self._items)
+        self._protected_high_water_mark = len(self._protected)
 
     def set(self, key: K, value: V, deadline: float) -> None:
         """Insert or update a value and its sortable deadline."""
@@ -2986,6 +3043,58 @@ class ReferenceLeaseIndex(Generic[K, OwnerT]):
                 self._leased_key_count += 1
             self._leases[pair] = _ReferenceLeaseRecord(key=key, owner=owner)
         self._expirations.set(pair, True, deadline)
+
+    def checkpoint_records(self) -> tuple[tuple[K, OwnerT, float, int], ...]:
+        """Return stable live lease rows without stale expiry-heap history."""
+
+        rows: list[tuple[K, OwnerT, float, int]] = []
+        for pair, marker, deadline, order, protected in self._expirations.checkpoint_records():
+            if marker is not True or protected or pair not in self._leases:
+                raise RuntimeError("reference lease checkpoint authority diverged")
+            key, owner = pair
+            rows.append((key, owner, deadline, order))
+        if (
+            len(rows) != len(self._leases)
+            or len({row[0] for row in rows}) != self._leased_key_count
+        ):
+            raise RuntimeError("reference lease checkpoint authority diverged")
+        return tuple(rows)
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, OwnerT, float, int], ...],
+    ) -> None:
+        """Hydrate live leases and rebuild their equality and expiry indexes."""
+
+        if self._leases or self._expirations or self._leased_key_count:
+            raise ValueError("reference lease checkpoint hydration requires an empty index")
+        expiration_rows: list[tuple[tuple[K, OwnerT], bool, float, int, bool]] = []
+        keys: set[K] = set()
+        try:
+            for key, owner, deadline, order in records:
+                pair = (key, owner)
+                hash(pair)
+                if (
+                    pair in self._leases
+                    or type(deadline) not in {int, float}
+                    or not math.isfinite(float(deadline))
+                    or type(order) is not int
+                    or order < 0
+                ):
+                    raise ValueError("reference lease checkpoint row is invalid or duplicated")
+                self._leases[pair] = _ReferenceLeaseRecord(key=key, owner=owner)
+                expiration_rows.append((pair, True, float(deadline), order, False))
+                keys.add(key)
+            self._expirations.restore_checkpoint_records(tuple(expiration_rows))
+        except (TypeError, ValueError):
+            self._leases = CompactIndexedStore(
+                key=lambda item: item.key,
+                owner=lambda item: item.owner,
+            )
+            self._expirations = ExpiringIndex()
+            self._leased_key_count = 0
+            raise
+        self._leased_key_count = len(keys)
 
     def release(self, key: K, owner: OwnerT) -> bool:
         """Release an exact owner lease without scanning other keys."""

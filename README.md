@@ -29,6 +29,10 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Deterministic engine, skill-assisted authoring.** Scenario creation uses AI agent skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
+- **Crash-safe generation resume.** Long runs checkpoint every 24 completed simulated hours by
+  default and resume from a self-contained output root with byte-identical deterministic artifacts.
+  The cadence is configurable and successful bundles retain no checkpoint residue.
+
 - **Built-in quality evaluation.** A 4-pillar scoring framework (22 sub-scores) measures
   parseability, plausibility, causality, and timing, with additional concern-oriented views for
   source schema, canonical invariants, scenario completeness, and distribution realism.
@@ -93,7 +97,7 @@ For scripted or non-interactive use:
 
 | Command | Description |
 |---------|-------------|
-| `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast machine resources, then generate logs; `--seed` overrides the scenario seed |
+| `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast resources, then generate logs with 24-hour checkpoints; `--seed` overrides the scenario seed |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
 | `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |
@@ -105,14 +109,22 @@ For scripted or non-interactive use:
 | `eforge version` | Show version |
 
 Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,
-`--output` / `-o` for output directory overrides, `--force` / `-f` to overwrite
-existing output without prompting, and `--target default|sof-elk|splunk` to choose the
+`--output` / `-o` for output directory overrides, `--resume` for incomplete output,
+`--overwrite` to replace output, and `--checkpoint-hours N` to change the 24-hour cadence (`0`
+disables it). `--force` / `-f` is a deprecated overwrite alias. Use
+`--target default|sof-elk|splunk` to choose the
 generated file layout. The `default` target is SIEM-neutral; `sof-elk` emits
 target-specific variants such as Snare Windows events and year-partitioned
 RFC3164 syslog for parser validation, and `splunk` emits Splunk-friendly
 Windows XML event streams. `eval` uses `--scenario` / `-s` and
 `--format text|json`; `info` and `validate-config` support `--json` for machine
 output.
+
+`validate` also accepts `--checkpoint-hours N`, so its resource forecast uses the intended
+generation cadence; it defaults to 24 and accepts `0` to model checkpointing as disabled.
+
+See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery,
+filesystem-safety, and output-state behavior.
 
 All commands accept `--help` and `-h` for usage information.
 

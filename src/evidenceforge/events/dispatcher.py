@@ -1178,7 +1178,7 @@ class DeferredSessionPublicationResult:
     """Terminal exact source result for a committed deferred-session root."""
 
     receipt: DeferredSessionPublicationReceipt
-    materialization_receipt: object
+    materialization_receipt: object | None
     identifiers: tuple[tuple[tuple[str, str], ...], ...]
     projections: tuple[ActionCohortProjectionOutcome, ...]
     target_proofs: tuple[DeferredSessionExactTargetProof, ...]
@@ -1208,12 +1208,12 @@ class _PreparedDeferredSessionPublicationRecord:
 
     batch_id: int
     carrier: PreparedDeferredSessionPublicationBatch
-    composition: object
-    coordinator: object
+    composition: object | None
+    coordinator: object | None
     composition_token: str
     physical_transport_id: str
     root: object
-    source_timing_preparation: SourceTimingPreparation
+    source_timing_preparation: SourceTimingPreparation | None
     dispatches: tuple[PreparedDispatch, ...]
     member_locks: tuple[object, ...]
     member_integrity_tokens: tuple[str, ...]
@@ -10753,6 +10753,8 @@ class EventDispatcher:
                     )
                 if record.kind == "deferred_session":
                     self._complete_deferred_session_exact_recovery(record)
+                elif record.kind == "action_cohort":
+                    self._complete_action_cohort_exact_recovery(record)
                 with self._action_cohort_lock:
                     if self._exact_projection_recoveries.get(id(receipt)) is not record:
                         raise EventContractError(
@@ -10800,6 +10802,8 @@ class EventDispatcher:
                     raise
             if record.kind == "deferred_session":
                 self._complete_deferred_session_exact_recovery(record)
+            elif record.kind == "action_cohort":
+                self._complete_action_cohort_exact_recovery(record)
             with self._action_cohort_lock:
                 if self._exact_projection_recoveries.get(id(receipt)) is not record:
                     raise EventContractError(
@@ -13481,6 +13485,38 @@ class EventDispatcher:
                         record,
                         terminal_state="published",
                     )
+                    # The exact recovery is now released and the terminal receipt
+                    # contains the scalar materialization token needed for audit.
+                    # Sever the retired owner graph so one-shot source-timing and
+                    # lifecycle receipts die by reference counting instead of a
+                    # later process-wide cyclic-GC pass.
+                    record.exact_recovery = None
+                    record.publication_result = None
+                    record.materialization_receipt = None
+                    record.materialization_receipt_shell = None
+                    record.source_timing_preparation = None
+                    record.composition = None
+                    record.coordinator = None
+                    record.dispatches = ()
+
+    @staticmethod
+    def _complete_action_cohort_exact_recovery(
+        recovery: _ExactProjectionRecoveryRecord,
+    ) -> None:
+        """Sever a released action cohort's retired recovery-owner cycle."""
+
+        record = recovery.owner_record
+        if (
+            type(record) is not _PreparedActionCohortBatchRecord
+            or record.exact_recovery is not recovery
+            or recovery.kind != "action_cohort"
+            or not recovery.batch.released
+        ):
+            raise EventContractError("Action-cohort exact recovery lost its released owner")
+        # The immutable result returned to the caller remains intact. The batch record has
+        # already been detached from every dispatcher registry, so its back-reference is only
+        # retired retry scaffolding and would otherwise require a cyclic-GC scan to disappear.
+        record.exact_recovery = None
 
     def _complete_deferred_session_owner_tail(
         self,

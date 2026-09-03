@@ -10,6 +10,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.generation.process_runtime_cache import (
     ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES,
     PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
@@ -17,6 +19,7 @@ from evidenceforge.generation.process_runtime_cache import (
     ActivityGeneratorRetentionDisposition,
     BoundedRuntimeCache,
     EmailArtifactManifestSpool,
+    ProcessRuntimeCacheCheckpoint,
     build_production_process_runtime_caches,
     discover_activity_generator_mutable_fields,
 )
@@ -119,6 +122,41 @@ def test_production_cache_bundle_exposes_complete_constant_time_census() -> None
     assert all(family.estimated_bytes > 0 for family in census.families)
 
 
+def test_production_cache_checkpoint_rebuilds_families_and_reverse_routes() -> None:
+    """A fresh bundle should reproduce live semantic rows without compact backing."""
+
+    bundle = build_production_process_runtime_caches(_START + timedelta(days=30))
+    for ordinal, family in enumerate(PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES):
+        bundle.load_probe_entry(
+            family.name,
+            ordinal,
+            _START + timedelta(hours=1),
+            owner=f"owner-{ordinal}",
+        )
+    checkpoint = bundle.checkpoint_records()
+
+    restored = build_production_process_runtime_caches(_START + timedelta(days=30))
+    restored.restore_checkpoint_records(checkpoint)
+
+    assert restored.checkpoint_records() == checkpoint
+    assert restored.census(watermark=None).physical_records == 20
+    assert restored.census(watermark=None).reverse_bindings == 3
+
+
+def test_production_cache_checkpoint_rejects_changed_family_order() -> None:
+    """Recovery must bind rows only to the fixed production family schema."""
+
+    bundle = build_production_process_runtime_caches(_START + timedelta(days=30))
+    checkpoint = bundle.checkpoint_records()
+    changed = ProcessRuntimeCacheCheckpoint(
+        families=tuple(reversed(checkpoint.families)),
+        reverse_routes=checkpoint.reverse_routes,
+    )
+
+    with pytest.raises(ValueError, match="family order"):
+        bundle.restore_checkpoint_records(changed)
+
+
 def _production_duration_census(hours: int) -> tuple[int, int, int]:
     bundle = build_production_process_runtime_caches(_START + timedelta(days=31))
     families = tuple(spec.name for spec in PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES)
@@ -202,6 +240,24 @@ def test_failed_logon_cadence_fields_have_closed_retention_policies() -> None:
     assert policies["_failed_logon_attempt_pending"].disposition is (
         ActivityGeneratorRetentionDisposition.TRANSIENT
     )
+
+
+def test_activity_generator_mutable_retention_inventory_is_complete() -> None:
+    """Every discovered mutable field must be live-classified or explicitly retired."""
+
+    from evidenceforge.generation.activity.generator import ActivityGenerator
+
+    discovered = {
+        row.field_name
+        for row in discover_activity_generator_mutable_fields(inspect.getsource(ActivityGenerator))
+    }
+    policy_fields = [policy.field_name for policy in ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES]
+    retired = set(REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS)
+
+    assert len(policy_fields) == len(set(policy_fields))
+    assert discovered <= set(policy_fields) | retired
+    assert discovered.isdisjoint(retired)
+    assert set(policy_fields).isdisjoint(retired)
 
 
 def test_dead_dns_caches_cannot_reenter_generator_retention() -> None:

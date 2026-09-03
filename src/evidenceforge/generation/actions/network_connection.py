@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from math import isfinite
 from threading import Lock
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from evidenceforge.events.application import (
     ApplicationChannelBudget,
@@ -2088,6 +2088,33 @@ class NetworkConnectionIdentityCapture:
         if self.lifecycle_mode is None:
             raise ValueError("Network connection did not publish a transport lifecycle mode")
         return self.lifecycle_mode
+
+    def release_committed_publication_proofs(
+        self,
+        transaction: NetworkTransactionPlan,
+        *,
+        lifecycle_authority: Any,
+    ) -> None:
+        """Drop one-shot commit capabilities after a durable semantic owner takes over.
+
+        The immutable transaction and lifecycle disposition remain available to the
+        installed continuation. Receipt, prepared-root, and outcome objects exist only
+        to authenticate the initial handoff and must not extend authority retention.
+        """
+
+        with self._lock:
+            if self._claim is not None or self._transaction is not transaction:
+                raise StateError("Network identity capture cannot release foreign commit proofs")
+            if self._source_timing_preparation is not None or self._prepared_dispatch is not None:
+                raise StateError("Network identity capture still owns deferred publication work")
+            receipt = self._receipt
+            if receipt is not None:
+                lifecycle_authority.retire_acknowledged_prepared_network_receipt(receipt)
+            self._prepared_root = None
+            self._persistent_smb_root_handoff = None
+            self._receipt = None
+            self._application_receipt = None
+            self._outcome = None
 
     def require_prepared_root(self) -> PreparedNetworkTransactionRoot:
         """Return the exact prepared root retained for receipt authentication."""

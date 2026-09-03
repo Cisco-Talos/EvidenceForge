@@ -201,6 +201,24 @@ class EmailArtifactManifestSpool:
         self._logical_rows += 1
         self._maximum_append_work = max(self._maximum_append_work, 1)
 
+    def checkpoint_connection(self) -> sqlite3.Connection:
+        """Return the protected connection used by the incremental spool adapter."""
+
+        return self._connect()
+
+    def restore_checkpoint_state(self) -> None:
+        """Rebuild scalar append state after row-delta hydration."""
+
+        connection = self._connect()
+        count, minimum, maximum = connection.execute(
+            "SELECT COUNT(*), MIN(ordinal), MAX(ordinal) FROM manifest_rows"
+        ).fetchone()
+        logical_rows = int(count)
+        if logical_rows and (minimum != 0 or maximum != logical_rows - 1):
+            raise ValueError("Email artifact checkpoint ordinals are not contiguous")
+        self._logical_rows = logical_rows
+        self._maximum_append_work = min(logical_rows, 1)
+
     def census(self) -> EmailArtifactManifestSpoolCensus:
         """Return row and disk cardinality without loading any payload row."""
 
@@ -293,6 +311,23 @@ class ProcessRuntimeCacheExpiryPage:
     ]
     processed: int
     has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeCacheCheckpointFamily:
+    """Live semantic rows for one fixed process-runtime cache family."""
+
+    name: str
+    watermark: datetime | None
+    records: tuple[tuple[Hashable, object, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeCacheCheckpoint:
+    """Bounded process-cache rows plus exact process-to-family reverse routes."""
+
+    families: tuple[ProcessRuntimeCacheCheckpointFamily, ...]
+    reverse_routes: tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...]
 
 
 def deadline_seconds(value: datetime | float | int) -> float:
@@ -717,6 +752,38 @@ class BoundedRuntimeCache(Generic[K, V]):
                 return self._records[key]
             except KeyError:
                 return None
+
+    def checkpoint_records(self) -> tuple[tuple[K, V, float], ...]:
+        """Return visible semantic rows for an explicit checkpoint participant.
+
+        This deliberately omits lookup counters, compact-store handles, expiry-heap
+        tombstones, and other derived index state. The participant is responsible for
+        encoding the key and value through an allowlisted inert schema.
+        """
+
+        with self._lock:
+            return tuple(
+                (key, record.value, record.deadline_seconds)
+                for key, record in self._records.items()
+                if self._visible(record)
+            )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, V, float], ...],
+        *,
+        watermark: datetime | None,
+    ) -> None:
+        """Replace this fresh cache with validated semantic checkpoint rows."""
+
+        with self._lock:
+            if self._records:
+                raise ValueError("checkpoint cache hydration requires a fresh empty cache")
+            self._watermark_seconds = None if watermark is None else deadline_seconds(watermark)
+            for key, value, deadline in records:
+                if self._watermark_seconds is not None and deadline < self._watermark_seconds:
+                    raise ValueError("checkpoint cache row predates its logical watermark")
+                self.set(key, value, deadline=deadline)
 
     def get(self, key: K, default: V | None = None) -> V | None:
         """Return one exact visible entry and account one candidate at most."""
@@ -1206,6 +1273,7 @@ _BOUNDED_TEMPORAL_FIELDS = (
     "_top_level_browser_launch_targets",
     "_privileged_auth_occurrences",
     "_failed_logon_attempt_times",
+    "_foreground_process_finalizers",
 )
 _SCENARIO_COMPILED_FIELDS = (
     "sid_registry",
@@ -1231,6 +1299,11 @@ _OCCURRENCE_OR_DRAIN_FIELDS = (
     "_expanding_types",
     "_postfix_queue_states",
     "_failed_logon_attempt_pending",
+    "_linux_sudo_tty_capacity_claims",
+    "_prepared_rdp_lifecycle_continuations",
+    "_prepared_ssh_close_continuations",
+    "_sid_reservation_groups",
+    "_sid_reservations",
 )
 _SESSION_SCOPED_FIELDS = (
     "_bash_history_next_time",
@@ -1243,6 +1316,14 @@ _SESSION_SCOPED_FIELDS = (
     "_linux_sudo_tty_available",
     "_linux_sudo_tty_keys_by_logon_id",
     "_last_workstation_lock_time",
+    "_foreground_shell_next_time",
+    "_foreground_shell_release_groups",
+    "_pending_linux_sudo_logoffs",
+    "_pending_rdp_lifecycle_continuations",
+    "_pending_ssh_manager_closures",
+    "_pending_ssh_session_closures",
+    "_process_connection_hold_until",
+    "_singleton_application_intervals",
 )
 _EXTERNAL_SPOOL_FIELDS = ("_email_artifact_manifest_spool",)
 _BOUNDED_LEGACY_FIELDS = (
@@ -1258,13 +1339,16 @@ _BOUNDED_LEGACY_FIELDS = (
     "_ntp_last_parser_times",
     "_linux_shell_last_session_close",
     "_postfix_qmgr_pid_cache",
+    "_kerberos_cache",
+    "_next_sid_reservation_id",
+    "_terminated_process_keys",
 )
 _DEFINITE_GROWING_FIELDS: tuple[str, ...] = ()
 _CONDITIONAL_GROWING_FIELDS: tuple[str, ...] = ()
 REMOVED_DEAD_ACTIVITY_GENERATOR_MUTABLE_FIELDS = (
     "_dns_observation_cache",
     "_dns_resolver_rrset_cache",
-    "_kerberos_cache",
+    "_http_persistent_connections",
     "_linux_local_logind_session_ids",
     "_tls_cert_validity",
     "_tls_intermediate_profiles",
@@ -1445,6 +1529,28 @@ class _ProcessRuntimeReverseIndex:
         self._reset_empty_backing()
         return True
 
+    def checkpoint_records(
+        self,
+    ) -> tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...]:
+        """Return live semantic routes without compact handle/index backing."""
+
+        return tuple(
+            (route.process_key, route.cache_name, route.cache_key)
+            for _route_key, route in self._routes.items()
+        )
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[tuple[str, int, datetime | None], str, Hashable], ...],
+    ) -> None:
+        """Rebuild exact reverse ownership in original route insertion order."""
+
+        if self._routes:
+            raise ValueError("process-runtime reverse hydration requires a fresh index")
+        for process_key, cache_name, cache_key in records:
+            if not self.bind(process_key, cache_name, cache_key):
+                raise ValueError("process-runtime reverse checkpoint route is duplicated")
+
     def pop_subject_page(
         self,
         process_key: tuple[str, int, datetime | None],
@@ -1525,6 +1631,38 @@ class ProductionProcessRuntimeCaches:
             return self._by_name[name]
         except KeyError as exc:
             raise KeyError(f"Unknown process-runtime cache family: {name}") from exc
+
+    def checkpoint_records(self) -> ProcessRuntimeCacheCheckpoint:
+        """Capture bounded semantic rows once, excluding alias and index backing."""
+
+        return ProcessRuntimeCacheCheckpoint(
+            families=tuple(
+                ProcessRuntimeCacheCheckpointFamily(
+                    name=name,
+                    watermark=cache.watermark,
+                    records=cache.checkpoint_records(),
+                )
+                for name, cache in self._items
+            ),
+            reverse_routes=self._reverse.checkpoint_records(),
+        )
+
+    def restore_checkpoint_records(self, checkpoint: ProcessRuntimeCacheCheckpoint) -> None:
+        """Hydrate every fixed family and rebuild validated process reverse routes."""
+
+        if type(checkpoint) is not ProcessRuntimeCacheCheckpoint:
+            raise TypeError("process-runtime checkpoint has an invalid snapshot type")
+        expected = tuple(name for name, _cache in self._items)
+        actual = tuple(family.name for family in checkpoint.families)
+        if actual != expected:
+            raise ValueError("process-runtime checkpoint family order changed")
+        for family, (_name, cache) in zip(checkpoint.families, self._items, strict=True):
+            cache.restore_checkpoint_records(family.records, watermark=family.watermark)
+        for _process_key, cache_name, cache_key in checkpoint.reverse_routes:
+            cache = self._by_name.get(cache_name)
+            if cache is None or cache.raw_get(cache_key) is None:
+                raise ValueError("process-runtime checkpoint reverse route has no live cache row")
+        self._reverse.restore_checkpoint_records(checkpoint.reverse_routes)
 
     def census(
         self,

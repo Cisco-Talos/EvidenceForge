@@ -14,7 +14,7 @@ import hashlib
 import math
 import secrets
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
@@ -874,7 +874,14 @@ def _source_timing_detached_binding_semantic_bytes(
 class _SourceTimingCache:
     """Versioned lock-owning facade for one bounded planner cache."""
 
-    __slots__ = ("_cache", "_default_deadline", "_lock", "_mutation_version", "_owner")
+    __slots__ = (
+        "_cache",
+        "_checkpoint_recorder",
+        "_default_deadline",
+        "_lock",
+        "_mutation_version",
+        "_owner",
+    )
 
     def __init__(self, *, default_deadline: Any) -> None:
         self._cache: BoundedRuntimeCache[Any, Any] = BoundedRuntimeCache(
@@ -884,6 +891,20 @@ class _SourceTimingCache:
         self._lock = RLock()
         self._mutation_version = 0
         self._owner: SourceTimingPlanner | None = None
+        self._checkpoint_recorder: (
+            Callable[[str, object, object | None, float | None], None] | None
+        ) = None
+
+    def _record_checkpoint_mutation(
+        self,
+        kind: str,
+        key: object,
+        value: object | None = None,
+        deadline: float | None = None,
+    ) -> None:
+        recorder = self._checkpoint_recorder
+        if recorder is not None:
+            recorder(kind, key, value, deadline)
 
     def _enter_public_mutation(self) -> SourceTimingPlanner | None:
         """Enter the planner lane before one canonical cache mutation."""
@@ -943,8 +964,10 @@ class _SourceTimingCache:
         owner = self._enter_public_mutation()
         try:
             with self._lock:
-                self._cache.set(key, value, deadline=deadline)
+                canonical_deadline = deadline_seconds(deadline)
+                self._cache.set(key, value, deadline=canonical_deadline)
                 self._mutation_version += 1
+                self._record_checkpoint_mutation("set", key, value, canonical_deadline)
         finally:
             self._leave_public_mutation(owner)
 
@@ -955,6 +978,13 @@ class _SourceTimingCache:
                 moved = self._cache.redeadline(key, deadline=deadline)
                 if moved:
                     self._mutation_version += 1
+                    value = self._cache.raw_get(key)
+                    self._record_checkpoint_mutation(
+                        "set",
+                        key,
+                        value,
+                        deadline_seconds(deadline),
+                    )
                 return moved
         finally:
             self._leave_public_mutation(owner)
@@ -967,6 +997,7 @@ class _SourceTimingCache:
                 value = self._cache.pop(key, default)
                 if present:
                     self._mutation_version += 1
+                    self._record_checkpoint_mutation("pop", key)
                 return value
         finally:
             self._leave_public_mutation(owner)
@@ -977,6 +1008,8 @@ class _SourceTimingCache:
             with self._lock:
                 expired = self._cache.advance_watermark(cutoff, limit=limit)
                 self._mutation_version += 1
+                for key, _value in expired:
+                    self._record_checkpoint_mutation("pop", key)
                 return expired
         finally:
             self._leave_public_mutation(owner)
@@ -1032,8 +1065,15 @@ class _SourceTimingCache:
                     operation.value,
                     deadline=operation.deadline_seconds,
                 )
+                self._record_checkpoint_mutation(
+                    "set",
+                    operation.key,
+                    operation.value,
+                    operation.deadline_seconds,
+                )
             else:
                 self._cache.pop(operation.key)
+                self._record_checkpoint_mutation("pop", operation.key)
         self._cache._lookup_candidates_inspected += lookup_candidate_delta
         self._mutation_version += version_delta
 
@@ -2137,6 +2177,47 @@ class SourceTimingPlanner:
                     receipt_identity,
                     authority,
                 )
+
+    def _retire_committed_preparation_receipt(
+        self,
+        receipt: SourceTimingPreparationReceipt,
+    ) -> None:
+        """Retire an acknowledged one-shot receipt and its terminal preparation.
+
+        The outer lifecycle authority calls this only after replacing its exact
+        receipt graph with an authenticated scalar acknowledgement.  At that
+        point neither the receipt nor its preparation can authorize another
+        mutation, so retaining them would only keep a cyclic capability graph
+        alive until a process-wide cyclic-GC pass.
+        """
+
+        receipt_identity = id(receipt)
+        with self._preparation_authority_lock:
+            authority = self._committed_preparation_receipts.get(receipt_identity)
+            if (
+                authority is None
+                or not authority.committed
+                or authority.receipt_ref() is not receipt
+            ):
+                raise StateError("Source timing receipt is not committed for retirement")
+            matching = tuple(
+                (preparation_identity, record)
+                for preparation_identity, record in self._preparation_claim_records.items()
+                if record.state == "committed" and record.expected_receipt is receipt
+            )
+            if len(matching) > 1:
+                raise StateError("Source timing receipt has duplicate terminal preparations")
+            if matching:
+                preparation_identity, record = matching[0]
+                removed_record = self._preparation_claim_records.pop(preparation_identity, None)
+                if removed_record is not record:
+                    raise StateError("Source timing terminal preparation changed during retirement")
+                self._remove_preparation_record_counts_locked(record)
+            if not self._remove_preparation_receipt_authority_locked(
+                receipt_identity,
+                authority,
+            ):
+                raise StateError("Source timing receipt changed during retirement")
 
     def preparation_authority_census(self) -> SourceTimingPreparationAuthorityCensus:
         """Return exact bounded preparation and terminal-receipt counts."""

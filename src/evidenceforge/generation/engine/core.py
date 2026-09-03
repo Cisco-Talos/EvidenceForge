@@ -27,6 +27,8 @@ It coordinates StateManager, emitters, and activity generation to produce
 consistent synthetic security logs across multiple formats.
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import random
@@ -35,6 +37,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
+from typing import TYPE_CHECKING
 
 from evidenceforge.composition.models import CompiledScenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
@@ -80,7 +83,15 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from evidenceforge.generation.checkpoints.models import CheckpointCursor, CheckpointRecovery
+    from evidenceforge.generation.checkpoints.participants import (
+        IncrementalCheckpointParticipant,
+    )
+    from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
+_RUNTIME_RETIREMENT_HOURS = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +136,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         workload_limits: WorkloadLimits | None = None,
         resource_forecast: ResourceForecast | None = None,
         compiled_scenario: CompiledScenario | None = None,
+        checkpoint_hour_callback: Callable[[int, datetime, str], None] | None = None,
+        checkpoint_hours: int = 0,
+        checkpoint_controller: IncrementalCheckpointController | None = None,
+        checkpoint_recovery: CheckpointRecovery | None = None,
+        checkpoint_synchronization_hook: Callable[[CheckpointCursor], None] | None = None,
     ):
         """Initialize generation engine.
 
@@ -139,6 +155,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
+            checkpoint_hour_callback: Optional internal cadence hook invoked after each
+                scheduled, completely swept simulated hour at an emitter barrier. The phase
+                names the post-boundary cursor and is one of warmup, collection, or tail.
+            checkpoint_hours: Internal positive cadence for checkpoint_hour_callback. Zero
+                disables the hook.
+            checkpoint_controller: Optional incremental checkpoint publisher. Its cadence must
+                match checkpoint_hours and it cannot be combined with the legacy test hook.
+            checkpoint_recovery: Optional validated recovery selected from the controller's store.
+            checkpoint_synchronization_hook: Internal post-publication test barrier. Production CLI
+                wiring exposes it only through the guarded pytest environment seam.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -184,6 +210,26 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.output_target = normalize_output_target(output_target)
         self.oob_hosts = tuple(oob_hosts)
         self.progress_callback = progress_callback
+        if type(checkpoint_hours) is not int or checkpoint_hours < 0:
+            raise ValueError("checkpoint_hours must be a non-negative integer")
+        if checkpoint_hour_callback is not None and checkpoint_hours == 0:
+            raise ValueError("checkpoint_hour_callback requires a positive checkpoint_hours")
+        if checkpoint_controller is not None and checkpoint_hour_callback is not None:
+            raise ValueError("checkpoint controller and checkpoint callback are mutually exclusive")
+        if checkpoint_controller is not None and checkpoint_controller.cadence.hours != (
+            checkpoint_hours
+        ):
+            raise ValueError("checkpoint controller cadence must match checkpoint_hours")
+        if checkpoint_recovery is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint recovery requires an incremental checkpoint controller")
+        if checkpoint_synchronization_hook is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint synchronization requires an incremental controller")
+        self.checkpoint_hour_callback = checkpoint_hour_callback
+        self.checkpoint_hours = checkpoint_hours
+        self._checkpoint_controller = checkpoint_controller
+        self._checkpoint_recovery = checkpoint_recovery
+        self._checkpoint_synchronization_hook = checkpoint_synchronization_hook
+        self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
         self.activity_generator: ActivityGenerator | None = None
@@ -238,6 +284,63 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self.progress_callback:
             self.progress_callback(event_type, data)
 
+    def _checkpoint_after_completed_hour(
+        self,
+        *,
+        completed_simulated_hours: int,
+        next_hour: datetime,
+    ) -> None:
+        """Invoke the optional cadence hook with an exact post-hour cursor."""
+
+        callback = self.checkpoint_hour_callback
+        controller = self._checkpoint_controller
+        checkpoint_due = (
+            (callback is not None or controller is not None)
+            and self.checkpoint_hours > 0
+            and completed_simulated_hours % self.checkpoint_hours == 0
+        )
+        retirement_due = completed_simulated_hours % _RUNTIME_RETIREMENT_HOURS == 0
+        if not checkpoint_due and not retirement_due:
+            return
+        if self.start_time is None or self.end_time is None:
+            raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
+        self._barrier_flush_all_emitters()
+        if retirement_due or controller is not None:
+            self._prepare_incremental_checkpoint_barrier(next_hour)
+        if not checkpoint_due:
+            return
+        if next_hour < self.start_time:
+            phase = "warmup"
+        elif next_hour < self.end_time:
+            phase = "collection"
+        else:
+            phase = "tail"
+        if controller is not None:
+            from evidenceforge.generation.checkpoints.models import CheckpointCursor
+
+            cursor = CheckpointCursor(
+                phase=phase,
+                completed_simulated_hours=completed_simulated_hours,
+                next_hour=None if phase == "tail" else next_hour.isoformat(),
+            )
+            controller.commit(
+                cursor=cursor,
+                participants=self._checkpoint_participants,
+            )
+            if self._checkpoint_synchronization_hook is not None:
+                self._checkpoint_synchronization_hook(cursor)
+        else:
+            assert callback is not None
+            callback(completed_simulated_hours, next_hour, phase)
+
+    def _prepare_incremental_checkpoint_barrier(self, cutoff: datetime) -> None:
+        """Retire terminal authorities at the sealed post-hour frontier."""
+
+        self.lifecycle_registry.prune_action_cohort_receipt_authorities()
+        self.lifecycle_registry.prune_checkpoint_expired_state(cutoff)
+        self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
+        self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
+
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""
 
@@ -278,13 +381,22 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self._initialization_complete:
             raise RuntimeError("Generation body cannot be restarted after an incomplete run")
 
-        # Phase 1: Initialize
+        # Phase 1: Initialize a fresh runtime, then hydrate semantic state when resuming.
         try:
             self._report_progress(
                 "phase_start",
                 {"phase": "initialize", "description": "Initializing generation engine"},
             )
             self._initialize()
+            recovery = self._checkpoint_recovery
+            if recovery is not None:
+                controller = self._checkpoint_controller
+                if controller is None:  # pragma: no cover - constructor invariant
+                    raise RuntimeError("checkpoint recovery lost its controller")
+                controller.restore_participants(
+                    recovery=recovery,
+                    participants=self._checkpoint_participants,
+                )
             self._initialization_complete = True
             self._report_progress("phase_end", {"phase": "initialize"})
         except BaseException as primary:
@@ -296,7 +408,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._report_progress(
                 "phase_start", {"phase": "baseline", "description": "Generating baseline activity"}
             )
-            self._generate_baseline()
+            self._generate_baseline(
+                resume_cursor=(
+                    None
+                    if self._checkpoint_recovery is None
+                    else self._checkpoint_recovery.manifest.cursor
+                )
+            )
             self._report_progress("phase_end", {"phase": "baseline"})
 
             # Phase 6.3: Execute remaining storyline events not covered by baseline hours
@@ -774,6 +892,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             activity_generator=self.activity_generator,
         )
         self.activity_generator._world_planner = self.world_planner
+
+        for emitter in self.emitters.values():
+            emitter.enable_deferred_sorted_publication()
+
+        if self._checkpoint_controller is not None:
+            from evidenceforge.generation.checkpoints.participant_set import (
+                production_checkpoint_participants,
+            )
+
+            self._checkpoint_participants = production_checkpoint_participants(self)
 
         logger.info("Initialization complete")
 

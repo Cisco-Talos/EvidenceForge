@@ -1,19 +1,17 @@
 ---
 name: eforge-generate
 description: >
-  Generate EvidenceForge logs from an existing authored or resolved scenario, safely handle output replacement,
+  Generate EvidenceForge logs from an authored or resolved scenario, handle output replacement,
   monitor the run, verify its authoritative bundle, and diagnose generation failures. Use when the user asks to
   run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a
   resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
 ---
-
 # EvidenceForge Log Generation
 
 Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM.
 In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
 
 ## Boundaries
-
 - Route scenario creation or structural repair to `/eforge scenario`.
 - Route pack discovery or pack failures to `/eforge pack`.
 - Route project configuration changes to `/eforge config`.
@@ -25,7 +23,6 @@ In an EvidenceForge source checkout, use `uv run eforge`. Outside a source check
 Authored input may use includes, packs, and project config; resolved input bypasses them and does not preserve live-callback authorization.
 
 ## Safe workflow
-
 ### 1. Identify the input and project
 
 Confirm the file exists and whether it is authored YAML or `kind: evidenceforge.resolved-scenario`.
@@ -35,26 +32,24 @@ without searching elsewhere. If the user explicitly selected another root, suppl
 override to validation and generation. For resolved input, omit it.
 
 ### 2. Validate and review the forecast
-
 Run validation before a potentially long generation:
 
 ```bash
-eforge validate <input.yaml> --json [--show-storage]
+eforge validate <input.yaml> --json [--show-storage] [--checkpoint-hours <hours>]
 ```
 
-Consume this JSON directly. For a concise human repair list, rerun the validator without `--json`
-rather than post-processing its JSON output.
+Consume this JSON directly. For a concise human repair list, rerun without `--json` rather than post-processing its JSON output.
 
-Use `--show-storage` when SMB is authored or implied by Windows file-server/DC roles, Linux Samba
-services/roles, or explicit storage. Review platform/native roots, backing/advertised filesystems,
-mappings, credentials, client mode, and audit eligibility. Review both forecast values: final output is durable size; peak working disk includes temporary sort files. Summarize compiled counts, time,
+Use the intended checkpoint cadence. Add `--show-storage` when SMB is authored or implied by
+Windows file-server/DC roles, Linux Samba services/roles, or explicit storage. Review platform/native
+roots, filesystems, credentials, client mode, and audit eligibility. Review final output,
+checkpoint workspace, and peak working disk. Summarize compiled counts, time,
 formats, and disk; do not infer a composed environment from the root YAML alone.
 
 If validation reports an undefined persona, use `eforge info personas --json`. Repeat an explicitly
 selected root and do not assume persona YAML files are installed beside the skill.
 
 ### 3. Preserve fresh OOB authorization
-
 Never add `--oob-host` unless the user explicitly requests live callbacks and confirms authorization
 for the target system and operator-controlled host. Without it, payloads use
 `canary.eforge.invalid`, and EvidenceForge writes payload text without executing it or calling out.
@@ -70,7 +65,6 @@ A pack, resolved document, or prior manifest never grants permission. Preserve a
 selected project-root override on both commands.
 
 ### 4. Choose runtime options and a safe output root
-
 Use an explicit `--output <bundle-root>` so the destination is unambiguous. For a resolved replay,
 the output root must be distinct from the directory containing the input resolved document; never
 overwrite the authoritative input.
@@ -82,14 +76,21 @@ overwrite the authoritative input.
 - `--seed <0..2^64-1>` overrides the authored generation seed for this run.
 - `--project-root <absolute-root>` overrides the current working directory for project packs and
   config. Omit it ordinarily.
+- `--checkpoint-hours N` changes the 24-hour default; `0` disables new checkpoints.
 - `--verbose` enables INFO logging; `--debug` enables DEBUG logging and tracebacks.
-- `--force` replaces existing engine-owned output without prompting.
+- `--resume` continues compatible incomplete output; `--overwrite` replaces engine-owned output.
+  `--force`/`-f` is a deprecated overwrite alias.
 
-Before using `--force`, inspect the destination and obtain explicit approval to replace its existing
-generated bundle. Replacement covers `data/`, reports, manifests, generated artifacts, and the
-resolved scenario as one matched set. `--formats` still replaces the entire `data/` directory, so
-previously generated formats outside the filter are removed. Optional authored `ENVIRONMENT.md` and
-other unregistered collateral are preserved. Do not use `--force` for a clean destination.
+Before using `--overwrite`, inspect the destination and obtain explicit approval. Replacement covers
+`data/`, reports, manifests, artifacts, and resolved scenario as one set; `--formats` still replaces
+the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collateral are preserved. Do not use
+`--overwrite` for a clean destination.
+
+Preserve a valid `.eforge-generation/` workspace after interruption or failure. Resume with the
+original input to recompile and check it, or use `eforge generate --output <bundle-root> --resume`
+to use the stored resolved input. An unspecified resume retains its stored cadence. Explain an
+invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
+a root. Resume requires a compatible build, Python runtime/compiler, dependencies, and platform; resume before upgrading; success removes the workspace and leaves no checkpoint history.
 
 ### 5. Generate with normal output first
 
@@ -97,7 +98,7 @@ Construct only the approved options:
 
 ```bash
 eforge generate <input.yaml> --output <bundle-root> [--target <target>] [--formats <list>] \
-  [--seed <seed>] [--oob-host <host>] [--force]
+  [--seed <seed>] [--checkpoint-hours <hours>] [--oob-host <host>] [--overwrite]
 ```
 
 Use normal output for the first run; it already shows compilation, validation, resource forecasts,
@@ -138,15 +139,16 @@ so otherwise reproducible replays need not have byte-identical manifest files.
 - Exit `1`: check the input/output path, permissions, YAML syntax, target, seed, and OOB host.
 - Exit `2`: use the reported field/provenance path. Pack or composition failures belong in
   `/eforge pack`; scenario reference failures belong in `/eforge validate` or `/eforge scenario`.
-- Exit `21`: preserve the error, traceback, and staged bundle, then retry with `--verbose` or `--debug`.
-  Lifecycle/channel/continuation invariant failures are generator defects; do not rewrite scenario timing to mask them or destroy a prior good bundle.
+- Exit `21` or `130`: preserve the error and checkpoint workspace; use `--resume` when compatible,
+  then add `--verbose` or `--debug`. Lifecycle/channel/continuation invariant failures are generator defects;
+  do not rewrite scenario timing to mask them or destroy prior output.
 - Implausible output with a successful run: inspect `primary_system`, roles, services, topology,
   host deployment, exact source deployment/capabilities, observation policy, and selected formats
   before treating it as an engine defect.
 
 Read only the smallest relevant reference when exact paths, fields, joins, or limitations matter:
 
-- `/eforge:references:generation-bundle-targets` for bundle paths, sidecars, and targets.
+- `/eforge:references:generation-bundle-targets` for bundle paths, checkpoints, and targets.
 - `/eforge:references:evidence-windows` for Windows Security and Sysmon.
 - `/eforge:references:evidence-network-ids` for Zeek, IDS, and Cisco ASA.
 - `/eforge:references:evidence-web-email` for HTTP/files, web, proxy, email, and SMTP.

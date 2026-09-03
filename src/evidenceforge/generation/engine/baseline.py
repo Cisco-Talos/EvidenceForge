@@ -31,6 +31,8 @@ Contains the BaselineMixin with methods for:
 - Process termination and session logoff
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import random
@@ -39,7 +41,7 @@ import string
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
@@ -148,6 +150,9 @@ from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import EmailMessageEventSpec, Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import ensure_utc
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.checkpoints.models import CheckpointCursor
 
 logger = logging.getLogger(__name__)
 
@@ -3923,11 +3928,12 @@ class BaselineMixin:
             else ts
         )
         run_date = local_ts.date().isoformat()
-        emitted = getattr(self, "_anacron_lifecycle_days", set())
-        key = (system.hostname, run_date)
-        if key in emitted:
+        emitted = getattr(self, "_anacron_lifecycle_days", None)
+        if not isinstance(emitted, dict):
+            emitted = {}
+        if emitted.get(system.hostname) == run_date:
             return
-        emitted.add(key)
+        emitted[system.hostname] = run_date
         self._anacron_lifecycle_days = emitted
 
         pid = sys_pids.get("anacron", rng.randint(10000, 60000))
@@ -5439,7 +5445,7 @@ class BaselineMixin:
             )
         return user_agent
 
-    def _generate_baseline(self) -> None:
+    def _generate_baseline(self, resume_cursor: CheckpointCursor | None = None) -> None:
         """Generate baseline activity for all enabled users.
 
         Iterates hour-by-hour through the time window, generating activity
@@ -5451,12 +5457,13 @@ class BaselineMixin:
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
         logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
 
-        # Initialize pending unlocks for cross-hour lock/unlock persistence
-        self._pending_unlocks: dict[str, tuple] = {}
+        if resume_cursor is None:
+            # Initialize pending unlocks for cross-hour lock/unlock persistence.
+            self._pending_unlocks: dict[str, tuple] = {}
 
-        # Emit initial DHCP leases (during warm-up they're suppressed from output
-        # but establish lease state for periodic renewals)
-        self._emit_dhcp_leases()
+            # Emit initial DHCP leases (during warm-up they're suppressed from output
+            # but establish lease state for periodic renewals).
+            self._emit_dhcp_leases()
 
         total_hours = max(
             1,
@@ -5466,7 +5473,42 @@ class BaselineMixin:
         # --- Warm-up phase: pre-populate state without emitting ---
         warmup_hours = math.ceil(self.warmup_duration.total_seconds() / 3600)
         total_simulated_hours = warmup_hours + total_hours
-        if warmup_hours > 0:
+        resume_hour: datetime | None = None
+        if resume_cursor is not None:
+            if resume_cursor.completed_simulated_hours > total_simulated_hours:
+                raise RuntimeError("checkpoint cursor exceeds the scenario duration")
+            if resume_cursor.phase == "warmup":
+                if resume_cursor.next_hour is None:
+                    raise RuntimeError("warm-up checkpoint cursor omitted its next hour")
+                resume_hour = datetime.fromisoformat(resume_cursor.next_hour)
+                if not self.warmup_start_time < resume_hour < self.start_time:
+                    raise RuntimeError("warm-up checkpoint cursor is outside the warm-up window")
+                expected_completed = int(
+                    (resume_hour - self.warmup_start_time).total_seconds() // 3600
+                )
+                if resume_cursor.completed_simulated_hours != expected_completed:
+                    raise RuntimeError("warm-up checkpoint cursor hour count is inconsistent")
+            elif resume_cursor.phase == "collection":
+                if resume_cursor.next_hour is None:
+                    raise RuntimeError("collection checkpoint cursor omitted its next hour")
+                resume_hour = datetime.fromisoformat(resume_cursor.next_hour)
+                if not self.start_time <= resume_hour < self.end_time:
+                    raise RuntimeError("collection checkpoint cursor is outside the output window")
+                expected_completed = warmup_hours + int(
+                    (resume_hour - self.start_time).total_seconds() // 3600
+                )
+                if resume_cursor.completed_simulated_hours != expected_completed:
+                    raise RuntimeError("collection checkpoint cursor hour count is inconsistent")
+            elif resume_cursor.phase == "tail":
+                if resume_cursor.completed_simulated_hours != total_simulated_hours:
+                    raise RuntimeError("tail checkpoint cursor hour count is inconsistent")
+                logger.info("Resuming after the completed baseline at the tail-work cursor")
+                return
+            else:  # pragma: no cover - validated CheckpointCursor contract
+                raise RuntimeError("checkpoint cursor phase is unsupported")
+
+        resume_in_warmup = resume_cursor is not None and resume_cursor.phase == "warmup"
+        if warmup_hours > 0 and (resume_cursor is None or resume_in_warmup):
             logger.info(f"Running {warmup_hours}-hour warm-up for state pre-population")
             self._report_progress(
                 "phase_start",
@@ -5476,8 +5518,8 @@ class BaselineMixin:
                 },
             )
 
-            current_hour = self.warmup_start_time
-            warmup_count = 0
+            current_hour = self.warmup_start_time if resume_hour is None else resume_hour
+            warmup_count = 0 if resume_cursor is None else resume_cursor.completed_simulated_hours
 
             while current_hour < self.start_time:
                 warmup_count += 1
@@ -5503,6 +5545,12 @@ class BaselineMixin:
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+                checkpoint_after_hour = getattr(self, "_checkpoint_after_completed_hour", None)
+                if next_hour < self.start_time and checkpoint_after_hour is not None:
+                    checkpoint_after_hour(
+                        completed_simulated_hours=warmup_count,
+                        next_hour=next_hour,
+                    )
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -5517,10 +5565,24 @@ class BaselineMixin:
             self._extra_syslog_sudo_command_host_counts = {}
 
         # --- Real baseline: emit sensor startup and begin output ---
-        self._emit_sensor_startup()
-
-        current_hour = self.start_time
-        hour_count = 0
+        checkpoint_after_hour = getattr(self, "_checkpoint_after_completed_hour", None)
+        if resume_cursor is None or resume_in_warmup:
+            self._emit_sensor_startup()
+            if warmup_hours > 0 and checkpoint_after_hour is not None:
+                # A cadence point coincident with this phase boundary must contain the
+                # post-transition state: warm-up-only texture is reset and sensor startup
+                # has already been emitted before the collection cursor is published.
+                checkpoint_after_hour(
+                    completed_simulated_hours=warmup_hours,
+                    next_hour=self.start_time,
+                )
+            current_hour = self.start_time
+            hour_count = 0
+        else:
+            assert resume_cursor is not None and resume_cursor.phase == "collection"
+            assert resume_hour is not None
+            current_hour = resume_hour
+            hour_count = resume_cursor.completed_simulated_hours - warmup_hours
 
         while current_hour < self.end_time:
             hour_count += 1
@@ -5545,6 +5607,11 @@ class BaselineMixin:
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+            if checkpoint_after_hour is not None:
+                checkpoint_after_hour(
+                    completed_simulated_hours=warmup_hours + hour_count,
+                    next_hour=next_hour,
+                )
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")

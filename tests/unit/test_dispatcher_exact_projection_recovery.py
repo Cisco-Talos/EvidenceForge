@@ -497,6 +497,10 @@ def test_named_type_five_exact_batch_stages_before_canonical_commit(tmp_path: Pa
     assert state.materialization_version == prior_state_version + 1
     assert dispatcher.action_cohort_publication_census().prepared_batches == 0
     assert dispatcher.exact_projection_recovery_census().unresolved_recoveries == 0
+    assert registry.action_cohort_preparation_census().committed_receipt_authorities == 1
+    del result
+    assert registry.prune_action_cohort_receipt_authorities() == 1
+    assert registry.action_cohort_preparation_census().committed_receipt_authorities == 0
     emitter.close()
     assert len(output_path.read_text(encoding="utf-8").splitlines()) == 1
 

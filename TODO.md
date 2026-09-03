@@ -392,17 +392,15 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   pre-encryption, or TLS metadata. Plaintext mail is eligible only when a
   storyline or background path explicitly asserts a signature.
 - [ ] HTTP proxy server support for Squid, Blue Coat, and Zscaler.
-- [ ] **Checkpointing and resume for long-running generation.** The goal is to avoid
-  restarting from the beginning when generation is interrupted; metadata-only
-  replay checkpoints are insufficient because rebuilding state can take nearly as
-  long as generation. Investigate true logical-state checkpoints at safe hourly
-  emitter barriers, persisting future-relevant sessions, processes, connections,
-  lifecycle/pending actions, timing and RNG state, allocators, long-lived protocol
-  channels, intent progress, and output-journal state while rebuilding immutable
-  configuration, derived indexes, and worker infrastructure. Use explicit,
-  versioned non-pickle serialization (human-readable manifest plus a suitable
-  state payload), atomic checkpoint commits, and recovery that resumes within one
-  checkpoint interval with byte-identical output.
+- [x] **Checkpointing and resume for long-running generation.** Cadence-only incremental
+  checkpoints now preserve bounded live state and immutable deltas, atomically retain two
+  recoveries, resume portably, and reproduce byte-identical deterministic bundle content. The
+  selected default is 24 simulated hours. See
+  [the incremental checkpoint worklog](docs/worklog/2026-09-02-incremental-generation-checkpoints.md).
+- [ ] Consolidate checkpoint-capable emitter spools into the protected
+  `.eforge-generation/` workspace. Active spools intentionally remain in their established
+  runtime locations for the initial checkpoint release; revisit placement only after production
+  experience confirms the incremental adapters are stable.
 - [ ] Additional skills: create-persona, create-log-format, create-network, and
   analyze-output.
 - [ ] Example scenario collection for ransomware, credential stuffing, and

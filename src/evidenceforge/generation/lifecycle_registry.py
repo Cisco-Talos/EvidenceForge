@@ -1658,6 +1658,11 @@ class _ProcessIndex:
 
         return self._store.compact_primary(max_slots=max_slots)
 
+    def iter_entries(self) -> Iterator[_ProcessEntry]:
+        """Yield every current process entry in stable handle order."""
+
+        yield from self._store.iter_values_by_handle()
+
     def __len__(self) -> int:
         return len(self._store)
 
@@ -1847,6 +1852,14 @@ class _SessionIndex:
             max_entries=max_slots - handles_page,
             force=not self._states,
         )
+
+    def iter_entries(self) -> Iterator[_SessionEntry]:
+        """Yield every current session entry in stable handle order."""
+
+        for handle in range(len(self._rows)):
+            entry = self.get_by_handle(handle)
+            if entry is not None:
+                yield entry
 
     def __len__(self) -> int:
         return self._live_count
@@ -4797,7 +4810,13 @@ class _LifecyclePartition:
             )
             return index.deadline(handle)
 
-    def advance_watermark(self, cutoff: datetime) -> tuple[LifecycleEntityRef, ...]:
+    def advance_watermark(
+        self,
+        cutoff: datetime,
+        *,
+        advance_semantic_watermark: bool = True,
+        compact_ledger_details: bool = True,
+    ) -> tuple[LifecycleEntityRef, ...]:
         """Expire bounded leases and evict due closed identities.
 
         Watermarks are monotonic. The method returns exact references for
@@ -4807,12 +4826,17 @@ class _LifecyclePartition:
         canonical_cutoff = ensure_utc(cutoff)
         with self._watermark_gate:
             with self._catalog_lock, self._index_lock:
-                if self._watermark is not None and canonical_cutoff < self._watermark:
+                if (
+                    advance_semantic_watermark
+                    and self._watermark is not None
+                    and canonical_cutoff < self._watermark
+                ):
                     raise StateError(
                         f"Lifecycle watermark cannot move backward: "
                         f"{canonical_cutoff.isoformat()} < {self._watermark.isoformat()}"
                     )
-                self._watermark = canonical_cutoff
+                if advance_semantic_watermark:
+                    self._watermark = canonical_cutoff
 
             evicted: list[LifecycleEntityRef] = []
             while True:
@@ -4972,13 +4996,88 @@ class _LifecyclePartition:
                             evicted.append(subject)
 
             with self._catalog_lock, self._index_lock:
-                self._compact_ledger_details(canonical_cutoff)
+                if compact_ledger_details:
+                    self._compact_ledger_details(canonical_cutoff)
                 self._process_starts.compact(max_groups=8)
                 self._session_starts.compact(max_groups=8)
                 self._service_starts.compact(max_groups=8)
                 self._transport_starts.compact(max_groups=8)
                 self._compact_indexes()
             return tuple(evicted)
+
+    def prune_checkpoint_expired_state(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain ordinary expiry queues without sealing the semantic event frontier."""
+
+        return self.advance_watermark(
+            cutoff,
+            advance_semantic_watermark=False,
+            compact_ledger_details=False,
+        )
+
+    def prune_checkpoint_terminal_transports(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Evict closed transports sealed by a checkpoint barrier.
+
+        Ordinary retention permits late source projection while an hour is active. At the
+        post-hour emitter barrier, a closed transport with no live binding or retention lease
+        has no remaining semantic owner. Its retention deadline doubles as an eligibility
+        queue, so checkpoint compaction does not scan the transport catalog.
+        """
+
+        canonical_cutoff = ensure_utc(cutoff)
+        eligibility_cutoff = canonical_cutoff + self._closed_retention
+        evicted: list[LifecycleEntityRef] = []
+        while True:
+            with self._catalog_lock, self._index_lock:
+                handles = self._transport_retention_deadlines.expire_page(eligibility_cutoff)
+                candidates: list[tuple[datetime, int, _TransportEntry]] = []
+                for handle in handles:
+                    try:
+                        entry = self._transports.get_by_handle(handle)
+                    except KeyError:
+                        continue
+                    if entry.closed_at is None:
+                        raise StateError(
+                            "Checkpoint transport eligibility referenced a live transport"
+                        )
+                    candidates.append((entry.closed_at, handle, entry))
+            if not handles:
+                break
+            candidates.sort(key=lambda item: (item[0], item[2].identity.object_id))
+            for closed_at, handle, entry in candidates:
+                subject = entry.identity.ref
+                with (
+                    self._host_lanes.lane(entry.identity.hostname),
+                    self._catalog_lock,
+                    self._index_lock,
+                ):
+                    try:
+                        current = self._transports.get_by_handle(handle)
+                    except KeyError:
+                        continue
+                    if not self._same_entry(current, entry):
+                        continue
+                    if (
+                        closed_at > canonical_cutoff
+                        or entry.active_binding_count
+                        or self._resource_lease_deadline_for(subject) is not None
+                    ):
+                        self._transport_retention_deadlines.set(
+                            handle,
+                            self._retention_deadline_for(subject, entry),
+                        )
+                        continue
+                    self._evict(subject, entry, handle=handle, retention_removed=True)
+                    evicted.append(subject)
+        with self._catalog_lock, self._index_lock:
+            self._transport_starts.compact(max_groups=8)
+            self._compact_indexes()
+        return tuple(evicted)
 
     def drain_route_removals(self) -> tuple[tuple[str, str], ...]:
         """Return and clear semantic routes removed by a sealed watermark."""
@@ -8775,6 +8874,12 @@ class LifecycleRegistry:
         """Return the exact-detail horizon behind the sealed watermark."""
 
         return self._ledger_detail_retention
+
+    @property
+    def shard_count(self) -> int:
+        """Return the fixed number of lifecycle owner partitions."""
+
+        return self._shard_count
 
     def _partition_id(self, hostname: str) -> int:
         digest = sha256(f"lifecycle-state\0{hostname}".encode()).digest()
@@ -16573,6 +16678,42 @@ class LifecycleRegistry:
             self._watermark = canonical_cutoff
             with self._closed_transport_preparation_lock:
                 self._prune_action_cohort_reservations_locked()
+            evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
+            return tuple(evicted)
+
+    def prune_checkpoint_expired_state(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain sharded expiry queues without sealing the semantic event frontier."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        with self._gate.watermark():
+            evicted: list[LifecycleEntityRef] = []
+            removals: list[tuple[str, str]] = []
+            for partition in self._partitions:
+                evicted.extend(partition.prune_checkpoint_expired_state(canonical_cutoff))
+                removals.extend(partition.drain_route_removals())
+            self._routes.remove_many(tuple(removals))
+            self._routes.compact(max_entries=_PRIMARY_COMPACTION_PAGE)
+            evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
+            return tuple(evicted)
+
+    def prune_checkpoint_terminal_transports(
+        self,
+        cutoff: datetime,
+    ) -> tuple[LifecycleEntityRef, ...]:
+        """Drain and revalidate sharded terminal-transport eligibility queues."""
+
+        canonical_cutoff = ensure_utc(cutoff)
+        with self._gate.watermark():
+            evicted: list[LifecycleEntityRef] = []
+            removals: list[tuple[str, str]] = []
+            for partition in self._partitions:
+                evicted.extend(partition.prune_checkpoint_terminal_transports(canonical_cutoff))
+                removals.extend(partition.drain_route_removals())
+            self._routes.remove_many(tuple(removals))
+            self._routes.compact(max_entries=_PRIMARY_COMPACTION_PAGE)
             evicted.sort(key=lambda subject: (subject.kind, subject.object_id))
             return tuple(evicted)
 

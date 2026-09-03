@@ -506,6 +506,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 sort_before_flush=settings.sort_before_flush,
                 sort_key=settings.sort_key,
                 external_sorting=settings.external_sorting,
+                checkpoint_mode=self._incremental_checkpointing,
+                defer_publication=self._defer_sorted_publication,
             )
             dict.__setitem__(writers, safe_sensor, writer)
             return writer

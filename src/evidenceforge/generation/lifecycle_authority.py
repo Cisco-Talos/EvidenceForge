@@ -5508,6 +5508,36 @@ class GeneratorLifecycleAuthority:
                 raise
             raise StateError("Prepared-network acknowledgement is not canonical") from error
 
+    def retire_acknowledged_prepared_network_receipt(
+        self,
+        receipt: LifecyclePreparedNetworkReceipt,
+    ) -> None:
+        """Retire terminal proof objects after a durable semantic owner takes over.
+
+        Acknowledgement retains a compact exact-object proof so immediate callers
+        can finish their handoff.  Once a session continuation has copied the
+        semantic transaction, that proof cannot participate in future work and
+        may be removed together with its source-timing receipt authority.
+        """
+
+        planner = self._source_timing_planner
+        if planner is None or type(receipt) is not LifecyclePreparedNetworkReceipt:
+            raise StateError("Prepared-network receipt retirement is malformed")
+        receipt_identity = id(receipt)
+        with planner._preparation_authority_lock:
+            acknowledged = self._acknowledged_prepared_network_receipts.get(receipt_identity)
+            if (
+                type(acknowledged) is not _AcknowledgedPreparedNetworkReceiptFacts
+                or acknowledged.receipt_ref() is not receipt
+                or acknowledged.timing_receipt_id != id(receipt.timing_receipt)
+                or not self._authenticates_issued_prepared_network_receipt(receipt)
+            ):
+                raise StateError("Prepared-network receipt is not acknowledged for retirement")
+            planner._retire_committed_preparation_receipt(receipt.timing_receipt)
+            removed = self._acknowledged_prepared_network_receipts.pop(receipt_identity, None)
+            if removed is not acknowledged:
+                raise StateError("Prepared-network receipt changed during retirement")
+
     def _prune_acknowledged_prepared_network_receipts_locked(self) -> None:
         """Drop dead compact acknowledgements while the timing authority lock is held."""
 

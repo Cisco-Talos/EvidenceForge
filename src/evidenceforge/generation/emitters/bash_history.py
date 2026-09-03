@@ -3185,6 +3185,8 @@ class BashHistoryEmitter(LogEmitter):
             ExactPublicationKey, tuple[str, int, tuple[str, str]]
         ] = {}
         self._provisional_routes: set[tuple[str, str]] = set()
+        self._checkpoint_output_routes: set[tuple[str, str]] = set()
+        self._checkpoint_replace_routes: set[tuple[str, str]] = set()
         self._buffer_size = buffer_size
         self._journal_route_capacity = journal_route_capacity
         self._journal_row_capacity = journal_row_capacity
@@ -3199,6 +3201,53 @@ class BashHistoryEmitter(LogEmitter):
             byte_capacity=journal_byte_capacity,
         )
         super().__init__(format_def, output_path, buffer_size, threaded)
+
+    def _record_checkpoint_output(self, writer_key: tuple[str, str], rendered: str) -> None:
+        """Track bounded route identity and semantic replacement since the last cadence point."""
+
+        if not self._incremental_checkpointing:
+            return
+        with self._receipt_lock:
+            self._checkpoint_output_routes.add(writer_key)
+            if _is_clear_entry(rendered):
+                self._checkpoint_replace_routes.add(writer_key)
+
+    def checkpoint_output_files(self) -> tuple[tuple[Path, bool], ...]:
+        """Expose public history files after their private writers have been reclaimed."""
+
+        with self._receipt_lock:
+            routes = tuple(sorted(self._checkpoint_output_routes))
+            replacements = frozenset(self._checkpoint_replace_routes)
+        return tuple((self._writer_path(route), route in replacements) for route in routes)
+
+    def checkpoint_outputs_committed(self) -> None:
+        """Advance replacement hints only after the recovery manifest is durable."""
+
+        with self._receipt_lock:
+            self._checkpoint_replace_routes.clear()
+
+    def checkpoint_outputs_restored(self, paths: tuple[Path, ...]) -> None:
+        """Rebuild bounded route discovery from restored public history paths."""
+
+        restored: set[tuple[str, str]] = set()
+        for path in paths:
+            try:
+                relative = path.relative_to(self._base_dir)
+            except ValueError:
+                continue
+            if (
+                len(relative.parts) != 3
+                or relative.parts[1] != "bash_history"
+                or not relative.parts[2].endswith(".bash_history")
+            ):
+                continue
+            writer_key = (relative.parts[2][: -len(".bash_history")], relative.parts[0])
+            if self._writer_path(writer_key) != path:
+                raise ExactPublicationError("Restored Bash history route is not canonical")
+            restored.add(writer_key)
+        with self._receipt_lock:
+            self._checkpoint_output_routes = restored
+            self._checkpoint_replace_routes.clear()
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         """Return whether this is a Linux bash-command occurrence."""
@@ -3478,6 +3527,7 @@ class BashHistoryEmitter(LogEmitter):
                     f"Bash history failed-admission cleanup also failed: {cleanup_error!r}"
                 )
             raise
+        self._record_checkpoint_output(writer_key, rendered)
         self._try_reclaim_writer(writer_key, writer)
 
     def _reserve_exact_publication_row(
@@ -3611,6 +3661,7 @@ class BashHistoryEmitter(LogEmitter):
                 consume_reserved_route=writer_key in self._provisional_routes,
             )
             writer.commit_exact(key, digest, rendered, retained_bytes)
+            self._record_checkpoint_output(writer_key, rendered)
             self._exact_history_receipts[key] = (writer_key, digest)
             self._exact_capacity_reservations.pop(key, None)
 

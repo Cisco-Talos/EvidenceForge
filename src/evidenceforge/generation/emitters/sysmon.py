@@ -2662,6 +2662,7 @@ class SysmonEventEmitter(LogEmitter):
         self._exact_candidate_high_water_rows = 0
         self._exact_candidate_high_water_bytes = 0
         self._exact_candidate_high_water_participants = 0
+        self._checkpoint_pruned_exact_sequence = 0
         self._exact_candidate_abort_close_rendering = False
         self._exact_candidate_abort_close_rows_rendered = False
         self._exact_candidate_abort_close_render_complete = False
@@ -4592,6 +4593,72 @@ class SysmonEventEmitter(LogEmitter):
                 self._active_exact_publication_keys.discard(key)
                 self._exact_publication_condition.notify_all()
 
+    def prune_checkpoint_terminal_receipts(self) -> None:
+        """Discard fully released exact receipts at a quiescent checkpoint barrier."""
+
+        with self._exact_publication_condition:
+            if self._active_exact_publication_keys or self._queue_admissions:
+                raise ExactPublicationError(
+                    "Sysmon checkpoint cannot prune active exact publication receipts"
+                )
+            reserved_rows = 0
+            reserved_bytes = 0
+            released_rows = 0
+            released_bytes = 0
+            completed = 0
+            for participant_key, participant in self._exact_candidate_participants.items():
+                if (
+                    not participant.completed
+                    or not participant.render_state_finalized
+                    or participant.admitted_rows != participant.reserved_rows
+                    or participant.released_rows != participant.reserved_rows
+                    or participant.released_bytes != participant.reserved_bytes
+                ):
+                    raise ExactPublicationError(
+                        "Sysmon checkpoint found an unterminated exact publication receipt"
+                    )
+                for candidate_key in participant.reservation_keys:
+                    reservation = self._exact_candidate_reservations.get(candidate_key)
+                    if (
+                        candidate_key[:2] != participant_key
+                        or reservation is None
+                        or not reservation.capacity_charged
+                        or not reservation.admitted
+                        or not reservation.released
+                    ):
+                        raise ExactPublicationError(
+                            "Sysmon checkpoint found an inconsistent exact publication receipt"
+                        )
+                reserved_rows += participant.reserved_rows
+                reserved_bytes += participant.reserved_bytes
+                released_rows += participant.released_rows
+                released_bytes += participant.released_bytes
+                completed += 1
+            if (
+                reserved_rows != self._exact_candidate_current_rows
+                or reserved_bytes != self._exact_candidate_current_bytes
+                or released_rows != self._exact_candidate_released_rows
+                or released_bytes != self._exact_candidate_released_bytes
+                or completed != self._exact_candidate_current_participants
+                or completed != self._exact_candidate_completed_participants
+                or len(self._exact_candidate_reservations) != reserved_rows
+            ):
+                raise ExactPublicationError(
+                    "Sysmon checkpoint exact publication census is inconsistent"
+                )
+            with self._file_lock:
+                if self._spool_conn is not None:
+                    self._validate_exact_candidate_receipts_before_seal_unlocked()
+            self._checkpoint_pruned_exact_sequence = self._spool_sequence
+            self._exact_candidate_reservations.clear()
+            self._exact_candidate_participants.clear()
+            self._exact_candidate_current_rows = 0
+            self._exact_candidate_current_bytes = 0
+            self._exact_candidate_current_participants = 0
+            self._exact_candidate_released_rows = 0
+            self._exact_candidate_released_bytes = 0
+            self._exact_candidate_completed_participants = 0
+
     def _abort_exact_publication_batch(
         self,
         key: ExactPublicationParticipantKey,
@@ -5266,6 +5333,13 @@ class SysmonEventEmitter(LogEmitter):
             raise ExactPublicationError(
                 "Sysmon exact candidate seal found incomplete receipt ownership"
             )
+        checkpoint_watermark = self._checkpoint_pruned_exact_sequence
+        if (
+            type(checkpoint_watermark) is not int
+            or checkpoint_watermark < 0
+            or checkpoint_watermark > self._spool_sequence
+        ):
+            raise ExactPublicationError("Sysmon exact candidate checkpoint watermark is invalid")
 
         matched_rows = 0
         cursor = connection.execute(
@@ -5320,7 +5394,13 @@ class SysmonEventEmitter(LogEmitter):
                     "Sysmon exact candidate seal found a noncanonical journal key"
                 )
             reservation = self._exact_candidate_reservations.get(key)
-            if (
+            checkpoint_sealed = sequence < checkpoint_watermark
+            if checkpoint_sealed:
+                if reservation is not None:
+                    raise ExactPublicationError(
+                        "Sysmon exact candidate checkpoint ownership overlaps a live receipt"
+                    )
+            elif (
                 reservation is None
                 or not reservation.capacity_charged
                 or not reservation.admitted
@@ -5340,14 +5420,15 @@ class SysmonEventEmitter(LogEmitter):
                     "Sysmon exact candidate seal found a malformed payload"
                 ) from None
             if (
-                len(encoded) != reservation.retained_bytes
-                or hashlib.sha256(encoded).hexdigest() != reservation.digest
+                len(encoded) != payload_bytes
+                or hashlib.sha256(encoded).hexdigest() != digest
                 or sort_key != expected_sort_key
             ):
                 raise ExactPublicationError(
                     "Sysmon exact candidate seal found a changed payload or sort key"
                 )
-            matched_rows += 1
+            if not checkpoint_sealed:
+                matched_rows += 1
 
         if matched_rows != self._exact_candidate_current_rows:
             raise ExactPublicationError(

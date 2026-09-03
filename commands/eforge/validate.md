@@ -37,8 +37,7 @@ Use `--json` directly when structured diagnostics are needed; inspect `severity_
 through Python merely to regroup or reprint issues.
 
 ```bash
-eforge validate <absolute-scenario-path> \
-  --json
+eforge validate <absolute-scenario-path> --json [--checkpoint-hours <hours>]
 ```
 
 For a compact repair-oriented display, run `eforge validate <absolute-scenario-path>` without
@@ -89,8 +88,9 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Info notes are observations, not warnings. Mention them only when useful.
 - On a clean pass, state that the scenario is valid; summarize counts or topology only if useful or
   requested.
-- Resource forecasts are advisory. Distinguish final output from peak working disk and do not use
-  hidden workload override flags.
+- Resource forecasts are advisory. They model the 24-hour checkpoint default; pass the intended
+  `--checkpoint-hours` value (`0` disables it) when generation will override that cadence.
+  Distinguish final output from peak working disk and do not use hidden workload override flags.
 
 A topology declared without sensors is valid for host/web/proxy-only output. Sensor-backed formats require matching sensors; a proxy-only lab does not need a placeholder Zeek sensor. For
 `ids_alerts`, each SID is unique within its event and must resolve to one effective policy across

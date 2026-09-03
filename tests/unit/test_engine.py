@@ -23,13 +23,22 @@
 """Unit tests for generation engine."""
 
 import json
+import random
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.composition import compile_scenario, with_runtime_scenario
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.generation.checkpoints import (
+    GenerationEngineParticipant,
+    IncrementalCheckpointStore,
+)
+from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
@@ -46,6 +55,7 @@ from evidenceforge.models import (
 )
 from evidenceforge.models.scenario import ConnectionEventSpec
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
+from evidenceforge.utils.timing import HawkesState
 
 
 def _mock_activity_generator_factory(mock_instance: Mock):
@@ -91,6 +101,325 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
 
 @pytest.mark.slow
 class TestGenerationEngine:
+    def test_incremental_tail_resume_is_byte_identical_for_external_sorted_emitters(
+        self,
+        tmp_path,
+    ):
+        """A restored immutable-run set should produce identical final sensor evidence."""
+
+        scenario_path = Path("tests/fixtures/scenarios/minimal.yaml")
+        compiled = compile_scenario(scenario_path)
+        compiled.scenario.output.logs = [{"format": "zeek"}]
+        compiled = with_runtime_scenario(compiled, compiled.scenario)
+        source_root = tmp_path / "source"
+        store = IncrementalCheckpointStore(source_root)
+        controller = IncrementalCheckpointController(
+            store=store,
+            fingerprint="a" * 64,
+            checkpoint_hours=1,
+            resolved_scenario=b"resolved\n",
+        )
+        source = GenerationEngine(
+            compiled.scenario,
+            source_root / "data",
+            ground_truth_dir=source_root,
+            artifact_dir=source_root / "artifacts",
+            scenario_root=scenario_path.parent,
+            compiled_scenario=compiled,
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+        )
+        source.generate()
+        recovery = store.recover(expected_fingerprint="a" * 64)
+
+        resumed_root = tmp_path / "resumed"
+        resumed_controller = IncrementalCheckpointController.for_recovery(
+            store=store,
+            recovery=recovery,
+            fingerprint="a" * 64,
+            resolved_scenario=store.read_resolved_scenario(recovery),
+        )
+        resumed = GenerationEngine(
+            compiled.scenario,
+            resumed_root / "data",
+            ground_truth_dir=resumed_root,
+            artifact_dir=resumed_root / "artifacts",
+            scenario_root=scenario_path.parent,
+            compiled_scenario=compiled,
+            checkpoint_hours=1,
+            checkpoint_controller=resumed_controller,
+            checkpoint_recovery=recovery,
+        )
+        resumed.generate()
+
+        source_files = {
+            path.relative_to(source_root / "data"): path.read_bytes()
+            for path in (source_root / "data").rglob("*")
+            if path.is_file()
+        }
+        resumed_files = {
+            path.relative_to(resumed_root / "data"): path.read_bytes()
+            for path in (resumed_root / "data").rglob("*")
+            if path.is_file()
+        }
+        assert source_files
+        assert resumed_files == source_files
+
+    def test_incremental_controller_commits_real_production_participants(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """A real cadence barrier should publish every initialized mutable owner."""
+
+        controller = IncrementalCheckpointController(
+            store=IncrementalCheckpointStore(tmp_path),
+            fingerprint="a" * 64,
+            checkpoint_hours=1,
+            resolved_scenario=b"resolved\n",
+        )
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path / "data",
+            ground_truth_dir=tmp_path,
+            artifact_dir=tmp_path / "artifacts",
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+        )
+
+        engine.generate()
+
+        recovery = controller.store.recover(expected_fingerprint="a" * 64)
+        expected_hours = int((engine.end_time - engine.warmup_start_time).total_seconds() // 3600)
+        assert recovery.manifest.cursor.phase == "tail"
+        assert recovery.manifest.cursor.completed_simulated_hours == expected_hours
+        assert {head.owner for head in recovery.manifest.participant_heads} == {
+            participant.checkpoint_owner for participant in engine._checkpoint_participants
+        }
+        assert (
+            engine.lifecycle_registry.action_cohort_preparation_census().committed_receipt_authorities
+            == 0
+        )
+
+        resumed_controller = IncrementalCheckpointController.for_recovery(
+            store=controller.store,
+            recovery=recovery,
+            fingerprint="a" * 64,
+            resolved_scenario=controller.store.read_resolved_scenario(recovery),
+        )
+        resumed = GenerationEngine(
+            minimal_scenario,
+            tmp_path / "resumed" / "data",
+            ground_truth_dir=tmp_path / "resumed",
+            artifact_dir=tmp_path / "resumed" / "artifacts",
+            checkpoint_hours=1,
+            checkpoint_controller=resumed_controller,
+            checkpoint_recovery=recovery,
+        )
+
+        resumed.generate()
+
+        assert resumed._generation_complete is True
+        assert resumed.malicious_events == engine.malicious_events
+        assert resumed.red_herring_events == engine.red_herring_events
+        source_files = {
+            path.relative_to(tmp_path / "data"): path.read_bytes()
+            for path in (tmp_path / "data").rglob("*")
+            if path.is_file()
+        }
+        resumed_files = {
+            path.relative_to(tmp_path / "resumed" / "data"): path.read_bytes()
+            for path in (tmp_path / "resumed" / "data").rglob("*")
+            if path.is_file()
+        }
+        assert source_files
+        assert resumed_files == source_files
+
+    def test_checkpoint_hour_hook_is_cadence_only_and_uses_post_boundary_phase(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Checkpoint hooks should run only at exact continuous-hour multiples."""
+
+        observed: list[tuple[int, datetime, str]] = []
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hour_callback=lambda hour, next_hour, phase: observed.append(
+                (hour, next_hour, phase)
+            ),
+            checkpoint_hours=6,
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        end = start + timedelta(hours=6)
+        engine.start_time = start
+        engine.end_time = end
+        barrier = Mock()
+        prepare_barrier = Mock()
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", barrier)
+        monkeypatch.setattr(engine, "_prepare_incremental_checkpoint_barrier", prepare_barrier)
+
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=5,
+            next_hour=start - timedelta(hours=1),
+        )
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=6,
+            next_hour=start,
+        )
+        engine._checkpoint_after_completed_hour(
+            completed_simulated_hours=12,
+            next_hour=end,
+        )
+
+        assert observed == [(6, start, "collection"), (12, end, "tail")]
+        assert barrier.call_count == 2
+        assert prepare_barrier.call_count == 2
+
+    def test_checkpoint_hour_hook_requires_a_nonnegative_exact_cadence(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """Internal engine cadence should reject disabled callbacks and invalid values."""
+
+        with pytest.raises(ValueError, match="requires a positive"):
+            GenerationEngine(
+                minimal_scenario,
+                tmp_path,
+                checkpoint_hour_callback=lambda *_args: None,
+            )
+        with pytest.raises(ValueError, match="non-negative integer"):
+            GenerationEngine(minimal_scenario, tmp_path, checkpoint_hours=-1)
+
+    def test_generation_engine_checkpoint_head_round_trips_bounded_progress(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """Engine progress and DHCP RNG state should restore without runtime identities."""
+
+        engine = GenerationEngine(minimal_scenario, tmp_path / "source")
+        system = engine.scenario.environment.systems[0]
+        moment = datetime(2024, 1, 15, 11, tzinfo=UTC)
+        renewal_rng = random.Random(91)
+        renewal_rng.random()
+        expected_rng = random.Random()
+        expected_rng.setstate(renewal_rng.getstate())
+        engine._ambient_registry_state = {"TEST-01": {"Run": "agent.exe"}}
+        engine._audit_serials = {"TEST-01": 1032}
+        engine._baseline_rdp_last_session = {("TEST-01", "DC-01", "testuser"): moment}
+        engine._baseline_startup_next_age_seconds = {("TEST-01", "0x1"): 93.5}
+        engine._dhcp_lease_state = {
+            "TEST-01": {
+                "system": system,
+                "renewal_rng": renewal_rng,
+                "next_renewal": moment,
+                "renewal_sequence": 2,
+            }
+        }
+        engine._extra_syslog_sudo_command_counts = {"testuser": 2}
+        engine._extra_syslog_sudo_command_host_counts = {("TEST-01", "testuser"): 1}
+        engine._extra_syslog_entry_counts = {"TEST-01:rsyslogd": 3}
+        engine._gpo_refresh_schedule_state = {
+            "TEST-01": {"scheduled_second": 7200.5, "sequence": 2}
+        }
+        engine._hawkes_states = {"testuser": HawkesState(12.5, 0.75)}
+        engine._last_tgt_time = {"testuser": moment}
+        engine._linux_dbus_bus_ids = {"TEST-01": 44}
+        engine._linux_polkit_agents = {
+            "TEST-01": [{"session_id": 19, "bus_id": 44, "process_path": "/usr/bin/agent"}]
+        }
+        engine._linux_polkit_session_pools = {"TEST-01": [19, 20, 24]}
+        engine._linux_resolved_feature_states = {"TEST-01": ("degraded", "10.0.0.2")}
+        engine._linux_rsyslog_health = {
+            "TEST-01": {"checkpoint": 12345, "pending": 3, "workers": 2}
+        }
+        engine._machine_ids = {"TEST-01": "a" * 32}
+        engine._ntp_schedule_state = {"TEST-01": (3, moment)}
+        engine._package_maintenance_windows = {"TEST-01": (moment, moment + timedelta(minutes=4))}
+        engine._pending_unlocks = {"testuser": (moment, "0x1")}
+        engine._red_herring_executed = {1}
+        engine._snapd_active_tasks = {"TEST-01": [(1001, 1, "core22")]}
+        engine._snapd_next_change_id = {"TEST-01": 1002}
+        engine._storyline_executed = {0, 2}
+        engine._storyline_staged_archives = [
+            SimpleNamespace(
+                actor=engine.scenario.environment.users[0],
+                staging_host="TEST-01",
+                staging_ip="10.0.0.10",
+                source_ip="10.0.0.20",
+                archive_path=r"C:\Temp\evidence.zip",
+                smb_filename="evidence.zip",
+                staged_at=moment,
+                consumed=False,
+            ),
+            SimpleNamespace(
+                actor=engine.scenario.environment.users[0],
+                staging_host="TEST-01",
+                staging_ip="10.0.0.10",
+                source_ip="10.0.0.20",
+                archive_path=r"C:\Temp\old.zip",
+                smb_filename="old.zip",
+                staged_at=moment - timedelta(hours=1),
+                consumed=True,
+            ),
+        ]
+        engine._windows_scheduled_task_counts = {"TEST-01": 4}
+        engine._windows_scheduled_task_last_seen = {"TEST-01": moment}
+        engine.malicious_events = [{"event": "process", "time": moment}]
+        engine.red_herring_events = [{"event": "dns", "time": moment}]
+
+        seal = GenerationEngineParticipant(engine).prepare_checkpoint(0)
+        assert not seal.segments
+
+        restored_scenario = Scenario.model_validate(minimal_scenario.model_dump(mode="python"))
+        restored = GenerationEngine(restored_scenario, tmp_path / "restored")
+        GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+        assert restored._ambient_registry_state == engine._ambient_registry_state
+        assert restored._baseline_rdp_last_session == engine._baseline_rdp_last_session
+        assert restored._hawkes_states == engine._hawkes_states
+        assert restored._linux_polkit_agents == engine._linux_polkit_agents
+        assert restored._package_maintenance_windows == engine._package_maintenance_windows
+        assert restored._snapd_active_tasks == engine._snapd_active_tasks
+        assert len(restored._storyline_staged_archives) == 1
+        restored_archive = restored._storyline_staged_archives[0]
+        assert restored_archive.actor is restored.scenario.environment.users[0]
+        assert restored_archive.archive_path == r"C:\Temp\evidence.zip"
+        assert restored._pending_unlocks == engine._pending_unlocks
+        assert restored._storyline_executed == engine._storyline_executed
+        assert restored.malicious_events == engine.malicious_events
+        restored_lease = restored._dhcp_lease_state["TEST-01"]
+        assert restored_lease["system"] is restored.scenario.environment.systems[0]
+        assert restored_lease["system"] is not system
+        assert restored_lease["renewal_rng"].random() == expected_rng.random()
+
+    def test_warmup_boundary_checkpoint_contains_post_transition_state(self):
+        """A cadence point at collection start should follow reset and sensor startup."""
+
+        engine = object.__new__(GenerationEngine)
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        engine.warmup_start_time = start - timedelta(hours=1)
+        engine.warmup_duration = timedelta(hours=1)
+        engine.scenario = Mock(environment=Mock(users=[]))
+        engine.state_manager = Mock()
+        engine.activity_generator = Mock()
+        engine._report_progress = Mock()
+        engine._emit_dhcp_leases = Mock()
+        engine._generate_hour = Mock()
+        order: list[str] = []
+        engine._emit_sensor_startup = lambda: order.append("sensor-startup")
+        engine._checkpoint_after_completed_hour = lambda **_kwargs: order.append("checkpoint")
+
+        engine._generate_baseline()
+
+        assert order[:2] == ["sensor-startup", "checkpoint"]
+
     """Tests for GenerationEngine class."""
 
     @pytest.fixture(autouse=True)

@@ -45,6 +45,14 @@ from evidenceforge.generation.actions.rdp_session import (
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
+from evidenceforge.generation.checkpoints.application_channel_head import (
+    ApplicationChannelRegistryParticipant,
+)
+from evidenceforge.generation.checkpoints.errors import CheckpointError
+from evidenceforge.generation.checkpoints.packed import loads
+from evidenceforge.generation.checkpoints.rdp_head import RdpSessionManagerParticipant
+from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
 from evidenceforge.generation.collection_deployment import (
     CompiledCollectionDeployment,
     SourceInstanceDeployment,
@@ -557,6 +565,175 @@ def _aborted_engine_for_rdp_harness(harness: _RdpTerminalHarness) -> GenerationE
     engine._closed_emitter_names = set()
     engine._exact_projection_recovery_dispatcher = None
     return engine
+
+
+def test_rdp_checkpoint_rejects_split_disconnect_publication(tmp_path: Path) -> None:
+    """A cadence barrier rejects a disconnect flag without its atomic sibling state."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    with harness.generator._rdp_lifecycle_journal_lock:
+        entries = tuple(harness.generator._pending_rdp_lifecycle_continuations.values())
+    assert len(entries) == 1
+    prepared = entries[0].continuation.prepared
+    systems = [prepared.target_system]
+    if prepared.source_system is not None:
+        systems.append(prepared.source_system)
+    harness.generator._scenario_environment = SimpleNamespace(
+        systems=systems,
+        users=[prepared.user],
+    )
+    participant = ActivityGeneratorStateParticipant(harness.generator)
+
+    document = loads(participant.prepare_checkpoint(0).head.payload)
+    assert isinstance(document, dict)
+    assert len(document["rdp_lifecycles"]) == 1
+    assert document["rdp_lifecycles"][0][0] == prepared.continuation_id
+
+    entries[0].disconnect_published = True
+    with pytest.raises(CheckpointError, match="split one disconnect"):
+        participant.prepare_checkpoint(1)
+    entries[0].disconnect_published = False
+    _close_rdp_terminal_harness(harness)
+
+
+def test_rdp_checkpoint_rebinds_disconnected_generation_waiting_for_logout(
+    tmp_path: Path,
+) -> None:
+    """Hydration preserves a completed disconnect that still awaits its logout deadline."""
+
+    harness = _open_rdp_terminal_harness(tmp_path / "original")
+    with harness.generator._rdp_lifecycle_journal_lock:
+        original_entry = next(iter(harness.generator._pending_rdp_lifecycle_continuations.values()))
+    prepared = original_entry.continuation.prepared
+    systems = [prepared.target_system]
+    if prepared.source_system is not None:
+        systems.append(prepared.source_system)
+    environment = SimpleNamespace(systems=systems, users=[prepared.user])
+    harness.generator._scenario_environment = environment
+    harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
+
+    assert original_entry.disconnect_published
+    assert original_entry.source_terminated
+    assert not original_entry.manager_logged_out
+    state_seal = StateManagerParticipant(harness.state).prepare_checkpoint(0)
+    application_seal = ApplicationChannelRegistryParticipant(
+        harness.generator._application_channel_registry
+    ).prepare_checkpoint(0)
+    rdp_seal = RdpSessionManagerParticipant(
+        harness.generator._rdp_session_manager
+    ).prepare_checkpoint(0)
+    activity_seal = ActivityGeneratorStateParticipant(harness.generator).prepare_checkpoint(0)
+    original_document = loads(activity_seal.head.payload)
+    assert isinstance(original_document, dict)
+    assert original_document["rdp_lifecycles"][0][13:15] == [True, True]
+
+    fresh_state = StateManager()
+    fresh_application = ApplicationChannelRegistry(
+        window_start=harness.generator._application_channel_registry.window_start,
+        window_end=harness.generator._application_channel_registry.window_end,
+    )
+    fresh_rdp = RdpReconnectStateManager(
+        application_registry=fresh_application,
+        window_start=fresh_application.window_start,
+        window_end=fresh_application.window_end,
+    )
+    fresh_generator = ActivityGenerator(
+        fresh_state,
+        {},
+        application_channel_registry=fresh_application,
+        rdp_session_manager=fresh_rdp,
+        generation_window_start=fresh_application.window_start,
+        generation_window_end=fresh_application.window_end,
+    )
+    fresh_generator._scenario_environment = environment
+    StateManagerParticipant(fresh_state).restore_checkpoint(
+        state_seal.head.payload,
+        tuple(segment.payload for segment in state_seal.segments),
+    )
+    ApplicationChannelRegistryParticipant(fresh_application).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    RdpSessionManagerParticipant(fresh_rdp).restore_checkpoint(rdp_seal.head.payload, ())
+    restored_activity = ActivityGeneratorStateParticipant(fresh_generator)
+    restored_activity.restore_checkpoint(activity_seal.head.payload, ())
+
+    restored_document = loads(restored_activity.prepare_checkpoint(1).head.payload)
+    assert isinstance(restored_document, dict)
+    assert restored_document["rdp_lifecycles"] == original_document["rdp_lifecycles"]
+    restored_entry = next(iter(fresh_generator._pending_rdp_lifecycle_continuations.values()))
+    assert restored_entry.disconnect_published
+    assert restored_entry.source_terminated
+    assert not restored_entry.manager_logged_out
+    assert fresh_rdp.get(harness.session_object_id).state is RdpSessionState.DISCONNECTED
+    _close_rdp_terminal_harness(harness)
+
+
+def test_rdp_checkpoint_rebinds_future_lifecycle_to_fresh_authorities(tmp_path: Path) -> None:
+    """Hydration rebuilds future RDP work against restored State and manager owners."""
+
+    harness = _open_rdp_terminal_harness(tmp_path / "original")
+    with harness.generator._rdp_lifecycle_journal_lock:
+        original_entry = next(iter(harness.generator._pending_rdp_lifecycle_continuations.values()))
+    prepared = original_entry.continuation.prepared
+    systems = [prepared.target_system]
+    if prepared.source_system is not None:
+        systems.append(prepared.source_system)
+    environment = SimpleNamespace(systems=systems, users=[prepared.user])
+    harness.generator._scenario_environment = environment
+
+    state_seal = StateManagerParticipant(harness.state).prepare_checkpoint(0)
+    application_seal = ApplicationChannelRegistryParticipant(
+        harness.generator._application_channel_registry
+    ).prepare_checkpoint(0)
+    rdp_seal = RdpSessionManagerParticipant(
+        harness.generator._rdp_session_manager
+    ).prepare_checkpoint(0)
+    activity_seal = ActivityGeneratorStateParticipant(harness.generator).prepare_checkpoint(0)
+
+    fresh_state = StateManager()
+    fresh_application = ApplicationChannelRegistry(
+        window_start=harness.generator._application_channel_registry.window_start,
+        window_end=harness.generator._application_channel_registry.window_end,
+    )
+    fresh_rdp = RdpReconnectStateManager(
+        application_registry=fresh_application,
+        window_start=fresh_application.window_start,
+        window_end=fresh_application.window_end,
+    )
+    fresh_generator = ActivityGenerator(
+        fresh_state,
+        {},
+        application_channel_registry=fresh_application,
+        rdp_session_manager=fresh_rdp,
+        generation_window_start=fresh_application.window_start,
+        generation_window_end=fresh_application.window_end,
+    )
+    fresh_generator._scenario_environment = environment
+    StateManagerParticipant(fresh_state).restore_checkpoint(
+        state_seal.head.payload,
+        tuple(segment.payload for segment in state_seal.segments),
+    )
+    ApplicationChannelRegistryParticipant(fresh_application).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    RdpSessionManagerParticipant(fresh_rdp).restore_checkpoint(rdp_seal.head.payload, ())
+    restored_activity = ActivityGeneratorStateParticipant(fresh_generator)
+    restored_activity.restore_checkpoint(activity_seal.head.payload, ())
+
+    restored_document = loads(restored_activity.prepare_checkpoint(1).head.payload)
+    original_document = loads(activity_seal.head.payload)
+    assert isinstance(restored_document, dict)
+    assert isinstance(original_document, dict)
+    assert restored_document["rdp_lifecycles"] == original_document["rdp_lifecycles"]
+    assert fresh_generator.rdp_lifecycle_journal_census().pending_generations == 1
+    restored_entry = next(iter(fresh_generator._pending_rdp_lifecycle_continuations.values()))
+    assert restored_entry.continuation.prepared.manager is fresh_rdp
+    assert restored_entry.continuation.session == fresh_rdp.get(
+        original_entry.continuation.session.identity.logical_session_id
+    )
+    _close_rdp_terminal_harness(harness)
 
 
 def _baseline_owner_for_rdp_harness(

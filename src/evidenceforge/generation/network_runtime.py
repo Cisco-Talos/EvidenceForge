@@ -2618,6 +2618,49 @@ class NetworkTransactionRuntime:
                 census=self._census_locked(),
             )
 
+    def prune_checkpoint_transport_leases(self, cutoff: datetime) -> int:
+        """Discard completed transport intervals sealed by an emitter barrier.
+
+        The separate freshness index retains the source-port reuse observation needed by
+        future planning. Once the durable evidence barrier has passed a transport's close,
+        the full interval record has no remaining runtime owner and can be removed through
+        its existing deadline queue without advancing the broader point-state watermark.
+        """
+
+        canonical_cutoff = _canonical_datetime(cutoff, field_name="checkpoint cutoff")
+        with self._lock:
+            if (
+                self._open_preparations
+                or self._open_point_batches
+                or self._prepared_tokens
+                or self._point_batch_tokens
+                or self._claimed_preparations
+                or self._claimed_point_batches
+                or self._pending_transport_leases
+            ):
+                raise StateError(
+                    "Network runtime checkpoint compaction requires a quiescent barrier"
+                )
+            removed = 0
+            while (
+                self._transport_lease_deadlines
+                and self._transport_lease_deadlines.first()[0] <= canonical_cutoff
+            ):
+                _deadline, _ordinal, occurrence_id = self._transport_lease_deadlines.pop_first()
+                if type(occurrence_id) is not str:
+                    raise StateError("Transport lease deadline contains an invalid occurrence ID")
+                record = self._transport_records_by_occurrence.get(occurrence_id)
+                if record is None or not record.committed:
+                    raise StateError("Transport lease deadline lost its committed occurrence")
+                self._transport_state_xor ^= self._state_component(
+                    "network-transport-lease-v1",
+                    _transport_lease_digest_value(record.lease),
+                )
+                self._remove_transport_record_locked(record)
+                self._live_transport_leases -= 1
+                removed += 1
+            return removed
+
     def census(self) -> NetworkTransactionRuntimeCensus:
         """Return constant-time structural runtime metrics."""
 

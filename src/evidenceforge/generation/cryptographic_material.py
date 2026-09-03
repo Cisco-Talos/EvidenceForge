@@ -751,6 +751,19 @@ class CryptographicMaterialRegistry:
         self._tls_material_generation_high_water = 0
         self._tls_preparation_high_water_overlays = 0
         self._tls_preparation_high_water_bytes = 0
+        self._checkpoint_incremental_recorder: Callable[[str, object, object], None] | None = None
+
+    def _record_incremental_checkpoint_value(
+        self,
+        field_name: str,
+        key: object,
+        value: object,
+    ) -> None:
+        """Offer one immutable material mutation to an attached checkpoint owner."""
+
+        recorder = self._checkpoint_incremental_recorder
+        if recorder is not None:
+            recorder(field_name, key, value)
 
     @property
     def tls_material_point_capacity(self) -> int | None:
@@ -1149,6 +1162,12 @@ class CryptographicMaterialRegistry:
                 self._tls_reserved_material_bytes -= reserved_delta
         if self._tls_material_capacity is not None:
             CryptographicMaterialRegistry._update_tls_capacity_high_water_locked(self)
+        for publication in publications:
+            self._record_incremental_checkpoint_value(
+                "point",
+                publication.point,
+                (publication.generation, True),
+            )
         return tuple(publication.generation for publication in publications)
 
     def _publish_tls_material_locked(
@@ -1232,6 +1251,7 @@ class CryptographicMaterialRegistry:
             )
             self._tls_point_retained_bytes[point] = tombstone_bytes
             self._tls_retained_material_bytes += tombstone_bytes - prior_retained_bytes
+        self._record_incremental_checkpoint_value("point", point, (generation, False))
         return True
 
     def _tls_material_snapshot(
@@ -2267,6 +2287,7 @@ class CryptographicMaterialRegistry:
             self._dkim_key_state_xor = next_state_xor
             self._dkim_key_high_water = next_high_water
             self._dkim_key_byte_high_water = next_byte_high_water
+            self._record_incremental_checkpoint_value("dkim", cache_key, None)
             return detached
 
     def resolve_ocsp_status(

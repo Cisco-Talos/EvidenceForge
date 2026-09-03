@@ -4,6 +4,7 @@
 """Tests for bounded, atomic external line sorting."""
 
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -80,6 +81,162 @@ def test_external_writer_flushes_at_byte_cap(tmp_path: Path) -> None:
     assert len(writer._run_paths) == 1
     assert writer._buffer == []
     writer.close()
+
+
+def test_checkpoint_mode_seals_only_new_runs_until_final_merge(tmp_path: Path) -> None:
+    output = tmp_path / "zeek.json"
+    writer = ExternalSortedLineWriter(output, sort_key=_key, checkpoint_mode=True)
+
+    writer.write("3|third")
+    writer.write("1|first")
+    writer.flush()
+    first_count, first_sequence, first_runs = writer.checkpoint_snapshot()
+    writer.checkpoint_committed()
+
+    assert not output.exists()
+    assert first_count == 2
+    assert first_sequence == 1
+    assert len(first_runs) == 1
+
+    writer.write("2|second")
+    writer.flush()
+    second_count, second_sequence, second_runs = writer.checkpoint_snapshot()
+    delta_count, delta_sequence, total_runs, delta_runs = writer.checkpoint_snapshot_since(
+        len(first_runs)
+    )
+
+    assert not output.exists()
+    assert second_count == 3
+    assert second_sequence == 2
+    assert second_runs[:1] == first_runs
+    assert len(second_runs) == 2
+    assert (delta_count, delta_sequence, total_runs) == (second_count, second_sequence, 2)
+    assert delta_runs == second_runs[1:]
+
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        "1|first",
+        "2|second",
+        "3|third",
+    ]
+
+
+def test_deferred_publication_compacts_runs_without_rewriting_destination(tmp_path: Path) -> None:
+    output = tmp_path / "deferred.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=2,
+        defer_publication=True,
+    )
+
+    for value in reversed(range(7)):
+        writer.write(f"{value}|record-{value}")
+        writer.flush()
+
+    assert not output.exists()
+    assert len(writer._run_paths) <= writer.merge_fan_in
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"{value}|record-{value}" for value in range(7)
+    ]
+
+
+def test_checkpoint_mode_restores_immutable_runs_into_fresh_writer(tmp_path: Path) -> None:
+    source = ExternalSortedLineWriter(
+        tmp_path / "source.log",
+        sort_key=_key,
+        checkpoint_mode=True,
+    )
+    source.write("3|third")
+    source.write("1|first")
+    source.flush()
+    event_count, run_sequence, source_runs = source.checkpoint_snapshot()
+
+    restored_output = tmp_path / "restored.log"
+    restored = ExternalSortedLineWriter(
+        restored_output,
+        sort_key=_key,
+        checkpoint_mode=True,
+    )
+    restored_spool = tmp_path / "restored-runs"
+    restored_spool.mkdir()
+    restored_runs = tuple(restored_spool / path.name for path in source_runs)
+    for source_path, restored_path in zip(source_runs, restored_runs, strict=True):
+        shutil.copyfile(source_path, restored_path)
+    restored.restore_checkpoint_runs(
+        paths=restored_runs,
+        event_count=event_count,
+        run_sequence=run_sequence,
+    )
+    restored.write("2|second")
+    restored.close()
+
+    assert restored_output.read_text(encoding="utf-8").splitlines() == [
+        "1|first",
+        "2|second",
+        "3|third",
+    ]
+    source.close()
+
+
+def test_checkpoint_close_balances_many_immutable_runs(tmp_path: Path) -> None:
+    output = tmp_path / "balanced.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=3,
+        checkpoint_mode=True,
+    )
+
+    for value in reversed(range(25)):
+        writer.write(f"{value % 5}|record-{value:02d}")
+        writer.flush()
+
+    assert len(writer._run_paths) == 25
+    writer.close()
+
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert lines == sorted(lines, key=_key)
+    assert not list(tmp_path.glob(".balanced.json.sort-*"))
+
+
+def test_checkpoint_balanced_close_preserves_runs_for_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "retry-balanced.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=2,
+        checkpoint_mode=True,
+    )
+    for value in reversed(range(5)):
+        writer.write(f"{value}|record-{value}")
+        writer.flush()
+    original_paths = tuple(writer._run_paths)
+    original_merge = writer._merge_runs_unlocked
+    calls = 0
+
+    def fail_second_merge(paths: object, destination: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected balanced merge failure")
+        original_merge(paths, destination)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(writer, "_merge_runs_unlocked", fail_second_merge)
+    with pytest.raises(OSError, match="balanced merge failure"):
+        writer.close()
+
+    assert tuple(writer._run_paths) == original_paths
+    assert all(path.exists() for path in original_paths)
+    monkeypatch.setattr(writer, "_merge_runs_unlocked", original_merge)
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"{value}|record-{value}" for value in range(5)
+    ]
 
 
 def test_external_writer_is_thread_safe_and_deterministic(tmp_path: Path) -> None:

@@ -443,6 +443,66 @@ def test_expiring_index_preserves_deadline_and_insertion_order() -> None:
     assert index.get("later") == "later-value"
 
 
+def test_expiring_index_checkpoint_records_rebuild_heap_order_and_protection() -> None:
+    """Checkpoint hydration should omit stale nodes while preserving semantic order."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+    index.set("first", "old", 5.0)
+    index.set("first", "new", 20.0)
+    index.set("protected", "held", 10.0)
+    index.set("second", "due", 10.0)
+    index.protect("protected")
+
+    restored: ExpiringIndex[str, str] = ExpiringIndex()
+    restored.restore_checkpoint_records(index.checkpoint_records())
+
+    assert list(restored.items()) == list(index.items())
+    assert restored.is_protected("protected")
+    assert restored.expire_before(10.0, inclusive=True) == [("second", "due")]
+    assert restored.release("protected")
+    assert restored.expire_before(10.0, inclusive=True) == [("protected", "held")]
+    assert restored.expire_before(20.0, inclusive=True) == [("first", "new")]
+
+
+def test_expiring_index_checkpoint_records_reject_nan_deadline() -> None:
+    """Checkpoint hydration should reject a non-orderable expiry deadline."""
+
+    index: ExpiringIndex[str, str] = ExpiringIndex()
+
+    with pytest.raises(ValueError, match="deadline cannot be NaN"):
+        index.restore_checkpoint_records((("bad", "value", float("nan"), 0, False),))
+
+
+def test_reference_lease_index_checkpoint_records_restore_exact_expiry_order() -> None:
+    """Lease hydration should rebuild exact-owner lookup and deterministic expiry order."""
+
+    index: ReferenceLeaseIndex[str, str] = ReferenceLeaseIndex()
+    index.acquire("version-1", "process-1", deadline=20.0)
+    index.acquire("version-2", "process-2", deadline=10.0)
+    index.acquire("version-1", "process-3", deadline=10.0)
+
+    restored: ReferenceLeaseIndex[str, str] = ReferenceLeaseIndex()
+    restored.restore_checkpoint_records(index.checkpoint_records())
+
+    assert tuple(restored.keys_for_owner("process-1")) == ("version-1",)
+    assert restored.leased_key_count == 2
+    assert restored.expire_before(10.0, inclusive=True) == (
+        ("version-2", "process-2"),
+        ("version-1", "process-3"),
+    )
+    assert restored.release("version-1", "process-1")
+    assert restored.leased_key_count == 0
+
+
+def test_reference_lease_index_checkpoint_rejects_nonfinite_deadline() -> None:
+    """Recovery must reject values ordinary lease admission would not accept."""
+
+    index: ReferenceLeaseIndex[str, str] = ReferenceLeaseIndex()
+
+    with pytest.raises(ValueError, match="invalid"):
+        index.restore_checkpoint_records((("version", "owner", float("inf"), 0),))
+
+
 def test_expiring_index_pages_due_entries_without_materializing_the_remainder() -> None:
     """Each compatibility-independent expiry page obeys its explicit bound."""
 

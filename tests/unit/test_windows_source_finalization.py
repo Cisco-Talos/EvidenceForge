@@ -1473,7 +1473,7 @@ def test_real_generation_engine_generate_uses_windows_source_coordinator(
 ) -> None:
     engine = GenerationEngine(_scenario(), tmp_path / "output", scenario_root=tmp_path)
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         emitter = engine.emitters["windows_event_security"]
         emitter.emit_event(_event(engine.start_time + timedelta(seconds=20), "later"))
         emitter.barrier_flush()
@@ -1507,7 +1507,7 @@ def test_generation_engine_retries_footer_without_reinitializing_or_regenerating
     engine = GenerationEngine(_scenario(), tmp_path / "output", scenario_root=tmp_path)
     baseline_calls = 0
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         nonlocal baseline_calls
         baseline_calls += 1
         engine.emitters["windows_event_security"].emit_event(
@@ -1548,7 +1548,7 @@ def test_generation_engine_resumes_exact_commit_from_a_different_thread(
 ) -> None:
     engine = GenerationEngine(_scenario(), tmp_path / "output", scenario_root=tmp_path)
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         engine.emitters["windows_event_security"].emit_event(
             _event(engine.start_time + timedelta(seconds=10), "once")
         )
@@ -1592,7 +1592,7 @@ def test_generation_failure_uses_terminal_aborted_legacy_close(
 ) -> None:
     engine = GenerationEngine(_scenario(), tmp_path / "output", scenario_root=tmp_path)
 
-    def failing_baseline() -> None:
+    def failing_baseline(**_kwargs: object) -> None:
         engine.emitters["windows_event_security"].emit_event(
             _event(engine.start_time + timedelta(seconds=10), "partial")
         )
@@ -1620,7 +1620,7 @@ def test_generation_abort_cleanup_failure_retries_cleanup_only(
     baseline_calls = 0
     close_calls = 0
 
-    def failing_baseline() -> None:
+    def failing_baseline(**_kwargs: object) -> None:
         nonlocal baseline_calls
         baseline_calls += 1
         emitter = engine.emitters["windows_event_security"]
@@ -1670,7 +1670,7 @@ def test_generation_hostile_primary_and_progress_failure_cannot_skip_abort_clean
         progress_callback=progress,
     )
 
-    def failing_baseline() -> None:
+    def failing_baseline(**_kwargs: object) -> None:
         engine.emitters["windows_event_security"].emit_event(
             _event(engine.start_time + timedelta(seconds=10), "partial")
         )
@@ -1715,7 +1715,7 @@ def test_generation_engine_rejects_concurrent_and_reentrant_generate(
             raise AssertionError("initialize release timed out")
 
     monkeypatch.setattr(engine, "_initialize", blocking_initialize)
-    monkeypatch.setattr(engine, "_generate_baseline", lambda: None)
+    monkeypatch.setattr(engine, "_generate_baseline", lambda **_kwargs: None)
     errors: list[BaseException] = []
 
     def run_generate() -> None:
@@ -1757,7 +1757,7 @@ def test_generation_ids_summary_is_applied_once_across_later_retry(
             if close_calls > 1:
                 raise AssertionError("closed fake Snort emitter was closed twice")
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         engine.emitters["windows_event_security"].emit_event(
             _event(engine.start_time + timedelta(seconds=10), "once")
         )
@@ -1814,7 +1814,7 @@ def test_generation_partial_emitter_close_retries_only_failed_identity(
 
     retry_emitter = RetryEmitter()
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         engine.emitters["windows_event_security"].emit_event(
             _event(engine.start_time + timedelta(seconds=10), "once")
         )

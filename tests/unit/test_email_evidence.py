@@ -855,6 +855,32 @@ def test_postfix_delay_components_vary_by_queue_and_recipient() -> None:
     assert len(ratio_shapes) >= 8
 
 
+def test_postfix_terminal_removal_releases_transient_queue_state(monkeypatch) -> None:
+    generator = object.__new__(ActivityGenerator)
+    system = System(hostname="MAIL-01", ip="10.10.2.25", os="Ubuntu 22.04", type="server")
+    queue_id = "1A2B3C4D5"
+    queue_state: dict[str, object] = {"removed": False}
+    generator._postfix_queue_states = {(system.hostname, queue_id): queue_state}
+    emitted: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        generator,
+        "generate_syslog_event",
+        lambda *args, **_kwargs: emitted.append(args),
+    )
+
+    generator._emit_postfix_removed(
+        system=system,
+        queue_id=queue_id,
+        qmgr_pid=1234,
+        time=datetime(2024, 1, 1, tzinfo=UTC),
+        queue_state=queue_state,
+    )
+
+    assert emitted
+    assert queue_state["removed"] is True
+    assert generator._postfix_queue_states == {}
+
+
 @pytest.mark.soak
 def test_plaintext_smtp_reply_uses_postfix_receive_queue_id(tmp_path: Path, monkeypatch) -> None:
     scenario = _email_scenario()

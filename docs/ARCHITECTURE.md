@@ -891,6 +891,35 @@ legacy/default during evaluation.
 - `dispatch_raw(RawProjectionRequest)` → `emit_raw(dict)` — explicitly source-local raw escape
   hatch; it cannot create sibling evidence or claim cross-source consistency
 
+### Generation Checkpoints
+
+Fresh CLI runs checkpoint every 24 completed simulated hours by default; `--checkpoint-hours 0`
+disables new recovery points. Cadence is continuous across warm-up and collection and does not add
+initialization, phase-boundary, or pre-finalization checkpoints. The engine offers a post-hour
+cursor only after emitter quiescence, lifecycle/network retirement, watermark advancement, and
+transient-owner validation.
+
+Checkpoint state is assembled from explicit participants. Each mutable owner classifies its fields
+as a bounded live head, immutable incremental records, deterministically rebuilt state, or
+transient state that must be empty. There is no generic object-graph fallback and no executable
+serialization. Pydantic validates small manifests while versioned stdlib-packed binary segments
+carry primitive state; RNG state uses an explicit numeric schema.
+
+`.eforge-generation/` contains a protected staged bundle, content-addressed immutable segments,
+the latest two recovery points, self-contained resolved input, and the run lock. Recovery manifests
+share unchanged segments through a size-tiered catalog. A cadence commit seals only new records and
+bounded heads; it never rereads, rehashes, or rewrites inherited segments. Active emitter spools
+remain in their runtime locations and expose append, SQLite-row, immutable-run, or protected-file
+incremental adapters.
+
+New objects and heads are written and synced before the manifest is written last. Atomic rename and
+directory sync publish the recovery, after which old unreferenced content may be collected. Restore
+validates ownership, containment, hashes, schemas, and fingerprints, hydrates semantic owners in
+dependency order, attaches immutable records, and rebuilds locks, workers, routes, and caches. A
+corrupt newest recovery falls back to the previous valid point. Successful bundle publication
+removes the hidden workspace and records no resume history in the final manifest. See
+[Generation Checkpoints and Resume](reference/GENERATION_CHECKPOINTS.md) for the user contract.
+
 ### Format Definition System
 
 Log formats are defined declaratively in YAML files (`src/evidenceforge/formats/definitions/`), not in code:

@@ -304,6 +304,13 @@ class ResourceForecast(BaseModel):
     calibration_label: str
     memory: ForecastRange
     final_output: ForecastRange
+    checkpoint_workspace: ForecastRange = Field(
+        default_factory=lambda: ForecastRange(
+            lower_bytes=0,
+            expected_bytes=0,
+            upper_bytes=0,
+        )
+    )
     disk: ForecastRange
     snapshot: ResourceSnapshot
     registry_report: RegistryForecastReport | None = None
@@ -439,6 +446,9 @@ class _DiskCalibration(BaseModel):
     upper_multiplier: float = Field(gt=0)
     peak_lower_multiplier: float = Field(gt=0)
     external_sort_transient_multiplier: float = Field(ge=0)
+    checkpoint_workspace_base_mib: float = Field(ge=0)
+    checkpoint_segment_multiplier: float = Field(ge=1)
+    checkpoint_head_memory_fraction: float = Field(ge=0, le=1)
     smb_activity_sidecar_bytes: int = Field(ge=0)
     smb_operation_sidecar_bytes: int = Field(ge=0)
     smb_activity_fixed_bytes_by_format: dict[str, int] = Field(default_factory=dict)
@@ -895,10 +905,13 @@ def build_resource_forecast(
     estimate: WorkloadEstimate,
     destination: Path,
     *,
+    checkpoint_hours: int = 0,
     snapshot: ResourceSnapshot | None = None,
     calibration: ResourceForecastCalibration | None = None,
 ) -> ResourceForecast:
     """Project peak memory and disk use, then classify machine pressure."""
+    if type(checkpoint_hours) is not int or checkpoint_hours < 0:
+        raise ValueError("checkpoint_hours must be a non-negative exact integer")
     effective_calibration = calibration or load_resource_forecast_calibration()
     resources = snapshot or snapshot_resources(destination)
     formats = expand_formats(
@@ -1021,19 +1034,52 @@ def build_resource_forecast(
     external_sort_transient = int(
         expected_zeek_output * disk_config.external_sort_transient_multiplier
     )
-    expected_disk = expected_final_output + external_sort_transient
     final_output = ForecastRange(
         lower_bytes=int(expected_final_output * disk_config.lower_multiplier),
         expected_bytes=expected_final_output,
         upper_bytes=int(expected_final_output * disk_config.upper_multiplier),
     )
+    checkpoint_possible = (
+        checkpoint_hours > 0
+        and estimate.primary_duration_seconds + estimate.warmup_seconds >= checkpoint_hours * 3600
+    )
+    if checkpoint_possible:
+        checkpoint_base = int(disk_config.checkpoint_workspace_base_mib * 1024 * 1024)
+        checkpoint_workspace = ForecastRange(
+            lower_bytes=(
+                checkpoint_base
+                + int(final_output.lower_bytes * disk_config.checkpoint_segment_multiplier)
+            ),
+            expected_bytes=(
+                checkpoint_base
+                + int(expected_final_output * disk_config.checkpoint_segment_multiplier)
+                + int(expected_memory * disk_config.checkpoint_head_memory_fraction)
+            ),
+            upper_bytes=(
+                checkpoint_base
+                + int(final_output.upper_bytes * disk_config.checkpoint_segment_multiplier)
+                + int(memory.upper_bytes * disk_config.checkpoint_head_memory_fraction)
+            ),
+        )
+    else:
+        checkpoint_workspace = ForecastRange(lower_bytes=0, expected_bytes=0, upper_bytes=0)
+    expected_disk = (
+        expected_final_output + external_sort_transient + checkpoint_workspace.expected_bytes
+    )
     disk = ForecastRange(
         lower_bytes=max(
-            final_output.lower_bytes,
-            int(expected_disk * disk_config.peak_lower_multiplier),
+            final_output.lower_bytes + checkpoint_workspace.lower_bytes,
+            int(
+                (expected_final_output + external_sort_transient)
+                * disk_config.peak_lower_multiplier
+            )
+            + checkpoint_workspace.lower_bytes,
         ),
         expected_bytes=expected_disk,
-        upper_bytes=int(expected_disk * disk_config.upper_multiplier),
+        upper_bytes=(
+            int((expected_final_output + external_sort_transient) * disk_config.upper_multiplier)
+            + checkpoint_workspace.upper_bytes
+        ),
     )
 
     capacity = effective_calibration.capacity
@@ -1062,6 +1108,7 @@ def build_resource_forecast(
         calibration_label=effective_calibration.calibration_label,
         memory=memory,
         final_output=final_output,
+        checkpoint_workspace=checkpoint_workspace,
         disk=disk,
         snapshot=resources,
         registry_report=registry_report,
