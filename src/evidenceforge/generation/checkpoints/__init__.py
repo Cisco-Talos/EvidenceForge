@@ -1,5 +1,6 @@
 """Crash-safe incremental generation checkpoints."""
 
+from .application_channel_head import ApplicationChannelRegistryParticipant
 from .cadence import CheckpointCadence
 from .lifecycle_head import LifecycleRegistryParticipant
 from .models import (
@@ -11,6 +12,8 @@ from .models import (
     SegmentReference,
 )
 from .owner_inventory import (
+    APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
+    APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
@@ -27,6 +30,9 @@ from .state_manager_head import StateManagerParticipant
 from .store import IncrementalCheckpointStore, RunLock
 
 __all__ = [
+    "APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS",
+    "APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS",
+    "ApplicationChannelRegistryParticipant",
     "CHECKPOINT_SCHEMA_VERSION",
     "CheckpointCadence",
     "CheckpointCursor",

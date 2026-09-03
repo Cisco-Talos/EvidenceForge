@@ -131,3 +131,10 @@ until every correctness and performance gate passes.
   detached binding, claim, and retained receipt must be absent at the barrier. The complete
   family-shape round trip is green, a real hour-one generation barrier produced an 895-byte head
   with no immutable delta, and 158 checkpoint/source-timing regression tests pass.
+- The protocol-neutral application-channel registry now exports one normalized bounded head for
+  open channels, retained closed tombstones, active operations, and completed-operation IDs.
+  Hydration recreates fresh packed stores, expiry ownership, channel/transport/operation routes,
+  and counters from stable semantic IDs rather than retaining compact handles. Prepared
+  admissions, close projections, recovery journals, weak receipts/proofs, and mutation claims are
+  required to be empty. Focused open/closed/active/used-ID replay and all 146 checkpoint and
+  application-channel regression tests pass; the minimal hour-one barrier head is 212 bytes.

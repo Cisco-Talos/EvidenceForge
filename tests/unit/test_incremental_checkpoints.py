@@ -13,6 +13,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from evidenceforge.events.application import (
+    ApplicationChannelBudget,
+    ApplicationChannelIdentity,
+    ApplicationOperationReservation,
+    ApplicationTransportBinding,
+)
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleForegroundLease,
@@ -30,6 +36,10 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
 )
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.checkpoints.application_channel_head import (
+    ApplicationChannelRegistryParticipant,
+)
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
@@ -44,6 +54,8 @@ from evidenceforge.generation.checkpoints.models import (
     CheckpointStoreMetrics,
 )
 from evidenceforge.generation.checkpoints.owner_inventory import (
+    APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
+    APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
@@ -84,6 +96,7 @@ from evidenceforge.generation.checkpoints.store import (
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
@@ -284,6 +297,10 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
     manager = StateManager()
     registry = LifecycleRegistry()
     source_timing = SourceTimingPlanner()
+    application_channels = ApplicationChannelRegistry(
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+    )
 
     assert_complete_owner_inventory(
         manager,
@@ -299,6 +316,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         source_timing,
         SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
         owner_name="source-timing",
+    )
+    assert_complete_owner_inventory(
+        application_channels,
+        APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
+        owner_name="application-channels",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -802,6 +824,108 @@ def test_source_timing_barrier_rejects_open_preparation_authority() -> None:
 
     with pytest.raises(CheckpointError, match="_active_preparation_claims"):
         SourceTimingPlannerParticipant(planner).prepare_checkpoint(0)
+
+
+def _application_identity(
+    channel_id: str,
+    transport_id: str,
+    started: datetime,
+) -> ApplicationChannelIdentity:
+    return ApplicationChannelIdentity(
+        channel_id=channel_id,
+        protocol="http",
+        owner_id="host-1",
+        affinity_digest=f"affinity-{channel_id}",
+        binding=ApplicationTransportBinding(
+            transport_id=transport_id,
+            opened_at=started,
+            closes_at=started + timedelta(hours=1),
+        ),
+        opened_at=started,
+        idle_timeout=timedelta(minutes=10),
+        hard_deadline=started + timedelta(hours=1),
+        budget=ApplicationChannelBudget(
+            initiator_bytes=1000,
+            responder_bytes=2000,
+            operations=10,
+        ),
+    )
+
+
+def test_application_channel_head_restores_open_closed_active_and_used_state() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=2),
+        shard_count=4,
+    )
+    first_identity = _application_identity("channel-1", "transport-1", started)
+    second_identity = _application_identity("channel-2", "transport-2", started)
+    registry.open_channel(first_identity)
+    registry.open_channel(second_identity)
+    completed = ApplicationOperationReservation(
+        operation_id="operation-completed",
+        channel_id="channel-1",
+        ordinal=0,
+        started_at=started + timedelta(seconds=1),
+        ended_at=started + timedelta(seconds=2),
+        initiator_bytes=10,
+        responder_bytes=20,
+    )
+    active = ApplicationOperationReservation(
+        operation_id="operation-active",
+        channel_id="channel-2",
+        ordinal=0,
+        started_at=started + timedelta(seconds=3),
+        ended_at=started + timedelta(minutes=1),
+        initiator_bytes=30,
+        responder_bytes=40,
+    )
+    registry.reserve_completed_operation(completed)
+    registry.reserve_operation(active)
+    registry.close_channel(
+        "channel-1",
+        closed_at=started + timedelta(seconds=4),
+        reason="complete",
+    )
+    registry.watermark(started + timedelta(seconds=5))
+    expected_first = registry.get("channel-1")
+    expected_second = registry.get("channel-2")
+
+    participant = ApplicationChannelRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+    restored = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=2),
+        shard_count=2,
+    )
+    ApplicationChannelRegistryParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.get("channel-1") == expected_first
+    assert restored.get("channel-2") == expected_second
+    assert restored.census().active_operations == 1
+    assert restored.census().used_operation_ids == 2
+    assert restored.finalize_operation("operation-active")
+    with pytest.raises(StateError, match="already used"):
+        restored.reserve_completed_operation(completed)
+    for shard in restored._shards.values():
+        assert_complete_owner_inventory(
+            shard,
+            APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+            owner_name="application-channel-shard",
+        )
+
+
+def test_application_channel_barrier_rejects_retained_capabilities() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=1),
+    )
+    registry._recoverable_admission_slots.add(1)
+
+    with pytest.raises(CheckpointError, match="_recoverable_admission_slots"):
+        ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

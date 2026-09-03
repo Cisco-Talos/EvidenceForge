@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 
 from .errors import CheckpointError
 from .participants import OwnerStateField
@@ -185,6 +186,78 @@ SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS = _fields(
 )
 
 
+APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS = _fields(
+    live=("_shards", "_watermark"),
+    rebuilt=(
+        "_admission_secret",
+        "_closed_grace",
+        "_directory_lock",
+        "_expiry_compaction_cursor",
+        "_gate",
+        "_max_reusable_per_affinity",
+        "_next_prepared_reservation_id",
+        "_prepared_lock",
+        "_retired_route_compaction_rotations",
+        "_retired_route_compaction_seconds",
+        "_retired_route_compaction_work",
+        "_route_compaction_cursor",
+        "_route_partitions",
+        "_route_reclaim_cursor",
+        "_shard_compaction_cursor",
+        "_shard_count",
+        "_watermark_lane",
+        "_window_end",
+        "_window_start",
+    ),
+    transient=(
+        "_acknowledging_admission_results",
+        "_acknowledging_close_results",
+        "_admission_receipts",
+        "_claimed_reservations",
+        "_close_receipts",
+        "_mutating_affinity_counts",
+        "_mutating_channel_ids",
+        "_mutating_operation_ids",
+        "_mutating_transport_ids",
+        "_prepared_affinity_reservations",
+        "_prepared_capabilities",
+        "_prepared_channel_ids",
+        "_prepared_close_capabilities",
+        "_prepared_close_commit_journals",
+        "_prepared_close_tokens",
+        "_prepared_commit_journals",
+        "_prepared_operation_ids",
+        "_prepared_reservations",
+        "_prepared_transport_ids",
+        "_recoverable_admission_receipts",
+        "_recoverable_admission_results",
+        "_recoverable_admission_slots",
+        "_recoverable_close_receipts",
+        "_recoverable_close_results",
+        "_releasing_reservations",
+        "_retirement_proofs",
+    ),
+)
+
+
+APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("channels", "operations", "used_operation_ids"),
+    rebuilt=(
+        "_accounting",
+        "active_expiry",
+        "closed_expiry",
+        "compaction_cursor",
+        "expiry_compaction_cursor",
+        "lock",
+        "lookup_candidates_inspected",
+        "operation_blocker_expiry",
+        "operation_deletions",
+        "shard_id",
+        "used_id_deletions",
+    ),
+)
+
+
 LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS = _fields(
     live=(
         "_action_cohort_committed_provenance",
@@ -345,7 +418,7 @@ def assert_complete_owner_inventory(
     """Reject an owner whose runtime attributes are absent from its inventory."""
 
     expected = {field.name for field in fields}
-    actual = set(vars(owner))
+    actual = set(_owner_attributes(owner))
     if expected != actual:
         raise CheckpointError(
             f"checkpoint inventory for {owner_name} is incomplete: "
@@ -363,7 +436,7 @@ def assert_transient_owner_state_empty(
 
     assert_complete_owner_inventory(owner, fields, owner_name=owner_name)
     nonempty: dict[str, object] = {}
-    attributes: Mapping[str, object] = vars(owner)
+    attributes = _owner_attributes(owner)
     for field in fields:
         if field.disposition != "transient-empty-at-barrier":
             continue
@@ -380,3 +453,16 @@ def assert_transient_owner_state_empty(
         raise CheckpointError(
             f"checkpoint barrier for {owner_name} retains transient state: {sorted(nonempty)}"
         )
+
+
+def _owner_attributes(owner: object) -> Mapping[str, object]:
+    """Return exact stored fields for dictionary- or dataclass-slot-backed owners."""
+
+    try:
+        return vars(owner)
+    except TypeError:
+        if is_dataclass(owner) and not isinstance(owner, type):
+            return {field.name: getattr(owner, field.name) for field in fields(owner)}
+        raise CheckpointError(
+            f"checkpoint owner {type(owner).__name__} exposes no inspectable stored fields"
+        ) from None
