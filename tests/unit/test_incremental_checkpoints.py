@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import socket
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.errors import (
     CheckpointCompatibilityError,
     CheckpointCorruptionError,
@@ -20,6 +22,12 @@ from evidenceforge.generation.checkpoints.models import (
     CheckpointManifest,
     CheckpointStoreMetrics,
 )
+from evidenceforge.generation.checkpoints.packed import dumps, loads
+from evidenceforge.generation.checkpoints.participants import (
+    OwnerStateField,
+    ParticipantSeal,
+)
+from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.checkpoints.store import (
     HeadDraft,
     IncrementalCheckpointStore,
@@ -28,6 +36,54 @@ from evidenceforge.generation.checkpoints.store import (
 )
 
 _FINGERPRINT = "1" * 64
+
+
+class _FakeParticipant:
+    checkpoint_owner = "fake"
+    checkpoint_schema_version = "1"
+    checkpoint_state_fields = (
+        OwnerStateField("head", "bounded-live-head"),
+        OwnerStateField("delta", "immutable-incremental-segments"),
+    )
+
+    def __init__(self) -> None:
+        self.committed_sequence = -1
+        self.prepared_sequence: int | None = None
+        self.aborted: list[int] = []
+        self.restored: tuple[object, tuple[object, ...]] | None = None
+
+    def prepare_checkpoint(self, sequence: int) -> ParticipantSeal:
+        if self.prepared_sequence not in {None, sequence}:
+            raise RuntimeError("fake participant already has another prepared sequence")
+        self.prepared_sequence = sequence
+        return ParticipantSeal(
+            head=HeadDraft(
+                owner=self.checkpoint_owner,
+                schema_version=self.checkpoint_schema_version,
+                payload=dumps({"committed": self.committed_sequence, "pending": sequence}),
+            ),
+            segments=(
+                SegmentDraft(
+                    owner=self.checkpoint_owner,
+                    schema_version=self.checkpoint_schema_version,
+                    payload=dumps([sequence]),
+                    record_count=1,
+                ),
+            ),
+        )
+
+    def checkpoint_committed(self, sequence: int) -> None:
+        assert self.prepared_sequence == sequence
+        self.committed_sequence = sequence
+        self.prepared_sequence = None
+
+    def checkpoint_aborted(self, sequence: int) -> None:
+        assert self.prepared_sequence == sequence
+        self.aborted.append(sequence)
+        self.prepared_sequence = None
+
+    def restore_checkpoint(self, head: bytes, segments: tuple[bytes, ...]) -> None:
+        self.restored = (loads(head), tuple(loads(segment) for segment in segments))
 
 
 def _cursor(hour: int, *, tail: bool = False) -> CheckpointCursor:
@@ -91,6 +147,120 @@ def test_cursor_requires_exact_phase_position() -> None:
             completed_simulated_hours=6,
             next_hour="2026-01-01T06:00:00+00:00",
         )
+
+
+def test_cadence_only_selects_positive_multiples_and_post_transition_phase() -> None:
+    cadence = CheckpointCadence(6)
+    collection_start = datetime(2026, 1, 1, 8, tzinfo=UTC)
+    collection_end = datetime(2026, 1, 3, 8, tzinfo=UTC)
+
+    assert (
+        cadence.cursor_after_hour(
+            completed_simulated_hours=5,
+            next_hour=collection_start,
+            collection_start=collection_start,
+            collection_end=collection_end,
+        )
+        is None
+    )
+    boundary = cadence.cursor_after_hour(
+        completed_simulated_hours=6,
+        next_hour=collection_start,
+        collection_start=collection_start,
+        collection_end=collection_end,
+    )
+    assert boundary is not None
+    assert boundary.phase == "collection"
+    assert boundary.next_hour == collection_start.isoformat()
+    tail = cadence.cursor_after_hour(
+        completed_simulated_hours=54,
+        next_hour=collection_end,
+        collection_start=collection_start,
+        collection_end=collection_end,
+    )
+    assert tail is not None
+    assert tail.phase == "tail"
+    assert tail.next_hour is None
+
+
+def test_zero_cadence_disables_every_checkpoint() -> None:
+    cadence = CheckpointCadence(0)
+    assert not cadence.enabled
+    assert not cadence.is_due(6)
+
+
+def test_packed_primitive_codec_is_deterministic_and_inert() -> None:
+    value = {"z": [None, True, -2, 3.5, b"bytes"], "a": "text"}
+    encoded = dumps(value)
+    assert encoded == dumps({"a": "text", "z": [None, True, -2, 3.5, b"bytes"]})
+    assert loads(encoded) == value
+    with pytest.raises(CheckpointCorruptionError, match="trailing bytes"):
+        loads(encoded + b"x")
+    with pytest.raises(TypeError, match="unsupported"):
+        dumps(Path("unsafe"))
+
+
+def test_controller_commits_only_due_transactional_participants(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    progress: list[dict[str, float | int | str]] = []
+    controller = IncrementalCheckpointController(
+        store=store,
+        fingerprint=_FINGERPRINT,
+        checkpoint_hours=6,
+        resolved_scenario=b"schema_version: '2.0'\n",
+        progress=progress.append,
+    )
+    participant = _FakeParticipant()
+
+    with pytest.raises(ValueError, match="not scheduled"):
+        controller.commit(cursor=_cursor(5), participants=(participant,))
+    first = controller.commit(cursor=_cursor(6), participants=(participant,))
+    second = controller.commit(cursor=_cursor(12), participants=(participant,))
+
+    assert first.sequence == 0
+    assert second.sequence == 1
+    assert participant.committed_sequence == 1
+    assert participant.prepared_sequence is None
+    assert len(second.segments) == 2
+    assert progress[-1]["new_segment_bytes"] > 0
+    assert progress[-1]["reused_segment_bytes"] == first.segments[0].size
+
+    recovered = store.recover(expected_fingerprint=_FINGERPRINT)
+    fresh = _FakeParticipant()
+    resumed = IncrementalCheckpointController.for_recovery(
+        store=store,
+        recovery=recovered,
+        fingerprint=_FINGERPRINT,
+        resolved_scenario=store.read_resolved_scenario(recovered),
+    )
+    resumed.restore_participants(recovery=recovered, participants=(fresh,))
+    assert fresh.restored == (
+        {"committed": 0, "pending": 1},
+        ([0], [1]),
+    )
+
+
+def test_controller_aborts_every_prepared_participant_on_store_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    controller = IncrementalCheckpointController(
+        store=store,
+        fingerprint=_FINGERPRINT,
+        checkpoint_hours=6,
+        resolved_scenario=b"schema_version: '2.0'\n",
+    )
+    participant = _FakeParticipant()
+
+    def fail_commit(**kwargs: object) -> CheckpointManifest:
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(store, "commit", fail_commit)
+    with pytest.raises(OSError, match="injected"):
+        controller.commit(cursor=_cursor(6), participants=(participant,))
+    assert participant.aborted == [0]
+    assert participant.committed_sequence == -1
+    assert participant.prepared_sequence is None
 
 
 def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Path) -> None:
