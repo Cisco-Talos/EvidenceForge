@@ -258,6 +258,116 @@ APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS = _fields(
 )
 
 
+GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_ambient_registry_state",
+        "_audit_serials",
+        "_baseline_startup_next_age_seconds",
+        "_dhcp_lease_state",
+        "_extra_syslog_sudo_command_counts",
+        "_extra_syslog_sudo_command_host_counts",
+        "_hawkes_states",
+        "_last_tgt_time",
+        "_machine_ids",
+        "_ntp_schedule_state",
+        "_pending_unlocks",
+        "_red_herring_executed",
+        "_storyline_executed",
+        "_windows_scheduled_task_counts",
+        "_windows_scheduled_task_last_seen",
+        "malicious_events",
+        "red_herring_events",
+    ),
+    rebuilt=(
+        "_ad_domain",
+        "_boot_materialization_existing_system_pids",
+        "_boot_materialization_state_time",
+        "_boot_materialization_terminal_identity",
+        "_boot_materialization_terminal_result",
+        "_boot_materialization_transaction",
+        "_boot_materialization_transaction_identity",
+        "_external_scanner_ips",
+        "_external_scanner_weights",
+        "_generate_owner",
+        "_generation_epoch",
+        "_host_activity_profile_cache",
+        "_identity_directory",
+        "_infra_ips",
+        "_initialization_complete",
+        "_kernel_boot_uptimes",
+        "_netbios_domain",
+        "_org_cidr_networks",
+        "_proxy_routes",
+        "_red_herring_by_hour",
+        "_scenario_tz",
+        "_source_finalization_authority",
+        "_source_finalization_coordinator",
+        "_storyline_by_hour",
+        "_system_pids",
+        "_system_service_defaults",
+        "_user_time_offsets",
+        "activity_generator",
+        "allow_large_workload",
+        "application_channel_registry",
+        "artifact_dir",
+        "authored_intent_ledger",
+        "checkpoint_hour_callback",
+        "checkpoint_hours",
+        "compiled_scenario",
+        "dispatcher",
+        "emitters",
+        "end_time",
+        "generation_seed",
+        "ground_truth_dir",
+        "intent_execution_ledger",
+        "lifecycle_authority",
+        "lifecycle_registry",
+        "lifecycle_shadow",
+        "network_resolver",
+        "oob_hosts",
+        "output_dir",
+        "output_target",
+        "progress_callback",
+        "rdp_session_manager",
+        "resource_forecast",
+        "scenario",
+        "scenario_root",
+        "source_deployment_compilation",
+        "source_timing_planner",
+        "start_time",
+        "state_manager",
+        "storage_world",
+        "timing_runtime",
+        "warmup_duration",
+        "warmup_start_time",
+        "workload_estimate",
+        "world_model",
+        "world_planner",
+    ),
+    transient=(
+        "_application_channels_finalized",
+        "_closed_emitter_names",
+        "_exact_projection_recoveries_finalized",
+        "_exact_projection_recovery_dispatcher",
+        "_expected_close_emitters",
+        "_finalization_aborted",
+        "_finalization_complete",
+        "_foreground_lifecycles_finalized",
+        "_generation_body_completed",
+        "_generation_complete",
+        "_ids_alert_summary_applied",
+        "_linux_sudo_logoffs_finalized",
+        "_persistent_smb_terminal_asserted",
+        "_rdp_lifecycles_finalized",
+        "_source_coordinator_closed",
+        "_ssh_lifecycles_finalized",
+        "_terminal_owner_snapshot",
+        "_terminal_runtime_cleanup_finalized",
+        "_terminal_transient_census_asserted",
+    ),
+)
+
+
 LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS = _fields(
     live=(
         "_action_cohort_committed_provenance",
@@ -426,19 +536,42 @@ def assert_complete_owner_inventory(
         )
 
 
-def assert_transient_owner_state_empty(
+def assert_owner_inventory_covers(
     owner: object,
     fields: tuple[OwnerStateField, ...],
     *,
     owner_name: str,
 ) -> None:
+    """Reject materialized owner fields absent from an inventory with optional entries."""
+
+    expected = {field.name for field in fields}
+    actual = set(_owner_attributes(owner))
+    if actual - expected:
+        raise CheckpointError(
+            f"checkpoint inventory for {owner_name} is incomplete: "
+            f"missing={sorted(actual - expected)}"
+        )
+
+
+def assert_transient_owner_state_empty(
+    owner: object,
+    fields: tuple[OwnerStateField, ...],
+    *,
+    owner_name: str,
+    allow_unmaterialized: bool = False,
+) -> None:
     """Reject a barrier while any field classified as transient still owns state."""
 
-    assert_complete_owner_inventory(owner, fields, owner_name=owner_name)
+    if allow_unmaterialized:
+        assert_owner_inventory_covers(owner, fields, owner_name=owner_name)
+    else:
+        assert_complete_owner_inventory(owner, fields, owner_name=owner_name)
     nonempty: dict[str, object] = {}
     attributes = _owner_attributes(owner)
     for field in fields:
         if field.disposition != "transient-empty-at-barrier":
+            continue
+        if field.name not in attributes:
             continue
         value = attributes[field.name]
         if value is None or value is False or value == 0:

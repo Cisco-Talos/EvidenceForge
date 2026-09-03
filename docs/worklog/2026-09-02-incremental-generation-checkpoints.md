@@ -138,3 +138,11 @@ until every correctness and performance gate passes.
   admissions, close projections, recovery journals, weak receipts/proofs, and mutation claims are
   required to be empty. Focused open/closed/active/used-ID replay and all 146 checkpoint and
   application-channel regression tests pass; the minimal hour-one barrier head is 212 bytes.
+- The first generation-engine progress head now captures the core history-sensitive scheduling
+  maps, executed authored-event sets, ground-truth accumulators, Hawkes continuity, audit/task
+  counters, and DHCP leases without serializing the engine object graph. DHCP rows replace their
+  runtime `System` reference with a hostname identity and preserve the renewal generator through
+  the numeric RNG schema; hydration binds each row to the freshly compiled scenario object. A
+  focused round trip is green, and a real minimal hour-one barrier produced a 7,473-byte head
+  with no immutable segments. Scenario-dependent Linux, protocol, and activity caches remain to
+  be classified before the engine participant can be wired into production cadence checkpoints.

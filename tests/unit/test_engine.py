@@ -23,6 +23,7 @@
 """Unit tests for generation engine."""
 
 import json
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
@@ -30,6 +31,7 @@ import pytest
 
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.generation.checkpoints import GenerationEngineParticipant
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
@@ -46,6 +48,7 @@ from evidenceforge.models import (
 )
 from evidenceforge.models.scenario import ConnectionEventSpec
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
+from evidenceforge.utils.timing import HawkesState
 
 
 def _mock_activity_generator_factory(mock_instance: Mock):
@@ -146,6 +149,62 @@ class TestGenerationEngine:
             )
         with pytest.raises(ValueError, match="non-negative integer"):
             GenerationEngine(minimal_scenario, tmp_path, checkpoint_hours=-1)
+
+    def test_generation_engine_checkpoint_head_round_trips_bounded_progress(
+        self,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """Engine progress and DHCP RNG state should restore without runtime identities."""
+
+        engine = GenerationEngine(minimal_scenario, tmp_path / "source")
+        system = engine.scenario.environment.systems[0]
+        moment = datetime(2024, 1, 15, 11, tzinfo=UTC)
+        renewal_rng = random.Random(91)
+        renewal_rng.random()
+        expected_rng = random.Random()
+        expected_rng.setstate(renewal_rng.getstate())
+        engine._ambient_registry_state = {"TEST-01": {"Run": "agent.exe"}}
+        engine._audit_serials = {"TEST-01": 1032}
+        engine._baseline_startup_next_age_seconds = {("TEST-01", "0x1"): 93.5}
+        engine._dhcp_lease_state = {
+            "TEST-01": {
+                "system": system,
+                "renewal_rng": renewal_rng,
+                "next_renewal": moment,
+                "renewal_sequence": 2,
+            }
+        }
+        engine._extra_syslog_sudo_command_counts = {"testuser": 2}
+        engine._extra_syslog_sudo_command_host_counts = {("TEST-01", "testuser"): 1}
+        engine._hawkes_states = {"testuser": HawkesState(12.5, 0.75)}
+        engine._last_tgt_time = {"testuser": moment}
+        engine._machine_ids = {"TEST-01": "a" * 32}
+        engine._ntp_schedule_state = {"TEST-01": (3, moment)}
+        engine._pending_unlocks = {"testuser": (moment, "0x1")}
+        engine._red_herring_executed = {1}
+        engine._storyline_executed = {0, 2}
+        engine._windows_scheduled_task_counts = {"TEST-01": 4}
+        engine._windows_scheduled_task_last_seen = {"TEST-01": moment}
+        engine.malicious_events = [{"event": "process", "time": moment}]
+        engine.red_herring_events = [{"event": "dns", "time": moment}]
+
+        seal = GenerationEngineParticipant(engine).prepare_checkpoint(0)
+        assert not seal.segments
+
+        restored_scenario = Scenario.model_validate(minimal_scenario.model_dump(mode="python"))
+        restored = GenerationEngine(restored_scenario, tmp_path / "restored")
+        GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+        assert restored._ambient_registry_state == engine._ambient_registry_state
+        assert restored._hawkes_states == engine._hawkes_states
+        assert restored._pending_unlocks == engine._pending_unlocks
+        assert restored._storyline_executed == engine._storyline_executed
+        assert restored.malicious_events == engine.malicious_events
+        restored_lease = restored._dhcp_lease_state["TEST-01"]
+        assert restored_lease["system"] is restored.scenario.environment.systems[0]
+        assert restored_lease["system"] is not system
+        assert restored_lease["renewal_rng"].random() == expected_rng.random()
 
     def test_warmup_boundary_checkpoint_contains_post_transition_state(self):
         """A cadence point at collection start should follow reset and sensor startup."""

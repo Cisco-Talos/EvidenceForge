@@ -2,6 +2,7 @@
 
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .cadence import CheckpointCadence
+from .engine_head import GenerationEngineParticipant
 from .lifecycle_head import LifecycleRegistryParticipant
 from .models import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -14,11 +15,13 @@ from .models import (
 from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
+    GENERATION_ENGINE_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
+    assert_owner_inventory_covers,
     assert_transient_owner_state_empty,
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
@@ -39,6 +42,8 @@ __all__ = [
     "CheckpointManifest",
     "CheckpointRecovery",
     "GenerationRngParticipant",
+    "GENERATION_ENGINE_CHECKPOINT_FIELDS",
+    "GenerationEngineParticipant",
     "AppendOnlySpoolParticipant",
     "IncrementalCheckpointStore",
     "ImmutableSpoolFilesParticipant",
@@ -57,5 +62,6 @@ __all__ = [
     "SQLiteSpoolParticipant",
     "SourceTimingPlannerParticipant",
     "assert_complete_owner_inventory",
+    "assert_owner_inventory_covers",
     "assert_transient_owner_state_empty",
 ]
