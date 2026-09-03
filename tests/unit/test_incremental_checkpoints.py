@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from evidenceforge.generation.checkpoints.spools import (
     AppendOnlySpoolParticipant,
     ImmutableSpoolFilesParticipant,
 )
+from evidenceforge.generation.checkpoints.sqlite_spool import SQLiteSpoolParticipant
 from evidenceforge.generation.checkpoints.store import (
     HeadDraft,
     IncrementalCheckpointStore,
@@ -307,6 +309,64 @@ def test_immutable_spool_files_are_imported_once_and_restored(tmp_path: Path) ->
     )
     assert (tmp_path / "restored" / "run-0.ndjson").read_bytes() == b"b\na\n"
     assert (tmp_path / "restored" / "run-1.ndjson").read_bytes() == b"d\nc\n"
+
+
+def test_sqlite_spool_seals_only_dirty_rows_and_rebuilds_fresh_database(
+    tmp_path: Path,
+) -> None:
+    source = sqlite3.connect(tmp_path / "source.sqlite3")
+    source.execute(
+        "CREATE TABLE events (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL, phase TEXT)"
+    )
+    source.execute("CREATE INDEX events_phase ON events (phase)")
+    source.execute("CREATE TABLE state (name TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+    source.executemany(
+        "INSERT INTO events VALUES (?, ?, ?)",
+        ((1, "one", "candidate"), (2, "two", "candidate")),
+    )
+    source.execute("INSERT INTO state VALUES ('count', 2)")
+    source.commit()
+    participant = SQLiteSpoolParticipant(
+        owner="sqlite-spool",
+        connection=lambda: source,
+        tables=("events", "state"),
+    )
+
+    first = participant.prepare_checkpoint(0)
+    assert participant.last_rows_read == 3
+    participant.checkpoint_committed(0)
+    source.execute("UPDATE events SET phase = 'final' WHERE sequence = 1")
+    source.execute("DELETE FROM events WHERE sequence = 2")
+    source.execute("INSERT INTO events VALUES (3, 'three', 'candidate')")
+    source.execute("UPDATE state SET value = 3 WHERE name = 'count'")
+    source.commit()
+    second = participant.prepare_checkpoint(1)
+    assert participant.last_rows_read == 4
+    participant.checkpoint_committed(1)
+    unchanged = participant.prepare_checkpoint(2)
+    assert participant.last_rows_read == 0
+    assert unchanged.segments == ()
+    participant.checkpoint_committed(2)
+
+    target = sqlite3.connect(tmp_path / "target.sqlite3")
+    restored = SQLiteSpoolParticipant(
+        owner="sqlite-spool",
+        connection=lambda: target,
+        tables=("events", "state"),
+        initialize_tracking=False,
+    )
+    restored.restore_checkpoint(
+        unchanged.head.payload,
+        tuple(segment.payload for segment in (*first.segments, *second.segments)),
+    )
+    assert target.execute("SELECT * FROM events ORDER BY sequence").fetchall() == [
+        (1, "one", "final"),
+        (3, "three", "candidate"),
+    ]
+    assert target.execute("SELECT * FROM state").fetchall() == [("count", 3)]
+    assert target.execute("PRAGMA index_list(events)").fetchall()
+    source.close()
+    target.close()
 
 
 def test_controller_commits_only_due_transactional_participants(tmp_path: Path) -> None:

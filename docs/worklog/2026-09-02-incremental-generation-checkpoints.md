@@ -57,3 +57,9 @@ until every correctness and performance gate passes.
 - Immutable external-sort run adapters import each logical run once. Later checkpoints skip every
   imported run without reopening it; recovery validates the content index and recreates the runs
   at fresh owner-selected locations.
+- SQLite spool adapters install explicit dirty-row triggers on an owner-declared table set. The
+  first recovery segment contains canonical schema plus current logical rows; subsequent segments
+  contain only the final value or deletion for rowids changed since the preceding durable point.
+  Focused coverage updates, deletes, and inserts between checkpoints, observes four dirty rows,
+  emits no segment when the next point is unchanged, and rebuilds an equivalent fresh database
+  with its indexes. SQLite database files and prior logical segments are never copied again.

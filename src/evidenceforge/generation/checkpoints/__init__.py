@@ -11,6 +11,7 @@ from .models import (
 )
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
+from .sqlite_spool import SQLiteSpoolParticipant
 from .store import IncrementalCheckpointStore, RunLock
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "ParticipantHead",
     "RunLock",
     "SegmentReference",
+    "SQLiteSpoolParticipant",
 ]
