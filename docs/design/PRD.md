@@ -584,6 +584,16 @@ Shows progress bars and writes detailed logs to output directory.
 Performs schema + cross-reference validation before generation starts.
 ```
 
+**Command: checkpoint**
+```
+eforge checkpoint status OUTPUT_ROOT [--verbose] [--json]
+eforge checkpoint suspend OUTPUT_ROOT
+
+status thoroughly validates retained recovery generations, compatibility, and managed storage
+without modifying or hydrating the run. suspend cooperatively stops a live checkpoint-enabled run
+after its current simulated hour and a durable recovery commit.
+```
+
 **Command: evaluate**
 ```
 eforge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]

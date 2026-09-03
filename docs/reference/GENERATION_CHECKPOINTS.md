@@ -14,6 +14,43 @@ authoritative. On Ctrl+C or an ordinary failure, the CLI reports whether a recov
 its simulated hour and phase, and how to resume. A resumed run reports the selected recovery cursor
 and effective cadence before continuing.
 
+## Inspect or intentionally suspend a run
+
+Thoroughly validate an output root without starting or hydrating the generator:
+
+```bash
+eforge checkpoint status ./bundle
+eforge checkpoint status ./bundle --verbose
+eforge checkpoint status ./bundle --json
+```
+
+The default human report shows the operational state, last recoverable simulated hour and phase,
+cadence, integrity and runtime compatibility, fallback warnings, generated-data size, recovery
+overhead, total known managed working footprint, and the exact resume command. `--verbose` adds both
+recovery generations, lock ownership, schema/run identities, participant and segment counts,
+fingerprint components, detailed storage categories, and validation work. `--json` always emits the
+complete structured report, independent of `--verbose`. Status is read-only and excludes unrelated
+files from all managed totals. Active protected spools live outside the output root and cannot be
+safely attributed by another process; the report says so explicitly, while their durable imported
+content is included in checkpoint storage.
+
+Request a planned stop from another terminal:
+
+```bash
+eforge checkpoint suspend ./bundle
+```
+
+Suspension is cooperative, not immediate. The command returns after publishing the request and
+reminds the operator that generation is still running. The generator finishes its current
+simulated hour, reaches the normal quiescent barrier, publishes an explicit recovery point even
+when that hour is off cadence, reports the suspended cursor, and exits successfully. An
+off-cadence suspension does not move the cadence anchor: with a 24-hour cadence, suspending at hour
+37 still leaves hour 48 as the next automatic checkpoint after resume. Repeating a pending request
+is idempotent. Suspension requires an active checkpoint-enabled run; Ctrl+C remains the immediate
+option and creates no emergency checkpoint. A request that arrives after the last hourly barrier,
+while tail work or finalization is already running, cannot interrupt that unsafe region and the run
+finishes normally.
+
 ## Resume an interrupted run
 
 Resume while rechecking the authored scenario:

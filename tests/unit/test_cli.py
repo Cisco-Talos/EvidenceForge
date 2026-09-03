@@ -695,6 +695,108 @@ class TestGenerateCheckpointOptions:
 class TestGenerateCommand:
     """Tests for 'eforge generate' command."""
 
+    def test_planned_suspension_resumes_to_byte_identical_output(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A cooperative off-cadence stop should resume to exact bundle bytes."""
+
+        from evidenceforge.generation.checkpoints.control import request_suspension
+        from evidenceforge.generation.checkpoints.status import inspect_checkpoint
+
+        scenario = tmp_path / "scenario.yaml"
+        scenario.write_text(
+            (scenarios_dir / "minimal.yaml")
+            .read_text(encoding="utf-8")
+            .replace('duration: "1h"', 'duration: "24h"'),
+            encoding="utf-8",
+        )
+        suspended_root = tmp_path / "suspended"
+        control_root = tmp_path / "control"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(suspended_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        controller_marker = suspended_root / ".eforge-generation" / "controller.json"
+        deadline = time.monotonic() + 30
+        while (
+            not controller_marker.exists()
+            and process.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert controller_marker.exists(), f"generation exited as {process.poll()} before control"
+        request_suspension(IncrementalCheckpointStore(suspended_root))
+
+        suspended_output, _ = process.communicate(timeout=60)
+
+        assert process.returncode == EXIT_SUCCESS, suspended_output
+        assert "Generation suspended at simulated hour" in suspended_output
+        status = inspect_checkpoint(suspended_root)
+        assert status.state == "resumable"
+        assert status.suspended
+        assert status.simulated_hour is not None
+        assert status.simulated_hour < 24
+
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(suspended_root),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout
+        assert _deterministic_bundle_files(suspended_root) == _deterministic_bundle_files(
+            control_root
+        )
+        assert not (suspended_root / ".eforge-generation").exists()
+
     @pytest.mark.parametrize(
         ("interrupt_signal", "checkpoint_hour", "duration"),
         [

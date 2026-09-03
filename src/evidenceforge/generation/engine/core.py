@@ -63,6 +63,7 @@ from evidenceforge.generation.source_finalization import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
@@ -294,20 +295,21 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         callback = self.checkpoint_hour_callback
         controller = self._checkpoint_controller
+        suspension_request = None if controller is None else controller.pending_suspension_request()
         checkpoint_due = (
             (callback is not None or controller is not None)
             and self.checkpoint_hours > 0
             and completed_simulated_hours % self.checkpoint_hours == 0
         )
         retirement_due = completed_simulated_hours % _RUNTIME_RETIREMENT_HOURS == 0
-        if not checkpoint_due and not retirement_due:
+        if not checkpoint_due and not retirement_due and suspension_request is None:
             return
         if self.start_time is None or self.end_time is None:
             raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
         self._barrier_flush_all_emitters()
         if retirement_due or controller is not None:
             self._prepare_incremental_checkpoint_barrier(next_hour)
-        if not checkpoint_due:
+        if not checkpoint_due and suspension_request is None:
             return
         if next_hour < self.start_time:
             phase = "warmup"
@@ -323,12 +325,28 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 completed_simulated_hours=completed_simulated_hours,
                 next_hour=None if phase == "tail" else next_hour.isoformat(),
             )
-            controller.commit(
-                cursor=cursor,
-                participants=self._checkpoint_participants,
-            )
+            if suspension_request is not None:
+                self._report_progress(
+                    "suspension_requested",
+                    {
+                        "completed_simulated_hours": completed_simulated_hours,
+                        "phase": phase,
+                    },
+                )
+                controller.commit_suspension(
+                    request=suspension_request,
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            else:
+                controller.commit(
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
             if self._checkpoint_synchronization_hook is not None:
                 self._checkpoint_synchronization_hook(cursor)
+            if suspension_request is not None:
+                raise GenerationSuspendedError(cursor)
         else:
             assert callback is not None
             callback(completed_simulated_hours, next_hour, phase)
@@ -457,6 +475,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         self._red_herring_executed.add(idx)
                     self._barrier_flush_all_emitters()
             self._generation_body_completed = True
+        except GenerationSuspendedError:
+            raise
         except BaseException as primary:
             self._abort_failed_generation(primary)
             raise

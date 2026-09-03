@@ -75,7 +75,31 @@ def run_fingerprint(
 ) -> str:
     """Return the exact compatibility identity, excluding paths and cadence."""
 
-    payload = {
+    payload = run_fingerprint_payload(
+        compiled,
+        output_target=output_target,
+        formats=formats,
+        oob_hosts=oob_hosts,
+    )
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def run_fingerprint_payload(
+    compiled: CompiledScenario,
+    *,
+    output_target: str,
+    formats: list[str],
+    oob_hosts: tuple[str, ...],
+) -> dict[str, Any]:
+    """Return the canonical compatibility inputs used by ``run_fingerprint``."""
+
+    return {
         "checkpoint_schema": CHECKPOINT_SCHEMA_VERSION,
         "dependencies": _dependency_versions(),
         "evidenceforge_build_sha256": installed_build_digest(),
@@ -92,10 +116,28 @@ def run_fingerprint(
         "resolved": _resolved_payload(compiled),
         "sys_byteorder": sys.byteorder,
     }
-    encoded = json.dumps(
-        payload,
+
+
+def run_fingerprint_components(
+    compiled: CompiledScenario,
+    *,
+    output_target: str,
+    formats: list[str],
+    oob_hosts: tuple[str, ...],
+) -> dict[str, Any]:
+    """Return compact, non-path compatibility diagnostics for checkpoint manifests."""
+
+    payload = run_fingerprint_payload(
+        compiled,
+        output_target=output_target,
+        formats=formats,
+        oob_hosts=oob_hosts,
+    )
+    resolved = json.dumps(
+        payload.pop("resolved"),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    payload["resolved_sha256"] = hashlib.sha256(resolved).hexdigest()
+    return payload

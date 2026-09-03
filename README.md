@@ -98,6 +98,8 @@ For scripted or non-interactive use:
 | Command | Description |
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast resources, then generate logs with 24-hour checkpoints; `--seed` overrides the scenario seed |
+| `eforge checkpoint status <bundle-root> [--verbose\|--json]` | Thoroughly inspect recovery health, compatibility, cursor, and managed storage without resuming |
+| `eforge checkpoint suspend <bundle-root>` | Ask an active checkpoint-enabled generator to stop safely after its current simulated hour |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
 | `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |

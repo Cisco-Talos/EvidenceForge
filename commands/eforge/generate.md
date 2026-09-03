@@ -61,36 +61,34 @@ eforge validate <input.yaml> --json --oob-host <host>
 eforge generate <input.yaml> --output <bundle-root> --oob-host <host>
 ```
 
-A pack, resolved document, or prior manifest never grants permission. Preserve an explicitly
-selected project-root override on both commands.
+A pack, resolved document, or prior manifest never grants permission. Preserve and repeat an
+explicitly selected root on both commands.
 
 ### 4. Choose runtime options and a safe output root
 Use an explicit `--output <bundle-root>` so the destination is unambiguous. For a resolved replay,
 the output root must be distinct from the directory containing the input resolved document; never
 overwrite the authoritative input.
 
-- `--target default|sof-elk|splunk` selects rendering. It does not create a target-named bundle
-  root, but it can change paths and record shapes beneath `data/`.
-- `--formats <comma-list>` intersects with `output.logs`; groups such as `zeek` and `windows` are supported.
-  Inspect `eforge info format_groups --json` when needed; repeat an explicitly selected root.
+- `--target default|sof-elk|splunk` selects rendering and can change paths/records under `data/`.
+- `--formats <comma-list>` intersects with `output.logs`; inspect groups with `eforge info format_groups --json`.
 - `--seed <0..2^64-1>` overrides the authored generation seed for this run.
-- `--project-root <absolute-root>` overrides the current working directory for project packs and
-  config. Omit it ordinarily.
+- `--project-root <absolute-root>` overrides the current working directory; omit it ordinarily.
 - `--checkpoint-hours N` changes the 24-hour default; `0` disables new checkpoints.
 - `--verbose` enables INFO logging; `--debug` enables DEBUG logging and tracebacks.
 - `--resume` continues compatible incomplete output; `--overwrite` replaces engine-owned output.
   `--force`/`-f` is a deprecated overwrite alias.
 
-Before using `--overwrite`, inspect the destination and obtain explicit approval. Replacement covers
-`data/`, reports, manifests, artifacts, and resolved scenario as one set; `--formats` still replaces
-the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collateral are preserved. Do not use
+Before using `--overwrite`, inspect the destination and obtain explicit approval. It replaces
+`data/`, reports, manifests, artifacts, and resolved scenario as one set; `--formats` still replaces the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collateral are preserved. Do not use
 `--overwrite` for a clean destination.
 
 Preserve a valid `.eforge-generation/` workspace after interruption or failure. Resume with the
-original input to recompile and check it, or use `eforge generate --output <bundle-root> --resume`
-to use the stored resolved input. An unspecified resume retains its stored cadence. Explain an
-invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
-a root. Resume requires a compatible build, Python runtime/compiler, dependencies, and platform; resume before upgrading; success removes the workspace and leaves no checkpoint history.
+original input or `eforge generate --output <bundle-root> --resume`; unspecified resume retains its stored cadence. Explain an invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
+the root; resume before upgrading; success removes the workspace and leaves no checkpoint history.
+
+Inspect recovery with `eforge checkpoint status <bundle-root> [--verbose|--json]`. For a planned
+stop, use `eforge checkpoint suspend <bundle-root>` and explain that it finishes the current hour
+and commits a safe point; do not substitute Ctrl+C. Read the checkpoint reference for exact behavior.
 
 ### 5. Generate with normal output first
 
