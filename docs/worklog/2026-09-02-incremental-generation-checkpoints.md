@@ -296,3 +296,9 @@ until every correctness and performance gate passes.
   publishes nine hourly recoveries across its eight-hour warm-up and one-hour collection window;
   the final recovery is a tail cursor with all 16 initialized participant heads and 15 immutable
   segments. A dedicated slow production-wiring test and all 63 incremental tests pass.
+- Fresh-runtime recovery now hydrates the explicit participants before entering generation and
+  validates the manifest cursor against the compiled warm-up and collection windows. Warm-up and
+  collection resumes begin at the exact next hour while preserving the continuous completed-hour
+  count; a tail recovery skips the baseline completely and deterministically re-enters remaining
+  scheduled work/finalization. The production slow test now creates a real tail recovery, restores
+  it into a second initialized engine, and completes with matching ground-truth event state.

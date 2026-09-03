@@ -134,6 +134,28 @@ class TestGenerationEngine:
             == 0
         )
 
+        resumed_controller = IncrementalCheckpointController.for_recovery(
+            store=controller.store,
+            recovery=recovery,
+            fingerprint="a" * 64,
+            resolved_scenario=controller.store.read_resolved_scenario(recovery),
+        )
+        resumed = GenerationEngine(
+            minimal_scenario,
+            tmp_path / "resumed" / "data",
+            ground_truth_dir=tmp_path / "resumed",
+            artifact_dir=tmp_path / "resumed" / "artifacts",
+            checkpoint_hours=1,
+            checkpoint_controller=resumed_controller,
+            checkpoint_recovery=recovery,
+        )
+
+        resumed.generate()
+
+        assert resumed._generation_complete is True
+        assert resumed.malicious_events == engine.malicious_events
+        assert resumed.red_herring_events == engine.red_herring_events
+
     def test_checkpoint_hour_hook_is_cadence_only_and_uses_post_boundary_phase(
         self,
         minimal_scenario,

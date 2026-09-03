@@ -918,6 +918,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "checkpoint_hours",
         "_checkpoint_controller",
         "_checkpoint_participants",
+        "_checkpoint_recovery",
         "compiled_scenario",
         "dispatcher",
         "emitters",

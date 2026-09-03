@@ -84,6 +84,7 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from evidenceforge.generation.checkpoints.models import CheckpointRecovery
     from evidenceforge.generation.checkpoints.participants import (
         IncrementalCheckpointParticipant,
     )
@@ -137,6 +138,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         checkpoint_hour_callback: Callable[[int, datetime, str], None] | None = None,
         checkpoint_hours: int = 0,
         checkpoint_controller: IncrementalCheckpointController | None = None,
+        checkpoint_recovery: CheckpointRecovery | None = None,
     ):
         """Initialize generation engine.
 
@@ -158,6 +160,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 disables the hook.
             checkpoint_controller: Optional incremental checkpoint publisher. Its cadence must
                 match checkpoint_hours and it cannot be combined with the legacy test hook.
+            checkpoint_recovery: Optional validated recovery selected from the controller's store.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -213,9 +216,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             checkpoint_hours
         ):
             raise ValueError("checkpoint controller cadence must match checkpoint_hours")
+        if checkpoint_recovery is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint recovery requires an incremental checkpoint controller")
         self.checkpoint_hour_callback = checkpoint_hour_callback
         self.checkpoint_hours = checkpoint_hours
         self._checkpoint_controller = checkpoint_controller
+        self._checkpoint_recovery = checkpoint_recovery
         self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -356,13 +362,22 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self._initialization_complete:
             raise RuntimeError("Generation body cannot be restarted after an incomplete run")
 
-        # Phase 1: Initialize
+        # Phase 1: Initialize a fresh runtime, then hydrate semantic state when resuming.
         try:
             self._report_progress(
                 "phase_start",
                 {"phase": "initialize", "description": "Initializing generation engine"},
             )
             self._initialize()
+            recovery = self._checkpoint_recovery
+            if recovery is not None:
+                controller = self._checkpoint_controller
+                if controller is None:  # pragma: no cover - constructor invariant
+                    raise RuntimeError("checkpoint recovery lost its controller")
+                controller.restore_participants(
+                    recovery=recovery,
+                    participants=self._checkpoint_participants,
+                )
             self._initialization_complete = True
             self._report_progress("phase_end", {"phase": "initialize"})
         except BaseException as primary:
@@ -374,7 +389,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._report_progress(
                 "phase_start", {"phase": "baseline", "description": "Generating baseline activity"}
             )
-            self._generate_baseline()
+            self._generate_baseline(
+                resume_cursor=(
+                    None
+                    if self._checkpoint_recovery is None
+                    else self._checkpoint_recovery.manifest.cursor
+                )
+            )
             self._report_progress("phase_end", {"phase": "baseline"})
 
             # Phase 6.3: Execute remaining storyline events not covered by baseline hours
