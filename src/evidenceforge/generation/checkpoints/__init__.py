@@ -13,6 +13,7 @@ from .models import (
     ParticipantHead,
     SegmentReference,
 )
+from .network_runtime_head import NetworkTransactionRuntimeParticipant
 from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
@@ -20,6 +21,7 @@ from .owner_inventory import (
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
     RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS,
     RDP_MANAGER_CHECKPOINT_FIELDS,
     RDP_SHARD_CHECKPOINT_FIELDS,
@@ -64,6 +66,8 @@ __all__ = [
     "LIFECYCLE_PARTITION_CHECKPOINT_FIELDS",
     "LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS",
     "LifecycleRegistryParticipant",
+    "NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS",
+    "NetworkTransactionRuntimeParticipant",
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",

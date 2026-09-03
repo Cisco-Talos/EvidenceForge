@@ -63,12 +63,16 @@ from evidenceforge.generation.checkpoints.models import (
     CheckpointManifest,
     CheckpointStoreMetrics,
 )
+from evidenceforge.generation.checkpoints.network_runtime_head import (
+    NetworkTransactionRuntimeParticipant,
+)
 from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
@@ -106,8 +110,17 @@ from evidenceforge.generation.checkpoints.store import (
     SegmentDraft,
 )
 from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
+from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.network_runtime import (
+    NetworkRuntimePointFamily,
+    NetworkTransactionRuntime,
+    NetworkTransportLease,
+    _network_transport_occurrence_stable_id,
+    _transport_lease_digest_value,
+    _TransportLeaseRecord,
+)
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
@@ -319,6 +332,12 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         window_end=datetime(2026, 1, 2, tzinfo=UTC),
     )
     intent_execution = IntentExecutionLedger(AuthoredIntentLedger("checkpoint-test", ()))
+    network_runtime = NetworkTransactionRuntime(
+        state_manager=manager,
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+    )
 
     assert_complete_owner_inventory(
         manager,
@@ -344,6 +363,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         intent_execution,
         INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
         owner_name="intent-execution-ledger",
+    )
+    assert_complete_owner_inventory(
+        network_runtime,
+        NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
+        owner_name="network-runtime",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -377,6 +401,170 @@ def test_checkpoint_barrier_rejects_transient_state() -> None:
             STATE_MANAGER_CHECKPOINT_FIELDS,
             owner_name="state-manager",
         )
+
+
+def test_network_runtime_head_round_trips_points_transports_and_freshness() -> None:
+    """Hydration should rebuild bounded network authority without heap snapshots."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    state = StateManager()
+    runtime = NetworkTransactionRuntime(
+        state_manager=state,
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=started,
+        window_end=started + timedelta(days=2),
+    )
+    runtime.set_point(
+        NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+        ("client", "example.test"),
+        {"ttl": 300, "answers": ["10.0.0.20"]},
+        expires_at=started + timedelta(hours=8),
+    )
+    runtime.set_point(
+        NetworkRuntimePointFamily.TLS_SERVER_NAME,
+        "10.0.0.20",
+        "example.test",
+        expires_at=started + timedelta(hours=2),
+    )
+    runtime.delete_point(NetworkRuntimePointFamily.TLS_SERVER_NAME, "10.0.0.20")
+
+    lease_opened_at = started + timedelta(minutes=10)
+    lease_occurrence_id = _network_transport_occurrence_stable_id(
+        "checkpoint-transport",
+        src_ip="10.0.0.10",
+        src_port=50_000,
+        dst_ip="10.0.0.20",
+        dst_port=443,
+        protocol="tcp",
+        opened_at=lease_opened_at,
+    )
+    lease = NetworkTransportLease(
+        intent_stable_id="checkpoint-transport",
+        src_ip="10.0.0.10",
+        src_port=50_000,
+        dst_ip="10.0.0.20",
+        dst_port=443,
+        protocol="tcp",
+        opened_at=lease_opened_at,
+        closed_at=started + timedelta(hours=3),
+        occurrence_stable_id=lease_occurrence_id,
+        automatic=False,
+    )
+    record = _TransportLeaseRecord(
+        lease=lease,
+        preparation_id=7,
+        candidate_inspections=3,
+        adaptive_reuse=True,
+        committed=True,
+    )
+    freshness_deadline = started + timedelta(days=1, hours=3)
+    with runtime._lock:
+        runtime._insert_transport_record_locked(record)
+        runtime._transport_lease_deadlines.replace(
+            lease.occurrence_stable_id,
+            (lease.closed_at, 1, lease.occurrence_stable_id),
+        )
+        runtime._transport_freshness[lease.tuple_key] = lease.closed_at
+        runtime._transport_freshness_deadlines.replace(
+            lease.tuple_key,
+            (freshness_deadline, 1, lease.tuple_key),
+        )
+        runtime._live_transport_leases = 1
+        runtime._next_preparation_id = 8
+        runtime._next_transport_ordinal = 2
+        runtime._transport_state_xor ^= runtime._state_component(
+            "network-transport-lease-v1",
+            _transport_lease_digest_value(lease),
+        )
+        runtime._transport_state_xor ^= runtime._state_component(
+            "network-transport-freshness-v1",
+            (lease.tuple_key, lease.closed_at),
+        )
+
+    seal = NetworkTransactionRuntimeParticipant(runtime).prepare_checkpoint(0)
+    expected_digest = runtime.state_digest()
+    restored = NetworkTransactionRuntime(
+        state_manager=StateManager(),
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=started,
+        window_end=started + timedelta(days=2),
+    )
+    NetworkTransactionRuntimeParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.state_digest() == expected_digest
+    assert restored.get_point(
+        NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+        ("client", "example.test"),
+    ) == {"ttl": 300, "answers": ["10.0.0.20"]}
+    assert not restored.transport_tuple_interval_available(
+        src_ip=lease.src_ip,
+        src_port=lease.src_port,
+        dst_ip=lease.dst_ip,
+        dst_port=lease.dst_port,
+        protocol=lease.protocol,
+        opened_at=started + timedelta(minutes=30),
+        closed_at=started + timedelta(hours=1),
+    )
+    assert restored.census().live_transport_leases == 1
+    page = restored.advance_watermark_page(started + timedelta(hours=4))
+    assert not page.has_more
+    assert restored.census().live_transport_leases == 0
+    assert restored.census().retained_transport_freshness == 1
+
+
+def test_network_runtime_head_rejects_open_preparation() -> None:
+    """A network preparation capability cannot cross a checkpoint barrier."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    runtime = NetworkTransactionRuntime(
+        state_manager=StateManager(),
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    preparation = runtime.begin(
+        owner_rng=random.Random(5),
+        stable_id="checkpoint-open-preparation",
+        linearization_time=started,
+    )
+
+    with pytest.raises(CheckpointError, match="_open_preparations"):
+        NetworkTransactionRuntimeParticipant(runtime).prepare_checkpoint(0)
+
+    preparation.cancel()
+
+
+def test_network_runtime_head_rejects_modified_semantic_row() -> None:
+    """The participant digest should reject a modified but structurally valid row."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    runtime = NetworkTransactionRuntime(
+        state_manager=StateManager(),
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    runtime.set_point(
+        NetworkRuntimePointFamily.DIRECT_DNS_TTL,
+        "example.test",
+        300,
+        expires_at=started + timedelta(hours=2),
+    )
+    seal = NetworkTransactionRuntimeParticipant(runtime).prepare_checkpoint(0)
+    modified = loads(seal.head.payload)
+    assert isinstance(modified, dict)
+    points = modified["points"]
+    assert isinstance(points, list)
+    points[0][3] = 301
+    restored = NetworkTransactionRuntime(
+        state_manager=StateManager(),
+        cryptographic_material=CryptographicMaterialRegistry(),
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+
+    with pytest.raises(CheckpointCorruptionError, match="state digest changed"):
+        NetworkTransactionRuntimeParticipant(restored).restore_checkpoint(dumps(modified), ())
 
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:

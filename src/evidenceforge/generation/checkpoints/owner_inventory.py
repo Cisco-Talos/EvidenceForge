@@ -359,6 +359,67 @@ RDP_SHARD_CHECKPOINT_FIELDS = _fields(
 )
 
 
+NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_next_point_ordinal",
+        "_next_preparation_id",
+        "_next_transport_ordinal",
+        "_points",
+        "_transport_freshness",
+        "_transport_records_by_occurrence",
+        "_watermark",
+    ),
+    rebuilt=(
+        "_adaptive_transport_reuses",
+        "_expiry_heap",
+        "_last_result",
+        "_live_points",
+        "_live_transport_leases",
+        "_lock",
+        "_peak_transport_bucket_occupancy",
+        "_point_state_xor",
+        "_secret",
+        "_tombstone_points",
+        "_tombstone_retention",
+        "_transport_buckets",
+        "_transport_candidate_inspections",
+        "_transport_endpoint_occurrences",
+        "_transport_exhaustions",
+        "_transport_freshness_deadlines",
+        "_transport_lease_deadlines",
+        "_transport_state_xor",
+        "_window_end",
+        "_window_start",
+        "cryptographic_material",
+        "state_manager",
+    ),
+    transient=(
+        "_adopted_transport_by_preparation",
+        "_claimed_composites",
+        "_claimed_point_batch_commits",
+        "_claimed_point_batches",
+        "_claimed_preparations",
+        "_open_capabilities_by_identity",
+        "_open_objects",
+        "_open_point_batch_capabilities_by_identity",
+        "_open_point_batch_objects",
+        "_open_point_batches",
+        "_open_preparations",
+        "_pending_transport_leases",
+        "_pending_watermark",
+        "_point_batch_capabilities",
+        "_point_batch_tokens",
+        "_preparation_fences",
+        "_prepared_capabilities",
+        "_prepared_tokens",
+        "_reserved_by_preparation",
+        "_reserved_deadlines",
+        "_reserved_points",
+        "_transport_records_by_preparation",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",

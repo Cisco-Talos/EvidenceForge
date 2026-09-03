@@ -173,3 +173,11 @@ until every correctness and performance gate passes.
   expiry-backed state without turning internal maintenance history into durable history. Hydration
   rejects duplicate/out-of-order rows and non-orderable NaN deadlines. The generation-index and
   incremental-checkpoint group has 95 passing tests.
+- The canonical network runtime now has an exhaustive owner inventory and one bounded semantic
+  head for live/tombstoned planner points, committed transport leases, transport freshness,
+  allocators, and its watermark. Hydration reconstructs the point, lease, and freshness deadline
+  heaps; tuple/endpoint reverse routes; counters; and constant-time state digests. Open or prepared
+  transactions, point batches, claims, reservations, pending leases, and partial watermark pages
+  fail the barrier. A populated round trip continues watermark pruning after restore, and semantic
+  row tampering is rejected by the participant digest. The 101-test checkpoint/network-runtime/
+  transport-lease group passes. Cryptographic material remains a separate unresolved participant.
