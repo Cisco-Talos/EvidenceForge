@@ -566,6 +566,73 @@ PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS = _fields(
 )
 
 
+SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS = _fields(
+    live=("_next_prepared_reservation_id", "_shards", "_watermark"),
+    rebuilt=(
+        "_admission_secret",
+        "_directory_lock",
+        "_gate",
+        "_manager_id",
+        "_operation_routes",
+        "_prepared_lock",
+        "_registry",
+        "_session_hot_cache",
+        "_session_hot_cache_bytes",
+        "_session_hot_cache_candidates",
+        "_session_hot_cache_lock",
+        "_shard_count",
+        "_watermark_lane",
+        "_window_end",
+        "_window_start",
+    ),
+    transient=(
+        "_admission_receipts",
+        "_claimed_admissions",
+        "_prepared_admissions",
+        "_prepared_capabilities",
+        "_prepared_channel_ids",
+    ),
+)
+
+
+SSH_SIDECAR_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("operations", "sessions"),
+    rebuilt=("expiry", "high_water_mark", "lock", "shard_id"),
+)
+
+
+SSH_PACKED_SESSION_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_rows",),
+    rebuilt=(
+        "_channels",
+        "_close_generations",
+        "_close_locators",
+        "_decoded",
+        "_decoded_bytes",
+        "_generation_epoch",
+        "_handle_generations",
+        "lookup_candidates_inspected",
+    ),
+)
+
+
+SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_rows",),
+    rebuilt=("_decoded", "_decoded_bytes"),
+)
+
+
+SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS = _fields(
+    rebuilt=(
+        "children",
+        "lock",
+        "lookup_candidates_inspected",
+        "operations",
+        "partition_id",
+    ),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",

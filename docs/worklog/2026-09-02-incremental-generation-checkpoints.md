@@ -204,3 +204,10 @@ until every correctness and performance gate passes.
   matching the production manager rather than storing duplicate authority. Prepared admission
   capabilities fail the barrier. A populated application+proxy restore reuses the original tunnel,
   and all 91 incremental-checkpoint/proxy tests pass.
+- The SSH protocol manager now persists its existing packed rows for open sessions and active
+  child operations instead of reconstructing per-row checkpoint objects. The shared application
+  registry reauthenticates every session, operation, transport interval, affinity, and owner;
+  hydration obtains fresh application close tokens and rebuilds SSH expiry, child/operation routes,
+  packed generations, and decode/hot caches. Prepared admission capabilities are transient-empty.
+  A populated restore can finalize the recovered child and close its session, and the 80-test
+  incremental/SSH manager/prepared-admission/source-port regression group passes.

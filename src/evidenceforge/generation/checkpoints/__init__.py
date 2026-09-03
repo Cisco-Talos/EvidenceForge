@@ -36,6 +36,11 @@ from .owner_inventory import (
     RDP_SHARD_CHECKPOINT_FIELDS,
     SOURCE_CLOCK_REGISTRY_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
+    SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS,
+    SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS,
+    SSH_PACKED_SESSION_STORE_CHECKPOINT_FIELDS,
+    SSH_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     TIMING_AUDIT_CHECKPOINT_FIELDS,
     TIMING_RELATIONSHIP_COUNTER_CHECKPOINT_FIELDS,
@@ -51,6 +56,7 @@ from .rng import GenerationRngParticipant
 from .source_timing_head import SourceTimingPlannerParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
 from .sqlite_spool import SQLiteSpoolParticipant
+from .ssh_channel_head import SshApplicationChannelParticipant
 from .state_manager_head import StateManagerParticipant
 from .store import IncrementalCheckpointStore, RunLock
 from .timing_runtime_head import TimingRuntimeParticipant
@@ -98,6 +104,12 @@ __all__ = [
     "RdpSessionManagerParticipant",
     "SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS",
     "SOURCE_CLOCK_REGISTRY_CHECKPOINT_FIELDS",
+    "SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
+    "SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS",
+    "SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS",
+    "SSH_PACKED_SESSION_STORE_CHECKPOINT_FIELDS",
+    "SSH_SIDECAR_SHARD_CHECKPOINT_FIELDS",
+    "SshApplicationChannelParticipant",
     "STATE_MANAGER_CHECKPOINT_FIELDS",
     "StateManagerParticipant",
     "TIMING_AUDIT_CHECKPOINT_FIELDS",

@@ -87,6 +87,11 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
     PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS,
+    SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+    SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS,
+    SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS,
+    SSH_PACKED_SESSION_STORE_CHECKPOINT_FIELDS,
+    SSH_SIDECAR_SHARD_CHECKPOINT_FIELDS,
     STATE_MANAGER_CHECKPOINT_FIELDS,
     assert_complete_owner_inventory,
     assert_transient_owner_state_empty,
@@ -114,6 +119,9 @@ from evidenceforge.generation.checkpoints.spools import (
     ImmutableSpoolFilesParticipant,
 )
 from evidenceforge.generation.checkpoints.sqlite_spool import SQLiteSpoolParticipant
+from evidenceforge.generation.checkpoints.ssh_channel_head import (
+    SshApplicationChannelParticipant,
+)
 from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
 from evidenceforge.generation.checkpoints.state_values import (
     decode_state_value,
@@ -147,6 +155,14 @@ from evidenceforge.generation.proxy_channels import (
 )
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.ssh_channels import (
+    SshApplicationChannelManager,
+    SshChannelAffinity,
+    SshOperationKind,
+    SshProcessHold,
+    SshSessionBinding,
+    SshTransportPlan,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.timing.clocks import SourceClockKey, SourceClockSpec
@@ -418,6 +434,16 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         proxy,
         PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
         owner_name="proxy-channels",
+    )
+    ssh = SshApplicationChannelManager(
+        application_registry=application_channels,
+        window_start=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    assert_complete_owner_inventory(
+        ssh,
+        SSH_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
+        owner_name="ssh-channels",
     )
     for index, partition in enumerate(registry._partitions):
         assert_complete_owner_inventory(
@@ -942,6 +968,152 @@ def test_proxy_channel_head_rejects_prepared_admission() -> None:
         ExplicitProxyChannelParticipant(manager).prepare_checkpoint(0)
 
     assert manager.cancel_prepared_admission(token)
+
+
+def test_ssh_channel_head_round_trips_open_session_and_active_operation() -> None:
+    """SSH hydration should rebuild packed sessions, children, routes, and expiry."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(days=1)
+    registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    manager = SshApplicationChannelManager(
+        application_registry=registry,
+        window_start=started,
+        window_end=ended,
+    )
+    closes_at = started + timedelta(minutes=30)
+    affinity = SshChannelAffinity(
+        client_identity="client.example.test",
+        client_session_object_id="checkpoint-client-session",
+        server_identity="server.example.test",
+        server_session_object_id="checkpoint-server-session",
+        principal="checkpoint-user",
+        auth_method="publickey",
+    )
+    source_process = SshProcessHold(
+        hostname=affinity.client_identity,
+        pid=40_001,
+        process_object_id="checkpoint-ssh-client-process",
+        session_object_id=affinity.client_session_object_id,
+        principal="checkpoint-local-user",
+        started_at=started,
+        required_until=closes_at,
+    )
+    receiver_process = SshProcessHold(
+        hostname=affinity.server_identity,
+        pid=40_002,
+        process_object_id="checkpoint-sshd-process",
+        session_object_id=affinity.server_session_object_id,
+        principal=affinity.principal,
+        started_at=started,
+        required_until=closes_at,
+    )
+    transport = SshTransportPlan(
+        transport_id="checkpoint-ssh-transport",
+        zeek_uid="CHECKPOINT-SSH",
+        conn_id="checkpoint-ssh-connection",
+        source_ip="10.0.0.10",
+        server_ip="10.0.0.20",
+        source_port=50_022,
+        server_port=22,
+        opened_at=started + timedelta(seconds=1),
+        closes_at=closes_at,
+        receiver_process=receiver_process,
+        source_process=source_process,
+    )
+    binding = SshSessionBinding(
+        hostname=affinity.server_identity,
+        logon_id="0x00000042",
+        session_object_id=affinity.server_session_object_id,
+        lifecycle_group_id="checkpoint-ssh-lifecycle",
+        principal=affinity.principal,
+        ready_at=started + timedelta(seconds=2),
+    )
+    session = manager.open_session(
+        affinity,
+        transport=transport,
+        binding=binding,
+        idle_timeout=timedelta(minutes=10),
+        initiator_budget=10_000,
+        responder_budget=20_000,
+        operation_budget=4,
+    )
+    operation = manager.reserve_operation(
+        session,
+        kind=SshOperationKind.EXEC,
+        semantic_operation_id="checkpoint-command",
+        started_at=started + timedelta(seconds=3),
+        ended_at=started + timedelta(seconds=4),
+        initiator_bytes=100,
+        responder_bytes=200,
+    )
+    application_seal = ApplicationChannelRegistryParticipant(registry).prepare_checkpoint(0)
+    ssh_seal = SshApplicationChannelParticipant(manager).prepare_checkpoint(0)
+
+    restored_registry = ApplicationChannelRegistry(window_start=started, window_end=ended)
+    ApplicationChannelRegistryParticipant(restored_registry).restore_checkpoint(
+        application_seal.head.payload,
+        (),
+    )
+    restored = SshApplicationChannelManager(
+        application_registry=restored_registry,
+        window_start=started,
+        window_end=ended,
+    )
+    SshApplicationChannelParticipant(restored).restore_checkpoint(ssh_seal.head.payload, ())
+
+    assert restored.session_view(session.channel_id) == session
+    assert restored.operation_lease(operation.operation_id) == operation
+    assert restored.finalize_operation(operation.operation_id)
+    assert (
+        restored.close_session(
+            session.channel_id,
+            closed_at=started + timedelta(seconds=5),
+            reason="checkpoint-test",
+        )
+        is not None
+    )
+    shard = next(iter(manager._shards.values()))
+    assert_complete_owner_inventory(
+        shard,
+        SSH_SIDECAR_SHARD_CHECKPOINT_FIELDS,
+        owner_name="ssh-sidecar-shard",
+    )
+    assert_complete_owner_inventory(
+        shard.sessions,
+        SSH_PACKED_SESSION_STORE_CHECKPOINT_FIELDS,
+        owner_name="ssh-packed-session-store",
+    )
+    assert_complete_owner_inventory(
+        shard.operations,
+        SSH_PACKED_OPERATION_STORE_CHECKPOINT_FIELDS,
+        owner_name="ssh-packed-operation-store",
+    )
+    route = next(item for item in manager._operation_routes if item is not None)
+    assert_complete_owner_inventory(
+        route,
+        SSH_OPERATION_ROUTE_CHECKPOINT_FIELDS,
+        owner_name="ssh-operation-route",
+    )
+
+
+def test_ssh_channel_head_rejects_prepared_admission_state() -> None:
+    """Prepared SSH capability state cannot cross the checkpoint barrier."""
+
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager = SshApplicationChannelManager(
+        application_registry=registry,
+        window_start=started,
+        window_end=started + timedelta(days=1),
+    )
+    manager._prepared_admissions[1] = object()  # type: ignore[assignment]
+
+    with pytest.raises(CheckpointError, match="_prepared_admissions"):
+        SshApplicationChannelParticipant(manager).prepare_checkpoint(0)
 
 
 def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None:
