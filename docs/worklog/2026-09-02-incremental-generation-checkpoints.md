@@ -110,3 +110,13 @@ until every correctness and performance gate passes.
   deterministic commit keys. The focused change and 103 broader lifecycle/lease tests are green;
   the lifecycle registry no longer has an unsupported mutable family. The public generator
   remains unwired pending the other mutable owners.
+- The first StateManager head uses an explicit allowlist for runtime dataclasses and safe primitive
+  containers; it has no arbitrary dataclass, object-dictionary, import, or graph fallback. Live
+  sessions, processes, threads, connections, retained identity indexes, PID/logind allocation
+  windows, DNS state, and bounded allocators are captured as a rebuilt live head. Four
+  history-growing identity/ordinal ledgers use an opt-in mutation recorder that is dormant when
+  checkpointing is disabled and emits only last-write-wins changes since the prior durable point.
+  A two-generation test proves allocator-only changes leave the head byte-identical and produce a
+  two-record second delta; hydration applies both generations and resumes the next ordinal. SMB
+  connection-pin authority remains an explicit fail-fast gap before public wiring. The focused
+  module has 31 passing tests and 214 broader StateManager/lifecycle/transport-lease tests pass.

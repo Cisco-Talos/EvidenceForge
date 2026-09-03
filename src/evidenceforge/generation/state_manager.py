@@ -4231,6 +4231,7 @@ class StateManager:
             | None
         ) = None
         self._prepared_state_admission_epoch = 0
+        self._checkpoint_incremental_recorder: Callable[[str, object, object], None] | None = None
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
@@ -4283,6 +4284,18 @@ class StateManager:
 
         with self._lock:
             return self._materialization_version
+
+    def _record_incremental_checkpoint_value(
+        self,
+        field_name: str,
+        key: object,
+        value: object,
+    ) -> None:
+        """Offer one history-growing allocator mutation to an attached checkpoint owner."""
+
+        recorder = self._checkpoint_incremental_recorder
+        if recorder is not None:
+            recorder(field_name, key, value)
 
     def authenticates_materialization_plan(self, plan: _MaterializationPlan) -> bool:
         """Verify an opaque plan's keyed integrity without applying its version fence."""
@@ -7759,8 +7772,10 @@ class StateManager:
         if patch.ordinal is not None:
             key, value = patch.ordinal
             self._logon_id_second_ordinals[key] = value
+            self._record_incremental_checkpoint_value("_logon_id_second_ordinals", key, value)
         if patch.used_logon_id is not None:
             self._used_logon_ids.add(patch.used_logon_id)
+            self._record_incremental_checkpoint_value("_used_logon_ids", patch.used_logon_id, None)
         if patch.windows_session_counter is not None:
             host, counter = patch.windows_session_counter
             self._windows_session_id_counters[host] = counter
@@ -7875,6 +7890,9 @@ class StateManager:
         ordinal_key = (system, elapsed_seconds, subsecond_bucket)
         ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
         self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
+        self._record_incremental_checkpoint_value(
+            "_logon_id_second_ordinals", ordinal_key, ordinal + 1
+        )
 
         stride = self._logon_luid_block_stride(system, block)
         candidate = base + self._logon_luid_block_offset(system, block)
@@ -7886,6 +7904,7 @@ class StateManager:
         while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
             candidate = _normalize_generated_logon_luid(candidate + 1)
         self._used_logon_ids.add(candidate)
+        self._record_incremental_checkpoint_value("_used_logon_ids", candidate, None)
         return candidate
 
     @staticmethod
@@ -7941,6 +7960,7 @@ class StateManager:
             key = (family, stable_key)
             ordinal = self._semantic_peer_ordinals.get(key, 0)
             self._semantic_peer_ordinals[key] = ordinal + 1
+            self._record_incremental_checkpoint_value("_semantic_peer_ordinals", key, ordinal + 1)
             return ordinal
 
     def _allocate_windows_session_id(
@@ -7994,6 +8014,7 @@ class StateManager:
         except (TypeError, ValueError):
             return
         self._used_logon_ids.add(val)
+        self._record_incremental_checkpoint_value("_used_logon_ids", val, None)
 
     def _resolve_logon_id(self, logon_id: str) -> str:
         """Resolve a preplanned session LogonID to its final rendered value."""
@@ -8786,6 +8807,11 @@ class StateManager:
             used_ids = used_ids_default if used_ids_default is not None else set()
             self._linux_logind_session_used_ids[patch.system] = used_ids
         used_ids.add(patch.session_id)
+        self._record_incremental_checkpoint_value(
+            "_linux_logind_session_used_ids",
+            (patch.system, patch.session_id),
+            None,
+        )
         allocations = self._linux_logind_session_allocations.get(patch.system)
         if allocations is None:
             allocations = (

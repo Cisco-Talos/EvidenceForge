@@ -66,6 +66,11 @@ from evidenceforge.generation.checkpoints.spools import (
     ImmutableSpoolFilesParticipant,
 )
 from evidenceforge.generation.checkpoints.sqlite_spool import SQLiteSpoolParticipant
+from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
+from evidenceforge.generation.checkpoints.state_values import (
+    decode_state_value,
+    encode_state_value,
+)
 from evidenceforge.generation.checkpoints.store import (
     HeadDraft,
     IncrementalCheckpointStore,
@@ -74,6 +79,7 @@ from evidenceforge.generation.checkpoints.store import (
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
 
 _FINGERPRINT = "1" * 64
@@ -653,6 +659,97 @@ def test_lifecycle_head_restores_lease_values_indexes_and_commit_keys() -> None:
     assert census.foreground_leases == 1
     assert census.singleton_leases == 1
     assert restored.release_retention_lease("retention-1")
+
+
+def test_state_value_codec_round_trips_only_explicit_runtime_records() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    session = ActiveSession(
+        logon_id="0x10001",
+        username="alice",
+        system="host-1",
+        logon_type=2,
+        start_time=started,
+        source_ip="10.0.0.5",
+    )
+
+    assert decode_state_value(encode_state_value(session)) == session
+    with pytest.raises(TypeError, match="unsupported"):
+        encode_state_value(StateManager())
+    with pytest.raises(CheckpointCorruptionError, match="unsupported"):
+        decode_state_value(["record", "unknown-runtime-class", []])
+
+
+def test_state_manager_head_seals_only_new_allocator_records_and_restores() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    manager = StateManager()
+    participant = StateManagerParticipant(manager)
+    manager.set_current_time(started)
+    manager.register_hostname("host-1", "10.0.0.5")
+    session = manager.register_session(
+        "0x10001",
+        "alice",
+        "host-1",
+        2,
+        "10.0.0.10",
+        started,
+        session_id=2,
+    )
+    process = manager.register_process(
+        "host-1",
+        4000,
+        0,
+        r"C:\Windows\System32\cmd.exe",
+        "cmd.exe",
+        "alice",
+        "Medium",
+        os_category="windows",
+        start_time=started + timedelta(seconds=1),
+        logon_id=session.logon_id,
+    )
+    assert manager.next_semantic_peer_ordinal("process", "peer-1") == 0
+    assert (
+        manager.next_linux_logind_session_id(
+            "linux-1", random.Random(7), started + timedelta(seconds=2)
+        )
+        > 0
+    )
+
+    first = participant.prepare_checkpoint(0)
+    assert len(first.segments) == 1
+    first_head = first.head.payload
+    first_segment = first.segments[0].payload
+    first_document = loads(first_segment)
+    assert isinstance(first_document, dict)
+    assert len(first_document["records"]) == 3
+    participant.checkpoint_committed(0)
+
+    manager._mark_logon_id_used("0x10002")
+    assert manager.next_semantic_peer_ordinal("process", "peer-1") == 1
+    second = participant.prepare_checkpoint(1)
+    assert second.head.payload == first_head
+    assert len(second.segments) == 1
+    second_document = loads(second.segments[0].payload)
+    assert isinstance(second_document, dict)
+    assert len(second_document["records"]) == 2
+    participant.checkpoint_committed(1)
+
+    restored = StateManager()
+    restored_participant = StateManagerParticipant(restored)
+    restored_participant.restore_checkpoint(
+        second.head.payload,
+        (first_segment, second.segments[0].payload),
+    )
+
+    assert restored.get_current_time() == manager.get_current_time()
+    assert restored.list_dns_cache() == manager.list_dns_cache()
+    assert restored.get_session(session.logon_id) == session
+    assert restored.get_process("host-1", process.pid) == process
+    assert restored._used_logon_ids == manager._used_logon_ids
+    assert restored._logon_id_second_ordinals == manager._logon_id_second_ordinals
+    assert restored._semantic_peer_ordinals == manager._semantic_peer_ordinals
+    assert restored._linux_logind_session_used_ids == manager._linux_logind_session_used_ids
+    assert restored.materialization_version == manager.materialization_version
+    assert restored.next_semantic_peer_ordinal("process", "peer-1") == 2
 
 
 def test_append_spool_seals_only_new_bytes_and_restores_fresh_files(tmp_path: Path) -> None:

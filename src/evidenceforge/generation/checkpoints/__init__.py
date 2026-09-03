@@ -21,6 +21,7 @@ from .participants import IncrementalCheckpointParticipant, OwnerStateField, Par
 from .rng import GenerationRngParticipant
 from .spools import AppendOnlySpoolParticipant, ImmutableSpoolFilesParticipant
 from .sqlite_spool import SQLiteSpoolParticipant
+from .state_manager_head import StateManagerParticipant
 from .store import IncrementalCheckpointStore, RunLock
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "ParticipantHead",
     "RunLock",
     "STATE_MANAGER_CHECKPOINT_FIELDS",
+    "StateManagerParticipant",
     "SegmentReference",
     "SQLiteSpoolParticipant",
     "assert_complete_owner_inventory",
