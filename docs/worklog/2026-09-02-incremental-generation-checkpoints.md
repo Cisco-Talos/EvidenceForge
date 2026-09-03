@@ -500,3 +500,9 @@ until every correctness and performance gate passes.
   otherwise copy files. The production implementation remains dependency-free stdlib packed
   segments with compression selected per payload; rejected benchmark-only dependencies are not
   added to `pyproject.toml` or `uv.lock`.
+- The retained 60-day incremental workspace measured 316,543,528 bytes for 258,046,109 bytes of
+  deterministic output, a 1.227× ratio before the subsequent 1.47 MB emitter-head reduction. The
+  resource model now uses a 1.20 sealed-segment multiplier plus its existing 2% bounded-head
+  memory term and 1 MiB metadata floor. It continues to show `Projected checkpoint workspace` as
+  a separate line and adds it exactly once to projected peak working disk; the active staged
+  bundle and external-sort transients remain outside this line to avoid double counting.

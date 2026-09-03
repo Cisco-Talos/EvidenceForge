@@ -885,7 +885,15 @@ name: test
     ):
         """A cadence capable of firing exposes its separate workspace projection."""
 
-        mock_engine_class.return_value = Mock()
+        def fake_generate() -> None:
+            root = mock_engine_class.call_args.kwargs["ground_truth_dir"]
+            (root / "data").mkdir(parents=True)
+            (root / "data" / "events.log").write_text("event\n")
+            (root / "GROUND_TRUTH.md").write_text("truth\n")
+            (root / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
+            (root / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+
+        mock_engine_class.return_value.generate.side_effect = fake_generate
         result = runner.invoke(
             app,
             [
