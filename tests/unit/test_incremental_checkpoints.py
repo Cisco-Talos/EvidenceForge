@@ -53,6 +53,9 @@ from evidenceforge.generation.application_channels import ApplicationChannelRegi
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
+from evidenceforge.generation.checkpoints.artifact_registry_head import (
+    LocalArtifactVersionRegistryParticipant,
+)
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.cryptographic_material_head import (
     CryptographicMaterialParticipant,
@@ -88,10 +91,16 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     INTENT_EXECUTION_LEDGER_CHECKPOINT_FIELDS,
     LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
     LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
+    LOCAL_ARTIFACT_DEADLINE_CHECKPOINT_FIELDS,
+    LOCAL_ARTIFACT_PACKED_STORE_CHECKPOINT_FIELDS,
+    LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS,
+    LOCAL_ARTIFACT_ROUTE_CHECKPOINT_FIELDS,
+    LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS,
     NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS,
     PROXY_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS,
     PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS,
+    REFERENCE_LEASE_INDEX_CHECKPOINT_FIELDS,
     SMB_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     SMB_SESSION_RECORD_CHECKPOINT_FIELDS,
     SMB_SESSION_STORE_CHECKPOINT_FIELDS,
@@ -148,6 +157,10 @@ from evidenceforge.generation.checkpoints.store import (
 )
 from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.deployment_registry import (
+    LocalArtifactPublishToken,
+    LocalArtifactVersionRegistry,
+)
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAffinity,
@@ -167,6 +180,10 @@ from evidenceforge.generation.proxy_channels import (
     ExplicitProxyChannelManager,
 )
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
+from evidenceforge.generation.runtime_content import (
+    RuntimeArtifactDescriptor,
+    RuntimeContentIdentityManager,
+)
 from evidenceforge.generation.smb_channels import SmbApplicationChannelManager, SmbChannelAffinity
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.ssh_channels import (
@@ -392,6 +409,7 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         window_start=datetime(2026, 1, 1, tzinfo=UTC),
         window_end=datetime(2026, 1, 2, tzinfo=UTC),
     )
+    artifacts = LocalArtifactVersionRegistry(capacity=8, shard_count=2)
 
     assert_complete_owner_inventory(
         manager,
@@ -428,6 +446,38 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
         owner_name="cryptographic-material",
     )
+    assert_complete_owner_inventory(
+        artifacts,
+        LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS,
+        owner_name="local-artifacts",
+    )
+    for shard in artifacts._shards:
+        assert_complete_owner_inventory(
+            shard,
+            LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS,
+            owner_name=f"local-artifact-shard-{shard.shard_id}",
+        )
+        assert_complete_owner_inventory(
+            shard.store,
+            LOCAL_ARTIFACT_PACKED_STORE_CHECKPOINT_FIELDS,
+            owner_name=f"local-artifact-store-{shard.shard_id}",
+        )
+        assert_complete_owner_inventory(
+            shard.deadlines,
+            LOCAL_ARTIFACT_DEADLINE_CHECKPOINT_FIELDS,
+            owner_name=f"local-artifact-deadlines-{shard.shard_id}",
+        )
+        assert_complete_owner_inventory(
+            shard.leases,
+            REFERENCE_LEASE_INDEX_CHECKPOINT_FIELDS,
+            owner_name=f"local-artifact-leases-{shard.shard_id}",
+        )
+    for route in artifacts._routes:
+        assert_complete_owner_inventory(
+            route,
+            LOCAL_ARTIFACT_ROUTE_CHECKPOINT_FIELDS,
+            owner_name="local-artifact-route",
+        )
     http = HttpApplicationChannelManager(
         window_start=datetime(2026, 1, 1, tzinfo=UTC),
         window_end=datetime(2026, 1, 2, tzinfo=UTC),
@@ -501,6 +551,137 @@ def test_checkpoint_barrier_rejects_transient_state() -> None:
             STATE_MANAGER_CHECKPOINT_FIELDS,
             owner_name="state-manager",
         )
+
+
+def _runtime_artifact_descriptor(ordinal: int) -> RuntimeArtifactDescriptor:
+    return RuntimeArtifactDescriptor(
+        hostname="WS-01",
+        principal="alice",
+        platform="windows",
+        user_profile_id="profile:WS-01:alice",
+        application_profile_id="runtime-files:WS-01:alice",
+        application_id="runtime-filesystem",
+        family="dropped-executable",
+        source_object_id=f"storyline:payload:{ordinal}",
+        native_path=rf"C:\Windows\Temp\payload-{ordinal}.exe",
+        file_object_id=f"attack-payload:{ordinal}",
+        content_version=1,
+        artifact_version=1,
+        size_bytes=1_024 + ordinal,
+        mime_type="application/vnd.microsoft.portable-executable",
+        seed_ref=f"attack-payload:{ordinal}:v1",
+        executable=True,
+        architecture="x64",
+    )
+
+
+def _commit_artifact_token(
+    registry: LocalArtifactVersionRegistry,
+    token: LocalArtifactPublishToken,
+) -> None:
+    with registry.prepared_publication(token) as publication:
+        publication.commit()
+
+
+def test_local_artifact_head_restores_live_payloads_retention_leases_and_allocators() -> None:
+    """The bounded head should preserve exact future registry authority and topology."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    registry = LocalArtifactVersionRegistry(
+        capacity=8,
+        retention=timedelta(hours=1),
+        shard_count=2,
+    )
+    manager = RuntimeContentIdentityManager(registry)
+    descriptors = tuple(_runtime_artifact_descriptor(ordinal) for ordinal in range(1, 4))
+    tokens = (
+        manager.prepare_publication(descriptors[0], start),
+        manager.prepare_publication(
+            descriptors[1],
+            start,
+            lease_owner="process:4242",
+            lease_until=start + timedelta(hours=2),
+        ),
+        manager.prepare_publication(descriptors[2], start + timedelta(minutes=30)),
+    )
+    for token in tokens:
+        _commit_artifact_token(registry, token)
+
+    assert manager.advance_watermark(start + timedelta(hours=1)) == (
+        tokens[0].record.artifact.artifact_version_id,
+    )
+    participant = LocalArtifactVersionRegistryParticipant(registry)
+    seal = participant.prepare_checkpoint(0)
+
+    restored_registry = LocalArtifactVersionRegistry(
+        capacity=8,
+        retention=timedelta(hours=1),
+        shard_count=2,
+    )
+    restored_participant = LocalArtifactVersionRegistryParticipant(restored_registry)
+    restored_participant.restore_checkpoint(seal.head.payload, ())
+    restored_manager = RuntimeContentIdentityManager(restored_registry)
+
+    original_census = manager.census()
+    restored_census = restored_manager.census()
+    assert (
+        restored_census.live_versions,
+        restored_census.leased_versions,
+        restored_census.active_leases,
+        restored_census.pending_expiry,
+        restored_census.prepared_publications,
+        restored_census.claimed_publications,
+        restored_census.reserved_slots,
+    ) == (
+        original_census.live_versions,
+        original_census.leased_versions,
+        original_census.active_leases,
+        original_census.pending_expiry,
+        original_census.prepared_publications,
+        original_census.claimed_publications,
+        original_census.reserved_slots,
+    )
+    for descriptor in descriptors[1:]:
+        assert restored_manager.resolve_record(
+            descriptor.hostname,
+            descriptor.principal,
+            descriptor.native_path,
+            descriptor.platform,
+        ) == manager.resolve_record(
+            descriptor.hostname,
+            descriptor.principal,
+            descriptor.native_path,
+            descriptor.platform,
+        )
+    assert restored_participant.prepare_checkpoint(1).head.payload == seal.head.payload
+    assert restored_registry.release_lease(
+        tokens[1].record.artifact.artifact_version_id,
+        "process:4242",
+    )
+    assert (
+        restored_manager.resolve_record(
+            descriptors[1].hostname,
+            descriptors[1].principal,
+            descriptors[1].native_path,
+            descriptors[1].platform,
+        )
+        is None
+    )
+
+
+def test_local_artifact_head_rejects_prepared_publication() -> None:
+    """A checkpoint barrier must not capture an uncommitted artifact capability."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    registry = LocalArtifactVersionRegistry(capacity=4)
+    token = RuntimeContentIdentityManager(registry).prepare_publication(
+        _runtime_artifact_descriptor(1),
+        start,
+    )
+
+    with pytest.raises(CheckpointError, match="retains transient state"):
+        LocalArtifactVersionRegistryParticipant(registry).prepare_checkpoint(0)
+    assert registry.cancel_prepared(token)
 
 
 def test_network_runtime_head_round_trips_points_transports_and_freshness() -> None:

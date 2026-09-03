@@ -3044,6 +3044,58 @@ class ReferenceLeaseIndex(Generic[K, OwnerT]):
             self._leases[pair] = _ReferenceLeaseRecord(key=key, owner=owner)
         self._expirations.set(pair, True, deadline)
 
+    def checkpoint_records(self) -> tuple[tuple[K, OwnerT, float, int], ...]:
+        """Return stable live lease rows without stale expiry-heap history."""
+
+        rows: list[tuple[K, OwnerT, float, int]] = []
+        for pair, marker, deadline, order, protected in self._expirations.checkpoint_records():
+            if marker is not True or protected or pair not in self._leases:
+                raise RuntimeError("reference lease checkpoint authority diverged")
+            key, owner = pair
+            rows.append((key, owner, deadline, order))
+        if (
+            len(rows) != len(self._leases)
+            or len({row[0] for row in rows}) != self._leased_key_count
+        ):
+            raise RuntimeError("reference lease checkpoint authority diverged")
+        return tuple(rows)
+
+    def restore_checkpoint_records(
+        self,
+        records: tuple[tuple[K, OwnerT, float, int], ...],
+    ) -> None:
+        """Hydrate live leases and rebuild their equality and expiry indexes."""
+
+        if self._leases or self._expirations or self._leased_key_count:
+            raise ValueError("reference lease checkpoint hydration requires an empty index")
+        expiration_rows: list[tuple[tuple[K, OwnerT], bool, float, int, bool]] = []
+        keys: set[K] = set()
+        try:
+            for key, owner, deadline, order in records:
+                pair = (key, owner)
+                hash(pair)
+                if (
+                    pair in self._leases
+                    or type(deadline) not in {int, float}
+                    or not math.isfinite(float(deadline))
+                    or type(order) is not int
+                    or order < 0
+                ):
+                    raise ValueError("reference lease checkpoint row is invalid or duplicated")
+                self._leases[pair] = _ReferenceLeaseRecord(key=key, owner=owner)
+                expiration_rows.append((pair, True, float(deadline), order, False))
+                keys.add(key)
+            self._expirations.restore_checkpoint_records(tuple(expiration_rows))
+        except (TypeError, ValueError):
+            self._leases = CompactIndexedStore(
+                key=lambda item: item.key,
+                owner=lambda item: item.owner,
+            )
+            self._expirations = ExpiringIndex()
+            self._leased_key_count = 0
+            raise
+        self._leased_key_count = len(keys)
+
     def release(self, key: K, owner: OwnerT) -> bool:
         """Release an exact owner lease without scanning other keys."""
         if self._expirations.pop((key, owner)) is None:

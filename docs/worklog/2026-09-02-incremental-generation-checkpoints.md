@@ -220,3 +220,10 @@ until every correctness and performance gate passes.
   exact sensor view. The incremental/SMB/persistent-projection regression group has 188 passing
   tests (29 slow tests excluded by the routine marker policy). Persistent SMB projection and
   continuation authorities remain separate owners to classify.
+- Runtime local-artifact retention now has an explicit bounded participant over its existing
+  packed payloads. The head preserves exact shard/handle/free-list topology, retention deadlines,
+  due-but-leased markers, lease insertion order, allocation cursors, and the canonical watermark;
+  recovery validates and re-packs every inert artifact row before rebuilding routes, equality
+  indexes, deadline heaps, and owner indexes. Prepared publications and retained capabilities fail
+  the barrier. Historical index backing and diagnostic high-water values are deliberately rebuilt,
+  not persisted. The generation-index and incremental-checkpoint group has 112 passing tests.

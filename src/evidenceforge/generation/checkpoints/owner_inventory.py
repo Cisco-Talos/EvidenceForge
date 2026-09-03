@@ -713,6 +713,97 @@ SMB_SESSION_RECORD_CHECKPOINT_FIELDS = _fields(
 )
 
 
+LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS = _fields(
+    live=("_eviction_cursor", "_next_reservation_id", "_shards", "_watermark"),
+    rebuilt=(
+        "_capacity",
+        "_capacity_lock",
+        "_gate",
+        "_high_water_mark",
+        "_live_count",
+        "_prepared_byte_capacity",
+        "_prepared_counts",
+        "_prepared_secret",
+        "_retention",
+        "_route_compaction_cursor",
+        "_routes",
+        "_shard_capacities",
+        "_shard_count",
+    ),
+    transient=(
+        "_claimed_reservations",
+        "_committing_reservations",
+        "_prepared_capability_locators",
+        "_prepared_commit_locators",
+        "_prepared_reservations",
+        "_prepared_retained_bytes",
+        "_prepared_versions",
+        "_publication_group_receipt_locators",
+        "_publication_group_receipts",
+        "_publication_receipt_locators",
+        "_publication_receipts",
+    ),
+)
+
+
+LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("deadlines", "leases", "pending_expiry", "store"),
+    rebuilt=("lock", "mutation_version", "shard_id"),
+)
+
+
+LOCAL_ARTIFACT_PACKED_STORE_CHECKPOINT_FIELDS = _fields(
+    live=("_active", "_payload_arena", "_payload_lengths", "_payload_overflow"),
+    rebuilt=(
+        "_application_profile_index",
+        "_artifact_digests",
+        "_artifact_index",
+        "_compaction_rotations",
+        "_compaction_work",
+        "_content_index",
+        "_execution_path_index",
+        "_free_handle_count",
+        "_free_handle_positions",
+        "_free_handles",
+        "_high_water",
+        "_live",
+        "_next_handle",
+        "_platforms",
+        "_primary",
+        "_release_pending",
+        "_reserved",
+        "_version_digests",
+    ),
+)
+
+
+LOCAL_ARTIFACT_DEADLINE_CHECKPOINT_FIELDS = _fields(
+    live=("_deadlines", "_orders"),
+    rebuilt=(
+        "_generations",
+        "_heap_deadlines",
+        "_heap_generations",
+        "_heap_handles",
+        "_heap_orders",
+        "_heap_size",
+        "_high_water",
+        "_live",
+        "_order_counter",
+    ),
+)
+
+
+LOCAL_ARTIFACT_ROUTE_CHECKPOINT_FIELDS = _fields(
+    rebuilt=("high_water", "lock", "routes"),
+)
+
+
+REFERENCE_LEASE_INDEX_CHECKPOINT_FIELDS = _fields(
+    live=("_expirations", "_leases"),
+    rebuilt=("_leased_key_count",),
+)
+
+
 RDP_AFFINITY_PARTITION_CHECKPOINT_FIELDS = _fields(
     rebuilt=(
         "deletions",
