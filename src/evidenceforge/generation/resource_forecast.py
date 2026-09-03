@@ -304,7 +304,13 @@ class ResourceForecast(BaseModel):
     calibration_label: str
     memory: ForecastRange
     final_output: ForecastRange
-    checkpoint_workspace: ForecastRange
+    checkpoint_workspace: ForecastRange = Field(
+        default_factory=lambda: ForecastRange(
+            lower_bytes=0,
+            expected_bytes=0,
+            upper_bytes=0,
+        )
+    )
     disk: ForecastRange
     snapshot: ResourceSnapshot
     registry_report: RegistryForecastReport | None = None

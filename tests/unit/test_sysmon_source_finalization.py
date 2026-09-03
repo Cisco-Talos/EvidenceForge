@@ -1456,7 +1456,7 @@ def test_engine_seals_security_and_sysmon_before_publishing_either(
     baseline_calls = 0
     fail_sysmon_seal = True
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         nonlocal baseline_calls
         baseline_calls += 1
         security = engine.emitters["windows_event_security"]
@@ -1509,7 +1509,7 @@ def test_engine_retries_sysmon_checkpoint_after_security_publication_without_dup
     baseline_calls = 0
     checkpoint_return_lost = True
 
-    def focused_baseline() -> None:
+    def focused_baseline(**_kwargs: object) -> None:
         nonlocal baseline_calls
         baseline_calls += 1
         security = engine.emitters["windows_event_security"]

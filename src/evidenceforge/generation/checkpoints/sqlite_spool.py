@@ -64,6 +64,7 @@ class SQLiteSpoolParticipant:
         connection: Callable[[], sqlite3.Connection],
         tables: Sequence[str],
         initialize_tracking: bool = True,
+        restore_complete: Callable[[], None] | None = None,
     ) -> None:
         if not owner:
             raise ValueError("SQLite spool checkpoint owner cannot be empty")
@@ -74,6 +75,7 @@ class SQLiteSpoolParticipant:
         self.checkpoint_owner = owner
         self._connection = connection
         self._tables = tuple(sorted(tables))
+        self._restore_complete = restore_complete
         self._committed_watermark = 0
         self._schema_sha256 = ""
         self._segment_count = 0
@@ -426,3 +428,5 @@ class SQLiteSpoolParticipant:
         self._committed_watermark = 0
         self._prepared = None
         self._install_change_tracking(connection)
+        if self._restore_complete is not None:
+            self._restore_complete()

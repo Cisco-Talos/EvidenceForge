@@ -109,20 +109,23 @@ paths or record shapes under `data/`; it does not create a target-named bundle r
 to evaluation. `COLLECTION_PROFILE.json` does not disclose storyline labels or truth.
 
 When storage is configured, `STORAGE_MANIFEST.json` uses schema version 3. Host file sets are unique
-canonical populations, share bindings are aliases rather than duplicate storage, and volumes identify server
-platform, native root, and backing filesystem. Shares keep provider/platform, network and
-server-native roots, backing and wire-advertised filesystems, case policy, and audit profile.
+canonical populations, share bindings are aliases rather than duplicate storage, and volumes identify server platform, native root, and backing filesystem. Shares keep provider/platform, network and server-native roots, backing and wire-advertised filesystems, case policy, and audit profile.
 Mappings retain compatibility `drive`/`mount` fields plus resolved platform/type/root
 presentations, credential mode, and non-secret principal identity. Resolved storyline targets keep
 wire/share-relative, client-presented, and server-local path views separate. The manifest never
 contains credential secrets or file payloads.
 
-## Replacement And Verification
+## Checkpoint workspace, replacement, and verification
 
-An approved `--force` run replaces engine-owned data, reports, manifests, generated artifacts, and
-resolved scenario as one unit. A format-filtered overwrite still replaces the entire `data/`
-directory; it does not retain formats from an older run. Unregistered authored collateral is
-preserved.
+Fresh runs checkpoint every 24 completed simulated hours unless `--checkpoint-hours 0` is passed.
+An incomplete bundle may be resumed with `--resume`; checkpoint-only resume requires an explicit
+`--output`. The protected `.eforge-generation/` workspace is portable only with the complete output
+root and is removed after success, so it is never part of an authoritative completed bundle.
+
+An approved `--overwrite` run replaces engine-owned data, reports, manifests, generated artifacts,
+and resolved scenario as one unit. `--force` / `-f` is a deprecated alias. A format-filtered overwrite
+still replaces the entire `data/` directory; it does not retain formats from an older run.
+Unregistered authored collateral is preserved.
 
 Inspect the generation manifest after exit code 0 and report its effective values, not merely the
 requested flags. Use `eforge eval <bundle-root>` for independent integrity verification: evaluation

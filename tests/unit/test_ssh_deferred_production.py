@@ -484,7 +484,7 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
     )
     SourceTimingPlannerParticipant(fresh.generator._source_timing_planner).restore_checkpoint(
         source_timing_seal.head.payload,
-        (),
+        tuple(segment.payload for segment in source_timing_seal.segments),
     )
     LifecycleRegistryParticipant(fresh.generator._lifecycle_authority.registry).restore_checkpoint(
         lifecycle_seal.head.payload,

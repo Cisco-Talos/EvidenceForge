@@ -585,6 +585,36 @@ class TestEvalCommand:
         assert "environment.description" in result.stdout
 
 
+class TestGenerateCheckpointOptions:
+    """Routine contracts for checkpoint option defaults and help text."""
+
+    @patch("evidenceforge.cli.commands.SIDECAR_REGISTRY.replace")
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_fresh_generation_defaults_to_24_hour_checkpoints(
+        self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
+    ):
+        mock_engine_class.return_value = Mock()
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        arguments = mock_engine_class.call_args.kwargs
+        assert arguments["checkpoint_hours"] == 24
+        assert arguments["checkpoint_controller"] is None
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    def test_generate_help_describes_checkpoint_default(self) -> None:
+        result = runner.invoke(app, ["generate", "--help"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        normalized = " ".join(result.stdout.split())
+        assert "default: 24" in normalized
+        assert "disables checkpoints" in normalized
+
+
 @pytest.mark.slow
 class TestGenerateCommand:
     """Tests for 'eforge generate' command."""

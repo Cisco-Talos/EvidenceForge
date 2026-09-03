@@ -257,7 +257,9 @@ class TestGenerationEngine:
         engine.start_time = start
         engine.end_time = end
         barrier = Mock()
+        prepare_barrier = Mock()
         monkeypatch.setattr(engine, "_barrier_flush_all_emitters", barrier)
+        monkeypatch.setattr(engine, "_prepare_incremental_checkpoint_barrier", prepare_barrier)
 
         engine._checkpoint_after_completed_hour(
             completed_simulated_hours=5,
@@ -274,6 +276,7 @@ class TestGenerationEngine:
 
         assert observed == [(6, start, "collection"), (12, end, "tail")]
         assert barrier.call_count == 2
+        assert prepare_barrier.call_count == 2
 
     def test_checkpoint_hour_hook_requires_a_nonnegative_exact_cadence(
         self,

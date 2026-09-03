@@ -15,6 +15,7 @@ from .emitter_spools import EmitterSpoolParticipant
 from .engine_head import GenerationEngineParticipant
 from .http_channel_head import HttpApplicationChannelParticipant
 from .intent_ledger_head import IntentExecutionLedgerParticipant
+from .lifecycle_authority_head import GeneratorLifecycleAuthorityParticipant
 from .lifecycle_head import LifecycleRegistryParticipant
 from .network_runtime_head import NetworkTransactionRuntimeParticipant
 from .participants import IncrementalCheckpointParticipant
@@ -54,6 +55,7 @@ def _email_manifest_participant(engine: GenerationEngine) -> SQLiteSpoolParticip
         owner="email-artifact-manifest-spool",
         connection=spool.checkpoint_connection,
         tables=("manifest_rows",),
+        restore_complete=spool.restore_checkpoint_state,
     )
 
 
@@ -74,6 +76,10 @@ def production_checkpoint_participants(
         TimingRuntimeParticipant(timing),
         SourceTimingPlannerParticipant(source_timing),
         LifecycleRegistryParticipant(engine.lifecycle_authority.registry),
+        GeneratorLifecycleAuthorityParticipant(
+            engine.lifecycle_authority,
+            systems=tuple(engine.scenario.environment.systems),
+        ),
         ApplicationChannelRegistryParticipant(engine.application_channel_registry),
         CryptographicMaterialParticipant(generator._cryptographic_material_registry),
         NetworkTransactionRuntimeParticipant(generator._network_transaction_runtime),

@@ -27203,6 +27203,9 @@ class ActivityGenerator:
             pid=qmgr_pid,
         )
         queue_state["removed"] = True
+        states = getattr(self, "_postfix_queue_states", None)
+        if isinstance(states, dict):
+            states.pop((system.hostname, queue_id), None)
 
     @staticmethod
     def _is_linux_mail_server(system: "System") -> bool:

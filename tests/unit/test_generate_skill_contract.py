@@ -66,9 +66,9 @@ def test_generate_skill_requires_safe_explicit_output_replacement() -> None:
     assert "Use an explicit `--output <bundle-root>`" in text
     assert "must be distinct from the directory containing the input resolved document" in text
     assert "obtain explicit approval" in text
-    assert "Do not use `--force` for a clean destination" in text
-    assert "`--formats` still replaces the entire `data/` directory" in text
-    assert "Optional authored `ENVIRONMENT.md`" in text
+    assert "Do not use\n`--overwrite` for a clean destination" in text
+    assert "`--formats` still replaces the entire `data/` directory" in " ".join(text.split())
+    assert "Authored `ENVIRONMENT.md`" in text
     assert "Always use `--force`" not in text
 
 
@@ -94,6 +94,7 @@ def test_generate_skill_covers_current_runtime_and_authorization_contracts() -> 
         "--formats <comma-list>",
         "--seed <0..2^64-1>",
         "--project-root <absolute-root>",
+        "--checkpoint-hours N",
     ):
         assert option in text
     assert "repeat each approved host on every relevant action" in normalized
@@ -106,6 +107,20 @@ def test_generate_skill_covers_current_runtime_and_authorization_contracts() -> 
     assert "Use normal output for the first run" in normalized
     assert "Retry with `--verbose`" in normalized
     assert "use `--debug` last" in normalized
+
+
+def test_generate_skill_preserves_and_resumes_checkpoints() -> None:
+    """Interrupted generation should prefer compatible recovery over replacement."""
+
+    normalized = " ".join(_read(GENERATE_SKILL).split())
+
+    assert "changes the 24-hour default; `0` disables new checkpoints" in normalized
+    assert "Preserve a valid `.eforge-generation/` workspace" in normalized
+    assert "generate --output <bundle-root> --resume" in normalized
+    assert "unspecified resume retains its stored cadence" in normalized
+    assert "Explain an invalid/incompatible checkpoint" in normalized
+    assert "`--force`/`-f` is a deprecated overwrite alias" in normalized
+    assert "success removes the workspace and leaves no checkpoint history" in normalized
 
 
 def test_generate_skill_verifies_the_authoritative_bundle() -> None:
@@ -133,7 +148,7 @@ def test_generate_skill_preserves_lifecycle_defect_evidence() -> None:
 
     normalized = " ".join(_read(GENERATE_SKILL).split())
 
-    assert "preserve the error, traceback, and staged bundle" in normalized
+    assert "preserve the error and checkpoint workspace" in normalized
     assert "Lifecycle/channel/continuation invariant failures are generator defects" in normalized
     assert "do not rewrite scenario timing to mask them" in normalized
 

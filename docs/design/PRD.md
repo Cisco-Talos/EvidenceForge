@@ -136,7 +136,7 @@ eforge validate SCENARIO_FILE
 
 #### Workflow 5: Generate Logs
 ```bash
-eforge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
+eforge generate [SCENARIO_FILE] [--output DIR] [--checkpoint-hours N] [--resume|--overwrite]
 ```
 1. Load and validate scenario file (schema + cross-reference validation)
 2. Load format definitions for requested log types
@@ -564,13 +564,17 @@ Checks performed:
 
 **Command: generate**
 ```
-eforge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
+eforge generate [SCENARIO_FILE] [--output DIR] [--checkpoint-hours N] [--resume|--overwrite]
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
 
 Options:
   --output, -o     Override output directory from scenario file
+  --checkpoint-hours N  Checkpoint every N simulated hours (default 24; 0 disables)
+  --resume         Resume compatible incomplete output; SCENARIO_FILE may be omitted with --output
+  --overwrite      Replace engine-owned output or an incompatible incomplete run
+  --force, -f      Deprecated alias for --overwrite
   --verbose, -v    Enable INFO level logging
   --debug, -d      Enable DEBUG level logging
 
@@ -1195,12 +1199,12 @@ Phase 4 evaluation revealed that while signal integrity is excellent (100/100), 
 | `eforge evaluate` command | Complete (Phase 4) |
 | Evaluation framework (5 dimensions, 23 sub-scores) | Complete (Phase 4) |
 | `/eforge evaluate` skill | Complete (Phase 4) |
+| Incremental generation checkpoints and portable resume | Complete |
 | Data realism improvements (SIDs, event diversity, protocol mix, timing) | Phase 5 (planned) |
 
 ### Future Enhancements
 
 **Short-term (post-MVP):**
-- Checkpointing and resume for long-running generation jobs
 - Large dataset optimization (100M+ events, memory-mapped writes)
 - Config file inheritance/templating
 - Additional log formats (cloud providers, databases)

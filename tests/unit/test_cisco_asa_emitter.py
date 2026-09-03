@@ -72,6 +72,15 @@ def asa_emitter(tmp_path):
 T0 = datetime(2024, 6, 15, 14, 23, 5, tzinfo=UTC)
 
 
+def test_asa_route_writer_inherits_incremental_checkpoint_mode(asa_emitter) -> None:
+    asa_emitter.enable_incremental_checkpointing()
+
+    writer = asa_emitter._get_writer("fw01")
+
+    assert writer._sorted_writer is not None
+    assert writer._sorted_writer._checkpoint_mode is True
+
+
 def _make_connection_event(
     src_ip="10.0.10.50",
     src_port=54321,

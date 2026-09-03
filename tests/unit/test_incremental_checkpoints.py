@@ -29,6 +29,7 @@ from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, Thre
 from evidenceforge.events.ids_evaluation import IdsDigest
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
+    LifecycleEntityRef,
     LifecycleForegroundLease,
     LifecycleHold,
     LifecycleMembership,
@@ -86,11 +87,13 @@ from evidenceforge.generation.checkpoints.http_channel_head import (
 from evidenceforge.generation.checkpoints.intent_ledger_head import (
     IntentExecutionLedgerParticipant,
 )
+from evidenceforge.generation.checkpoints.lifecycle_authority_head import (
+    GeneratorLifecycleAuthorityParticipant,
+)
 from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.models import (
     CheckpointCursor,
     CheckpointManifest,
-    CheckpointStoreMetrics,
 )
 from evidenceforge.generation.checkpoints.network_runtime_head import (
     NetworkTransactionRuntimeParticipant,
@@ -101,6 +104,8 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     EXPIRING_INDEX_CHECKPOINT_FIELDS,
+    GENERATOR_LIFECYCLE_AUTHORITY_CHECKPOINT_FIELDS,
+    GENERATOR_LIFECYCLE_AUTHORITY_SHARD_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
     HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS,
     HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS,
@@ -194,7 +199,13 @@ from evidenceforge.generation.http_channels import (
     HttpChannelAffinity,
 )
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.lifecycle_authority import (
+    DeferredLifecycleCloseIntent,
+    GeneratorLifecycleAuthority,
+    ProcessCloseIntent,
+)
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_runtime import (
     NetworkRuntimePointFamily,
     NetworkTransactionRuntime,
@@ -315,7 +326,6 @@ def _commit(
     inherited: tuple = (),
     payload: bytes | None = None,
     references: tuple[str, ...] = (),
-    metrics: CheckpointStoreMetrics | None = None,
 ) -> CheckpointManifest:
     segments = (
         ()
@@ -347,7 +357,6 @@ def _commit(
                 referenced_segments=references,
             ),
         ),
-        metrics=metrics,
     )
 
 
@@ -444,6 +453,11 @@ def test_rng_numeric_schema_rejects_invalid_word() -> None:
 def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
     manager = StateManager()
     registry = LifecycleRegistry()
+    lifecycle_authority = GeneratorLifecycleAuthority(
+        manager,
+        LifecycleShadow(manager, registry),
+        shard_count=8,
+    )
     source_timing = SourceTimingPlanner()
     application_channels = ApplicationChannelRegistry(
         window_start=datetime(2026, 1, 1, tzinfo=UTC),
@@ -468,6 +482,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         registry,
         LIFECYCLE_REGISTRY_CHECKPOINT_FIELDS,
         owner_name="lifecycle-registry",
+    )
+    assert_complete_owner_inventory(
+        lifecycle_authority,
+        GENERATOR_LIFECYCLE_AUTHORITY_CHECKPOINT_FIELDS,
+        owner_name="generator-lifecycle-authority",
     )
     assert_complete_owner_inventory(
         source_timing,
@@ -589,6 +608,89 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
             LIFECYCLE_PARTITION_CHECKPOINT_FIELDS,
             owner_name=f"lifecycle-partition-{index}",
         )
+
+
+def test_lifecycle_authority_head_round_trips_future_closes_and_strict_markers() -> None:
+    """Pending close work and hard lifecycle gates should survive fresh hydration."""
+
+    start = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    system = System(
+        hostname="LINUX-01",
+        ip="10.0.0.10",
+        os="Ubuntu 24.04",
+        type="server",
+    )
+    manager = StateManager()
+    registry = LifecycleRegistry()
+    authority = GeneratorLifecycleAuthority(
+        manager,
+        LifecycleShadow(manager, registry),
+        shard_count=8,
+    )
+    process_intent = ProcessCloseIntent(
+        system=system,
+        pid=4321,
+        started_at=start,
+        process_object_id="process-1",
+        username="alice",
+        process_name="sudo",
+        logon_id="session-1",
+        close_at=start + timedelta(hours=2),
+        action_id="close-process-1",
+        transition_ordinal=3,
+        eligible_at=start + timedelta(hours=3),
+    )
+    deferred_intent = DeferredLifecycleCloseIntent(
+        close_id="deferred-1",
+        hostname=system.hostname,
+        session_object_id="session-1",
+        close_at=start + timedelta(hours=4),
+        action_id="close-session-1",
+        payload=("ssh", 22),
+        transition_ordinal=4,
+    )
+    authority.schedule_process_close(process_intent)
+    authority.schedule_deferred_close(deferred_intent)
+    authority.mark_strict(
+        LifecycleEntityRef("session", "separate-session"),
+        hostname=system.hostname,
+        retain_until=start + timedelta(hours=5),
+    )
+    authority._bootstrap_complete = True
+    authority._bootstrapped_sessions = 2
+    authority._bootstrapped_processes = 3
+    participant = GeneratorLifecycleAuthorityParticipant(authority, systems=(system,))
+    seal = participant.prepare_checkpoint(1)
+
+    restored_manager = StateManager()
+    restored_registry = LifecycleRegistry()
+    restored_authority = GeneratorLifecycleAuthority(
+        restored_manager,
+        LifecycleShadow(restored_manager, restored_registry),
+        shard_count=8,
+    )
+    restored = GeneratorLifecycleAuthorityParticipant(restored_authority, systems=(system,))
+    restored.restore_checkpoint(seal.head.payload, ())
+
+    assert restored.prepare_checkpoint(2).head.payload == seal.head.payload
+    assert restored_authority.process_close_intent(system.hostname, 4321, start) == process_intent
+    assert (
+        restored_authority.deferred_close(
+            hostname=system.hostname,
+            close_id="deferred-1",
+        )
+        == deferred_intent
+    )
+    assert restored_authority.is_strict(
+        LifecycleEntityRef("session", "separate-session"),
+        system.hostname,
+    )
+    shard = next(shard for shard in restored_authority._shards if shard is not None)
+    assert_complete_owner_inventory(
+        shard,
+        GENERATOR_LIFECYCLE_AUTHORITY_SHARD_CHECKPOINT_FIELDS,
+        owner_name="generator-lifecycle-authority-shard",
+    )
 
 
 def test_checkpoint_barrier_rejects_transient_state() -> None:
@@ -1920,6 +2022,50 @@ def test_lifecycle_head_rebuilds_service_and_cross_host_transport_bindings() -> 
     )
     assert restored_registry.get_transport("transport-1") == expected_transport
 
+    transport_close = started.replace(minute=30)
+    restored_registry.close_transport_session_binding(
+        transport_binding.binding_id,
+        expected_identity=transport_binding,
+        closed_at=started.replace(minute=10),
+        action_id="transport-unbind",
+    )
+    ticket = restored_registry.request_close(
+        LifecycleCloseBarrier(
+            barrier_id="transport-close-barrier",
+            subject=transport.ref,
+            requested_at=transport_close,
+            authority="generated",
+            action_id="transport-close",
+        ),
+        ticket_id="transport-close-ticket",
+    )
+    restored_registry.close(ticket.ticket_id)
+    assert restored_registry.prune_checkpoint_terminal_transports(transport_close) == (
+        transport.ref,
+    )
+    expected_pruned_binding = restored_registry.transport_session_binding(
+        transport_binding.binding_id
+    )
+    expected_session_deadline = restored_registry.session_transport_close_deadline(
+        session.object_id
+    )
+    pruned_seal = LifecycleRegistryParticipant(restored_registry).prepare_checkpoint(1)
+    pruned_hydration = LifecycleRegistry(shard_count=4)
+
+    LifecycleRegistryParticipant(pruned_hydration).restore_checkpoint(
+        pruned_seal.head.payload,
+        (),
+    )
+
+    assert pruned_hydration.get_transport(transport.object_id) is None
+    assert pruned_hydration.transport_session_binding(transport_binding.binding_id) == (
+        expected_pruned_binding
+    )
+    assert (
+        pruned_hydration.session_transport_close_deadline(session.object_id)
+        == expected_session_deadline
+    )
+
 
 def test_lifecycle_head_restores_lease_values_indexes_and_commit_keys() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2581,12 +2727,12 @@ def test_email_manifest_spool_restores_row_deltas_and_append_cursor(tmp_path: Pa
         connection=restored.checkpoint_connection,
         tables=("manifest_rows",),
         initialize_tracking=False,
+        restore_complete=restored.restore_checkpoint_state,
     )
     restored_participant.restore_checkpoint(
         second.head.payload,
         (first.segments[0].payload, second.segments[0].payload),
     )
-    restored.restore_checkpoint_state()
     restored.append({"date": "2026-01-03", "message_id": "final", "sender": "m"})
 
     assert restored.census().logical_rows == 3
@@ -3217,13 +3363,11 @@ def test_sqlite_spool_seals_only_dirty_rows_and_rebuilds_fresh_database(
 
 def test_controller_commits_only_due_transactional_participants(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
-    progress: list[dict[str, float | int | str]] = []
     controller = IncrementalCheckpointController(
         store=store,
         fingerprint=_FINGERPRINT,
         checkpoint_hours=6,
         resolved_scenario=b"schema_version: '2.0'\n",
-        progress=progress.append,
     )
     participant = _FakeParticipant()
 
@@ -3239,13 +3383,7 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
     first_segments = store.segment_references(first)
     second_segments = store.segment_references(second)
     assert len(second_segments) == 2
-    assert progress[-1]["new_segment_bytes"] > 0
-    assert progress[-1]["reused_segment_bytes"] == first_segments[0].size
-    assert progress[-1]["reused_segment_bytes_read"] == 0
-    assert progress[-1]["reused_segment_bytes_hashed"] == 0
-    participant_metrics = json.loads(str(progress[-1]["participants_json"]))
-    assert participant_metrics[0]["owner"] == participant.checkpoint_owner
-    assert participant_metrics[0]["head_bytes"] > 0
+    assert second_segments[0] == first_segments[0]
 
     recovered = store.recover(expected_fingerprint=_FINGERPRINT)
     fresh = _FakeParticipant()
@@ -3255,11 +3393,21 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
         fingerprint=_FINGERPRINT,
         resolved_scenario=store.read_resolved_scenario(recovered),
     )
+    assert resumed.cadence.hours == 6
     resumed.restore_participants(recovery=recovered, participants=(fresh,))
     assert fresh.restored == (
         {"committed": 0, "pending": 1},
         ([0], [1]),
     )
+
+    disabled = IncrementalCheckpointController.for_recovery(
+        store=store,
+        recovery=recovered,
+        fingerprint=_FINGERPRINT,
+        resolved_scenario=store.read_resolved_scenario(recovered),
+        checkpoint_hours=0,
+    )
+    assert not disabled.cadence.enabled
 
 
 def test_controller_restores_participants_in_dependency_order(tmp_path: Path) -> None:
@@ -3454,20 +3602,17 @@ def test_store_rejects_externally_writable_segment(tmp_path: Path) -> None:
 
 def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
-    first_metrics = CheckpointStoreMetrics()
     first = _commit(
         store,
         sequence=0,
         hour=6,
         payload=b"first delta" * 100,
-        metrics=first_metrics,
     )
     first_segments = store.segment_references(first)
     first_segment = first_segments[0]
     first_path = store.workspace / first_segment.relative_path
     first_stat = first_path.stat()
 
-    second_metrics = CheckpointStoreMetrics()
     second = _commit(
         store,
         sequence=1,
@@ -3475,15 +3620,11 @@ def test_store_shares_inherited_segments_without_reprocessing_them(tmp_path: Pat
         inherited=first.segment_catalogs,
         payload=b"second delta" * 100,
         references=(first_segment.sha256,),
-        metrics=second_metrics,
     )
 
     second_segments = store.segment_references(second)
     assert len(second_segments) == 2
-    assert second_metrics.reused_segment_bytes == first_segment.size
-    assert second_metrics.bytes_read == 0
-    assert second_metrics.reused_segment_bytes_read == 0
-    assert second_metrics.reused_segment_bytes_hashed == 0
+    assert second_segments[0] == first_segment
     assert [segment.owner_ordinal for segment in second_segments] == [0, 1]
     assert first_path.stat().st_ino == first_stat.st_ino
     assert first_path.stat().st_mtime_ns == first_stat.st_mtime_ns
@@ -3498,18 +3639,14 @@ def test_store_size_tiers_catalogs_without_flat_manifest_growth(tmp_path: Path) 
     catalogs = ()
     manifest = None
     for sequence in range(32):
-        metrics = CheckpointStoreMetrics()
         manifest = _commit(
             store,
             sequence=sequence,
             hour=(sequence + 1) * 6,
             inherited=catalogs,
             payload=f"delta-{sequence}".encode(),
-            metrics=metrics,
         )
         catalogs = manifest.segment_catalogs
-        assert metrics.reused_segment_bytes_read == 0
-        assert metrics.reused_segment_bytes_hashed == 0
 
     assert manifest is not None
     assert [catalog.level for catalog in manifest.segment_catalogs] == [5]

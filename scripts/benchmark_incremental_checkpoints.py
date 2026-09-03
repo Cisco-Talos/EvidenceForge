@@ -1,7 +1,7 @@
 """Benchmark incremental generation checkpoints in rotated fresh-process pairs.
 
 The harness measures the generator body with and without checkpointing, verifies every pair's
-complete deterministic output digest, and retains the controller's per-checkpoint instrumentation.
+complete deterministic output digest, and times checkpoint commits from outside production code.
 It intentionally uses only production dependencies.
 """
 
@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import cast
@@ -31,6 +31,8 @@ from evidenceforge.composition.artifacts import (
 )
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.fingerprint import run_fingerprint
+from evidenceforge.generation.checkpoints.models import CheckpointCursor, CheckpointManifest
+from evidenceforge.generation.checkpoints.participants import IncrementalCheckpointParticipant
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 
@@ -93,7 +95,7 @@ def _run_child(args: argparse.Namespace) -> int:
         workspace = nullcontext(str(args.child_output_root))
     with workspace as temporary:
         root = Path(temporary)
-        progress: list[dict[str, float | int | str]] = []
+        checkpoints: list[dict[str, float | int | str]] = []
         phase_started: dict[str, float] = {}
         phase_seconds: dict[str, float] = {}
         engine: GenerationEngine | None = None
@@ -191,8 +193,27 @@ def _run_child(args: argparse.Namespace) -> int:
                 ),
                 checkpoint_hours=args.child_checkpoint_hours,
                 resolved_scenario=resolved_scenario,
-                progress=progress.append,
             )
+            original_commit = controller.commit
+
+            def measured_checkpoint_commit(
+                *,
+                cursor: CheckpointCursor,
+                participants: Iterable[IncrementalCheckpointParticipant],
+            ) -> CheckpointManifest:
+                checkpoint_started = time.perf_counter()
+                manifest = original_commit(cursor=cursor, participants=participants)
+                checkpoints.append(
+                    {
+                        "checkpoint_seconds": time.perf_counter() - checkpoint_started,
+                        "completed_simulated_hours": cursor.completed_simulated_hours,
+                        "phase": cursor.phase,
+                        "sequence": manifest.sequence,
+                    }
+                )
+                return manifest
+
+            controller.commit = measured_checkpoint_commit  # type: ignore[method-assign]
         engine = GenerationEngine(
             scenario,
             root / "data",
@@ -214,12 +235,12 @@ def _run_child(args: argparse.Namespace) -> int:
             else _directory_bytes(store.workspace)
         )
         scale_points = [
-            item for item in progress if int(item["completed_simulated_hours"]) in _SCALING_HOURS
+            item for item in checkpoints if int(item["completed_simulated_hours"]) in _SCALING_HOURS
         ]
         result = {
-            "checkpoint_count": len(progress),
+            "checkpoint_count": len(checkpoints),
             "checkpoint_hours": args.child_checkpoint_hours,
-            "checkpoint_seconds": sum(float(item["checkpoint_seconds"]) for item in progress),
+            "checkpoint_seconds": sum(float(item["checkpoint_seconds"]) for item in checkpoints),
             "output_bytes": output_bytes,
             "output_digest": output_digest,
             "output_hashes": output_hashes,

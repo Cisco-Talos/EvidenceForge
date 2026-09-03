@@ -43,6 +43,7 @@ from evidenceforge.events.lifecycle import (
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleRegistry,
+    _DependentClosureAggregate,
     _ForegroundLeaseEntry,
     _LifecycleState,
     _ProcessEntry,
@@ -1000,8 +1001,8 @@ def _decode_snapshot_rows(
     list[SessionLifecycleSnapshot],
     list[ServiceInstanceLifecycleSnapshot],
     list[TransportLifecycleSnapshot],
-    list[ServiceProcessBindingSnapshot],
-    list[TransportSessionBindingSnapshot],
+    list[tuple[int, ServiceProcessBindingSnapshot]],
+    list[tuple[int, TransportSessionBindingSnapshot]],
     list[LifecycleRetentionLease],
     list[_ForegroundLeaseEntry],
     list[_SingletonLeaseEntry],
@@ -1014,13 +1015,13 @@ def _decode_snapshot_rows(
     sessions: list[SessionLifecycleSnapshot] = []
     services: list[ServiceInstanceLifecycleSnapshot] = []
     transports: list[TransportLifecycleSnapshot] = []
-    service_bindings: list[ServiceProcessBindingSnapshot] = []
-    transport_bindings: list[TransportSessionBindingSnapshot] = []
+    service_bindings: list[tuple[int, ServiceProcessBindingSnapshot]] = []
+    transport_bindings: list[tuple[int, TransportSessionBindingSnapshot]] = []
     retention_leases: list[LifecycleRetentionLease] = []
     foreground_leases: list[_ForegroundLeaseEntry] = []
     singleton_leases: list[_SingletonLeaseEntry] = []
     states: dict[str, _DecodedState] = {}
-    for partition in partitions:
+    for partition_id, partition in enumerate(partitions):
         (
             process_rows,
             session_rows,
@@ -1079,11 +1080,11 @@ def _decode_snapshot_rows(
             transports.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         service_bindings.extend(
-            _decode_service_binding(row)
+            (partition_id, _decode_service_binding(row))
             for row in service_binding_rows  # type: ignore[union-attr]
         )
         transport_bindings.extend(
-            _decode_transport_binding(row)
+            (partition_id, _decode_transport_binding(row))
             for row in transport_binding_rows  # type: ignore[union-attr]
         )
         retention_leases.extend(
@@ -1110,6 +1111,92 @@ def _decode_snapshot_rows(
         singleton_leases,
         states,
     )
+
+
+def _restore_terminal_service_binding(
+    registry: LifecycleRegistry,
+    partition_id: int,
+    binding: ServiceProcessBindingSnapshot,
+    *,
+    service_ids: set[str],
+    process_ids: set[str],
+) -> None:
+    """Restore a closed binding whose terminal owner was already compacted."""
+
+    closed_at = binding.closed_at
+    if closed_at is None:
+        raise CheckpointCorruptionError("lifecycle checkpoint has an orphaned live binding")
+    identity = binding.identity
+    partition = registry._partitions[partition_id]
+    with partition._catalog_lock, partition._index_lock:
+        for store, object_id, retained in (
+            (
+                partition._service_processes_by_service,
+                identity.service_object_id,
+                identity.service_object_id in service_ids,
+            ),
+            (
+                partition._service_bindings_by_process,
+                identity.process_object_id,
+                identity.process_object_id in process_ids,
+            ),
+        ):
+            if not retained:
+                continue
+            aggregate = store.get(object_id)
+            if aggregate is None:
+                aggregate = _DependentClosureAggregate()
+                store[object_id] = aggregate
+            aggregate.register()
+            aggregate.close(closed_at)
+        partition._service_process_tombstones[identity.binding_id] = binding
+        handle = partition._service_process_tombstones.handle_for(identity.binding_id)
+        partition._service_process_tombstone_deadlines.set(
+            handle,
+            closed_at + registry.closed_retention,
+        )
+    key = ("service_process_binding", identity.binding_id)
+    with registry._routes.locked((key,)):
+        if registry._routes.get_locked(*key) is not None:
+            raise CheckpointCorruptionError("lifecycle checkpoint binding ID is duplicated")
+        registry._routes.set_locked(*key, partition_id)
+
+
+def _restore_terminal_transport_binding(
+    registry: LifecycleRegistry,
+    partition_id: int,
+    binding: TransportSessionBindingSnapshot,
+    *,
+    session_ids: set[str],
+) -> None:
+    """Restore a closed cross-host binding after its transport was compacted."""
+
+    closed_at = binding.closed_at
+    if closed_at is None:
+        raise CheckpointCorruptionError("lifecycle checkpoint has an orphaned live binding")
+    identity = binding.identity
+    partition = registry._partitions[partition_id]
+    with partition._catalog_lock, partition._index_lock:
+        partition._transport_session_tombstones[identity.binding_id] = binding
+        handle = partition._transport_session_tombstones.handle_for(identity.binding_id)
+        partition._transport_session_tombstone_deadlines.set(
+            handle,
+            closed_at + registry.closed_retention,
+        )
+    if identity.session_object_id in session_ids:
+        route = registry._routes.get("session", identity.session_object_id)
+        session_partition_id = registry._session_partition_from_route(route)
+        if session_partition_id is None:
+            raise CheckpointCorruptionError("lifecycle checkpoint session route is missing")
+        session_partition = registry._partitions[session_partition_id]
+        with session_partition._catalog_lock, session_partition._index_lock:
+            session_partition._register_session_transport_binding_locked(identity)
+            session_partition._close_session_transport_binding_locked(identity, closed_at)
+    key = ("transport_session_binding", identity.binding_id)
+    with registry._routes.locked((key,)):
+        if registry._routes.get_locked(*key) is not None:
+            raise CheckpointCorruptionError("lifecycle checkpoint binding ID is duplicated")
+        registry._routes.set_locked(*key, partition_id)
 
 
 def _register_parent_ordered(
@@ -1323,22 +1410,57 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
         ),
     )
-    for binding in sorted(service_bindings, key=lambda item: item.identity.binding_id):
-        fresh.bind_service_process(binding.identity)
+    service_ids = {snapshot.identity.object_id for snapshot in services}
+    process_ids = {snapshot.identity.object_id for snapshot in processes}
+    session_ids = {snapshot.identity.object_id for snapshot in sessions}
+    transport_ids = {snapshot.identity.object_id for snapshot in transports}
+    for partition_id, binding in sorted(
+        service_bindings,
+        key=lambda item: item[1].identity.binding_id,
+    ):
+        identity = binding.identity
+        if (
+            identity.service_object_id not in service_ids
+            or identity.process_object_id not in process_ids
+        ):
+            _restore_terminal_service_binding(
+                fresh,
+                partition_id,
+                binding,
+                service_ids=service_ids,
+                process_ids=process_ids,
+            )
+            continue
+        fresh.bind_service_process(identity)
         if binding.closed_at is not None:
             fresh.close_service_process_binding(
-                binding.identity.binding_id,
-                expected_identity=binding.identity,
+                identity.binding_id,
+                expected_identity=identity,
                 closed_at=binding.closed_at,
                 action_id=binding.close_action_id,
                 transition_ordinal=binding.close_transition_ordinal,
             )
-    for binding in sorted(transport_bindings, key=lambda item: item.identity.binding_id):
-        fresh.bind_transport_session(binding.identity)
+    for partition_id, binding in sorted(
+        transport_bindings,
+        key=lambda item: item[1].identity.binding_id,
+    ):
+        identity = binding.identity
+        if (
+            identity.transport_object_id not in transport_ids
+            or identity.session_object_id not in session_ids
+        ):
+            _restore_terminal_transport_binding(
+                fresh,
+                partition_id,
+                binding,
+                session_ids=session_ids,
+            )
+            continue
+        fresh.bind_transport_session(identity)
         if binding.closed_at is not None:
             fresh.close_transport_session_binding(
-                binding.identity.binding_id,
-                expected_identity=binding.identity,
+                identity.binding_id,
+                expected_identity=identity,
                 closed_at=binding.closed_at,
                 action_id=binding.close_action_id,
                 transition_ordinal=binding.close_transition_ordinal,

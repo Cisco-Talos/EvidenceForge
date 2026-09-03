@@ -32,7 +32,6 @@ from __future__ import annotations
 import logging
 import math
 import random
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -305,15 +304,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             return
         if self.start_time is None or self.end_time is None:
             raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
-        checkpoint_started = time.perf_counter()
-        quiesce_started = time.perf_counter()
         self._barrier_flush_all_emitters()
-        emitter_quiesce_seconds = time.perf_counter() - quiesce_started
-        barrier_prepare_seconds = 0.0
         if retirement_due or controller is not None:
-            barrier_prepare_started = time.perf_counter()
             self._prepare_incremental_checkpoint_barrier(next_hour)
-            barrier_prepare_seconds = time.perf_counter() - barrier_prepare_started
         if not checkpoint_due:
             return
         if next_hour < self.start_time:
@@ -333,12 +326,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             controller.commit(
                 cursor=cursor,
                 participants=self._checkpoint_participants,
-                emitter_quiesce_seconds=emitter_quiesce_seconds,
-                barrier_prepare_seconds=barrier_prepare_seconds,
-            )
-            logger.debug(
-                "Incremental checkpoint foreground pause completed in %.6f seconds",
-                time.perf_counter() - checkpoint_started,
             )
             if self._checkpoint_synchronization_hook is not None:
                 self._checkpoint_synchronization_hook(cursor)

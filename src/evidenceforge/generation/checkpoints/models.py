@@ -148,35 +148,3 @@ class CheckpointRecovery(BaseModel):
     warning: str | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class CheckpointStoreMetrics(BaseModel):
-    """Bounded work performed while publishing an incremental checkpoint."""
-
-    emitter_quiesce_seconds: float = Field(default=0.0, ge=0.0)
-    barrier_prepare_seconds: float = Field(default=0.0, ge=0.0)
-    participant_prepare_seconds: float = Field(default=0.0, ge=0.0)
-    participant_commit_seconds: float = Field(default=0.0, ge=0.0)
-    new_segment_bytes: int = Field(default=0, ge=0)
-    catalog_bytes: int = Field(default=0, ge=0)
-    reused_segment_bytes: int = Field(default=0, ge=0)
-    head_bytes: int = Field(default=0, ge=0)
-    manifest_bytes: int = Field(default=0, ge=0)
-    bytes_read: int = Field(default=0, ge=0)
-    bytes_hashed: int = Field(default=0, ge=0)
-    reused_segment_bytes_read: int = Field(default=0, ge=0)
-    reused_segment_bytes_hashed: int = Field(default=0, ge=0)
-    segment_encode_seconds: float = Field(default=0.0, ge=0.0)
-    compression_seconds: float = Field(default=0.0, ge=0.0)
-    hashing_seconds: float = Field(default=0.0, ge=0.0)
-    segment_write_seconds: float = Field(default=0.0, ge=0.0)
-    catalog_write_seconds: float = Field(default=0.0, ge=0.0)
-    head_write_seconds: float = Field(default=0.0, ge=0.0)
-    manifest_write_seconds: float = Field(default=0.0, ge=0.0)
-    atomic_publish_seconds: float = Field(default=0.0, ge=0.0)
-    index_publish_seconds: float = Field(default=0.0, ge=0.0)
-    rotation_seconds: float = Field(default=0.0, ge=0.0)
-    commit_seconds: float = Field(default=0.0, ge=0.0)
-    foreground_pause_seconds: float = Field(default=0.0, ge=0.0)
-
-    model_config = ConfigDict(extra="forbid")

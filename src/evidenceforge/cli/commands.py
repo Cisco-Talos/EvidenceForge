@@ -94,15 +94,25 @@ from evidenceforge.output_targets import (
     normalize_output_target,
     write_output_target_marker,
 )
+from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 if TYPE_CHECKING:
     from evidenceforge.generation.storage_world import StorageWorldModel
     from evidenceforge.validation.schema import ScenarioValidator, ValidationIssue
 
 
-# Remains disabled until the complete representative performance matrix selects the production
-# default required by the checkpoint acceptance plan.
-_PROVISIONAL_DEFAULT_CHECKPOINT_HOURS = 0
+_DEFAULT_CHECKPOINT_HOURS = 24
+
+
+def _completed_simulated_hours(scenario: Scenario) -> int:
+    """Return the cadence counter span across warm-up and collection."""
+
+    start, end = resolve_time_window(scenario.time_window)
+    collection_hours = math.ceil((end - start).total_seconds() / 3600)
+    warmup = scenario.time_window.warmup
+    warmup_duration = parse_duration(warmup) if warmup is not None else parse_duration("8h")
+    warmup_hours = max(1, math.ceil(warmup_duration.total_seconds() / 3600))
+    return warmup_hours + collection_hours
 
 
 def _generation_prompt_available() -> bool:
@@ -1159,7 +1169,7 @@ def generate(
         None,
         "--checkpoint-hours",
         min=0,
-        help="Checkpoint every N completed simulated hours; 0 disables new checkpoints",
+        help="Checkpoint every N completed simulated hours (default: 24); 0 disables checkpoints",
     ),
     formats: str | None = typer.Option(
         None,
@@ -1504,8 +1514,13 @@ def generate(
         selected_checkpoint_hours = (
             preliminary_recovery.manifest.checkpoint_hours
             if resume and preliminary_recovery is not None
-            else _PROVISIONAL_DEFAULT_CHECKPOINT_HOURS
+            else _DEFAULT_CHECKPOINT_HOURS
         )
+    fresh_checkpoint_enabled = (
+        not resume
+        and selected_checkpoint_hours > 0
+        and _completed_simulated_hours(scenario) >= selected_checkpoint_hours
+    )
 
     from evidenceforge.config.provider import effective_config_scope
 
@@ -1514,7 +1529,9 @@ def generate(
             scenario,
             scenario_root=scenario_dir,
             destination=ground_truth_dir,
-            checkpoint_hours=selected_checkpoint_hours,
+            checkpoint_hours=(
+                selected_checkpoint_hours if resume or fresh_checkpoint_enabled else 0
+            ),
         )
     if resource_forecast is None:
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
@@ -1577,7 +1594,7 @@ def generate(
     checkpoint_recovery = None
     lock_owned = False
     generation_succeeded = False
-    persistent_staging = resume or selected_checkpoint_hours > 0
+    persistent_staging = resume or fresh_checkpoint_enabled
     staging_dir: Path | None = None
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
@@ -1601,9 +1618,8 @@ def generate(
                 fingerprint=fingerprint,
                 resolved_scenario=resolved_scenario,
                 checkpoint_hours=checkpoint_hours,
-                progress=lambda values: logger.info("Checkpoint progress: %s", values),
             )
-        elif selected_checkpoint_hours > 0:
+        elif fresh_checkpoint_enabled:
             checkpoint_controller = IncrementalCheckpointController(
                 store=checkpoint_store,
                 fingerprint=fingerprint,
@@ -1614,7 +1630,6 @@ def generate(
                     "oob_hosts": list(oob_hosts),
                     "output_target": output_target.value,
                 },
-                progress=lambda values: logger.info("Checkpoint progress: %s", values),
             )
 
         if persistent_staging:
@@ -1751,7 +1766,7 @@ def generate(
     finally:
         if lock_owned:
             checkpoint_store.lock.release()
-        if generation_succeeded or selected_checkpoint_hours == 0:
+        if generation_succeeded or (not resume and not fresh_checkpoint_enabled):
             checkpoint_store.remove_workspace()
 
 

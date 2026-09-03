@@ -125,6 +125,74 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
 )
 
 
+GENERATOR_LIFECYCLE_AUTHORITY_CHECKPOINT_FIELDS = _fields(
+    live=(
+        "_bootstrap_complete",
+        "_bootstrapped_processes",
+        "_bootstrapped_sessions",
+        "_shards",
+        "_watermark",
+    ),
+    rebuilt=(
+        "_acknowledged_prepared_network_receipts",
+        "_application_registry",
+        "_bootstrap_lock",
+        "_detached_network_receipt_bindings",
+        "_explicit_proxy_manager",
+        "_fixture_parent_backfill",
+        "_http_channel_manager",
+        "_materialization_batch_transaction_byte_capacity",
+        "_materialization_batch_transaction_capacity",
+        "_materialization_batch_transaction_condition",
+        "_materialization_batch_transaction_generation",
+        "_materialization_batch_transaction_high_water",
+        "_materialization_batch_transaction_lock",
+        "_materialization_batch_transaction_retained_bytes",
+        "_materialization_batch_transaction_retained_bytes_high_water",
+        "_materialization_batch_transactions",
+        "_materialization_batch_transactions_acknowledged",
+        "_materialization_batch_transactions_pending",
+        "_materialization_batch_transactions_unacknowledged",
+        "_network_runtime",
+        "_prepared_network_receipt_generation",
+        "_prepared_network_receipt_issuance_capacity",
+        "_prepared_network_receipt_issuance_generation",
+        "_prepared_network_receipt_issuance_lock",
+        "_rdp_session_manager",
+        "_receipt_secret",
+        "_registry",
+        "_shadow",
+        "_shard_allocation_lock",
+        "_shard_count",
+        "_smb_channel_manager",
+        "_source_timing_planner",
+        "_ssh_channel_manager",
+        "_state_manager",
+    ),
+    transient=(
+        "_materialization_precommit_hook",
+        "_prepared_network_receipt_authorities",
+        "_prepared_network_receipt_issuance_generations",
+        "_prepared_network_receipt_issuance_receipts",
+        "_prepared_network_receipt_issuances",
+    ),
+)
+
+
+GENERATOR_LIFECYCLE_AUTHORITY_SHARD_CHECKPOINT_FIELDS = _fields(
+    live=("deferred_closes", "process_closes", "strict_markers"),
+    rebuilt=(
+        "deferred_close_deadlines",
+        "deferred_close_order",
+        "high_water_entries",
+        "lock",
+        "process_close_deadlines",
+        "process_close_order",
+        "strict_deadlines",
+    ),
+)
+
+
 SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS = _fields(
     live=(
         "_admitted_ecar_remote_transports",
