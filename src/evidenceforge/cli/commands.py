@@ -105,6 +105,16 @@ if TYPE_CHECKING:
 _PROVISIONAL_DEFAULT_CHECKPOINT_HOURS = 0
 
 
+def _generation_prompt_available() -> bool:
+    """Return whether generation may ask for an output-state decision."""
+
+    input_stream = click.get_text_stream("stdin")
+    return input_stream.isatty() or type(input_stream).__module__ in {
+        "click.testing",
+        "typer.testing",
+    }
+
+
 class AbbreviatedGroup(typer.core.TyperGroup):
     """Typer Group that resolves unique command prefixes.
 
@@ -1227,6 +1237,41 @@ def generate(
         )
         raise typer.Exit(EXIT_INPUT_ERROR)
 
+    if not resume and not overwrite:
+        incomplete_root = output if output is not None else scenario_file.parent
+        incomplete_store = IncrementalCheckpointStore(incomplete_root)
+        if incomplete_store.workspace.exists():
+            if not _generation_prompt_available():
+                console.print(
+                    "[bold red]Error:[/bold red] An incomplete generation workspace exists. "
+                    "Non-interactive use requires explicit --resume or --overwrite."
+                )
+                raise typer.Exit(EXIT_INPUT_ERROR)
+            try:
+                incomplete_store.recover()
+            except CheckpointError as error:
+                console.print(f"[bold red]Invalid generation checkpoint:[/bold red] {error}")
+                try:
+                    typer.confirm("Overwrite the incomplete workspace?", abort=True)
+                except typer.Abort:
+                    console.print("[dim]Aborted.[/dim]")
+                    raise typer.Exit(EXIT_ABORTED) from None
+                overwrite = True
+            else:
+                decision = typer.prompt(
+                    "Incomplete generation found; choose an action (resume, overwrite, abort)",
+                    type=click.Choice(("resume", "overwrite", "abort"), case_sensitive=False),
+                    default="abort",
+                    show_choices=True,
+                )
+                if decision == "resume":
+                    resume = True
+                elif decision == "overwrite":
+                    overwrite = True
+                else:
+                    console.print("[dim]Aborted.[/dim]")
+                    raise typer.Exit(EXIT_ABORTED)
+
     preliminary_store: IncrementalCheckpointStore | None = None
     preliminary_recovery = None
     stored_run_options: dict[str, object] = {}
@@ -1502,6 +1547,12 @@ def generate(
             )
 
         if not overwrite and not resume:
+            if not _generation_prompt_available():
+                console.print(
+                    "[bold red]Error:[/bold red] Existing output requires explicit "
+                    "--overwrite in non-interactive use."
+                )
+                raise typer.Exit(EXIT_INPUT_ERROR)
             try:
                 typer.confirm("\nOverwrite existing output?", abort=True)
             except typer.Abort:
@@ -1522,17 +1573,6 @@ def generate(
     )
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
     checkpoint_store = IncrementalCheckpointStore(ground_truth_dir)
-    if (
-        not resume
-        and not overwrite
-        and checkpoint_store.workspace.exists()
-        and any(checkpoint_store.workspace.iterdir())
-    ):
-        console.print(
-            "[bold red]Error:[/bold red] An incomplete generation workspace exists. "
-            "Use --resume to continue it or --overwrite to restart."
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
     checkpoint_controller: IncrementalCheckpointController | None = None
     checkpoint_recovery = None
     lock_owned = False

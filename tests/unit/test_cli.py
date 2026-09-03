@@ -1175,6 +1175,96 @@ output:
         assert (tmp_path / "GROUND_TRUTH.md").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands._generation_prompt_available", return_value=False)
+    def test_generate_noninteractive_existing_output_requires_overwrite(
+        self,
+        _mock_prompt_available,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "GROUND_TRUTH.md").write_text("old")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "requires explicit --overwrite" in result.stdout
+        assert not mock_engine_class.called
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_invalid_checkpoint_prompts_for_overwrite(
+        self,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        (workspace / "orphan").write_text("incomplete")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="y\n",
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "Invalid generation checkpoint" in result.stdout
+        assert "Overwrite the incomplete workspace?" in result.stdout
+        assert mock_engine_class.called
+        assert not workspace.exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands._generation_prompt_available", return_value=False)
+    def test_generate_noninteractive_incomplete_workspace_requires_explicit_action(
+        self,
+        _mock_prompt_available,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        (workspace / "orphan").write_text("incomplete")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "explicit --resume or --overwrite" in result.stdout
+        assert not mock_engine_class.called
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands.IncrementalCheckpointStore.recover")
+    def test_generate_valid_incomplete_workspace_offers_three_actions(
+        self,
+        mock_recover,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        mock_recover.return_value = Mock()
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="overwrite\n",
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "resume, overwrite, abort" in result.stdout
+        assert mock_engine_class.called
+        assert not workspace.exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_artifacts_manifest(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):

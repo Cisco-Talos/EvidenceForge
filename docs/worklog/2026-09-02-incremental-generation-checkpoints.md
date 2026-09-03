@@ -521,3 +521,9 @@ until every correctness and performance gate passes.
   when the same sequence retries; after `CURRENT.json` is durable, cleanup failure is warned and
   cannot roll back participant watermarks. Recovery also rejects rehashed path-traversal metadata
   and externally writable segment objects. The focused checkpoint module has 81 passing tests.
+- Output-state prompting now distinguishes a structurally valid incomplete recovery, an invalid
+  checkpoint, and a completed bundle. Interactive generation offers resume/overwrite/abort for a
+  valid incomplete workspace, reports the validation failure before offering overwrite/abort for
+  an invalid one, and retains the existing overwrite/abort prompt for completed output. Redirected
+  input must provide explicit `--resume` or `--overwrite`; focused CLI coverage confirms these
+  branches without weakening the run-lock checks.
