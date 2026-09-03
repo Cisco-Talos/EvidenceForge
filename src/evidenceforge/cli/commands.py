@@ -73,6 +73,10 @@ from evidenceforge.composition.artifacts import (
 )
 from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
 from evidenceforge.generation import GenerationEngine
+from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
+from evidenceforge.generation.checkpoints.errors import CheckpointError
+from evidenceforge.generation.checkpoints.fingerprint import run_fingerprint
+from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.workload import estimate_workload
 from evidenceforge.models.exceptions import (
@@ -91,6 +95,11 @@ from evidenceforge.output_targets import (
 if TYPE_CHECKING:
     from evidenceforge.generation.storage_world import StorageWorldModel
     from evidenceforge.validation.schema import ScenarioValidator, ValidationIssue
+
+
+# Remains disabled until the complete representative performance matrix selects the production
+# default required by the checkpoint acceptance plan.
+_PROVISIONAL_DEFAULT_CHECKPOINT_HOURS = 0
 
 
 class AbbreviatedGroup(typer.core.TyperGroup):
@@ -1087,9 +1096,9 @@ def _validate_compiled_scenario(
 
 @app.command()
 def generate(
-    scenario_file: Path = typer.Argument(
-        ...,
-        help="Path to scenario YAML file",
+    scenario_file: Path | None = typer.Argument(
+        None,
+        help="Path to scenario YAML file (optional with --output and --resume)",
     ),
     output: Path | None = typer.Option(
         None,
@@ -1102,7 +1111,26 @@ def generate(
     ),
     debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
     force: bool = typer.Option(
-        False, "--force", "-f", help="Overwrite existing output without prompting"
+        False,
+        "--force",
+        "-f",
+        help="Deprecated alias for --overwrite",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace existing output or an incompatible incomplete run without prompting",
+    ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume the latest compatible generation checkpoint",
+    ),
+    checkpoint_hours: int | None = typer.Option(
+        None,
+        "--checkpoint-hours",
+        min=0,
+        help="Checkpoint every N completed simulated hours; 0 disables new checkpoints",
     ),
     formats: str | None = typer.Option(
         None,
@@ -1112,8 +1140,8 @@ def generate(
         "Only generates formats present in both this list and the scenario. "
         "Supports group names (zeek, windows). See 'eforge info format_groups'.",
     ),
-    target: str = typer.Option(
-        "default",
+    target: str | None = typer.Option(
+        None,
         "--target",
         help="Output rendering target: default, sof-elk, or splunk",
     ),
@@ -1158,6 +1186,50 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
+    if resume and (overwrite or force):
+        console.print(
+            "[bold red]Error:[/bold red] --resume conflicts with --overwrite/--force",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if force:
+        overwrite = True
+        console.print("[yellow]Warning: --force/-f is deprecated; use --overwrite.[/yellow]")
+    if scenario_file is None and not resume:
+        console.print(
+            "[bold red]Error:[/bold red] A scenario file is required unless --resume is used",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if scenario_file is None and output is None:
+        console.print(
+            "[bold red]Error:[/bold red] --output is required for checkpoint-only resume",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    preliminary_store: IncrementalCheckpointStore | None = None
+    preliminary_recovery = None
+    stored_run_options: dict[str, object] = {}
+    if resume:
+        preliminary_root = output if output is not None else scenario_file.parent
+        preliminary_store = IncrementalCheckpointStore(preliminary_root)
+        try:
+            preliminary_recovery = preliminary_store.recover()
+            raw_options = preliminary_recovery.manifest.metadata.get("run_options", {})
+            if type(raw_options) is not dict:
+                raise CheckpointError("checkpoint run options are malformed")
+            stored_run_options = raw_options
+            if preliminary_recovery.warning:
+                console.print(f"[yellow]Warning: {preliminary_recovery.warning}[/yellow]")
+            if scenario_file is None:
+                scenario_file = preliminary_store.resolved_scenario_path(preliminary_recovery)
+        except CheckpointError as error:
+            console.print(f"[bold red]Error:[/bold red] Cannot resume generation: {error}")
+            raise typer.Exit(EXIT_INPUT_ERROR) from error
+
+    if scenario_file is None:  # pragma: no cover - narrowed by the checks above
+        raise typer.Exit(EXIT_INPUT_ERROR)
     if not scenario_file.is_file() or not os.access(scenario_file, os.R_OK):
         console.print(
             f"[bold red]Error:[/bold red] Scenario file not found or unreadable: {scenario_file}",
@@ -1168,7 +1240,13 @@ def generate(
     setup_logging(verbose, debug)
     logger = logging.getLogger(__name__)
     try:
-        output_target = normalize_output_target(target)
+        selected_target = target
+        if selected_target is None and resume:
+            retained_target = stored_run_options.get("output_target")
+            if retained_target is not None and type(retained_target) is not str:
+                raise ValueError("checkpoint output target is malformed")
+            selected_target = retained_target
+        output_target = normalize_output_target(selected_target or "default")
     except ValueError as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
@@ -1177,6 +1255,14 @@ def generate(
     # --oob-host IS the explicit opt-in, and only the explicitly-registered host(s) become
     # allowlisted, so a payload can never silently point anywhere else. Normalize + validate
     # at the boundary (fail fast) via the shared helper that generate and validate share.
+    if resume and not oob_host:
+        retained_oob_hosts = stored_run_options.get("oob_hosts", [])
+        if type(retained_oob_hosts) is not list or any(
+            type(value) is not str for value in retained_oob_hosts
+        ):
+            console.print("[bold red]Error:[/bold red] Checkpoint OOB settings are malformed")
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        oob_host = retained_oob_hosts
     oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
@@ -1320,6 +1406,12 @@ def generate(
     from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 
     # Apply --formats filter (intersection with scenario output.logs)
+    if formats is None and resume:
+        retained_formats = stored_run_options.get("formats_filter")
+        if retained_formats is not None and type(retained_formats) is not str:
+            console.print("[bold red]Error:[/bold red] Checkpoint format filter is malformed")
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        formats = retained_formats
     if formats:
         from evidenceforge.events.dispatcher import expand_formats
 
@@ -1381,27 +1473,101 @@ def generate(
                 "Previously generated formats not in the filter will be deleted.[/yellow]"
             )
 
-        if not force:
+        if not overwrite and not resume:
             try:
                 typer.confirm("\nOverwrite existing output?", abort=True)
             except typer.Abort:
                 console.print("[dim]Aborted.[/dim]")
                 raise typer.Exit(EXIT_ABORTED)
+            overwrite = True
 
-    # Stage generation into a temp directory when overwriting, so that a
-    # mid-run failure doesn't destroy the previous good output.
-    staging_dir = None
+    selected_checkpoint_hours = checkpoint_hours
+    if selected_checkpoint_hours is None:
+        selected_checkpoint_hours = (
+            preliminary_recovery.manifest.checkpoint_hours
+            if resume and preliminary_recovery is not None
+            else _PROVISIONAL_DEFAULT_CHECKPOINT_HOURS
+        )
+    checkpoint_formats = [
+        str(log["format"])
+        for log in scenario.output.logs
+        if isinstance(log, dict) and "format" in log
+    ]
+    fingerprint = run_fingerprint(
+        compiled,
+        output_target=output_target.value,
+        formats=checkpoint_formats,
+        oob_hosts=oob_hosts,
+    )
+    resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
+    checkpoint_store = IncrementalCheckpointStore(ground_truth_dir)
+    if (
+        not resume
+        and not overwrite
+        and checkpoint_store.workspace.exists()
+        and any(checkpoint_store.workspace.iterdir())
+    ):
+        console.print(
+            "[bold red]Error:[/bold red] An incomplete generation workspace exists. "
+            "Use --resume to continue it or --overwrite to restart."
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    checkpoint_controller: IncrementalCheckpointController | None = None
+    checkpoint_recovery = None
+    lock_owned = False
+    generation_succeeded = False
+    persistent_staging = resume or selected_checkpoint_hours > 0
+    staging_dir: Path | None = None
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
     gen_artifacts_dir = artifacts_dir
-    if has_existing:
-        staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
-        gen_data_dir = staging_dir / "data"
-        gen_gt_dir = staging_dir
-        gen_artifacts_dir = staging_dir / "artifacts"
 
     # Generate logs
     try:
+        if overwrite and checkpoint_store.workspace.exists():
+            checkpoint_store.lock.acquire()
+            checkpoint_store.lock.release()
+            checkpoint_store.remove_workspace()
+        checkpoint_store.lock.acquire()
+        lock_owned = True
+
+        if resume:
+            checkpoint_recovery = checkpoint_store.recover(expected_fingerprint=fingerprint)
+            resolved_scenario = checkpoint_store.read_resolved_scenario(checkpoint_recovery)
+            checkpoint_controller = IncrementalCheckpointController.for_recovery(
+                store=checkpoint_store,
+                recovery=checkpoint_recovery,
+                fingerprint=fingerprint,
+                resolved_scenario=resolved_scenario,
+                checkpoint_hours=checkpoint_hours,
+                progress=lambda values: logger.info("Checkpoint progress: %s", values),
+            )
+        elif selected_checkpoint_hours > 0:
+            checkpoint_controller = IncrementalCheckpointController(
+                store=checkpoint_store,
+                fingerprint=fingerprint,
+                checkpoint_hours=selected_checkpoint_hours,
+                resolved_scenario=resolved_scenario,
+                run_options={
+                    "formats_filter": formats,
+                    "oob_hosts": list(oob_hosts),
+                    "output_target": output_target.value,
+                },
+                progress=lambda values: logger.info("Checkpoint progress: %s", values),
+            )
+
+        if persistent_staging:
+            staging_dir = checkpoint_store.staged_bundle
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+            staging_dir.mkdir(parents=True, mode=0o700)
+        elif has_existing:
+            staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
+        if staging_dir is not None:
+            gen_data_dir = staging_dir / "data"
+            gen_gt_dir = staging_dir
+            gen_artifacts_dir = staging_dir / "artifacts"
+
         console.print("\n[bold]Starting log generation...[/bold]")
 
         # Create progress display with Rich
@@ -1422,6 +1588,9 @@ def generate(
                 allow_large_workload=allow_large_workload,
                 resource_forecast=resource_forecast,
                 compiled_scenario=compiled,
+                checkpoint_hours=selected_checkpoint_hours,
+                checkpoint_controller=checkpoint_controller,
+                checkpoint_recovery=checkpoint_recovery,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -1431,11 +1600,7 @@ def generate(
                 compiled,
                 gen_gt_dir,
                 output_target=output_target.value,
-                formats=[
-                    str(log["format"])
-                    for log in scenario.output.logs
-                    if isinstance(log, dict) and "format" in log
-                ],
+                formats=checkpoint_formats,
                 oob_hosts=oob_hosts,
                 overrides={
                     "formats": formats,
@@ -1451,9 +1616,12 @@ def generate(
             try:
                 SIDECAR_REGISTRY.replace(staging_dir, ground_truth_dir)
             finally:
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                if not persistent_staging:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
 
             console.print("[dim]Replaced previous output[/dim]")
+
+        generation_succeeded = True
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
         console.print("\nGenerated files:")
@@ -1498,7 +1666,7 @@ def generate(
         return
 
     except KeyboardInterrupt:
-        if staging_dir and staging_dir.exists():
+        if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
@@ -1506,7 +1674,7 @@ def generate(
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
-        if staging_dir and staging_dir.exists():
+        if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
@@ -1514,6 +1682,11 @@ def generate(
             console.print_exception()
         logger.exception("Generation failed")
         raise typer.Exit(EXIT_GENERATION_ERROR)
+    finally:
+        if lock_owned:
+            checkpoint_store.lock.release()
+        if generation_succeeded or selected_checkpoint_hours == 0:
+            checkpoint_store.remove_workspace()
 
 
 @app.command("resolve")

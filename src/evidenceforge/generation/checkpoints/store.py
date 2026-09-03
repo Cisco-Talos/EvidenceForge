@@ -228,6 +228,12 @@ class IncrementalCheckpointStore:
         self.index_path = self.workspace / _INDEX_NAME
         self.lock = RunLock(self.workspace)
 
+    @property
+    def staged_bundle(self) -> Path:
+        """Return the stable hidden bundle root used by resumable generation."""
+
+        return self.workspace / "staged"
+
     def initialize(self) -> None:
         """Create and validate the protected checkpoint workspace."""
 
@@ -738,6 +744,12 @@ class IncrementalCheckpointStore:
             path.stat().st_size,
             recovery.manifest.resolved_scenario_sha256,
         )
+
+    def resolved_scenario_path(self, recovery: CheckpointRecovery) -> Path:
+        """Return the validated authoritative resolved input path for checkpoint-only resume."""
+
+        self.read_resolved_scenario(recovery)
+        return self._object_path(recovery.manifest.resolved_scenario_relative_path)
 
     def remove_workspace(self) -> None:
         """Remove checkpoint infrastructure after successful bundle publication."""

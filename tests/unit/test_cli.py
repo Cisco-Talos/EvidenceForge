@@ -575,6 +575,93 @@ class TestGenerateCommand:
     """Tests for 'eforge generate' command."""
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_checkpoint_hours_zero_disables_controller(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        mock_engine_class.return_value = Mock()
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.call_args.kwargs["checkpoint_hours"] == 0
+        assert mock_engine_class.call_args.kwargs["checkpoint_controller"] is None
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    def test_resume_conflicts_with_overwrite(self, scenarios_dir, tmp_path):
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--resume",
+                "--overwrite",
+            ],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "conflicts" in result.stdout
+
+    def test_checkpoint_only_resume_requires_output(self):
+        result = runner.invoke(app, ["generate", "--resume"])
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "--output is required" in result.stdout
+
+    def test_checkpoint_hours_rejects_negative_and_noninteger(self, scenarios_dir):
+        for value in ("-1", "1.5"):
+            result = runner.invoke(
+                app,
+                ["generate", str(scenarios_dir / "minimal.yaml"), "--checkpoint-hours", value],
+            )
+            assert result.exit_code != EXIT_SUCCESS
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_positive_checkpoint_cadence_uses_hidden_staging_and_cleans_success(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        def fake_generate() -> None:
+            root = mock_engine_class.call_args.kwargs["ground_truth_dir"]
+            (root / "data").mkdir(parents=True)
+            (root / "data" / "events.log").write_text("event\n")
+            (root / "GROUND_TRUTH.md").write_text("truth\n")
+            (root / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
+            (root / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
+
+        mock_engine_class.return_value.generate.side_effect = fake_generate
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "6",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        arguments = mock_engine_class.call_args.kwargs
+        assert arguments["checkpoint_hours"] == 6
+        assert arguments["checkpoint_controller"] is not None
+        assert ".eforge-generation/staged" in arguments["ground_truth_dir"].as_posix()
+        assert (tmp_path / "data" / "events.log").read_bytes() == b"event\n"
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_included_environment(self, mock_engine_class, tmp_path):
         """eforge generate should expand scenario includes before constructing the engine."""
         scenario_file = _write_included_minimal_scenario(tmp_path, name="include-generate-test")

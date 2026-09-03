@@ -35,6 +35,7 @@ class IncrementalCheckpointController:
         run_id: str | None = None,
         next_sequence: int = 0,
         inherited_segments: tuple[SegmentReference, ...] = (),
+        run_options: dict[str, object] | None = None,
         progress: Callable[[dict[str, float | int | str]], None] | None = None,
     ) -> None:
         self.store = store
@@ -44,6 +45,7 @@ class IncrementalCheckpointController:
         self.run_id = run_id or uuid.uuid4().hex
         self.next_sequence = next_sequence
         self.inherited_segments = inherited_segments
+        self.run_options = {} if run_options is None else dict(run_options)
         self.progress = progress
 
     @classmethod
@@ -70,6 +72,7 @@ class IncrementalCheckpointController:
             run_id=recovery.manifest.run_id,
             next_sequence=recovery.manifest.sequence + 1,
             inherited_segments=recovery.manifest.segments,
+            run_options=dict(recovery.manifest.metadata.get("run_options", {})),
             progress=progress,
         )
 
@@ -150,7 +153,8 @@ class IncrementalCheckpointController:
                 metadata={
                     "participant_owners": [
                         participant.checkpoint_owner for participant, _ in prepared
-                    ]
+                    ],
+                    "run_options": self.run_options,
                 },
                 metrics=metrics,
             )

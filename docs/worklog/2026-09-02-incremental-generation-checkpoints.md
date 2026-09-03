@@ -318,3 +318,13 @@ until every correctness and performance gate passes.
   scenario history while preserving terminal source validation. A production tail resume now
   produces byte-identical Windows Security, Sysmon, and Zeek evidence; 84 focused incremental/spool
   tests and 271 Windows/Sysmon emitter regressions pass.
+- The generate command now accepts `--checkpoint-hours`, `--resume`, and `--overwrite`, retains
+  `--force/-f` as a warning-emitting deprecated alias, rejects conflicting resume/overwrite flags,
+  and allows the scenario positional argument to be omitted only for checkpoint resume with an
+  explicit output root. Positive-cadence runs generate inside the stable hidden staged bundle,
+  publish through the existing sidecar transaction, retain that workspace on interruption/failure,
+  and remove it after success; cadence zero leaves no workspace. Recovery metadata retains the
+  output target, OOB hosts, and format filter for checkpoint-only resume, while an explicitly
+  supplied scenario is recompiled and fingerprint checked. The pre-benchmark unspecified default
+  intentionally remains disabled until the acceptance matrix selects a supported cadence. All 39
+  slow generation CLI tests, 84 focused checkpoint tests, and repository-wide Ruff gates pass.
