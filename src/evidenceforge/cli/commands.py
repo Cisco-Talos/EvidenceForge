@@ -77,6 +77,9 @@ from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.fingerprint import run_fingerprint
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+from evidenceforge.generation.checkpoints.test_sync import (
+    checkpoint_test_synchronizer_from_environment,
+)
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.workload import estimate_workload
 from evidenceforge.models.exceptions import (
@@ -1609,6 +1612,11 @@ def generate(
                 checkpoint_hours=selected_checkpoint_hours,
                 checkpoint_controller=checkpoint_controller,
                 checkpoint_recovery=checkpoint_recovery,
+                checkpoint_synchronization_hook=(
+                    checkpoint_test_synchronizer_from_environment()
+                    if checkpoint_controller is not None
+                    else None
+                ),
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)

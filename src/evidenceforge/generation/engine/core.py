@@ -84,7 +84,7 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from evidenceforge.generation.checkpoints.models import CheckpointRecovery
+    from evidenceforge.generation.checkpoints.models import CheckpointCursor, CheckpointRecovery
     from evidenceforge.generation.checkpoints.participants import (
         IncrementalCheckpointParticipant,
     )
@@ -139,6 +139,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         checkpoint_hours: int = 0,
         checkpoint_controller: IncrementalCheckpointController | None = None,
         checkpoint_recovery: CheckpointRecovery | None = None,
+        checkpoint_synchronization_hook: Callable[[CheckpointCursor], None] | None = None,
     ):
         """Initialize generation engine.
 
@@ -161,6 +162,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             checkpoint_controller: Optional incremental checkpoint publisher. Its cadence must
                 match checkpoint_hours and it cannot be combined with the legacy test hook.
             checkpoint_recovery: Optional validated recovery selected from the controller's store.
+            checkpoint_synchronization_hook: Internal post-publication test barrier. Production CLI
+                wiring exposes it only through the guarded pytest environment seam.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -218,10 +221,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             raise ValueError("checkpoint controller cadence must match checkpoint_hours")
         if checkpoint_recovery is not None and checkpoint_controller is None:
             raise ValueError("checkpoint recovery requires an incremental checkpoint controller")
+        if checkpoint_synchronization_hook is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint synchronization requires an incremental controller")
         self.checkpoint_hour_callback = checkpoint_hour_callback
         self.checkpoint_hours = checkpoint_hours
         self._checkpoint_controller = checkpoint_controller
         self._checkpoint_recovery = checkpoint_recovery
+        self._checkpoint_synchronization_hook = checkpoint_synchronization_hook
         self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -305,14 +311,17 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if controller is not None:
             from evidenceforge.generation.checkpoints.models import CheckpointCursor
 
+            cursor = CheckpointCursor(
+                phase=phase,
+                completed_simulated_hours=completed_simulated_hours,
+                next_hour=None if phase == "tail" else next_hour.isoformat(),
+            )
             controller.commit(
-                cursor=CheckpointCursor(
-                    phase=phase,
-                    completed_simulated_hours=completed_simulated_hours,
-                    next_hour=None if phase == "tail" else next_hour.isoformat(),
-                ),
+                cursor=cursor,
                 participants=self._checkpoint_participants,
             )
+            if self._checkpoint_synchronization_hook is not None:
+                self._checkpoint_synchronization_hook(cursor)
         else:
             assert callback is not None
             callback(completed_simulated_hours, next_hour, phase)

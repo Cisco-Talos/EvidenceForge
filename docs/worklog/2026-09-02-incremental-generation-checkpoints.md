@@ -389,3 +389,12 @@ until every correctness and performance gate passes.
   fallbacks now use scoped stable seeds over domain plus semantic identity, and an explicit test
   proves the result is invariant under unrelated global-RNG advancement. This root-cause fix is
   required before repeating the full byte-identity gate.
+- Fresh-process interruption tests no longer race a briefly visible generation phase. A guarded
+  pytest-only synchronization seam writes a durable marker after the recovery manifest has been
+  atomically published and blocks until acknowledged or signaled; an optional exact-hour selector
+  lets tests pass earlier cadence points without polling them. SIGKILL during warm-up, SIGINT during
+  collection, and SIGKILL from a tail cursor all retain the last committed recovery, resume after
+  moving the complete output root, and match a checkpoint-disabled uninterrupted bundle byte-for-
+  byte. The comparison includes evidence, resolved scenario, ground truth, and deterministic
+  sidecars and excludes only `generation.log` and the time-bearing generation manifest. All three
+  fresh-process cases pass.

@@ -23,7 +23,13 @@
 """Unit tests for CLI commands."""
 
 import json
+import os
+import signal
+import subprocess
+import sys
+import time
 from io import StringIO
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -50,6 +56,15 @@ from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILEN
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def _deterministic_bundle_files(root: Path) -> dict[str, bytes]:
+    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }
 
 
 def test_generation_progress_uses_fifteen_minute_speed_window():
@@ -573,6 +588,112 @@ class TestEvalCommand:
 @pytest.mark.slow
 class TestGenerateCommand:
     """Tests for 'eforge generate' command."""
+
+    @pytest.mark.parametrize(
+        ("interrupt_signal", "checkpoint_hour", "duration"),
+        [
+            (signal.SIGKILL, 1, "1h"),
+            (signal.SIGINT, 9, "2h"),
+            (signal.SIGKILL, 10, "2h"),
+        ],
+        ids=("sigkill-warmup", "sigint-collection", "sigkill-tail"),
+    )
+    def test_fresh_process_checkpoint_resume_is_byte_identical_after_move(
+        self,
+        interrupt_signal: signal.Signals,
+        checkpoint_hour: int,
+        duration: str,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A post-commit signal should resume portably to exact deterministic bundle bytes."""
+
+        scenario = tmp_path / "scenario.yaml"
+        scenario.write_text(
+            (scenarios_dir / "minimal.yaml")
+            .read_text(encoding="utf-8")
+            .replace('duration: "1h"', f'duration: "{duration}"'),
+            encoding="utf-8",
+        )
+        interrupted = tmp_path / "interrupted"
+        moved = tmp_path / "moved"
+        control = tmp_path / "control"
+        sync_directory = tmp_path / "checkpoint-sync"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = str(checkpoint_hour)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        marker = sync_directory / f"{checkpoint_hour:020d}.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.send_signal(interrupt_signal)
+        assert process.wait(timeout=30) != 0
+        interrupted.rename(moved)
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_HOUR")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(moved),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS
+        assert _deterministic_bundle_files(moved) == _deterministic_bundle_files(control)
+        assert not (moved / ".eforge-generation").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_checkpoint_hours_zero_disables_controller(

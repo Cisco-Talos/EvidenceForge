@@ -8,9 +8,10 @@ import os
 import random
 import socket
 import sqlite3
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -174,6 +175,9 @@ from evidenceforge.generation.checkpoints.store import (
     IncrementalCheckpointStore,
     RunLock,
     SegmentDraft,
+)
+from evidenceforge.generation.checkpoints.test_sync import (
+    checkpoint_test_synchronizer_from_environment,
 )
 from evidenceforge.generation.checkpoints.timing_runtime_head import TimingRuntimeParticipant
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
@@ -2842,6 +2846,39 @@ def test_emitter_spool_restores_reclaimed_bash_routes_from_suffix_and_reset_chun
     source.close()
     restored_emitter.close()
     assert restored_path.read_bytes() == source_path.read_bytes()
+
+
+def test_checkpoint_test_synchronizer_blocks_after_durable_cursor_until_acknowledged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync_directory = tmp_path / "sync"
+    sync_directory.mkdir()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "checkpoint synchronization")
+    monkeypatch.setenv("EFORGE_TEST_CHECKPOINT_SYNC_DIR", str(sync_directory))
+    hook = checkpoint_test_synchronizer_from_environment()
+    assert hook is not None
+    cursor = CheckpointCursor(
+        phase="collection",
+        completed_simulated_hours=6,
+        next_hour="2026-01-01T06:00:00+00:00",
+    )
+    completed: list[bool] = []
+    worker = Thread(target=lambda: (hook(cursor), completed.append(True)))
+    worker.start()
+    marker = sync_directory / "00000000000000000006.ready"
+    deadline = time.monotonic() + 2
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert json.loads(marker.read_text(encoding="utf-8")) == {
+        "completed_simulated_hours": 6,
+        "next_hour": "2026-01-01T06:00:00+00:00",
+        "phase": "collection",
+    }
+    assert completed == []
+    (sync_directory / "00000000000000000006.continue").touch()
+    worker.join(timeout=2)
+    assert completed == [True]
 
 
 def _checkpoint_snort_event(second: int, *, candidate: bool) -> dict[str, object]:
