@@ -76,6 +76,7 @@ class _SingleHostWriter:
         defer_sorted_flush_until_close: bool = False,
         external_sorting: bool = False,
         checkpoint_mode: bool = False,
+        defer_publication: bool = False,
     ):
         self.output_path = output_path
         self.buffer: list[str] = []
@@ -96,6 +97,7 @@ class _SingleHostWriter:
                 sort_key=self._sort_key,
                 buffer_size=buffer_size,
                 checkpoint_mode=checkpoint_mode,
+                defer_publication=defer_publication,
             )
             if sort_on_flush and external_sorting
             else None
@@ -446,6 +448,7 @@ class HostMultiplexEmitter(LogEmitter):
                 defer_sorted_flush_until_close=self._defer_sorted_flush_until_close,
                 external_sorting=self._external_sorting,
                 checkpoint_mode=self._incremental_checkpointing,
+                defer_publication=self._defer_sorted_publication,
             )
             header_template = self.format_def.output.header_template
             if header_template:

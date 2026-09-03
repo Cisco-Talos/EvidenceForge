@@ -121,6 +121,27 @@ def test_checkpoint_mode_seals_only_new_runs_until_final_merge(tmp_path: Path) -
     ]
 
 
+def test_deferred_publication_compacts_runs_without_rewriting_destination(tmp_path: Path) -> None:
+    output = tmp_path / "deferred.json"
+    writer = ExternalSortedLineWriter(
+        output,
+        sort_key=_key,
+        merge_fan_in=2,
+        defer_publication=True,
+    )
+
+    for value in reversed(range(7)):
+        writer.write(f"{value}|record-{value}")
+        writer.flush()
+
+    assert not output.exists()
+    assert len(writer._run_paths) <= writer.merge_fan_in
+    writer.close()
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"{value}|record-{value}" for value in range(7)
+    ]
+
+
 def test_checkpoint_mode_restores_immutable_runs_into_fresh_writer(tmp_path: Path) -> None:
     source = ExternalSortedLineWriter(
         tmp_path / "source.log",

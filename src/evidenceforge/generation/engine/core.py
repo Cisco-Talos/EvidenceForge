@@ -906,6 +906,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.activity_generator._world_planner = self.world_planner
 
+        for emitter in self.emitters.values():
+            emitter.enable_deferred_sorted_publication()
+
         if self._checkpoint_controller is not None:
             from evidenceforge.generation.checkpoints.participant_set import (
                 production_checkpoint_participants,

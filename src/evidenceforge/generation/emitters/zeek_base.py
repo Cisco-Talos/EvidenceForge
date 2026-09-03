@@ -198,6 +198,7 @@ class _SingleZeekWriter:
         buffer_bytes: int = 16 * 1024 * 1024,
         external_sorting: bool = True,
         checkpoint_mode: bool = False,
+        defer_publication: bool = False,
     ):
         self.output_path = output_path
         self.buffer: list[str] = []
@@ -214,6 +215,7 @@ class _SingleZeekWriter:
                 buffer_size=buffer_size,
                 buffer_bytes=buffer_bytes,
                 checkpoint_mode=checkpoint_mode,
+                defer_publication=defer_publication,
             )
             if sort_before_flush and external_sorting
             else None
@@ -496,6 +498,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 sort_key=getattr(self, "_sort_key_func", self._sort_key_func),
                 external_sorting=self._external_sorting,
                 checkpoint_mode=self._incremental_checkpointing,
+                defer_publication=self._defer_sorted_publication,
             )
             self._writers[safe_sensor] = writer
             logger.debug(f"Created Zeek writer: {path}")

@@ -1166,6 +1166,7 @@ class LogEmitter(ABC):
         self._footer_pending: tuple[str, int, int] | None = None
         self._footer_written = False
         self._incremental_checkpointing = False
+        self._defer_sorted_publication = False
 
         # Threading support (Phase 2.1)
         self.threaded = threaded
@@ -1195,6 +1196,13 @@ class LogEmitter(ABC):
                 f"{self.format_def.name} incremental checkpointing started after output"
             )
         self._incremental_checkpointing = True
+
+    def enable_deferred_sorted_publication(self) -> None:
+        """Defer sorted destination replacement until close without enabling recovery."""
+
+        if self.event_count or self.buffer:
+            raise RuntimeError(f"{self.format_def.name} sorted publication deferred after output")
+        self._defer_sorted_publication = True
 
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Configure the generated-output target for this emitter."""

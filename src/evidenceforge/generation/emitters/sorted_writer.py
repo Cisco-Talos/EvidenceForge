@@ -72,6 +72,7 @@ class ExternalSortedLineWriter:
         exact_journal_row_capacity: int = 1_000_000,
         exact_journal_byte_capacity: int = 4 * 1024 * 1024 * 1024,
         checkpoint_mode: bool = False,
+        defer_publication: bool = False,
     ) -> None:
         if buffer_size <= 0:
             raise ValueError("buffer_size must be positive")
@@ -112,6 +113,7 @@ class ExternalSortedLineWriter:
         self._exact_high_water_bytes = 0
         self._exact_export_generation = 0
         self._checkpoint_mode = checkpoint_mode
+        self._defer_publication = checkpoint_mode or defer_publication
         self._exact_publication_condition = Condition(Lock())
         self._active_exact_publication_keys: set[ExactPublicationParticipantKey] = set()
         self._close_state = "open"
@@ -341,7 +343,9 @@ class ExternalSortedLineWriter:
             self._require_open_locked()
             with self._lock:
                 self._spill_unlocked()
-                if self._checkpoint_mode:
+                if self._defer_publication:
+                    if not self._checkpoint_mode:
+                        self._mark_exact_rows_exported_unlocked()
                     return
                 self._publish_runs_unlocked()
                 self._mark_exact_rows_exported_unlocked()

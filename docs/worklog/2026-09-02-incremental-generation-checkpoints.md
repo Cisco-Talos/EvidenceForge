@@ -506,3 +506,12 @@ until every correctness and performance gate passes.
   memory term and 1 MiB metadata floor. It continues to show `Projected checkpoint workspace` as
   a separate line and adds it exactly once to projected peak working disk; the active staged
   bundle and external-sort transients remain outside this line to avoid double counting.
+- Fair performance controls now use the same deferred final publication for external-sorted
+  evidence as checkpointed runs. Hourly retirement barriers may spill and compact bounded runs,
+  but neither arm repeatedly merges the entire accumulated output into its destination; both
+  publish once during finalization. All three moved-root fresh-process interruption cases and the
+  slow deterministic generation integration cases remain byte-identical. In the first normalized
+  seven-day pair, six-hour cadence cost 7.18% (5.570 seconds across 29 checkpoint paths) and
+  18-hour cadence cost 3.47% (2.206 seconds across ten checkpoint paths). These are single-pair
+  diagnostics, not cadence selection results; the rotated three-pair representative matrix is
+  still required.
