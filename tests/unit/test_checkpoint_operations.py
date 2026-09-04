@@ -116,9 +116,47 @@ def test_status_absent_is_read_only(tmp_path: Path) -> None:
     output = tmp_path / "missing"
 
     report = inspect_checkpoint(output)
+    result = runner.invoke(app, ["checkpoint", "status", str(output)])
 
     assert report.state == "absent"
+    assert result.exit_code == 1
+    assert "Checkpoint state: no checkpoints found" in " ".join(result.stdout.split())
+    assert "Validation:" not in result.stdout
+    assert "Storage:" not in result.stdout
     assert not output.exists()
+
+
+def test_status_and_suspend_explain_generated_data_directory(tmp_path: Path) -> None:
+    output = tmp_path / "bundle"
+    data = output / "data"
+    _controller(output, Path("tests/fixtures/scenarios/minimal.yaml"))
+    data.mkdir()
+    report = inspect_checkpoint(data)
+
+    status = runner.invoke(
+        app,
+        ["checkpoint", "status", str(data)],
+        terminal_width=300,
+    )
+    suspend = runner.invoke(
+        app,
+        ["checkpoint", "suspend", str(data)],
+        terminal_width=300,
+    )
+
+    status_text = " ".join(status.stdout.split())
+    suspend_text = " ".join(suspend.stdout.split())
+    assert status.exit_code == 1
+    assert "Checkpoint state: no checkpoints found" in status_text
+    assert "generated data directory" in status_text
+    assert report.warnings == (
+        "This appears to be the generated data directory. Use the bundle root instead: "
+        f"eforge checkpoint status {output}",
+    )
+    assert "Storage:" not in status.stdout
+    assert suspend.exit_code == 1
+    assert "generated data directory" in suspend_text
+    assert "eforge checkpoint suspend" in suspend_text
 
 
 def test_status_json_validates_recovery_and_reports_nonoverlapping_storage(
@@ -222,6 +260,7 @@ def test_status_reports_active_controller_before_first_recovery(tmp_path: Path) 
     store.lock.acquire()
     try:
         report = inspect_checkpoint(output)
+        result = runner.invoke(app, ["checkpoint", "status", str(output)])
     finally:
         store.lock.release()
 
@@ -229,6 +268,10 @@ def test_status_reports_active_controller_before_first_recovery(tmp_path: Path) 
     assert report.integrity == "pending"
     assert report.checkpoint_hours == 6
     assert report.simulated_hour is None
+    assert result.exit_code == 0, result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert "Checkpoint state: active — no checkpoint yet" in normalized
+    assert "Validation: waiting for the first checkpoint" in normalized
 
 
 def test_status_validates_both_recoveries_and_warns_on_fallback(tmp_path: Path) -> None:

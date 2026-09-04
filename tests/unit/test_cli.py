@@ -644,7 +644,10 @@ class TestGenerateCheckpointOptions:
     def test_fresh_generation_defaults_to_24_hour_checkpoints(
         self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
     ):
-        mock_engine_class.return_value = Mock()
+        def assert_workspace_ready() -> None:
+            assert (tmp_path / ".eforge-generation" / "controller.json").is_file()
+
+        mock_engine_class.return_value.generate.side_effect = assert_workspace_ready
 
         result = runner.invoke(
             app,
@@ -654,7 +657,7 @@ class TestGenerateCheckpointOptions:
         assert result.exit_code == EXIT_SUCCESS, result.stdout
         arguments = mock_engine_class.call_args.kwargs
         assert arguments["checkpoint_hours"] == 24
-        assert arguments["checkpoint_controller"] is None
+        assert arguments["checkpoint_controller"] is not None
         assert not (tmp_path / ".eforge-generation").exists()
 
     def test_generate_help_describes_checkpoint_default(self) -> None:

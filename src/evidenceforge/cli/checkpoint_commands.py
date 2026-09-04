@@ -11,7 +11,11 @@ from rich.table import Table
 
 from evidenceforge.generation.checkpoints.control import request_suspension
 from evidenceforge.generation.checkpoints.errors import CheckpointError
-from evidenceforge.generation.checkpoints.status import CheckpointStatusReport, inspect_checkpoint
+from evidenceforge.generation.checkpoints.status import (
+    CheckpointStatusReport,
+    checkpoint_bundle_root_hint,
+    inspect_checkpoint,
+)
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
 
 checkpoint_app = typer.Typer(
@@ -21,9 +25,7 @@ checkpoint_app = typer.Typer(
 console = Console()
 
 
-def _format_bytes(value: int | None) -> str:
-    if value is None:
-        return "unavailable"
+def _format_bytes(value: int) -> str:
     units = ("B", "KiB", "MiB", "GiB", "TiB")
     amount = float(value)
     for unit in units:
@@ -41,17 +43,29 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
         "absent": "yellow",
         "invalid": "red",
     }[report.state]
-    console.print(f"[bold]Checkpoint state:[/bold] [{state_style}]{report.state}[/{state_style}]")
+    state_label = report.state
+    if report.state == "absent":
+        state_label = "no checkpoints found"
+    elif report.state == "active" and report.simulated_hour is None:
+        state_label = "active — no checkpoint yet"
+    console.print(f"[bold]Checkpoint state:[/bold] [{state_style}]{state_label}[/{state_style}]")
+    if report.state == "absent":
+        for warning in report.warnings:
+            console.print(f"[yellow]Hint:[/yellow] {warning}")
+        return
     if report.simulated_hour is not None:
         console.print(
             f"[bold]Recovery point:[/bold] simulated hour {report.simulated_hour} ({report.phase})"
         )
     if report.checkpoint_hours is not None:
         console.print(f"[bold]Cadence:[/bold] every {report.checkpoint_hours} simulated hours")
-    console.print(
-        f"[bold]Validation:[/bold] integrity {report.integrity}; "
-        f"runtime compatibility {report.compatibility}"
-    )
+    if report.integrity == "pending" and report.simulated_hour is None:
+        console.print("[bold]Validation:[/bold] waiting for the first checkpoint")
+    else:
+        console.print(
+            f"[bold]Validation:[/bold] integrity {report.integrity}; "
+            f"runtime compatibility {report.compatibility}"
+        )
     if report.suspended:
         console.print("[bold yellow]Generation is intentionally suspended.[/bold yellow]")
     elif report.suspension_requested:
@@ -80,12 +94,15 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
     storage_table = Table(show_header=False, box=None)
     storage_table.add_column("Item", style="cyan")
     storage_table.add_column("Value", justify="right")
-    for label, value in (
+    diagnostic_sizes = (
         ("Staged/current generated data", storage.generated_bytes),
         ("Checkpoint recovery objects", storage.checkpoint_bytes),
         ("Prior published bundle", storage.prior_bundle_bytes),
         ("Available disk", storage.available_bytes),
-    ):
+    )
+    for label, value in diagnostic_sizes:
+        if value is None:
+            continue
         storage_table.add_row(label, _format_bytes(value))
     storage_table.add_row("Managed files", f"{storage.managed_file_count:,}")
     storage_table.add_row("Unrelated root entries excluded", str(storage.unrelated_entry_count))
@@ -155,6 +172,14 @@ def checkpoint_suspend(
         "[bold yellow]Suspension is not immediate.[/bold yellow] The generator will stop at the "
         "end of its current simulated hour, after a safe recovery checkpoint is committed."
     )
+    suggested_root = checkpoint_bundle_root_hint(directory)
+    if suggested_root is not None:
+        console.print(
+            "[bold red]Error:[/bold red] No checkpoint workspace was found at that path. "
+            "It appears to be the generated data directory; use the bundle root instead: "
+            f"eforge checkpoint suspend {suggested_root}"
+        )
+        raise typer.Exit(1)
     try:
         request = request_suspension(IncrementalCheckpointStore(directory))
     except CheckpointError as error:

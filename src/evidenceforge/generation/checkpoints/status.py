@@ -98,6 +98,19 @@ class CheckpointStatusReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def checkpoint_bundle_root_hint(output_root: Path) -> Path | None:
+    """Suggest the parent bundle when given its generated ``data`` directory."""
+
+    requested = Path(output_root)
+    if requested.name != "data" or requested.is_symlink():
+        return None
+    parent = IncrementalCheckpointStore(requested.resolve().parent)
+    workspace = parent.workspace
+    has_workspace = workspace.is_dir() and not workspace.is_symlink()
+    has_completed_bundle = (parent.output_root / GENERATION_MANIFEST_FILENAME).is_file()
+    return parent.output_root if has_workspace or has_completed_bundle else None
+
+
 def _managed_files(
     roots: tuple[Path, ...],
     *,
@@ -266,13 +279,14 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
 
     started = time.monotonic()
     store = _InspectingCheckpointStore(output_root)
-    storage, storage_warnings = _storage_usage(store)
-    warnings = list(storage_warnings)
+    warnings: list[str] = []
     errors: list[str] = []
     diagnostics: dict[str, Any] = {}
 
     if not store.workspace.exists():
         if (store.output_root / GENERATION_MANIFEST_FILENAME).is_file():
+            storage, storage_warnings = _storage_usage(store)
+            warnings.extend(storage_warnings)
             try:
                 manifest = verify_generation_bundle(store.output_root)
             except (OSError, ValueError, EvidenceForgeError, CheckpointError) as error:
@@ -294,6 +308,12 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
                 storage=storage,
                 diagnostics=diagnostics,
             )
+        suggested_root = checkpoint_bundle_root_hint(output_root)
+        if suggested_root is not None:
+            warnings.append(
+                f"This appears to be the generated data directory. Use the bundle root instead: "
+                f"eforge checkpoint status {suggested_root}"
+            )
         diagnostics["validation_seconds"] = time.monotonic() - started
         return CheckpointStatusReport(
             output_root=str(store.output_root),
@@ -301,10 +321,21 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             integrity="not-applicable",
             compatibility="not-applicable",
             warnings=tuple(warnings),
-            storage=storage,
+            storage=StorageUsage(
+                generated_bytes=0,
+                checkpoint_bytes=0,
+                recovery_overhead_bytes=0,
+                prior_bundle_bytes=0,
+                total_managed_bytes=0,
+                available_bytes=None,
+                managed_file_count=0,
+                unrelated_entry_count=0,
+            ),
             diagnostics=diagnostics,
         )
 
+    storage, storage_warnings = _storage_usage(store)
+    warnings.extend(storage_warnings)
     lock = store.lock.inspect()
     diagnostics["lock"] = {
         "state": lock.state,
@@ -370,7 +401,7 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             errors.append("no valid generation checkpoint remains")
             state_value: Literal["active", "invalid"] = "invalid"
             integrity_value: Literal["failed", "pending"] = "failed"
-        elif active and controller is not None:
+        elif active:
             state_value = "active"
             integrity_value = "pending"
         else:
@@ -458,4 +489,10 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
     )
 
 
-__all__ = ["CheckpointStatusReport", "RecoveryHealth", "StorageUsage", "inspect_checkpoint"]
+__all__ = [
+    "CheckpointStatusReport",
+    "RecoveryHealth",
+    "StorageUsage",
+    "checkpoint_bundle_root_hint",
+    "inspect_checkpoint",
+]

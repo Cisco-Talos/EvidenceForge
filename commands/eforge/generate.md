@@ -86,9 +86,10 @@ Preserve a valid `.eforge-generation/` workspace after interruption or failure. 
 original input or `eforge generate --output <bundle-root> --resume`; unspecified resume retains its stored cadence. Explain an invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
 the root; resume before upgrading; success removes the workspace and leaves no checkpoint history.
 
-Inspect recovery with `eforge checkpoint status <bundle-root> [--verbose|--json]`. For a planned
-stop, use `eforge checkpoint suspend <bundle-root>` and explain that it finishes the current hour
-and commits a safe point; do not substitute Ctrl+C. Read the checkpoint reference for exact behavior.
+Checkpoint commands take the bundle root (parent of `data/`; scenario parent without `--output`):
+`eforge checkpoint status <bundle-root> [--verbose|--json]` and
+`eforge checkpoint suspend <bundle-root>`. Control state exists before warm-up, distinguishing
+active/no checkpoint yet from none. Suspension finishes the current hour; do not substitute Ctrl+C.
 
 ### 5. Generate with normal output first
 

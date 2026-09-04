@@ -23,6 +23,11 @@ next completed simulated-hour barrier after publishing an explicit recovery poin
   with a 24-hour cadence still schedules the next automatic checkpoint at hour 48.
 - Ctrl+C behavior is unchanged: it does not attempt an emergency checkpoint.
 - No generator checkpoint-path timing probes are reintroduced.
+- Checkpoint-enabled generation creates its protected workspace and controller marker before
+  warm-up even when the total run is shorter than one cadence. Status therefore distinguishes an
+  active run awaiting its first checkpoint from a directory where no checkpoint workspace exists.
+- A mistakenly supplied generated `data/` directory is detected without recursively measuring its
+  contents, and status/suspend give the exact command using the parent bundle root.
 
 ## Validation record
 
@@ -62,6 +67,12 @@ results, Ruff results, and status-validation timing observations here.
 
 ## Validation results
 
+- The bundle-root discovery and pre-first-checkpoint UX follow-up passed 103 focused checkpoint,
+  CLI, generation-skill contract, and skill-installer tests with 54 deselected. The exact mistaken
+  `scenarios/iteration-test/data` status invocation returned immediately with `no checkpoints
+  found` and the corrected parent-root command. Repository-wide Ruff check and format-check passed;
+  the slow tier was intentionally not repeated for this bounded control-initialization and output
+  change.
 - The final focused checkpoint, CLI, skill-contract, and installer group passed 186 tests with 54
   deselected by the routine marker policy.
 - The fresh-process planned-suspension test requests an off-cadence stop, observes the durable

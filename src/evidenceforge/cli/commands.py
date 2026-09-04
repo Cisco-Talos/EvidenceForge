@@ -100,7 +100,6 @@ from evidenceforge.output_targets import (
     normalize_output_target,
     write_output_target_marker,
 )
-from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 if TYPE_CHECKING:
     from evidenceforge.generation.storage_world import StorageWorldModel
@@ -108,17 +107,6 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_CHECKPOINT_HOURS = 24
-
-
-def _completed_simulated_hours(scenario: Scenario) -> int:
-    """Return the cadence counter span across warm-up and collection."""
-
-    start, end = resolve_time_window(scenario.time_window)
-    collection_hours = math.ceil((end - start).total_seconds() / 3600)
-    warmup = scenario.time_window.warmup
-    warmup_duration = parse_duration(warmup) if warmup is not None else parse_duration("8h")
-    warmup_hours = max(1, math.ceil(warmup_duration.total_seconds() / 3600))
-    return warmup_hours + collection_hours
 
 
 def _generation_prompt_available() -> bool:
@@ -1543,11 +1531,7 @@ def generate(
             if resume and preliminary_recovery is not None
             else _DEFAULT_CHECKPOINT_HOURS
         )
-    fresh_checkpoint_enabled = (
-        not resume
-        and selected_checkpoint_hours > 0
-        and _completed_simulated_hours(scenario) >= selected_checkpoint_hours
-    )
+    fresh_checkpoint_enabled = not resume and selected_checkpoint_hours > 0
 
     from evidenceforge.config.provider import effective_config_scope
 
