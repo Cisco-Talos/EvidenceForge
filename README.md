@@ -17,33 +17,56 @@ Generate realistic synthetic security logs for cybersecurity threat hunting trai
 For background on the project and why we built it, read our announcement:
 [Introducing EvidenceForge: synthetic security logs that don't look (as) fake](https://blog.talosintelligence.com/introducing-evidenceforge-synthetic-security-logs-that-dont-look-as-fake).
 
+## What It Does
+
+EvidenceForge creates multi-format security log datasets from YAML scenario definitions. You
+describe an environment—users, systems, network topology, and normal activity—and an optional
+attack storyline. EvidenceForge then generates temporally consistent evidence across all selected
+formats, complete with cross-referenced identities, sessions, processes, timestamps, and network
+connections.
+
+Every generated bundle includes human-readable `GROUND_TRUTH.md` and machine-readable
+`GROUND_TRUTH.json` answer keys. Attack scenarios document what happened, when, and where, while
+baseline-only scenarios explicitly state that no malicious events were generated.
+
+### Key Capabilities
+
+- **Guided scenario authoring** — Agent skills turn exercise ideas into validated scenario
+  definitions, environment briefings, reusable packs, and configuration changes.
+- **Multi-source evidence generation** — Produce Windows, Linux, EDR, network, IDS, firewall, web,
+  proxy, and email evidence from one scenario.
+- **Baseline and storyline modeling** — Combine ordinary user and system activity, benign red
+  herrings, and typed attack events in the same dataset.
+- **Repeatable generation at scale** — Deterministic seeds, resource forecasts, progress reporting,
+  and resumable checkpoints support complex simulations and huge datasets.
+- **Validation and quality measurement** — Catch schema, cross-reference, topology, and capacity
+  problems before generation, then evaluate the resulting evidence across four quality pillars.
+- **Reusable environment modeling** — Split scenarios with YAML includes, compose versioned
+  industry or organization packs, and apply project-local configuration overlays.
+
 ## What Makes EvidenceForge Different
 
-Most synthetic log generators produce isolated, single-format data that experienced analysts identify as fake within seconds. EvidenceForge takes a fundamentally different approach:
+Most synthetic log generators create independent rows or replay isolated templates. EvidenceForge
+models activities first, then renders the evidence those activities would leave across different
+systems and sensors.
 
-- **Consistency by construction.** Canonical events and immutable plans own shared connection,
-  identity, lifecycle, and protocol facts for migrated action families; emitters perform only
-  source-native projection. Dispatch rejects unknown or incomplete canonical occurrences. Some
-  mutable compatibility views remain during the approved migration, and the explicit `raw` path
-  is outside cross-source consistency guarantees.
-
-- **Causal event ordering.** Events respect real-world dependencies — DNS queries precede connections, Kerberos TGT/TGS precede domain logons, audit events follow administrative commands. A composable rule engine auto-generates prerequisites with realistic timing offsets, so the data tells a coherent causal story across log sources.
-
-- **Self-exciting temporal dynamics.** User activity follows a Hawkes process — events trigger bursts that taper off naturally, matching real human work patterns. System traffic uses periodic intervals with jitter. Day-of-week variation models Monday login storms, Friday early departures, and near-zero weekends. Most generators use uniform random timing that experienced analysts spot instantly.
-
-- **20+ correlated log formats.** Windows Security (30 event IDs), Sysmon, 13 Zeek log types, eCAR EDR/XDR, syslog, bash history, Snort IDS, web access, and proxy logs — all from the same event pipeline.
-
-- **Network visibility modeling.** Define sensor placement (SPAN/TAP), monitored segments, and direction. EvidenceForge determines which connections each sensor can see and only emits network logs where they'd realistically appear.
-
-- **Deterministic engine, skill-assisted authoring.** Scenario creation uses AI agent skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
-
-- **Crash-safe generation resume.** Long runs checkpoint every 24 completed simulated hours by
-  default and resume from a self-contained output root with byte-identical deterministic artifacts.
-  The cadence is configurable and successful bundles retain no checkpoint residue.
-
-- **Built-in quality evaluation.** A 4-pillar scoring framework (22 sub-scores) measures
-  parseability, plausibility, causality, and timing, with additional concern-oriented views for
-  source schema, canonical invariants, scenario completeness, and distribution realism.
+- **Correlated evidence, not independent rows.** A logon, process, file operation, or connection
+  retains the same identities and relationships everywhere it is observed, enabling realistic
+  pivots between endpoint, identity, network, and application sources.
+- **Causal activity, not keyword matching.** DNS lookups precede connections, Kerberos tickets
+  precede domain logons, and lifecycle endings follow their beginnings. Required supporting
+  evidence is generated automatically instead of being hand-authored as disconnected events.
+- **Behavioral and temporal realism.** Bursty user activity, periodic system traffic with jitter,
+  day-of-week variation, role-aware services, and benign anomalies create the texture analysts
+  expect from real environments.
+- **Observation-aware output.** Sensor placement, network direction, collection profiles, source
+  clocks, and coherent visibility gaps determine what each source can actually observe.
+- **Source-native evidence.** Each output uses the identities, fields, ordering, and lifecycle
+  conventions of the source it represents rather than projecting one generic event schema into
+  every format.
+- **Creative authoring, deterministic rendering.** Agent skills help research and design scenarios,
+  while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
+  reproduce the same dataset without API costs or model variability.
 
 ## What's New in 2.0
 
@@ -70,59 +93,94 @@ Most synthetic log generators produce isolated, single-format data that experien
   applications, and activity models. Packs can be validated, shared as portable `.efpack`
   archives, and reproduced with their exact dependencies.
 
+[See the complete changelog](CHANGELOG.md) for detailed release history.
+
+## Supported Log Formats
+
+| Format | Description |
+|--------|-------------|
+| Windows Security Events | 30 event IDs covering authentication, process activity, Kerberos, persistence, account and group management, permitted connections, and log clearing |
+| Windows Sysmon | Events 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22 for process, network, module, injection, file, registry, and DNS activity |
+| Zeek (16 log types) | conn, dhcp, dns, files, http, ntp, ocsp, packet_filter, pe, reporter, smb_files, smb_mapping, smtp, ssl, weird, and x509 |
+| eCAR | Simulated EDR/XDR telemetry for processes, files, flows, registry, modules, threads, user sessions, and services |
+| Linux syslog | Authentication, session, service, package, scheduler, maintenance, firewall, Samba, and other role-aware system activity |
+| Bash history | Per-user timestamped command history |
+| Snort/Suricata alerts | Fast-format IDS alerts with sensor-aware filtering and correlation to network evidence |
+| Cisco ASA | Connection, teardown, deny, NAT, and threat-detection syslog from modeled firewall control points |
+| Web access | Apache/Nginx combined text or Splunk-compatible JSON, depending on the output target |
+| HTTP proxy | Extended Apache/Nginx combined text, SOF-ELK-compatible combined text, or Splunk-compatible JSON, depending on the output target |
+
+The default target uses SIEM-neutral output. `--target sof-elk` produces layouts and source-native
+variants suitable for SOF-ELK®, including Snare Windows events and year-partitioned RFC3164
+syslog. `--target splunk` produces Splunk-friendly Windows event streams and JSON variants for web
+and proxy access logs. Formats whose representation does not need to change remain identical
+across targets.
+
+See the [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for field-level details and
+the [Output Target Ingest Guides](docs/output-targets/README.md) for target-specific ingestion and
+parser support.
+
 ## Quick Start
 
 ```bash
-# Install
+# Install EvidenceForge from the source checkout
 git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 uv sync
 
-# Install project-local skills for all supported agents
+# Install skills. You can choose either project- or user-level skills, or both
+
+# Install the project-local skills for Claude Code and ChatGPT/Codex
+# (for the current directory/project only)
 uv run eforge install-skills
 
-# Or select one agent or install user-wide
-uv run eforge install-skills --agent chatgpt
+# Install the user-level skills for Claude Code and ChatGPT/Codex
+# (for all user projects)
 uv run eforge install-skills --global
+```
 
-# Create a scenario interactively
-# /eforge scenario
+In Claude Code, create a new exercise or try the bundled branch-office scenario:
 
-# Or generate from an existing scenario
-uv run eforge generate scenarios/branch-office-example/scenario.yaml -o ./output
+```text
+/eforge scenario
+/eforge generate scenarios/branch-office-example/scenario.yaml to ./output
+/eforge evaluate ./output
+```
 
-# Validate a scenario file
-uv run eforge validate scenarios/branch-office-example/scenario.yaml
+In ChatGPT or Codex, use the corresponding `eforge-scenario`, `eforge-generate`, and
+`eforge-evaluate` skills.
 
-# Evaluate a new authoritative bundle (legacy bundles still need --scenario)
-uv run eforge eval ./output
+Checkpoint-enabled runs can be inspected, stopped safely after the current simulated hour, and
+resumed from another terminal:
+
+```bash
+uv run eforge checkpoint status ./output
+uv run eforge checkpoint suspend ./output
+uv run eforge generate --output ./output --resume
 ```
 
 ## Agent Skills (Recommended)
 
-EvidenceForge includes agent skills for interactive, guided workflows. These are the preferred way to use EvidenceForge.
+EvidenceForge provides skills for the creative and interactive parts of the workflow. They guide
+scenario and pack authoring, invoke the deterministic CLI when appropriate, interpret results,
+and help repair problems without adding LLM calls to generation itself.
 
-| Skill | Description |
-|-------|-------------|
-| `/eforge scenario` | Guided scenario creation through a structured interview. Researches TTPs via MITRE ATT&CK, builds environment/network/personas, outputs validated YAML + student context document. |
-| `/eforge pack` | Discovers, compares, inspects, validates, initializes, and copies industry or organization packs. |
-| `/eforge industry-pack` | Authors reusable industry catalogs with exact references, qualified exports, validation, and composition smoke tests. |
-| `/eforge organization-pack` | Authors concrete organization environments and baselines with pinned industry dependencies, validation, and composition smoke tests. |
-| `/eforge generate` | Validates the scenario, runs the generation engine, monitors output, and diagnoses errors. |
-| `/eforge validate` | Checks a scenario for schema correctness and cross-reference integrity. Fixes simple issues, escalates structural problems. |
-| `/eforge evaluate` | Runs the data quality evaluation, interprets scores, reviews records for realism, and suggests improvements. |
-| `/eforge config` | Add, modify, or remove personas, domains, applications, and other configuration data. Handles cross-file dependencies automatically. See [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md). |
+| Workflow | Claude Code | ChatGPT/Codex | Purpose |
+|----------|-------------|---------------|---------|
+| Scenario authoring | `/eforge scenario` | `eforge-scenario` | Create or revise a validated exercise and its environment briefing |
+| Scenario validation | `/eforge validate` | `eforge-validate` | Explain validation failures and repair authored scenarios when requested |
+| Log generation | `/eforge generate` | `eforge-generate` | Generate, monitor, verify, and troubleshoot an existing scenario |
+| Quality evaluation | `/eforge evaluate` | `eforge-evaluate` | Score generated evidence, interpret results, and review realism |
+| Pack discovery and lifecycle | `/eforge pack` | `eforge-pack` | Find, inspect, validate, initialize, and copy reusable packs |
+| Industry-pack authoring | `/eforge industry-pack` | `eforge-industry-pack` | Create reusable sector-specific personas, applications, traffic, and storage vocabulary |
+| Organization-pack authoring | `/eforge organization-pack` | `eforge-organization-pack` | Create reusable users, systems, topology, services, and baseline activity |
+| Pack releases | `/eforge pack-release` | `eforge-pack-release` | Build, inspect, import, hydrate, and verify portable `.efpack` releases |
+| Configuration | `/eforge config` | `eforge-config` | Inspect or tailor project-local personas, applications, traffic, and other generator data |
 
-The table shows Claude Code command names. In ChatGPT and Codex, use the corresponding
-`eforge-scenario`, `eforge-pack`, `eforge-industry-pack`, `eforge-organization-pack`,
-`eforge-generate`, `eforge-validate`, `eforge-evaluate`, and `eforge-config` skills.
-
-`uv run eforge install-skills` installs project-local skills for both Claude Code
-and ChatGPT. Claude commands go under `.claude/commands/`; ChatGPT skills go
-under `.agents/skills/`. Add `--global` to install both user-wide under
-`~/.claude/commands/` and `~/.agents/skills/`, or select one with `--agent
-claude` or `--agent chatgpt`. The legacy name `--agent codex` remains an alias
-for `--agent chatgpt` and uses the same destinations.
+By default, `uv run eforge install-skills` installs both integrations for the current project under
+`.claude/commands/eforge/` and `.agents/skills/eforge-*`. Use `--global` for user-wide installation,
+or select one integration with `--agent claude` or `--agent chatgpt`; `--agent codex` remains an
+alias for `--agent chatgpt`.
 
 ## CLI Reference
 
@@ -135,7 +193,7 @@ For scripted or non-interactive use:
 | `eforge checkpoint suspend <bundle-root>` | Ask an active checkpoint-enabled generator to stop safely after its current simulated hour |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
-| `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |
+| `eforge pack <command>` | Discover, author, lock, validate, package, inspect, import, or hydrate industry and organization packs |
 | `eforge eval <output_dir> [-s <scenario.yaml>] [--allow-large-evaluation]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge schema <selector> [--json]` | Show one focused installed-version authored-scenario contract, such as `environment.network_identities` or `event.email_read`. |
@@ -143,282 +201,122 @@ For scripted or non-interactive use:
 | `eforge install-skills [--agent all\|claude\|chatgpt\|codex] [--global]` | Install project-local or user-wide agent skills; defaults to all agents (`codex` aliases `chatgpt`) |
 | `eforge version` | Show version |
 
-Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,
-`--output` / `-o` for output directory overrides, `--resume` for incomplete output,
-`--overwrite` to replace output, and `--checkpoint-hours N` to change the 24-hour cadence (`0`
-disables it). `--force` / `-f` is a deprecated overwrite alias. Use
-`--target default|sof-elk|splunk` to choose the
-generated file layout. The `default` target is SIEM-neutral; `sof-elk` emits
-target-specific variants such as Snare Windows events and year-partitioned
-RFC3164 syslog for parser validation, and `splunk` emits Splunk-friendly
-Windows XML event streams. `eval` uses `--scenario` / `-s` and
-`--format text|json`; `info` and `validate-config` support `--json` for machine
-output.
+Useful `generate` flags include `--verbose` / `--debug`, `--formats` / `-F`,
+`--target default|sof-elk|splunk`, `--resume`, `--overwrite`, and `--checkpoint-hours N`. The
+default checkpoint cadence is 24 simulated hours; `0` disables new checkpoints. `validate` accepts
+the same checkpoint-cadence option so its resource forecast reflects the intended run.
 
-`validate` also accepts `--checkpoint-hours N`, so its resource forecast uses the intended
-generation cadence; it defaults to 24 and accepts `0` to model checkpointing as disabled.
-
-During generation, the first Ctrl+C requests a safe stop at the end of the current simulated hour
-and creates a recovery point when checkpointing is enabled. Press Ctrl+C a second time to force an
-immediate exit. With `--checkpoint-hours 0`, the first interrupt still waits for the hour boundary
-but cannot create a new recovery point.
-
-See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery,
-filesystem-safety, and output-state behavior.
+See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery and
+filesystem-safety details, and the [Output Target Ingest Guides](docs/output-targets/README.md) for
+target-specific layouts and parser support.
 
 All commands accept `--help` and `-h` for usage information.
 
 ## Customizing Configuration
 
-EvidenceForge ships with 50+ YAML config files controlling DNS domains, applications, personas, traffic profiles, and more. You can customize these using a project-local overlay at `.eforge/config/` — your changes survive package upgrades and merge automatically with built-in defaults.
+EvidenceForge uses a large data-driven configuration catalog for DNS, applications, personas,
+traffic profiles, source behavior, timing, and more. Customize it through a project-local overlay
+at `.eforge/config/`; project changes remain separate from the installed defaults and survive
+package upgrades.
 
 The recommended approach is the agent skill (`/eforge config` in Claude Code or `eforge-config` in
 ChatGPT/Codex):
 
-```
+```text
 /eforge config add a nurse persona for a healthcare scenario
 ```
 
-For details on the overlay system, manual editing, and cross-file dependencies, see **[Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md)**.
+For the overlay workflow, manual editing, and cross-file dependencies, see
+[Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md).
 
-## Scenario 2.0 packs
+## Reusable Industry and Organization Packs
 
-Scenario 2.0 optionally composes exact, whole industry or organization packs from installed data,
-project-local `.eforge/packs`, or an explicit path. Packs have the same six predictable catalogs,
-including required empty catalogs; organization packs can also contribute a concrete environment
-and baseline. Existing Scenario 1.0 files and monolithic Scenario 2.0 files require no packs and do
-not scan for or warn about them.
+Scenarios can compose exact-version industry or organization packs while still supporting
+monolithic authoring. Industry packs provide reusable sector-specific behavior and vocabulary;
+organization packs can provide a concrete environment and baseline activity. The skills are the
+recommended way to discover, select, author, and release packs.
 
-EvidenceForge ships `finance`, `healthcare`, and `technology` industry examples plus the fictional
-`northstar-health` organization example. Start with the `/eforge pack` (Claude Code) or
-`eforge-pack` (ChatGPT/Codex) skill, or run `eforge pack list --json`. See
-[Scenario 2.0 and composable packs](docs/reference/SCENARIO_PACKS.md) for the composition and
-lifecycle guide and the [Pack Authoring Reference](commands/eforge/references/pack-reference.md)
-for exact catalog fields, cadence, validation, and consumer-harness workflows.
+Bundled industry packs:
 
-## What It Does
+- `finance` v1.0.0
+- `healthcare` v1.0.0
+- `technology` v1.0.0
 
-EvidenceForge creates multi-format security log datasets from YAML scenario definitions. You describe an environment (users, systems, network topology) and a storyline (attack events), and EvidenceForge generates temporally consistent logs across all formats simultaneously — complete with cross-referenced LogonIDs, PIDs, timestamps, and UIDs.
+Bundled fictional organization packs:
 
-Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios document exactly what happened, when, and where, while baseline-only scenarios explicitly document that no malicious events were generated.
+- `metrolink-specialty-care` v1.0.0
+- `northstar-health` v1.0.0 and v1.1.0; v1.1.0 adds cross-platform SMB storage
 
-### Key Capabilities
-
-- **Cross-log consistency** — Shared LogonIDs, PIDs, timestamps, and Zeek UIDs across all formats
-- **Causal expansion engine** — Auto-generates prerequisite events (DNS, Kerberos, audit events) with composable rules
-- **Realistic baseline noise** — 26 lateral movement patterns, process→network correlation, network-level red herrings, and 18 Linux syslog categories create noise that analysts must work through
-- **OS-aware generation** — Windows systems produce Windows Event + Sysmon logs; Linux systems produce syslog + bash history
-- **Network visibility modeling** — Define sensor placement (SPAN/TAP), direction, and monitored segments
-- **Ground truth documentation** — Every run generates a GROUND_TRUTH.md; attack scenarios include narrative, timeline, and IOCs
-- **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
-- **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
-- **Data quality evaluation** — 4-pillar scoring framework (22 sub-scores), concern-oriented
-  diagnostic categories, non-vacuous applicability, and acceptance criteria
-- **Multi-timezone support** — Pattern-based timezone overrides per system hostname
-
-## Supported Log Formats
-
-| Format | Category | Description |
-|--------|----------|-------------|
-| Windows Security Events | Host | 30 event IDs: authentication (4624/4625/4634/4648/4672), process (4688/4689), Kerberos (4768/4769/4770/4771/4776), persistence (4697/4698-4701), account mgmt (4720/4723/4724/4726/4738), group membership (4728/4729/4732/4733/4756/4757), firewall (5156), defense evasion (1102) |
-| Windows Sysmon | Host | Process create (Event 1), terminate (Event 5), remote thread injection (Event 8), process access (Event 10) |
-| Zeek (13 log types) | Network | conn, dns, http, ssl, files, x509, dhcp, ntp, weird, pe, ocsp, packet_filter, reporter |
-| eCAR | Host | EDR/XDR telemetry in MITRE CAR-based format (PROCESS, FILE, FLOW, REGISTRY, MODULE, THREAD, USER_SESSION, SERVICE) |
-| Syslog | Host | Linux authentication and system logs (BSD format) |
-| Bash History | Host | Per-user timestamped command history |
-| Snort Alert | Network | IDS alert format (fast alert) |
-| Web Access | Network | Apache/Nginx combined log format |
-| HTTP Proxy | Host | Forward proxy access log (W3C Extended format, CONNECT entries, cache status, proxy action hints) |
-
-See [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
-
-## Scenario Structure
-
-Scenarios are YAML files describing an environment, personas, time window, and optional attack storyline:
-
-```yaml
-version: "1.0"
-name: my-scenario
-description: "Description of the scenario"
-
-environment:
-  description: "Corporate office network"
-  timezone:
-    default: "America/New_York"
-  users: [...]
-  systems: [...]
-  network:             # Optional: segments and sensors
-    segments: [...]
-    sensors: [...]
-
-personas: [...]        # User behavior patterns
-
-time_window:
-  start: "2024-01-15T08:00:00Z"
-  duration: "8h"
-
-baseline_activity:
-  description: "Normal office activity"
-  intensity: medium
-  variation: low
-
-storyline:             # Optional: attack events
-  - time: "+2h"
-    actor: attacker
-    system: TARGET-01
-    activity: "Lateral movement via pass-the-hash"
-    events:
-      - type: process
-        process_name: "C:\\Windows\\System32\\cmd.exe"
-        command_line: "cmd.exe /c whoami"
-
-output:
-  logs: [{format: windows_event_security}, {format: zeek}]
-  destination: ./output
-```
-
-See [Scenario Reference](docs/reference/scenario-reference.md) for complete schema documentation.
-
-## Example Scenarios
-
-| Scenario | Users | Duration | Description |
-|----------|-------|----------|-------------|
-| [branch-office-example](scenarios/branch-office-example/scenario.yaml) | 5 | 6 hours | Beginner branch office scenario with Windows, Zeek, eCAR, syslog, bash history, Snort, ASA, web, and proxy logs |
-| [minimal.yaml](tests/fixtures/scenarios/minimal.yaml) | 1 | 1 hour | Minimal baseline-only scenario |
-| [attack.yaml](tests/fixtures/scenarios/attack.yaml) | 2 | 4 hours | Lateral movement + exfiltration |
-| [retail-store-ftp-attack.yaml](tests/fixtures/scenarios/retail-store-ftp-attack.yaml) | 20+ | 24 hours | Retail store with FTP RCE attack, full network topology |
+Use `/eforge pack` or `eforge-pack` to inspect the available inventory. For the underlying
+composition and lifecycle contract, see
+[Reusable scenario packs](docs/reference/SCENARIO_PACKS.md).
 
 ## Data Quality Evaluation
 
-EvidenceForge includes a built-in evaluation framework that scores generated data across 4 pillars:
+EvidenceForge can evaluate a generated bundle across four complementary quality pillars:
 
 | Pillar | Weight | What it measures |
 |--------|--------|-----------------|
-| Parseability | 30% | Spec conformance, format constraints |
-| Plausibility | 25% | Value/OS correctness, co-occurrence, distributions, user diversity, anomaly rate |
-| Causality | 25% | Causal ordering, event presence, indicator accuracy, pivot linkability |
-| Timing | 20% | Attack-chain timing, burstiness, diurnal patterns, volume adequacy |
+| Parseability | 30% | Source conformance and format constraints |
+| Plausibility | 25% | Values, cross-source agreement, distributions, diversity, and anomaly rates |
+| Causality | 25% | Event presence, ordering, authored-intent reconciliation, and investigative pivots |
+| Timing | 20% | Attack-chain timing, burstiness, regularity, diurnal patterns, and event rates |
 
-**Two-tier acceptance**: applicable hard gates must pass, while aspirational targets remain
-informational. Gates cover source conformance, value and field consistency, exact IDS integrity,
-causal/scenario reconciliation, and linkability. The authoritative thresholds are configurable in
-`src/evidenceforge/config/evaluation/thresholds.yaml`.
-
-The compatibility pillars remain the weighted public score. The report also groups the same
-applicable measures by review concern: source/schema fidelity, canonical cross-source invariants,
-declared-scenario completeness, and distribution realism. Required measures with no applicable
-denominator are reported as unavailable instead of receiving a vacuous perfect score.
-
-By default, evaluation accepts at most 512 MiB of input, 10,000 files, and 500,000 parsed records.
-Use `--allow-large-evaluation` only for a trusted corpus after reviewing available memory. The
-override does not relax file or parser safety checks.
+Applicable hard gates must pass; aspirational targets show where quality can improve without
+turning every shortfall into a failure. Measures that do not apply to a dataset are reported as
+unavailable rather than receiving an automatic perfect score.
 
 ```bash
-uv run eforge eval ./output -s scenario.yaml
+uv run eforge eval ./output
 ```
-
-## Architecture
-
-```
-Scenario YAML
-    |
-    v
-Validation (Pydantic schema + cross-reference checks)
-    |
-    v
-GenerationEngine (hour-by-hour orchestration)
-    |
-    v
-WorldModel / WorldPlanner (compile host roles, user placement, session bootstrap)
-    |
-    v
-ActivityGenerator (builds canonical occurrences with composable contexts)
-    |
-    v
-EventDispatcher (routes to StateManager + matching emitters)
-    |
-    +---> WindowsEventEmitter ---> default XML / sof-elk Snare / splunk XML stream
-    +---> SysmonEmitter ---------> default XML / sof-elk Snare / splunk XML stream
-    +---> ZeekEmitter(s) --------> sensor/conn,dns,http,ssl,... (NDJSON)
-    +---> EcarEmitter -----------> ecar.json (NDJSON)
-    +---> SyslogEmitter ---------> default+splunk RFC5424 / sof-elk RFC3164 year layout
-    +---> BashHistoryEmitter ----> per-user bash history
-    +---> SnortEmitter ----------> snort_alert.log
-    +---> CiscoAsaEmitter -------> default+splunk flat / sof-elk year layout
-    +---> WebEmitter ------------> web_access.log
-    +---> ProxyEmitter ----------> proxy_access.log
-```
-
-Generation records the selected output target in `OUTPUT_TARGET.txt` and
-emitters apply it only where file shape differs.
-
-`WorldModel` compiles authoritative host and user capabilities from scenario fields like `primary_system`, `roles`, `services`, and workstation assignments. `WorldPlanner` then chooses realistic interactive, network, SSH, and RDP session paths before `ActivityGenerator` emits the correlated evidence.
-
-See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the world-model layer, CanonicalOccurrence model, state management, and emitter system.
 
 ## Development
 
 ```bash
-# Install dependencies and development tools
 uv sync --all-extras
-
-# Run the routine test tier (coverage is opt-in)
 uv run pytest
-
-# Run the extended release gate without coverage instrumentation
-uv run pytest -m slow --no-cov --durations=20
-
-# Run exceptional scale/duration/exhaustive diagnostics only when relevant
-uv run pytest -m soak --no-cov --durations=20
-
-# Run optional third-party parser validation tests.
-# Requires Docker Compose v2 or Podman Compose.
-uv run pytest --include-external-parsers -m external_parser --no-cov
-
-# Run the release coverage gate before a dev -> main PR
-uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
-
-# Do not combine extended or soak tests with coverage during release validation.
-# Coverage is measured on the default routine suite.
-
-# Run specific test suite
-uv run pytest tests/unit/test_network_visibility.py -v
-
-# Lint and format
 uv run ruff check .
 uv run ruff format --check .
 ```
 
-See [External Parser Validation](docs/external-parser-validation/README.md)
-for the third-party parser validation quickstart, external-parser harness architecture,
-full-dataset runner command, and failure report details.
-
-### Tech Stack
-
-- Python 3.12+ with [uv](https://docs.astral.sh/uv/)
-- Pydantic v2 for schema validation
-- Jinja2 for log format templates
-- Typer + Rich for CLI
-- pytest (3700+ tests)
+See [Contributing](CONTRIBUTING.md) for the complete development workflow, extended test tiers,
+coverage gate, coding conventions, and external-parser validation requirements.
 
 ## Documentation
 
-- [Scenario Reference](docs/reference/scenario-reference.md) — Complete YAML schema documentation
-- [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — All log types, field details, known limitations
-- [Architecture](docs/ARCHITECTURE.md) — How the generation engine works
-- [Contributing](CONTRIBUTING.md) — How to contribute to EvidenceForge
-- [AGENTS.md](AGENTS.md) — Coding conventions for AI agents
-
-### Design Documents
-
-- [PRD](docs/design/PRD.md) — Product requirements and specifications
-- [Event Model Design](docs/design/event-model-prd.md) — Canonical occurrence architecture
-- [Data Quality Design](docs/design/data-quality-prd.md) — Evaluation framework design
-- [Research Report](docs/design/synthetic-log-generation-research.md) — Analysis of existing tools
+- [Scenario Reference](docs/reference/scenario-reference.md) — Scenario fields, includes, typed
+  events, and validation rules
+- [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — Output layout, log types,
+  field details, and known limitations
+- [Reusable Scenario Packs](docs/reference/SCENARIO_PACKS.md) — Industry and organization pack
+  composition and lifecycle
+- [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md) — Project-local configuration
+  overlays and data catalogs
+- [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) — Safe suspension,
+  recovery, status, storage, and filesystem behavior
+- [Output Target Ingest Guides](docs/output-targets/README.md) — Default, SOF-ELK®, and Splunk
+  layouts, parsing, and ingestion
+- [Adversarial Payload Testing](docs/reference/adversarial_payload.md) — Safe synthetic payload and
+  callback-testing workflow
+- [Credential Spillage Modeling](docs/reference/spillage.md) — Synthetic credential leakage and
+  evidence-surface behavior
+- [Configuration Compatibility](docs/reference/config-compatibility.md) — Legacy configuration
+  normalization and compatibility rules
+- [External Parser Validation](docs/external-parser-validation/README.md) — SOF-ELK and Splunk
+  validation harnesses
+- [Architecture](docs/ARCHITECTURE.md) — Generation architecture and ownership contracts
+- [Changelog](CHANGELOG.md) — Release history
+- [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), and
+  [Code of Conduct](CODE_OF_CONDUCT.md) — Project contribution and security policies
+- [Agent Development Conventions](AGENTS.md) — Repository conventions for coding agents
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, sending pull requests, and setting up a development environment.
+Before opening a pull request, please open an issue describing the problem or proposed change and
+wait for the approach to be discussed with the maintainers. This helps avoid work on changes that
+do not fit the project direction; pull requests submitted without prior agreement may be closed.
+Once an approach is agreed, follow [CONTRIBUTING.md](CONTRIBUTING.md) for development, testing, and
+submission requirements.
 
 ## Acknowledgements
 
