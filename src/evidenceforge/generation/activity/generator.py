@@ -6930,6 +6930,11 @@ class ActivityGenerator:
         planned: list[tuple[ProcessIdentity, datetime]] = []
         prior = disconnect_at
         for ordinal, process in enumerate(processes, start=1):
+            retained_child_close = (
+                self._lifecycle_authority.process_latest_closed_child_at_for_object(
+                    process.ecar_object_id
+                )
+            )
             process_identity = self.state_manager.get_process_identity(
                 identity.hostname,
                 process.pid,
@@ -6940,6 +6945,11 @@ class ActivityGenerator:
                 disconnect_at,
                 ensure_utc(process.start_time),
                 ensure_utc(process.last_activity_time or process.start_time),
+                *(
+                    (ensure_utc(retained_child_close) + timedelta(microseconds=1),)
+                    if retained_child_close is not None
+                    else ()
+                ),
                 prior,
             )
             terminate_at = max(disconnect_at + step * ordinal, minimum)
@@ -7024,6 +7034,14 @@ class ActivityGenerator:
             if continuation.disconnect_at > canonical_cutoff:
                 continue
             self._disconnect_exact_rdp_entry(entry)
+
+        # A due RDP session can itself own a later nested RDP client process. Close every
+        # due transport and source process before logging out any session so a parent
+        # session remains available while its child client is terminalized.
+        for entry in pending:
+            continuation = entry.continuation
+            if continuation.disconnect_at > canonical_cutoff:
+                continue
             snapshot = self._rdp_session_manager.get(
                 continuation.session.identity.logical_session_id
             )
