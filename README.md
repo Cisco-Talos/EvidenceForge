@@ -45,6 +45,31 @@ Most synthetic log generators produce isolated, single-format data that experien
   parseability, plausibility, causality, and timing, with additional concern-oriented views for
   source schema, canonical invariants, scenario completeness, and distribution realism.
 
+## What's New in 2.0
+
+- **More realistic correlated evidence:** SSH, RDP, SMB, Windows authentication, Sysmon, Zeek,
+  Snort, eCAR, and Linux system logs now agree more closely on identities, timing, processes,
+  network sessions, and lifecycle boundaries. Investigations encounter fewer cross-source
+  contradictions and more source-native behavior.
+
+- **Cross-platform SMB2/3 activity:** Generate realistic file-share activity across Windows and
+  Linux clients and Windows or Samba servers. Authentication, file operations, network traffic,
+  endpoint telemetry, and Samba audit events remain correlated across the resulting log sources.
+
+- **Resumable long-running generation:** EvidenceForge creates automatic recovery checkpoints
+  during generation, so large or multi-week runs can be safely interrupted and resumed without
+  starting over. New status and suspension commands make these runs easier to inspect and control.
+
+- **Easier scenario authoring:** Focused `eforge schema` commands provide exact field definitions
+  and working minimal examples for individual scenario objects and event types. Validation errors
+  are grouped around the object that needs attention and point directly to the relevant schema
+  contract.
+
+- **Modular, reusable scenarios:** Split large scenarios into nested YAML includes, then compose
+  them with versioned industry and organization packs containing reusable environments, personas,
+  applications, and activity models. Packs can be validated, shared as portable `.efpack`
+  archives, and reproduced with their exact dependencies.
+
 ## Quick Start
 
 ```bash
