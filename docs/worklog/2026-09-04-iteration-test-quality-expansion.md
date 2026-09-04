@@ -105,3 +105,30 @@ later engine-quality loops.
 - **Sibling risks:** the fix must cover non-sample upload and SMB operations, avoid changing the
   remote SMB credential/effective identity, and preserve explicit capable process ownership.
   Broader actor-native Windows registry/file side effects remain outside this loop.
+
+### Result
+
+- Focused generated-data probe passed: local archive effects retain Aisha's local token,
+  outbound upload credentials remain Marcus, the Windows SMB client uses Explorer rather than
+  the unrelated `New-Item` PID, and Samba retains Marcus as the remote principal.
+- Automated evaluation was 95.8246 across 111,587 records; temporal integrity remained below
+  its hard gate.
+- The blind panel returned four Synthetic verdicts with scores 99, 97, 94, and 98 (average
+  97.0). The next dominant blocker is a repeated Sysmon native timestamp contradiction.
+
+## Assessment loop 33 — atomic Sysmon process timing
+
+### Family contract
+
+- **Owning abstraction:** `SourceTimingPlanner`'s host-shared Sysmon process lifecycle pair.
+- **Invariant:** Event 1 and Event 5 payload `UtcTime` and provider-envelope `TimeCreated` are
+  projections of the same exact occurrence; an instance-local retained envelope may not be
+  combined with a separately resolved native timestamp.
+- **Entry paths:** baseline process starts/stops, storyline processes, RDP/SSH client processes,
+  services, causal process companions, and collection-boundary finalization.
+- **Consumers:** Sysmon Event 1/5, Security 4688/4689 ordering, eCAR process correlation,
+  ProcessGuid identity, and dependent Sysmon Event 3/7/11/22 ordering.
+- **Layer rationale:** the planner owns both timestamps as one canonical source-native pair.
+  Repairing XML after rendering would leave ProcessGuid and sibling timing contracts stale.
+- **Sibling risks:** preserve parent-before-child and create-before-dependent ordering, provider
+  latency, deterministic rendering, exact-publication replay, and termination containment.

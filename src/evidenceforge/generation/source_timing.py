@@ -3958,9 +3958,11 @@ class SourceTimingPlanner:
             canonical_start=start_time,
         )
         create_cache_key = (instance, object_id)
-        create_render = self._sysmon_process_render_create_times.get(create_cache_key)
-        if create_render is None:
-            create_render = shared_create_render
+        # The host-shared pair is one source-native fact.  Do not combine its native
+        # timestamp with an independently retained instance-local envelope: a later
+        # planning path can otherwise render one Sysmon row with timestamps from two
+        # different lifecycle observations.
+        create_render = shared_create_render
         parent = (
             event.identity_plan.actor
             if event.identity_plan is not None
@@ -4235,9 +4237,10 @@ class SourceTimingPlanner:
                     hostname=hostname,
                     phase=phase,
                 )
+                specialized_native = specialized[0] if specialized is not None else None
                 native_time = (
-                    specialized[0]
-                    if specialized is not None
+                    specialized_native
+                    if specialized_native is not None
                     else self._runtime_endpoint_event_time(
                         event,
                         family=family,
@@ -4296,7 +4299,13 @@ class SourceTimingPlanner:
                     )
                 phase_times[phase] = native_time
                 render_time = specialized[1] if specialized is not None else native_time
-                if family == "sysmon":
+                if specialized is not None and specialized_native is not None:
+                    # Specialized lifecycle planners return an atomic native/envelope
+                    # pair.  Session and transport constraints operate afterward; move
+                    # the envelope by the same repair delta instead of combining two
+                    # different occurrence times in one source-native row.
+                    render_time += native_time - specialized_native
+                elif family == "sysmon":
                     if specialized is None:
                         render_time = self._sysmon_runtime_envelope_time(
                             native_time,

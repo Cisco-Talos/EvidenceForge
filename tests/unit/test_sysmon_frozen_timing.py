@@ -177,6 +177,55 @@ def test_sysmon_renderer_only_formats_finalized_process_times(tmp_path: Path) ->
         assert row["_TimingFinalized"] is sysmon_module._FROZEN_TIMING_MARKER
 
 
+def test_sysmon_process_pair_does_not_mix_a_stale_instance_envelope() -> None:
+    """One process projection keeps its native and envelope timestamps atomic."""
+
+    planner = SourceTimingPlanner(
+        timing_runtime=TimingRuntime(reference_time=T0, namespace="sysmon-atomic-pair")
+    )
+    event = _process_event()
+    object_id = planner._sysmon_process_object_id("WIN-01", 2_012, T0)
+    stale_envelope = T0 + timedelta(hours=2)
+    planner._sysmon_process_render_create_times.set(
+        ("sysmon:win-01", object_id),
+        stale_envelope,
+        deadline=stale_envelope + timedelta(days=2),
+    )
+
+    _plan(event, planner)
+
+    assert event.source_timing is not None
+    native = event.source_timing.finalized_times[sysmon_process_native_key("create", "WIN-01")]
+    rendered = event.source_timing.finalized_times[sysmon_process_render_key("create", "WIN-01")]
+    assert rendered != stale_envelope
+    assert timedelta(0) < rendered - native < timedelta(seconds=1)
+
+
+def test_sysmon_process_pair_moves_together_after_session_constraint() -> None:
+    """A post-specialization session repair shifts payload and envelope together."""
+
+    planner = SourceTimingPlanner(
+        timing_runtime=TimingRuntime(reference_time=T0, namespace="sysmon-session-pair")
+    )
+    event = _process_event()
+    with patch.object(
+        planner,
+        "_apply_runtime_session_constraints",
+        side_effect=lambda _event, **kwargs: kwargs["preferred"] + timedelta(hours=2),
+    ):
+        _plan(event, planner)
+
+    assert event.source_timing is not None
+    native = event.source_timing.finalized_times[
+        endpoint_event_native_key("windows_event_sysmon", "WIN-01", "process_create")
+    ]
+    rendered = event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_event_sysmon", "WIN-01", "process_create")
+    ]
+    assert native > T0 + timedelta(hours=1)
+    assert timedelta(0) < rendered - native < timedelta(seconds=1)
+
+
 def test_sysmon_file_create_formats_frozen_native_fields(tmp_path: Path) -> None:
     """Event 11 uses frozen native time for both payload timestamp fields."""
 
