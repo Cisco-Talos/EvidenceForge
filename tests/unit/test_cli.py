@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -59,6 +60,41 @@ from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def _configure_mock_generation(
+    mock_engine_class: Mock,
+    *,
+    files: dict[str, str] | None = None,
+    omit: set[str] | None = None,
+    before_write: Callable[[], None] | None = None,
+) -> Mock:
+    """Configure a mocked engine to emit a minimally complete generated bundle."""
+
+    generated_files = {
+        "data/events.log": "event\n",
+        "GROUND_TRUTH.md": "truth\n",
+        "GROUND_TRUTH.json": '{"schema_version": 1, "events": []}',
+        OBSERVATION_MANIFEST_FILENAME: '{"schema_version": 1}',
+    }
+    generated_files.update(files or {})
+    for relative_path in omit or set():
+        generated_files.pop(relative_path, None)
+
+    engine = Mock()
+
+    def fake_generate() -> None:
+        if callable(before_write):
+            before_write()
+        ground_truth_dir: Path = mock_engine_class.call_args.kwargs["ground_truth_dir"]
+        for relative_path, contents in generated_files.items():
+            destination = ground_truth_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents, encoding="utf-8")
+
+    engine.generate.side_effect = fake_generate
+    mock_engine_class.return_value = engine
+    return engine
 
 
 def _deterministic_bundle_files(root: Path) -> dict[str, bytes]:
@@ -648,7 +684,10 @@ class TestGenerateCheckpointOptions:
         def assert_workspace_ready() -> None:
             assert (tmp_path / ".eforge-generation" / "controller.json").is_file()
 
-        mock_engine_class.return_value.generate.side_effect = assert_workspace_ready
+        _configure_mock_generation(
+            mock_engine_class,
+            before_write=assert_workspace_ready,
+        )
 
         result = runner.invoke(
             app,
@@ -696,8 +735,8 @@ class TestGenerateCheckpointOptions:
 
 
 @pytest.mark.slow
-class TestGenerateCommand:
-    """Tests for 'eforge generate' command."""
+class TestGenerateCheckpointResume:
+    """Fresh-process checkpoint, interruption, and resume tests."""
 
     def test_planned_suspension_resumes_to_byte_identical_output(
         self,
@@ -1413,11 +1452,15 @@ class TestGenerateCommand:
         assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
         assert not (interrupted / ".eforge-generation").exists()
 
+
+class TestGenerateCommand:
+    """Routine tests for 'eforge generate' command."""
+
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_checkpoint_hours_zero_disables_controller(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
-        mock_engine_class.return_value = Mock()
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1434,6 +1477,29 @@ class TestGenerateCommand:
         assert result.exit_code == EXIT_SUCCESS
         assert mock_engine_class.call_args.kwargs["checkpoint_hours"] == 0
         assert mock_engine_class.call_args.kwargs["checkpoint_controller"] is None
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_checkpoint_hours_zero_rejects_incomplete_generated_bundle(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """Direct generation must not report success without its required bundle."""
+        mock_engine_class.return_value = Mock()
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated data missing after generation" in result.stdout
         assert not (tmp_path / ".eforge-generation").exists()
 
     def test_resume_conflicts_with_overwrite(self, scenarios_dir, tmp_path):
@@ -1470,15 +1536,7 @@ class TestGenerateCommand:
     def test_positive_checkpoint_cadence_uses_hidden_staging_and_cleans_success(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
-        def fake_generate() -> None:
-            root = mock_engine_class.call_args.kwargs["ground_truth_dir"]
-            (root / "data").mkdir(parents=True)
-            (root / "data" / "events.log").write_text("event\n")
-            (root / "GROUND_TRUTH.md").write_text("truth\n")
-            (root / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-            (root / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine_class.return_value.generate.side_effect = fake_generate
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1504,6 +1562,7 @@ class TestGenerateCommand:
     def test_generate_accepts_included_environment(self, mock_engine_class, tmp_path):
         """eforge generate should expand scenario includes before constructing the engine."""
         scenario_file = _write_included_minimal_scenario(tmp_path, name="include-generate-test")
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1565,24 +1624,23 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_with_custom_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """--output flag should use custom output directory."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         custom_output = tmp_path / "custom"
 
-        runner.invoke(
+        result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(custom_output)]
         )
 
         # Should create engine and call generate
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.called
         assert mock_engine.generate.called
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_success_minimal(self, mock_engine_class, scenarios_dir, tmp_path):
         """eforge generate with valid minimal scenario should succeed."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
@@ -1602,16 +1660,7 @@ name: test
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
         """A cadence capable of firing exposes its separate workspace projection."""
-
-        def fake_generate() -> None:
-            root = mock_engine_class.call_args.kwargs["ground_truth_dir"]
-            (root / "data").mkdir(parents=True)
-            (root / "data" / "events.log").write_text("event\n")
-            (root / "GROUND_TRUTH.md").write_text("truth\n")
-            (root / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-            (root / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine_class.return_value.generate.side_effect = fake_generate
+        _configure_mock_generation(mock_engine_class)
         result = runner.invoke(
             app,
             [
@@ -1633,8 +1682,7 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_sof_elk_target(self, mock_engine_class, scenarios_dir, tmp_path):
         """--target sof-elk is passed to the generation engine."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1655,8 +1703,7 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_splunk_target(self, mock_engine_class, scenarios_dir, tmp_path):
         """--target splunk is passed to the generation engine."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1694,8 +1741,7 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_verbose_mode(self, mock_engine_class, scenarios_dir, tmp_path):
         """--verbose flag should enable verbose logging."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1758,14 +1804,14 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_with_progress_callback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Generate should invoke progress callback during generation."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
-        runner.invoke(
+        result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
         )
 
         # Verify engine was created with progress callback
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.called
         call_kwargs = mock_engine_class.call_args.kwargs
         assert "progress_callback" in call_kwargs
@@ -1774,12 +1820,10 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_reports_storage_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
         """Successful generation lists the storage sidecar when the engine emitted it."""
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = lambda: (tmp_path / "STORAGE_MANIFEST.json").write_text(
-            "{}\n", encoding="utf-8"
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"STORAGE_MANIFEST.json": "{}\n"},
         )
-        mock_engine_class.return_value = mock_engine
 
         result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
@@ -1829,24 +1873,18 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """Existing output should prompt for confirmation; 'y' proceeds."""
-
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
-                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+        mock_engine = _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+                COLLECTION_PROFILE_FILENAME: '{"profile": "new"}',
+                ARTIFACTS_MANIFEST_FILENAME: (
                     '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
-                )
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+                ),
+            },
+            omit={"data/events.log"},
+        )
 
         # Create existing output files
         (tmp_path / "data").mkdir()
@@ -1923,6 +1961,7 @@ output:
         workspace = tmp_path / ".eforge-generation"
         workspace.mkdir(mode=0o700)
         (workspace / "orphan").write_text("incomplete")
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1970,6 +2009,7 @@ output:
         workspace = tmp_path / ".eforge-generation"
         workspace.mkdir(mode=0o700)
         mock_recover.return_value = Mock()
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -2007,22 +2047,15 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_skips_prompt(self, mock_engine_class, scenarios_dir, tmp_path):
         """--force should skip the prompt and overwrite."""
-
-        def _fake_generate():
-            # Simulate engine creating staged output in the staging dir
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+                COLLECTION_PROFILE_FILENAME: '{"profile": "new"}',
+            },
+            omit={"data/events.log"},
+        )
 
         # Create existing output files
         (tmp_path / "data").mkdir()
@@ -2064,17 +2097,14 @@ output:
         matched set (here: old data/, still no GT.md)."""
         from pathlib import Path
 
-        def _fake_generate():
-            sd = next(iter(tmp_path.glob(".eforge_staging_*")))
-            (sd / "data").mkdir(exist_ok=True)
-            (sd / "data" / "new.xml").write_text("new data")
-            (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-            (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-            (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+            },
+            omit={"data/events.log"},
+        )
 
         # PARTIAL prior state: data/ exists, but GROUND_TRUTH.md does NOT.
         (tmp_path / "data").mkdir()
@@ -2084,8 +2114,12 @@ output:
         # swap fails AFTER new data/ + new GROUND_TRUTH.md were already installed.
         real_rename = Path.rename
 
+        fault_reached = False
+
         def boom_rename(self, target):
-            if self.name == OUTPUT_TARGET_FILENAME and ".eforge_staging_" in str(self):
+            nonlocal fault_reached
+            if self.name == OUTPUT_TARGET_FILENAME and ".eforge-generation/staged" in str(self):
+                fault_reached = True
                 raise RuntimeError("injected swap failure")
             return real_rename(self, target)
 
@@ -2096,7 +2130,9 @@ output:
             ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path), "--force"],
         )
 
-        assert result.exit_code != EXIT_SUCCESS  # the run failed
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert "injected swap failure" in result.stdout
         # No orphaned NEW ground truth, and the OLD data/ is restored intact.
         assert not (tmp_path / "GROUND_TRUTH.md").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
@@ -2108,30 +2144,26 @@ output:
     ):
         """--force should swap baseline-only outputs with data, reports, and manifest."""
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "baseline.log").write_text("new baseline data")
-                (sd / "GROUND_TRUTH.json").write_text(
+        _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/baseline.log": "new baseline data",
+                "GROUND_TRUTH.json": (
                     '{"schema_version": 1, "scenario_name": "baseline-only", "events": []}'
-                )
-                (sd / "GROUND_TRUTH.md").write_text(
+                ),
+                "GROUND_TRUTH.md": (
                     "# Ground Truth: baseline-only\n\n*No malicious activities in this scenario.*\n"
-                )
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text(
+                ),
+                OBSERVATION_MANIFEST_FILENAME: (
                     '{"schema_version": 1, "scenario_name": "baseline-only"}'
-                )
-                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+                ),
+                ARTIFACTS_MANIFEST_FILENAME: (
                     '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
-                )
-                (sd / "artifacts" / "email").mkdir(parents=True)
-                (sd / "artifacts" / "email" / "new.eml").write_text("new artifact")
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+                ),
+                "artifacts/email/new.eml": "new artifact",
+            },
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.log").write_text("old data")
@@ -2207,31 +2239,26 @@ output:
         from pathlib import Path
 
         original_rename = Path.rename
+        fault_reached = False
 
         def _fail_on_data_install(self_path, target):
+            nonlocal fault_reached
             if (
                 self_path.name == "data"
                 and target.name == "data"
                 and "rollback" not in str(self_path)
+                and ".eforge-generation/staged" in str(self_path)
             ):
                 # Fail when installing staged data/ → live data/
-                if ".eforge_staging_" in str(self_path):
-                    raise OSError("Simulated disk error during data install")
+                fault_reached = True
+                raise OSError("Simulated disk error during data install")
             return original_rename(self_path, target)
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2251,6 +2278,8 @@ output:
             )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert "Simulated disk error during data install" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2265,28 +2294,25 @@ output:
 
         original_rename = Path.rename
         data_installed = []
+        fault_reached = False
 
         def _fail_on_gt_install(self_path, target):
-            if self_path.name == "GROUND_TRUTH.md" and "staging" in str(self_path):
+            nonlocal fault_reached
+            if self_path.name == "GROUND_TRUTH.md" and ".eforge-generation/staged" in str(
+                self_path
+            ):
+                fault_reached = True
                 raise OSError("Simulated disk error during GT install")
             result = original_rename(self_path, target)
-            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
                 data_installed.append(True)
             return result
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2305,6 +2331,9 @@ output:
             )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert data_installed
+        assert "Simulated disk error during GT install" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2328,6 +2357,7 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated data missing after generation" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2340,25 +2370,20 @@ output:
         from pathlib import Path
 
         original_rename = Path.rename
+        fault_reached = False
 
         def _interrupt_on_data_install(self_path, target):
-            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+            nonlocal fault_reached
+            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+                fault_reached = True
                 raise KeyboardInterrupt()
             return original_rename(self_path, target)
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2377,7 +2402,8 @@ output:
             )
 
         # KeyboardInterrupt → exit code for SIGINT
-        assert result.exit_code != EXIT_SUCCESS
+        assert result.exit_code == EXIT_SIGINT
+        assert fault_reached
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2385,18 +2411,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_requires_staged_gt(self, mock_engine_class, scenarios_dir, tmp_path):
         """If engine succeeds but staged GROUND_TRUTH.md is missing, old output preserved."""
-
-        def _fake_generate_no_gt():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                # Deliberately skip creating GROUND_TRUTH.md
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate_no_gt
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data"},
+            omit={"data/events.log", "GROUND_TRUTH.md"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2414,6 +2433,7 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated GROUND_TRUTH.md missing after generation" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2421,19 +2441,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_requires_staged_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
         """If engine succeeds but staged observation manifest is missing, old output preserved."""
-
-        def _fake_generate_no_manifest():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                # Deliberately skip creating OBSERVATION_MANIFEST.json
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate_no_manifest
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log", OBSERVATION_MANIFEST_FILENAME},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2452,6 +2464,11 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        normalized_output = " ".join(result.stdout.split())
+        assert (
+            f"Generated {OBSERVATION_MANIFEST_FILENAME} missing after generation"
+            in normalized_output
+        )
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -2460,20 +2477,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_cleans_stale_rollback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Stale rollback dirs from prior killed runs are cleaned up."""
-
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -2507,8 +2515,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
         """Clean output directory should not trigger any prompt."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
@@ -2521,8 +2528,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_filters_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats should narrow scenario output.logs to the intersection."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -2546,8 +2552,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_supports_groups(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats should expand group names before intersecting."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -2573,8 +2578,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_warns_on_mismatch(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats with formats not in scenario should warn."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,

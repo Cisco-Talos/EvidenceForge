@@ -76,6 +76,16 @@ class SidecarRegistry:
     def validate_staged(self, root: Path) -> None:
         """Require the complete authoritative subset before installation."""
 
+        self._validate_required(root, description="Staged")
+
+    def validate_generated(self, root: Path) -> None:
+        """Require the complete authoritative subset after generation."""
+
+        self._validate_required(root, description="Generated")
+
+    def _validate_required(self, root: Path, *, description: str) -> None:
+        """Validate required bundle members with a context-specific description."""
+
         self.reject_symlinks(root)
         for spec in self.specs:
             if not spec.required:
@@ -83,7 +93,7 @@ class SidecarRegistry:
             path = root / spec.relative_path
             valid = path.is_dir() if spec.directory else path.is_file()
             if not valid:
-                raise RuntimeError(f"Staged {spec.relative_path} missing after generation")
+                raise RuntimeError(f"{description} {spec.relative_path} missing after generation")
 
     def hashes(self, root: Path) -> dict[str, str]:
         """Hash the registered bundle payload without following symlinks.
