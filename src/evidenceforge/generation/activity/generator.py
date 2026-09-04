@@ -7349,11 +7349,16 @@ class ActivityGenerator:
             raise TypeError("Exact SSH close finalization requires its built-in continuation")
         installed = self._installed_exact_ssh_close_continuation(continuation)
         self._execute_exact_ssh_close_continuation(installed)
+        acknowledged = False
         with self._ssh_close_journal_lock:
             for index, existing in enumerate(self._pending_ssh_session_closures):
                 if existing is installed:
                     del self._pending_ssh_session_closures[index]
-                    return
+                    acknowledged = True
+                    break
+        if acknowledged:
+            installed.prepared.acknowledge_application_session_retirement()
+            return
         raise StateError("Exact SSH close continuation disappeared before acknowledgement")
 
     def finalize_ssh_session_lifecycles(self, end_time: datetime) -> None:
@@ -7373,7 +7378,8 @@ class ActivityGenerator:
             if type(item) is _SshCloseContinuation:
                 if item.close_time > window_end:
                     continue
-                self._execute_exact_ssh_close_continuation(item)
+                self._finalize_exact_ssh_close_continuation(item)
+                continue
             else:
                 close_time, bundle, state, event, auth_state = item
                 if close_time > window_end:

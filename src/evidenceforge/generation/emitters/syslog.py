@@ -1579,6 +1579,7 @@ class SyslogEmitter(HostMultiplexEmitter):
     _sort_flat_file = True
     _sort_key = staticmethod(_rfc5424_syslog_sort_key)
     _defer_sorted_flush_until_close = True
+    _checkpoint_external_sorting = False
     _EXACT_CANDIDATE_METADATA_BYTES = 1_024
 
     # Context-driven: handles any event type that carries SyslogContext
@@ -2619,6 +2620,307 @@ class SyslogEmitter(HostMultiplexEmitter):
         finally:
             if not worker_final_flush:
                 self._finish_queue_admission()
+
+    def checkpoint_spool_export(self, committed_bytes: int) -> tuple[bytes, dict[str, object]]:
+        """Export only the new anonymous-journal suffix and its bounded live head."""
+
+        if type(committed_bytes) is not int or committed_bytes < 0:
+            raise ExactPublicationError("Syslog checkpoint byte watermark is invalid")
+        with self._writers_lock:
+            route_writers = tuple(self._writers.items())
+            if any(writer.buffer for _route, writer in route_writers):
+                raise ExactPublicationError("Syslog checkpoint retains an unsealed writer buffer")
+        with self._file_lock:
+            if self._exact_syslog_reservations or self._spool_appends:
+                raise ExactPublicationError("Syslog checkpoint retains a prepared append")
+            if any(
+                not candidate.installed or not candidate.released
+                for candidate in self._exact_syslog_candidates.values()
+            ):
+                raise ExactPublicationError("Syslog checkpoint retains an active exact candidate")
+            if (
+                self._final_candidates
+                or self._public_appends
+                or self._public_proofs
+                or self._route_plans
+                or self._syslog_publication_complete
+                or self._syslog_cleanup_ready
+                or self._terminal_retry_required
+            ):
+                raise ExactPublicationError("Syslog checkpoint crossed terminal publication")
+            exact_rows = len(self._exact_syslog_candidates)
+            exact_bytes = sum(
+                candidate.capacity_bytes for candidate in self._exact_syslog_candidates.values()
+            )
+        if committed_bytes > self._spool_bytes:
+            raise ExactPublicationError("Syslog checkpoint journal was truncated")
+        if self._spool_bytes == 0:
+            if self._spool_receipts or route_writers or exact_rows:
+                raise ExactPublicationError("Syslog empty checkpoint journal has retained state")
+            return b"", {
+                "digest": self._spool_digest,
+                "extent_count": 0,
+                "record_count": 0,
+                "receipts": [],
+            }
+        descriptor = self._verify_anonymous_stream(
+            self._spool_stream,
+            self._spool_identity or (-1, -1),
+            label="private spool",
+            expected_bytes=self._spool_bytes,
+        )
+        suffix = bytearray()
+        offset = committed_bytes
+        while offset < self._spool_bytes:
+            chunk = _secure_pread(
+                descriptor,
+                min(_IO_CHUNK_BYTES, self._spool_bytes - offset),
+                offset,
+            )
+            if not chunk:
+                raise ExactPublicationError("Syslog checkpoint journal suffix disappeared")
+            suffix.extend(chunk)
+            offset += len(chunk)
+        if int(_secure_fstat(descriptor).st_size) != self._spool_bytes:
+            raise ExactPublicationError("Syslog checkpoint journal changed during export")
+        receipts = [
+            [
+                route,
+                receipt.head_offset,
+                receipt.payload_bytes,
+                receipt.record_count,
+                receipt.extent_count,
+            ]
+            for route, receipt in sorted(self._spool_receipts.items())
+        ]
+        if (
+            {route for route, _writer in route_writers} != set(self._spool_receipts)
+            or sum(receipt.record_count for receipt in self._spool_receipts.values())
+            != self._spool_record_count
+            or sum(receipt.extent_count for receipt in self._spool_receipts.values())
+            != self._spool_extent_count
+            or exact_rows > self._spool_record_count
+            or exact_bytes != self._exact_admitted_bytes
+            or self._exact_released_rows != exact_rows
+        ):
+            raise ExactPublicationError("Syslog checkpoint journal census diverged")
+        return bytes(suffix), {
+            "digest": self._spool_digest,
+            "extent_count": self._spool_extent_count,
+            "record_count": self._spool_record_count,
+            "receipts": receipts,
+        }
+
+    def _checkpoint_restore_exact_candidates(self, descriptor: int) -> set[ExactPublicationKey]:
+        """Rebuild exact candidate authentication from restored journal records."""
+
+        keys: set[ExactPublicationKey] = set()
+        cursor = 0
+        extents = 0
+        records = 0
+        while cursor < self._spool_bytes:
+            header_frame, payload_offset = self._read_frame_at(
+                descriptor,
+                cursor,
+                capacity=_SPOOL_EXTENT_HEADER_BYTE_CAPACITY,
+                journal_bytes=self._spool_bytes,
+            )
+            try:
+                header = _secure_json_loads(header_frame)
+            except (UnicodeDecodeError, ValueError) as error:
+                raise ExactPublicationError(
+                    "Syslog checkpoint journal extent header is invalid"
+                ) from error
+            if (
+                type(header) is not dict
+                or set(header)
+                != {
+                    "payload_bytes",
+                    "payload_digest",
+                    "previous",
+                    "record_count",
+                    "route",
+                    "version",
+                }
+                or type(header["payload_bytes"]) is not int
+                or type(header["record_count"]) is not int
+                or type(header["route"]) is not str
+                or type(header["version"]) is not int
+                or header["version"] != 1
+                or header["payload_bytes"] < 0
+                or header["record_count"] <= 0
+                or payload_offset + header["payload_bytes"] > self._spool_bytes
+            ):
+                raise ExactPublicationError("Syslog checkpoint journal extent header changed")
+            route = header["route"]
+            if route not in self._spool_receipts:
+                raise ExactPublicationError("Syslog checkpoint journal has an unknown route")
+            extent_records = 0
+            for encoded_bytes in self._iter_extent_payload_frames(
+                descriptor,
+                offset=payload_offset,
+                payload_bytes=header["payload_bytes"],
+            ):
+                extent_records += 1
+                try:
+                    encoded = encoded_bytes.decode("utf-8")
+                    value = _secure_json_loads(encoded)
+                except (UnicodeDecodeError, ValueError) as error:
+                    raise ExactPublicationError(
+                        "Syslog checkpoint journal record is invalid"
+                    ) from error
+                if type(value) is not dict or set(value) != {
+                    "digest",
+                    "key",
+                    "line",
+                    "logical_route",
+                    "version",
+                }:
+                    continue
+                raw_key = value["key"]
+                if (
+                    value["version"] != 2
+                    or type(value["version"]) is not int
+                    or type(raw_key) is not list
+                    or len(raw_key) != 3
+                    or type(raw_key[0]) is not str
+                    or type(raw_key[1]) is not int
+                    or type(raw_key[2]) is not int
+                    or type(value["digest"]) is not str
+                    or type(value["line"]) is not str
+                    or type(value["logical_route"]) is not str
+                ):
+                    raise ExactPublicationError("Syslog checkpoint exact journal record changed")
+                key: ExactPublicationKey = (raw_key[0], raw_key[1], raw_key[2])
+                frozen = self._exact_candidate_payload(
+                    route,
+                    value["logical_route"],
+                    value["line"],
+                )
+                digest = _secure_sha256(frozen.encode()).hexdigest()
+                if key in keys or digest != value["digest"]:
+                    raise ExactPublicationError("Syslog checkpoint exact journal identity changed")
+                capacity_bytes = self._exact_candidate_capacity_bytes(
+                    key,
+                    digest,
+                    len(frozen.encode()),
+                )
+                marker = _ExactSyslogLine(value["line"], value["logical_route"], key)
+                self._exact_syslog_candidates[key] = _ExactSyslogCandidate(
+                    digest=digest,
+                    frozen=frozen,
+                    writer_route_key=route,
+                    logical_route_key=value["logical_route"],
+                    marker=marker,
+                    capacity_bytes=capacity_bytes,
+                    installed=True,
+                    released=True,
+                )
+                keys.add(key)
+            if extent_records != header["record_count"]:
+                raise ExactPublicationError("Syslog checkpoint journal record count changed")
+            records += extent_records
+            extents += 1
+            cursor = payload_offset + header["payload_bytes"]
+        if cursor != self._spool_bytes or (
+            records,
+            extents,
+        ) != (
+            self._spool_record_count,
+            self._spool_extent_count,
+        ):
+            raise ExactPublicationError("Syslog checkpoint journal framing changed")
+        return keys
+
+    def checkpoint_spool_restore(self, payload: bytes, state: object) -> None:
+        """Restore an authenticated anonymous journal into a fresh emitter."""
+
+        if (
+            type(state) is not dict
+            or set(state) != {"digest", "extent_count", "record_count", "receipts"}
+            or type(state["digest"]) is not str
+            or type(state["extent_count"]) is not int
+            or state["extent_count"] < 0
+            or type(state["record_count"]) is not int
+            or state["record_count"] < 0
+            or type(state["receipts"]) is not list
+            or len(payload) > self._spool_total_byte_capacity
+            or _secure_sha256(payload).hexdigest() != state["digest"]
+        ):
+            raise ExactPublicationError("Syslog checkpoint spool head is invalid")
+        if (
+            self._writers
+            or self._spool_stream is not None
+            or self._spool_bytes
+            or self._spool_receipts
+            or self._exact_syslog_candidates
+        ):
+            raise ExactPublicationError("Syslog checkpoint restore requires a fresh emitter")
+        receipts: dict[str, _SyslogSpoolReceipt] = {}
+        for row in state["receipts"]:
+            if (
+                type(row) is not list
+                or len(row) != 5
+                or type(row[0]) is not str
+                or sanitize_syslog_family_route_key(row[0]) != row[0]
+                or type(row[1]) is not int
+                or row[1] < 0
+                or type(row[2]) is not int
+                or row[2] <= 0
+                or type(row[3]) is not int
+                or row[3] <= 0
+                or type(row[4]) is not int
+                or row[4] <= 0
+                or row[0] in receipts
+            ):
+                raise ExactPublicationError("Syslog checkpoint route receipt is invalid")
+            receipts[row[0]] = _SyslogSpoolReceipt(
+                head_offset=row[1],
+                payload_bytes=row[2],
+                record_count=row[3],
+                extent_count=row[4],
+            )
+        if (
+            (not payload) != (not receipts)
+            or sum(receipt.record_count for receipt in receipts.values()) != state["record_count"]
+            or sum(receipt.extent_count for receipt in receipts.values()) != state["extent_count"]
+        ):
+            raise ExactPublicationError("Syslog checkpoint route census changed")
+        descriptor = self._ensure_spool_stream(allow_zero_recovery=True) if payload else None
+        self._spool_receipts = receipts
+        self._spool_bytes = len(payload)
+        self._spool_record_count = state["record_count"]
+        self._spool_extent_count = state["extent_count"]
+        self._spool_digest = state["digest"]
+        self._spool_hash_state = _secure_sha256()
+        self._spool_hash_state.update(payload)
+        if payload:
+            assert descriptor is not None
+            self._write_descriptor(descriptor, payload)
+            _secure_fsync(descriptor)
+            for route, receipt in sorted(receipts.items()):
+                writer = self._get_writer(route)
+                writer.event_count = receipt.record_count
+            keys = self._checkpoint_restore_exact_candidates(descriptor)
+            self._exact_admitted_rows = len(keys)
+            self._exact_released_rows = len(keys)
+            self._exact_admitted_bytes = sum(
+                candidate.capacity_bytes for candidate in self._exact_syslog_candidates.values()
+            )
+            if (
+                self._exact_admitted_rows > self._exact_candidate_row_capacity
+                or self._exact_admitted_bytes > self._exact_candidate_byte_capacity
+            ):
+                raise ExactPublicationError("Syslog checkpoint exact candidate capacity changed")
+            self._exact_high_water_rows = self._exact_admitted_rows
+            self._exact_high_water_bytes = self._exact_admitted_bytes
+            self._authenticate_spool_journal()
+            matched: set[ExactPublicationKey] = set()
+            for route, receipt in sorted(receipts.items()):
+                tuple(self._iter_spooled_route_lines(route, receipt, matched))
+            self._invalidate_spool_snapshot()
+            if matched != keys:
+                raise ExactPublicationError("Syslog checkpoint exact candidate set changed")
 
     @staticmethod
     def _spool_records_match_prefix(buffer: list[str], records: tuple[str, ...]) -> bool:

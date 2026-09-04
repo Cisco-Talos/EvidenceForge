@@ -1220,6 +1220,98 @@ class TestGenerateCommand:
         assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
         assert not (interrupted / ".eforge-generation").exists()
 
+    def test_iteration_scenario_sigint_resume_is_byte_identical(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The representative iteration scenario must survive a fresh-process resume."""
+
+        scenario = Path("scenarios/iteration-test/scenario.yaml")
+        interrupted = tmp_path / "interrupted"
+        control = tmp_path / "control"
+        sync_directory = tmp_path / "checkpoint-sync"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = "4"
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_TIMEOUT"] = "300"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "4",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        marker = sync_directory / "00000000000000000004.ready"
+        deadline = time.monotonic() + 600
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.send_signal(signal.SIGINT)
+        interrupted_output, _ = process.communicate(timeout=60)
+        assert process.returncode == EXIT_SIGINT, interrupted_output
+
+        resumed_environment = environment.copy()
+        for name in (
+            "EFORGE_TEST_CHECKPOINT_SYNC_DIR",
+            "EFORGE_TEST_CHECKPOINT_SYNC_HOUR",
+            "EFORGE_TEST_CHECKPOINT_SYNC_TIMEOUT",
+        ):
+            resumed_environment.pop(name)
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
+
     @pytest.mark.parametrize(
         ("stage", "expected_hour"),
         [

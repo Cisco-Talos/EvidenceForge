@@ -9,6 +9,8 @@ import random
 import socket
 import sqlite3
 import time
+from collections import Counter, deque
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, Thread
@@ -25,6 +27,7 @@ from evidenceforge.events.application import (
     ApplicationTransportBinding,
 )
 from evidenceforge.events.contracts import OccurrenceRole, SemanticOccurrenceKey
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.ids_evaluation import IdsDigest
 from evidenceforge.events.lifecycle import (
@@ -51,6 +54,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
+from evidenceforge.events.observation import ObservationSummary
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpRetentionLease,
@@ -58,7 +62,7 @@ from evidenceforge.events.rdp import (
     RdpTransportPlan,
 )
 from evidenceforge.formats import load_format
-from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity import ActivityGenerator, bash_commands
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
 from evidenceforge.generation.checkpoints.application_channel_head import (
@@ -67,12 +71,18 @@ from evidenceforge.generation.checkpoints.application_channel_head import (
 from evidenceforge.generation.checkpoints.artifact_registry_head import (
     LocalArtifactVersionRegistryParticipant,
 )
+from evidenceforge.generation.checkpoints.bash_command_memory import (
+    BashCommandMemoryParticipant,
+)
 from evidenceforge.generation.checkpoints.cadence import CheckpointCadence
 from evidenceforge.generation.checkpoints.cryptographic_material_head import (
     CryptographicMaterialParticipant,
 )
 from evidenceforge.generation.checkpoints.deferred_source_spool import (
     DeferredSourceSpoolParticipant,
+)
+from evidenceforge.generation.checkpoints.dispatcher_observation_head import (
+    DispatcherObservationParticipant,
 )
 from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
 from evidenceforge.generation.checkpoints.errors import (
@@ -97,6 +107,9 @@ from evidenceforge.generation.checkpoints.models import (
 )
 from evidenceforge.generation.checkpoints.network_runtime_head import (
     NetworkTransactionRuntimeParticipant,
+)
+from evidenceforge.generation.checkpoints.network_visibility_head import (
+    NetworkVisibilityParticipant,
 )
 from evidenceforge.generation.checkpoints.owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
@@ -139,6 +152,9 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     assert_transient_owner_state_empty,
 )
 from evidenceforge.generation.checkpoints.packed import dumps, loads
+from evidenceforge.generation.checkpoints.participant_set import (
+    _email_artifact_files_participant,
+)
 from evidenceforge.generation.checkpoints.participants import (
     OwnerStateField,
     ParticipantSeal,
@@ -149,6 +165,7 @@ from evidenceforge.generation.checkpoints.process_runtime_head import (
 from evidenceforge.generation.checkpoints.proxy_channel_head import (
     ExplicitProxyChannelParticipant,
 )
+from evidenceforge.generation.checkpoints.proxy_emitter_head import ProxyEmitterParticipant
 from evidenceforge.generation.checkpoints.rdp_head import RdpSessionManagerParticipant
 from evidenceforge.generation.checkpoints.rng import (
     GenerationRngParticipant,
@@ -182,6 +199,7 @@ from evidenceforge.generation.checkpoints.store import (
     RunLock,
     SegmentDraft,
 )
+from evidenceforge.generation.checkpoints.syslog_spool import SyslogSpoolParticipant
 from evidenceforge.generation.checkpoints.test_sync import (
     checkpoint_publication_test_synchronizer_from_environment,
     checkpoint_test_synchronizer_from_environment,
@@ -193,8 +211,11 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
 )
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
+from evidenceforge.generation.emitters.proxy import ProxyEmitter, _PendingTunnelSummary
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.generation.emitters.syslog import SyslogEmitter
+from evidenceforge.generation.emitters.web import WebEmitter
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAffinity,
@@ -215,6 +236,7 @@ from evidenceforge.generation.network_runtime import (
     _transport_lease_digest_value,
     _TransportLeaseRecord,
 )
+from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.process_runtime_cache import (
     ACTIVITY_GENERATOR_MUTABLE_RETENTION_POLICIES,
     PRODUCTION_PROCESS_RUNTIME_CACHE_FAMILIES,
@@ -451,6 +473,110 @@ def test_rng_numeric_schema_rejects_invalid_word() -> None:
         decode_random_state(state)
 
 
+def test_bash_command_memory_restores_exact_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    recency = {
+        ("app-01", "alice"): deque(
+            ["pwd", "tar -czf /tmp/support.tar.gz /var/log"],
+            maxlen=bash_commands._COMMAND_RECENCY_LIMIT,
+        )
+    }
+    user_recency = {
+        "alice": deque(
+            ["pwd", "tar -czf /tmp/support.tar.gz /var/log"],
+            maxlen=bash_commands._COMMAND_RECENCY_LIMIT * 2,
+        )
+    }
+    monkeypatch.setattr(bash_commands, "_COMMAND_RECENCY", recency)
+    monkeypatch.setattr(bash_commands, "_COMMAND_USER_RECENCY", user_recency)
+    monkeypatch.setattr(bash_commands, "_COMMAND_GLOBAL_COUNTS", Counter({"pwd": 4}))
+    monkeypatch.setattr(
+        bash_commands,
+        "_COMMAND_GLOBAL_LOW_REPEAT_COUNTS",
+        Counter({"tar -czf /tmp/support.tar.gz /var/log": 1}),
+    )
+    participant = BashCommandMemoryParticipant()
+    seal = participant.prepare_checkpoint(0)
+
+    recency.clear()
+    user_recency.clear()
+    bash_commands._COMMAND_GLOBAL_COUNTS.clear()
+    bash_commands._COMMAND_GLOBAL_LOW_REPEAT_COUNTS.clear()
+    participant.restore_checkpoint(seal.head.payload, ())
+
+    assert participant.prepare_checkpoint(1).head.payload == seal.head.payload
+    assert recency[("app-01", "alice")].maxlen == bash_commands._COMMAND_RECENCY_LIMIT
+    assert user_recency["alice"].maxlen == bash_commands._COMMAND_RECENCY_LIMIT * 2
+
+
+def test_bash_command_memory_rejects_invalid_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bash_commands, "_COMMAND_RECENCY", {})
+    monkeypatch.setattr(bash_commands, "_COMMAND_USER_RECENCY", {})
+    monkeypatch.setattr(bash_commands, "_COMMAND_GLOBAL_COUNTS", Counter({"pwd": 1}))
+    monkeypatch.setattr(bash_commands, "_COMMAND_GLOBAL_LOW_REPEAT_COUNTS", Counter())
+    participant = BashCommandMemoryParticipant()
+    document = loads(participant.prepare_checkpoint(0).head.payload)
+    assert isinstance(document, dict)
+    document["global_counts"] = [["pwd", 0]]
+
+    with pytest.raises(CheckpointCorruptionError, match="count row is invalid"):
+        participant.restore_checkpoint(dumps(document), ())
+
+
+def test_network_visibility_head_restores_pat_allocator_cursors() -> None:
+    source = NetworkVisibilityEngine(None, [])
+    source._pat_port_counters = {("fw-a", 0): 24_681, ("fw-b", 2): 61_043}
+    seal = NetworkVisibilityParticipant(source).prepare_checkpoint(1)
+    restored = NetworkVisibilityEngine(None, [])
+    restored._pat_port_counters = {("fw-a", 0): 1_024, ("fw-b", 2): 1_024}
+
+    NetworkVisibilityParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored._pat_port_counters == source._pat_port_counters
+
+
+def test_dispatcher_observation_head_restores_report_counters() -> None:
+    source = EventDispatcher(StateManager(), {})
+    source._source_evidence_status = {
+        "evt-001": {
+            "zeek": ObservationSummary(visible=5, delayed=2),
+            "syslog": ObservationSummary(filtered=3),
+        }
+    }
+    source._source_evidence_version = 10
+    seal = DispatcherObservationParticipant(source).prepare_checkpoint(1)
+    restored = EventDispatcher(StateManager(), {})
+
+    DispatcherObservationParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored.source_evidence_status == source.source_evidence_status
+    assert restored._source_evidence_version == 10
+
+
+def test_proxy_emitter_head_restores_only_live_tunnel_summaries(tmp_path: Path) -> None:
+    opened_at = datetime(2026, 8, 16, 12, 58, tzinfo=UTC)
+    source = ProxyEmitter(load_format("proxy_access"), tmp_path / "source")
+    source._pending_tunnels[("proxy.example", "PT-test")] = _PendingTunnelSummary(
+        connect_data={
+            "timestamp": opened_at,
+            "_host_fqdn": "proxy.example",
+            "method": "CONNECT",
+        },
+        opened_at=opened_at,
+        last_activity_at=opened_at + timedelta(minutes=1),
+        tunnel_cs_bytes=123,
+        tunnel_sc_bytes=456,
+        latest_child_end=opened_at + timedelta(minutes=1, seconds=2),
+        transport_duration_ms=62_000,
+    )
+    seal = ProxyEmitterParticipant(source).prepare_checkpoint(1)
+    restored = ProxyEmitter(load_format("proxy_access"), tmp_path / "restored")
+
+    ProxyEmitterParticipant(restored).restore_checkpoint(seal.head.payload, ())
+
+    assert restored._observed_tunnel_children == []
+    assert restored._pending_tunnels == source._pending_tunnels
+
+
 def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
     manager = StateManager()
     registry = LifecycleRegistry()
@@ -473,6 +599,7 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
     )
     artifacts = LocalArtifactVersionRegistry(capacity=8, shard_count=2)
     process_caches = build_production_process_runtime_caches(datetime(2026, 1, 2, tzinfo=UTC))
+    visibility = NetworkVisibilityEngine(None, [])
 
     assert_complete_owner_inventory(
         manager,
@@ -534,6 +661,11 @@ def test_core_mutable_owners_have_complete_checkpoint_inventories() -> None:
         process_caches._reverse,
         PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS,
         owner_name="process-runtime-reverse",
+    )
+    assert_complete_owner_inventory(
+        visibility,
+        NetworkVisibilityParticipant.checkpoint_state_fields,
+        owner_name="network-visibility",
     )
     for shard in artifacts._shards:
         assert_complete_owner_inventory(
@@ -2523,6 +2655,29 @@ def test_application_channel_head_restores_open_closed_active_and_used_state() -
         )
 
 
+def test_application_channel_head_preserves_subsecond_idle_timeout_exactly() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=2),
+    )
+    identity = _application_identity("channel-1", "transport-1", started)
+    identity = replace(identity, idle_timeout=timedelta(microseconds=4_124_012))
+    registry.open_channel(identity)
+
+    participant = ApplicationChannelRegistryParticipant(registry)
+    first = participant.prepare_checkpoint(0).head.payload
+    restored = ApplicationChannelRegistry(
+        window_start=started,
+        window_end=started + timedelta(hours=2),
+    )
+    restored_participant = ApplicationChannelRegistryParticipant(restored)
+    restored_participant.restore_checkpoint(first, ())
+
+    assert restored.get("channel-1") == registry.get("channel-1")
+    assert restored_participant.prepare_checkpoint(1).head.payload == first
+
+
 def test_application_channel_barrier_rejects_retained_capabilities() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)
     registry = ApplicationChannelRegistry(
@@ -2947,6 +3102,159 @@ def test_emitter_spool_imports_each_sorted_run_once_and_resumes_final_merge(
 
     assert (restored_root / "sensor" / "conn.json").read_bytes() == (
         source_root / "sensor" / "conn.json"
+    ).read_bytes()
+
+
+def test_emitter_spool_seals_deferred_sorted_host_output_before_resume(
+    tmp_path: Path,
+) -> None:
+    def event(timestamp: datetime, path: str) -> dict[str, object]:
+        return {
+            "_host_fqdn": "web.example.test",
+            "bytes_sent": 128,
+            "client_ip": "192.0.2.10",
+            "method": "GET",
+            "path": path,
+            "protocol": "HTTP/1.1",
+            "referer": "-",
+            "status_code": 200,
+            "timestamp": timestamp,
+            "user_agent": "checkpoint-test",
+            "username": None,
+        }
+
+    source_root = tmp_path / "source"
+    source_emitter = WebEmitter(load_format("web_access"), source_root)
+    source_emitter.enable_incremental_checkpointing()
+    source = EmitterSpoolParticipant(
+        emitters={"web_access": source_emitter},
+        output_root=source_root,
+    )
+    source_emitter.emit_event(event(datetime(2026, 1, 1, 0, 2, tzinfo=UTC), "/before"))
+    source_emitter.barrier_flush()
+
+    seal = source.prepare_checkpoint(0)
+    source.checkpoint_committed(0)
+    document = loads(seal.head.payload)
+    assert type(document) is dict
+    assert document["append"] == []
+    assert document["sorted"] == [
+        {
+            "event_count": 1,
+            "format": "web_access",
+            "route": "web.example.test",
+            "run_count": 1,
+            "run_sequence": 1,
+        }
+    ]
+
+    restored_root = tmp_path / "restored"
+    restored_emitter = WebEmitter(load_format("web_access"), restored_root)
+    restored_emitter.enable_incremental_checkpointing()
+    restored = EmitterSpoolParticipant(
+        emitters={"web_access": restored_emitter},
+        output_root=restored_root,
+    )
+    restored.restore_checkpoint(
+        seal.head.payload,
+        tuple(segment.payload for segment in seal.segments),
+    )
+
+    later = event(datetime(2026, 1, 1, 0, 1, tzinfo=UTC), "/after")
+    source_emitter.emit_event(later)
+    restored_emitter.emit_event(later)
+    source_emitter.close()
+    restored_emitter.close()
+
+    source_path = source_root / "web.example.test" / "web_access.log"
+    restored_path = restored_root / "web.example.test" / "web_access.log"
+    assert restored_path.read_bytes() == source_path.read_bytes()
+    assert b"/before" in restored_path.read_bytes()
+
+
+def test_syslog_spool_seals_only_new_journal_bytes_and_restores_final_output(
+    tmp_path: Path,
+) -> None:
+    def event(second: int, message: str) -> dict[str, object]:
+        return {
+            "_host_fqdn": "linux.example.test",
+            "app_name": "sshd",
+            "facility": 10,
+            "hostname": "linux",
+            "message": message,
+            "pid": 1234,
+            "severity": 6,
+            "timestamp": datetime(2026, 1, 1, 0, 0, second, tzinfo=UTC),
+        }
+
+    source_root = tmp_path / "source"
+    source_emitter = SyslogEmitter(load_format("syslog"), source_root)
+    source_emitter.enable_incremental_checkpointing()
+    source = SyslogSpoolParticipant(source_emitter)
+    source_emitter.emit_event(event(2, "before"))
+    source_emitter.barrier_flush()
+    first = source.prepare_checkpoint(0)
+    source.checkpoint_committed(0)
+
+    source_emitter.emit_event(event(3, "middle"))
+    source_emitter.barrier_flush()
+    second = source.prepare_checkpoint(1)
+    source.checkpoint_committed(1)
+    assert source.last_bytes_read > 0
+    assert len(first.segments) == 1
+    assert len(second.segments) == 1
+
+    restored_root = tmp_path / "restored"
+    restored_emitter = SyslogEmitter(load_format("syslog"), restored_root)
+    restored_emitter.enable_incremental_checkpointing()
+    restored = SyslogSpoolParticipant(restored_emitter)
+    restored.restore_checkpoint(
+        second.head.payload,
+        tuple(segment.payload for seal in (first, second) for segment in seal.segments),
+    )
+
+    later = event(1, "after")
+    source_emitter.emit_event(later)
+    restored_emitter.emit_event(later)
+    source_emitter.close()
+    restored_emitter.close()
+
+    source_path = source_root / "linux.example.test" / "syslog.log"
+    restored_path = restored_root / "linux.example.test" / "syslog.log"
+    assert restored_path.read_bytes() == source_path.read_bytes()
+    assert all(word in restored_path.read_text() for word in ("before", "middle", "after"))
+
+
+def test_email_artifact_files_participant_restores_materialized_messages(
+    tmp_path: Path,
+) -> None:
+    def participant(root: Path) -> ImmutableSpoolFilesParticipant:
+        generator = SimpleNamespace(
+            _email_artifact_dir=root,
+            _scenario_environment=SimpleNamespace(
+                email=SimpleNamespace(artifacts=SimpleNamespace(mode="all"))
+            ),
+        )
+        created = _email_artifact_files_participant(SimpleNamespace(activity_generator=generator))
+        assert created is not None
+        return created
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "message.eml").write_bytes(b"Message-ID: <one@example.test>\r\n\r\nbody\r\n")
+    source = participant(source_root)
+    seal = source.prepare_checkpoint(0)
+    source.checkpoint_committed(0)
+
+    restored_root = tmp_path / "restored"
+    restored = participant(restored_root)
+    restored.restore_checkpoint(
+        seal.head.payload,
+        tuple(segment.payload for segment in seal.segments),
+    )
+
+    assert (restored_root / "message.eml").read_bytes() == (
+        source_root / "message.eml"
     ).read_bytes()
 
 

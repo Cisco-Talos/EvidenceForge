@@ -2264,6 +2264,7 @@ def test_exact_close_converges_after_public_ssh_application_watermark(
     assert fixture.state.get_session(target_session.logon_id) is None
     assert fixture.state.get_process(fixture.target.hostname, receiver_pid) is None
     assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    assert not registry._retirement_proofs
     fixture.generator.assert_ssh_session_lifecycles_drained()
     _assert_no_dispatcher_residue(fixture.generator.dispatcher)
     fixture.close_and_read()

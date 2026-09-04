@@ -276,7 +276,7 @@ class TestGenerationEngine:
         )
 
         assert observed == [(6, start, "collection"), (12, end, "tail")]
-        assert barrier.call_count == 2
+        assert barrier.call_count == 4
         assert prepare_barrier.call_count == 2
 
     def test_graceful_interrupt_without_checkpoints_stops_after_hour_cleanup(
@@ -409,6 +409,7 @@ class TestGenerationEngine:
         engine._red_herring_executed = {1}
         engine._snapd_active_tasks = {"TEST-01": [(1001, 1, "core22")]}
         engine._snapd_next_change_id = {"TEST-01": 1002}
+        engine._system_pids = {"TEST-01": {"systemd": 1, "sssd": 1_449_103}}
         engine._storyline_executed = {0, 2}
         engine._storyline_staged_archives = [
             SimpleNamespace(
@@ -442,6 +443,8 @@ class TestGenerationEngine:
 
         restored_scenario = Scenario.model_validate(minimal_scenario.model_dump(mode="python"))
         restored = GenerationEngine(restored_scenario, tmp_path / "restored")
+        restored._system_pids = {"TEST-01": {"systemd": 1}}
+        rebuilt_system_pids = restored._system_pids
         GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
 
         assert restored._ambient_registry_state == engine._ambient_registry_state
@@ -450,6 +453,8 @@ class TestGenerationEngine:
         assert restored._linux_polkit_agents == engine._linux_polkit_agents
         assert restored._package_maintenance_windows == engine._package_maintenance_windows
         assert restored._snapd_active_tasks == engine._snapd_active_tasks
+        assert restored._system_pids == engine._system_pids
+        assert restored._system_pids is rebuilt_system_pids
         assert len(restored._storyline_staged_archives) == 1
         restored_archive = restored._storyline_staged_archives[0]
         assert restored_archive.actor is restored.scenario.environment.users[0]
@@ -478,12 +483,24 @@ class TestGenerationEngine:
         engine._emit_dhcp_leases = Mock()
         engine._generate_hour = Mock()
         order: list[str] = []
+        engine.activity_generator.advance_application_channel_watermark.side_effect = (
+            lambda _cutoff: order.append("application-watermark")
+        )
+        engine.activity_generator.finalize_ssh_session_lifecycles.side_effect = lambda _cutoff: (
+            order.append("ssh-finalize")
+        )
         engine._emit_sensor_startup = lambda: order.append("sensor-startup")
         engine._checkpoint_after_completed_hour = lambda **_kwargs: order.append("checkpoint")
 
         engine._generate_baseline()
 
-        assert order[:2] == ["sensor-startup", "checkpoint"]
+        assert order[:4] == [
+            "application-watermark",
+            "ssh-finalize",
+            "sensor-startup",
+            "checkpoint",
+        ]
+        assert order[4:] == ["application-watermark", "ssh-finalize", "checkpoint"]
 
     """Tests for GenerationEngine class."""
 

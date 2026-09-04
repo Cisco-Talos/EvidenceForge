@@ -5545,6 +5545,11 @@ class BaselineMixin:
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+                # The application watermark may retire a deferred SSH channel and
+                # transfer its authenticated retirement proof to the action-owned
+                # close continuation. Consume every due continuation before a
+                # checkpoint attempts to capture transient-free owner state.
+                self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
                 checkpoint_after_hour = getattr(self, "_checkpoint_after_completed_hour", None)
                 if next_hour < self.start_time and checkpoint_after_hour is not None:
                     checkpoint_after_hour(
@@ -5607,6 +5612,7 @@ class BaselineMixin:
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+            self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
             if checkpoint_after_hour is not None:
                 checkpoint_after_hour(
                     completed_simulated_hours=warmup_hours + hour_count,

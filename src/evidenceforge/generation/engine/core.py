@@ -321,6 +321,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._barrier_flush_all_emitters()
         if retirement_due or controller is not None:
             self._prepare_incremental_checkpoint_barrier(next_hour)
+            # Retirement and channel finalization may emit terminal evidence. Seal
+            # those rows before any checkpoint participant snapshots its spools.
+            self._barrier_flush_all_emitters()
         signal_requested = signal_requested or bool(
             self._graceful_interrupt_requested is not None and self._graceful_interrupt_requested()
         )
@@ -397,6 +400,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.lifecycle_registry.prune_checkpoint_expired_state(cutoff)
         self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
         self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
+        for emitter in self.emitters.values():
+            prepare = getattr(emitter, "prepare_incremental_checkpoint_barrier", None)
+            if callable(prepare):
+                prepare(cutoff)
 
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""

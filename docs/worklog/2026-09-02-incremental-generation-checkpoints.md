@@ -635,3 +635,20 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   end-of-hour request and, when checkpointing is enabled, publishes an off-cadence recovery before
   exiting with status 130. A second Ctrl+C forces immediate exit; checkpoint-disabled generation
   performs normal abort cleanup after the hour without creating recovery state.
+- A representative `iteration-test` SIGINT/resume comparison exposed state that the earlier compact
+  fixtures did not exercise. Recovery now persists Bash command recency, evolving system service
+  PIDs, network PAT allocator cursors, bounded proxy CONNECT summaries, and cumulative dispatcher
+  observation counters. Checkpoint barriers compact completed proxy summaries into the existing
+  external-sort spool while retaining only tunnels inside the four-minute reuse window. Syslog's
+  anonymous exact-publication journal has a dedicated incremental hash-chain adapter, sorted
+  host-multiplex emitters seal external-sort runs in checkpoint mode, and immutable email MIME
+  artifacts are imported once. Exact integer timedelta encoding also avoids one-microsecond losses
+  in application and lifecycle heads. The actual scenario now resumes in a fresh process and is
+  byte-identical to checkpoint-disabled generation across all 120 deterministic artifacts.
+- The post-fix 60-day/24-hour regression pair remained byte-identical and measured 649.159 seconds
+  without checkpoints versus 670.609 seconds with them: 3.304% total overhead, effectively
+  unchanged from the selected 3.31% baseline. Sixty checkpoint paths totaled 20.940 seconds, down
+  from 24.994 seconds. Hour-720 and hour-1,440 commits took 0.280 and 0.329 seconds, and retained
+  workspace was 306,675,720 bytes, only 6,519 bytes above the prior measurement. Peak RSS was
+  1,081,049,088 bytes for the checkpoint arm versus 925,696,000 bytes for the control; unlike time
+  and disk, this single-pair high-water result regressed and should be watched in future profiling.

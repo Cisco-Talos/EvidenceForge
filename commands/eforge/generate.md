@@ -3,13 +3,11 @@ name: eforge-generate
 description: >
   Generate EvidenceForge logs from an authored or resolved scenario, handle output replacement,
   monitor the run, verify its authoritative bundle, and diagnose generation failures. Use when the user asks to
-  run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a
-  resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
+  run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
 ---
 # EvidenceForge Log Generation
 
-Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM.
-In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
+Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM. In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
 
 ## Boundaries
 - Route scenario creation or structural repair to `/eforge scenario`.
@@ -25,7 +23,7 @@ Authored input may use includes, packs, and project config; resolved input bypas
 ## Safe workflow
 ### 1. Identify the input and project
 
-Confirm the file exists and whether it is authored YAML or `kind: evidenceforge.resolved-scenario`.
+Confirm the input and identify authored versus resolved YAML.
 
 Read `/eforge:references:project-context`. For authored input, use the current working directory
 without searching elsewhere. If the user explicitly selected another root, supply that same
@@ -38,7 +36,7 @@ Run validation before a potentially long generation:
 eforge validate <input.yaml> --json [--show-storage] [--checkpoint-hours <hours>]
 ```
 
-Consume this JSON directly. For a concise human repair list, rerun without `--json` rather than post-processing its JSON output.
+Consume JSON directly; omit `--json` for a concise repair list.
 
 Use the intended checkpoint cadence. Add `--show-storage` when SMB is authored or implied by
 Windows file-server/DC roles, Linux Samba services/roles, or explicit storage. Review platform/native
@@ -103,9 +101,8 @@ eforge generate <input.yaml> --output <bundle-root> [--target <target>] [--forma
   [--seed <seed>] [--checkpoint-hours <hours>] [--oob-host <host>] [--overwrite]
 ```
 
-Use normal output for the first run; it already shows compilation, validation, resource forecasts,
-and progress. Retry with `--verbose` only when INFO logs would help diagnose a failure, and use
-`--debug` last when a traceback is required.
+Use normal output for the first run. Retry with `--verbose` for INFO diagnostics; use `--debug` last
+for tracebacks.
 
 Exit codes: `0` success, `1` input error, `2` compilation/schema/cross-reference error, `3`
 overwrite declined, `21` generation error, and `130` interruption.
