@@ -11,6 +11,7 @@ from .control import (
     SuspensionRequest,
     clear_controller_record,
     mark_suspended,
+    new_suspension_request,
     publish_controller_record,
     read_suspension_request,
 )
@@ -219,6 +220,25 @@ class IncrementalCheckpointController:
         )
         mark_suspended(self.store, request=request, cursor=cursor)
         return manifest
+
+    def commit_local_suspension(
+        self,
+        *,
+        cursor: CheckpointCursor,
+        participants: Iterable[IncrementalCheckpointParticipant],
+    ) -> CheckpointManifest:
+        """Publish and acknowledge an in-process graceful suspension request."""
+
+        return self.commit_suspension(
+            request=new_suspension_request(),
+            cursor=cursor,
+            participants=participants,
+        )
+
+    def acknowledge_local_suspension(self, cursor: CheckpointCursor) -> None:
+        """Mark a just-published cadence point as an in-process suspension."""
+
+        mark_suspended(self.store, request=new_suspension_request(), cursor=cursor)
 
     def restore_participants(
         self,

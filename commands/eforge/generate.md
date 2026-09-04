@@ -89,7 +89,10 @@ the root; resume before upgrading; success removes the workspace and leaves no c
 Checkpoint commands take the bundle root (parent of `data/`; scenario parent without `--output`):
 `eforge checkpoint status <bundle-root> [--verbose|--json]` and
 `eforge checkpoint suspend <bundle-root>`. Control state exists before warm-up, distinguishing
-active/no checkpoint yet from none. Suspension finishes the current hour; do not substitute Ctrl+C.
+active/no checkpoint yet from none. Suspension finishes the current hour. When operating the
+generator interactively, one Ctrl+C is a local shorthand: it finishes the current hour and creates
+an off-cadence recovery when checkpoints are enabled. A second Ctrl+C forces immediate exit. With
+`--checkpoint-hours 0`, the first interrupt stops after the hour without creating recovery state.
 
 ### 5. Generate with normal output first
 

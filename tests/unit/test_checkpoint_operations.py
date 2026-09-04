@@ -372,6 +372,30 @@ def test_off_cadence_suspension_commits_and_preserves_cadence_anchor(tmp_path: P
     assert suspended.cursor.completed_simulated_hours == 5
 
 
+def test_local_interrupt_commits_off_cadence_suspension(tmp_path: Path) -> None:
+    """An in-process interrupt should publish a resumable point without a control request."""
+
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+        checkpoint_hours=24,
+    )
+
+    manifest = controller.commit_local_suspension(
+        cursor=_cursor(3),
+        participants=(participant,),
+    )
+
+    assert manifest.cursor.completed_simulated_hours == 3
+    assert manifest.checkpoint_hours == 24
+    assert controller.cadence.is_due(24)
+    assert read_suspension_request(store) is None
+    suspended = read_suspension_record(store)
+    assert suspended is not None
+    assert suspended.cursor == manifest.cursor
+
+
 def test_suspend_rejects_request_after_suspension_was_committed(tmp_path: Path) -> None:
     output = tmp_path / "bundle"
     store, controller, participant = _controller(

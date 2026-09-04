@@ -43,6 +43,7 @@ from evidenceforge.cli.commands import (
     EXIT_GENERATION_ERROR,
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
+    EXIT_SIGINT,
     EXIT_SUCCESS,
     _checkpoint_recovery_guidance,
     _generation_progress,
@@ -799,6 +800,202 @@ class TestGenerateCommand:
             control_root
         )
         assert not (suspended_root / ".eforge-generation").exists()
+
+    def test_sigint_creates_off_cadence_checkpoint_and_resumes_byte_identically(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """One SIGINT should stop after the hour and preserve exact resumed output."""
+
+        from evidenceforge.generation.checkpoints.status import inspect_checkpoint
+
+        scenario = scenarios_dir / "minimal.yaml"
+        interrupted_root = tmp_path / "interrupted"
+        control_root = tmp_path / "control"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        prefix: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            prefix.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=30)
+        interrupted_output = "".join(prefix) + remainder
+
+        assert process.returncode == EXIT_SIGINT, interrupted_output
+        assert "will stop at the end of the current simulated hour" in interrupted_output
+        assert "after creating a recovery checkpoint" in interrupted_output
+        assert "Generation interrupted after creating a recovery checkpoint" in interrupted_output
+        status = inspect_checkpoint(interrupted_root)
+        assert status.state == "resumable"
+        assert status.suspended
+        assert status.simulated_hour is not None
+        assert status.simulated_hour < 24
+
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted_root),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout
+        assert _deterministic_bundle_files(interrupted_root) == _deterministic_bundle_files(
+            control_root
+        )
+        assert not (interrupted_root / ".eforge-generation").exists()
+
+    def test_second_sigint_forces_immediate_process_exit(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A second terminal interrupt should bypass the end-of-hour wait."""
+
+        output_root = tmp_path / "forced"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(output_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        observed: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            observed.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        while process.poll() is None:
+            line = process.stdout.readline()
+            observed.append(line)
+            if "Press Ctrl+C again to force exit" in line:
+                break
+        assert process.poll() is None, "generation stopped before the second SIGINT"
+
+        forced_at = time.monotonic()
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=10)
+        output = "".join(observed) + remainder
+
+        assert process.returncode == EXIT_SIGINT, output
+        assert time.monotonic() - forced_at < 5
+        assert "Second interrupt received; forcing immediate exit" in output
+
+    def test_sigint_without_checkpointing_stops_after_hour_without_recovery(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The graceful first interrupt should not create disabled checkpoint state."""
+
+        output_root = tmp_path / "disabled"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(output_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        prefix: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            prefix.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=30)
+        output = "".join(prefix) + remainder
+
+        assert process.returncode == EXIT_SIGINT, output
+        assert "Checkpoint creation is disabled" in output
+        assert "No recovery point has been committed" not in output
+        assert not (output_root / ".eforge-generation").exists()
 
     @pytest.mark.parametrize(
         ("interrupt_signal", "checkpoint_hour", "duration"),

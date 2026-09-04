@@ -21,7 +21,10 @@ next completed simulated-hour barrier after publishing an explicit recovery poin
   existing quiescent checkpoint barrier to publish an off-cadence recovery, and exits cleanly.
 - An off-cadence suspension does not move the cadence anchor. For example, a suspension at hour 37
   with a 24-hour cadence still schedules the next automatic checkpoint at hour 48.
-- Ctrl+C behavior is unchanged: it does not attempt an emergency checkpoint.
+- The first Ctrl+C is a process-local cooperative suspension request. It is acknowledged
+  immediately, stops at the completed-hour barrier, and publishes an off-cadence recovery when
+  checkpointing is enabled. With `--checkpoint-hours 0`, it stops after the hour through ordinary
+  abort cleanup without creating a recovery. A second Ctrl+C forces immediate exit.
 - No generator checkpoint-path timing probes are reintroduced.
 - Checkpoint-enabled generation creates its protected workspace and controller marker before
   warm-up even when the total run is shorter than one cadence. Status therefore distinguishes an
@@ -68,9 +71,21 @@ results, Ruff results, and status-validation timing observations here.
 - Compact fingerprint-component metadata is included in new recovery manifests. This permits
   verbose status to identify component-level mismatches while the aggregate fingerprint remains
   authoritative and older manifests remain readable.
+- Generation installs a two-stage SIGINT latch around the engine. The first signal cannot interrupt
+  a checkpoint transaction; the completed-hour path either publishes a local suspension recovery
+  or, if the signal arrives during an already-due commit, acknowledges that recovery without
+  duplicating it. The second signal uses immediate process termination and therefore has the same
+  stale-lock/staging implications as a hard kill; normal recovery and stale-lock reclamation remain
+  authoritative.
 
 ## Validation results
 
+- Two-stage Ctrl+C coverage passed: focused signal/controller/engine contracts; a fresh-process
+  off-cadence SIGINT followed by resume with byte-identical deterministic output; a signal arriving
+  after an ordinary cadence publication without a duplicate checkpoint; checkpoint-disabled
+  end-of-hour cleanup with no recovery workspace; and a second-SIGINT forced exit. The focused
+  routine checkpoint, CLI, generation-skill, and installer group passed 183 tests with 79
+  slow-marker deselections. Repository-wide Ruff check and format-check passed.
 - Phase-local recovery rendering passed the 104-test focused checkpoint, CLI, generation-skill,
   and installer group with 54 routine-marker deselections. The exact regression fixture uses a
   two-hour warm-up and six-hour collection window and verifies both the human

@@ -201,18 +201,24 @@ def request_suspension(store: IncrementalCheckpointStore) -> SuspensionRequest:
     existing = read_suspension_request(store)
     if existing is not None:
         return existing
-    request = SuspensionRequest(
-        request_id=uuid.uuid4().hex,
-        requested_ns=time.time_ns(),
-        hostname=socket.gethostname(),
-        pid=os.getpid(),
-    )
+    request = new_suspension_request()
     if _atomic_create(store.workspace / _SUSPEND_REQUEST_NAME, _canonical_json(request)):
         return request
     existing = read_suspension_request(store)
     if existing is None:  # pragma: no cover - only possible with hostile concurrent mutation
         raise CheckpointError("checkpoint suspension request changed during publication")
     return existing
+
+
+def new_suspension_request() -> SuspensionRequest:
+    """Create one process-local suspension identity without publishing control state."""
+
+    return SuspensionRequest(
+        request_id=uuid.uuid4().hex,
+        requested_ns=time.time_ns(),
+        hostname=socket.gethostname(),
+        pid=os.getpid(),
+    )
 
 
 def read_suspension_request(

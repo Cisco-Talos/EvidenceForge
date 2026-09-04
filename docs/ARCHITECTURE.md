@@ -921,6 +921,13 @@ validation, and participant transaction as a cadence checkpoint, acknowledges th
 after manifest publication, and exits without terminal finalization. This explicit off-cadence
 commit does not alter the modulo-based cadence anchor.
 
+The foreground generator also installs a two-stage SIGINT controller during execution. Its first
+Ctrl+C latches a cooperative request instead of injecting `KeyboardInterrupt` into participant or
+publication transactions. At the next completed-hour barrier, checkpoint-enabled runs publish the
+same off-cadence suspension recovery; checkpoint-disabled runs enter ordinary abort cleanup without
+creating recovery state. A second Ctrl+C forces immediate process exit, leaving any previously
+published recovery authoritative.
+
 New objects and heads are written and synced before the manifest is written last. Atomic rename and
 directory sync publish the recovery, after which old unreferenced content may be collected. Restore
 validates ownership, containment, hashes, schemas, and fingerprints, hydrates semantic owners in

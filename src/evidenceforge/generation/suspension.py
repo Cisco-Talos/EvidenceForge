@@ -9,13 +9,19 @@ if TYPE_CHECKING:
 
 
 class GenerationSuspendedError(Exception):
-    """Signal successful planned suspension after a durable recovery commit."""
+    """Signal successful cooperative suspension after a durable recovery commit."""
 
-    def __init__(self, cursor: CheckpointCursor) -> None:
+    def __init__(
+        self,
+        cursor: CheckpointCursor,
+        *,
+        requested_by_signal: bool = False,
+    ) -> None:
         super().__init__(
             f"generation suspended at simulated hour {cursor.completed_simulated_hours}"
         )
         self.cursor = cursor
+        self.requested_by_signal = requested_by_signal
 
 
 __all__ = ["GenerationSuspendedError"]

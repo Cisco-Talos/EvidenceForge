@@ -8,11 +8,14 @@ default. The cadence counts continuously across warm-up and collection. Override
 Checkpointing is cadence-only. Generation does not force recovery points after initialization, at
 phase boundaries, or before finalization. If a run ends before its first cadence point, it has no
 recovery point and must restart after interruption. Otherwise, recovery replays work after the
-latest committed point, including tail work or finalization when necessary. Ctrl+C and process
-termination do not attempt an emergency checkpoint; the last atomically published point remains
-authoritative. On Ctrl+C or an ordinary failure, the CLI reports whether a recovery point exists,
-its simulated hour and phase, and how to resume. A resumed run reports the selected recovery cursor
-and effective cadence before continuing.
+latest committed point, including tail work or finalization when necessary. During hourly
+generation, the first Ctrl+C requests a cooperative stop at the end of the current simulated hour.
+When checkpointing is enabled, that safe boundary publishes a recovery point even when it is off
+cadence; with `--checkpoint-hours 0`, generation stops there without creating one. A second Ctrl+C
+forces immediate exit. Hard process termination never attempts an emergency checkpoint, so the
+last atomically published point remains authoritative. On interruption or an ordinary failure, the
+CLI reports whether a recovery point exists, its simulated hour and phase, and how to resume. A
+resumed run reports the selected recovery cursor and effective cadence before continuing.
 
 ## Inspect or intentionally suspend a run
 
@@ -59,10 +62,16 @@ simulated hour, reaches the normal quiescent barrier, publishes an explicit reco
 when that hour is off cadence, reports the suspended cursor, and exits successfully. An
 off-cadence suspension does not move the cadence anchor: with a 24-hour cadence, suspending at hour
 37 still leaves hour 48 as the next automatic checkpoint after resume. Repeating a pending request
-is idempotent. Suspension requires an active checkpoint-enabled run; Ctrl+C remains the immediate
-option and creates no emergency checkpoint. A request that arrives after the last hourly barrier,
-while tail work or finalization is already running, cannot interrupt that unsafe region and the run
-finishes normally.
+is idempotent. Suspension requires an active checkpoint-enabled run.
+
+In the generator's terminal, one Ctrl+C is a convenient local form of the same safe suspension: it
+immediately acknowledges the request, finishes the current simulated hour, and publishes an
+off-cadence recovery when checkpointing is enabled. The process then exits with status 130 rather
+than the external suspension command's successful status. Press Ctrl+C again to force an immediate
+exit and retain only the last recovery point that had already been published. With checkpointing
+disabled, the first Ctrl+C still waits for the hour boundary but creates no recovery point. A
+request that arrives after the last hourly barrier, while tail work or finalization is already
+running, cannot interrupt that unsafe region and the run finishes normally.
 
 ## Resume an interrupted run
 

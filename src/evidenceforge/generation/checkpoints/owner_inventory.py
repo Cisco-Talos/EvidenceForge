@@ -1006,6 +1006,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_external_outbound_destination_weights",
         "_generate_owner",
         "_generation_epoch",
+        "_graceful_interrupt_requested",
         "_host_activity_profile_cache",
         "_identity_directory",
         "_infra_ips",

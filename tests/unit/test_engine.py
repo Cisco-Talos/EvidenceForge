@@ -41,6 +41,7 @@ from evidenceforge.generation.checkpoints import (
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
+from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -277,6 +278,70 @@ class TestGenerationEngine:
         assert observed == [(6, start, "collection"), (12, end, "tail")]
         assert barrier.call_count == 2
         assert prepare_barrier.call_count == 2
+
+    def test_graceful_interrupt_without_checkpoints_stops_after_hour_cleanup(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """A latched interrupt should enter normal cleanup only after a safe hour boundary."""
+
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hours=0,
+            graceful_interrupt_requested=lambda: True,
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        barrier = Mock()
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", barrier)
+
+        with pytest.raises(KeyboardInterrupt):
+            engine._checkpoint_after_completed_hour(
+                completed_simulated_hours=1,
+                next_hour=start,
+            )
+
+        barrier.assert_called_once_with()
+
+    def test_signal_after_cadence_commit_marks_existing_recovery_suspended(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """A signal noticed after publication should not create a duplicate checkpoint."""
+
+        controller = Mock()
+        controller.cadence.hours = 1
+        controller.pending_suspension_request.return_value = None
+        interrupt_requested = iter((False, False, True))
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+            graceful_interrupt_requested=lambda: next(interrupt_requested),
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", Mock())
+        monkeypatch.setattr(engine, "_prepare_incremental_checkpoint_barrier", Mock())
+
+        with pytest.raises(GenerationSuspendedError) as raised:
+            engine._checkpoint_after_completed_hour(
+                completed_simulated_hours=1,
+                next_hour=start,
+            )
+
+        controller.commit.assert_called_once()
+        controller.commit_local_suspension.assert_not_called()
+        controller.acknowledge_local_suspension.assert_called_once_with(raised.value.cursor)
+        assert raised.value.requested_by_signal
 
     def test_checkpoint_hour_hook_requires_a_nonnegative_exact_cadence(
         self,

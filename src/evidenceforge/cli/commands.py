@@ -61,6 +61,7 @@ from rich.text import Text
 
 from evidenceforge import __version__
 from evidenceforge.cli.checkpoint_commands import checkpoint_app
+from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.pack_commands import pack_app
 from evidenceforge.composition import CompiledScenario, compile_scenario, with_runtime_scenario
 from evidenceforge.composition.artifacts import (
@@ -1617,6 +1618,9 @@ def generate(
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
     gen_artifacts_dir = artifacts_dir
+    interrupt_controller = GenerationInterruptController(
+        checkpoint_enabled=selected_checkpoint_hours > 0
+    )
 
     # Generate logs
     try:
@@ -1678,10 +1682,10 @@ def generate(
             gen_gt_dir = staging_dir
             gen_artifacts_dir = staging_dir / "artifacts"
 
-        console.print("\n[bold]Starting log generation...[/bold]")
-
-        # Create progress display with Rich
-        with _generation_progress(console) as progress:
+        # Install cooperative interruption before announcing generation readiness so operators and
+        # subprocess callers can act on that message without racing the signal handler.
+        with interrupt_controller.installed(), _generation_progress(console) as progress:
+            console.print("\n[bold]Starting log generation...[/bold]")
             progress_tracker = _GenerationProgressTracker(progress)
 
             # Generate logs with progress reporting
@@ -1702,10 +1706,13 @@ def generate(
                 checkpoint_controller=checkpoint_controller,
                 checkpoint_recovery=checkpoint_recovery,
                 checkpoint_synchronization_hook=(
-                    checkpoint_test_synchronizer_from_environment()
+                    checkpoint_test_synchronizer_from_environment(
+                        lambda: interrupt_controller.requested
+                    )
                     if checkpoint_controller is not None
                     else None
                 ),
+                graceful_interrupt_requested=lambda: interrupt_controller.requested,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -1782,6 +1789,27 @@ def generate(
 
     except GenerationSuspendedError as suspended:
         cursor = suspended.cursor
+        if suspended.requested_by_signal:
+            if staging_dir and staging_dir.exists() and not persistent_staging:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
+            console.print(
+                f"\n[bold yellow]Generation interrupted after creating a recovery "
+                f"checkpoint at simulated hour {cursor.completed_simulated_hours} "
+                f"({cursor.phase}).[/bold yellow]"
+            )
+            recovery_guidance = _checkpoint_recovery_guidance(
+                checkpoint_controller,
+                ground_truth_dir,
+            )
+            if recovery_guidance is not None:
+                console.print(Text(recovery_guidance, style="yellow"))
+            logger.info(
+                "Generation interrupted safely at simulated hour %s (%s)",
+                cursor.completed_simulated_hours,
+                cursor.phase,
+            )
+            raise typer.Exit(EXIT_SIGINT)
         console.print(
             f"\n[bold yellow]Generation suspended at simulated hour "
             f"{cursor.completed_simulated_hours} ({cursor.phase}).[/bold yellow]"

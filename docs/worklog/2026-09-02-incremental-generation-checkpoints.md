@@ -631,3 +631,7 @@ calibration, and cadence-selection evidence here. The original three-pair perfor
   publication-stage barriers now write and sync a private pending marker, atomically publish it, and
   sync the directory before waiting for acknowledgement. The CI-equivalent default suite then
   passed all 8,119 tests (5 skipped), and Ruff checks remained clean.
+- Interactive SIGINT handling now shares the explicit suspension safe point. One Ctrl+C latches an
+  end-of-hour request and, when checkpointing is enabled, publishes an off-cadence recovery before
+  exiting with status 130. A second Ctrl+C forces immediate exit; checkpoint-disabled generation
+  performs normal abort cleanup after the hour without creating recovery state.
