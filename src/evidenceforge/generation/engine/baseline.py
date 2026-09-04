@@ -408,6 +408,19 @@ def _baseline_service_for_success_port(port: int) -> str | None:
     return _service_for_port(port) or {443: "ssl", 80: "http", 53: "dns"}.get(port)
 
 
+def _profile_connection_payload_bytes(
+    connection: dict[str, Any],
+    rng: random.Random,
+) -> tuple[int, int]:
+    """Return protocol-aware application bytes for one profile connection."""
+
+    orig_bytes = rng.randint(200, 5000)
+    sampled_resp_bytes = rng.randint(500, 50000)
+    if connection.get("proto", "tcp") == "udp" and connection.get("service") == "syslog":
+        return orig_bytes, 0
+    return orig_bytes, sampled_resp_bytes
+
+
 def _baseline_success_port_for_target(
     target_system: System,
     requested_port: int,
@@ -9727,6 +9740,7 @@ class BaselineMixin:
                     # SMB workload below. Do not add a second opaque profile flow.
                     continue
 
+                orig_bytes, resp_bytes = _profile_connection_payload_bytes(conn, rng)
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=dst_ip,
@@ -9735,8 +9749,8 @@ class BaselineMixin:
                     proto=conn.get("proto", "tcp"),
                     service=conn.get("service"),
                     duration=rng.uniform(0.05, 5.0),
-                    orig_bytes=rng.randint(200, 5000),
-                    resp_bytes=rng.randint(500, 50000),
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
                     emit_dns=conn.get("emit_dns", False),
                     source_system=system,
                     hostname=hostname,
@@ -10010,6 +10024,7 @@ class BaselineMixin:
                         ):
                             continue
 
+                        orig_bytes, resp_bytes = _profile_connection_payload_bytes(conn, rng)
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
@@ -10018,8 +10033,8 @@ class BaselineMixin:
                             proto=conn.get("proto", "tcp"),
                             service=conn.get("service"),
                             duration=rng.uniform(0.05, 5.0),
-                            orig_bytes=rng.randint(200, 5000),
-                            resp_bytes=rng.randint(500, 50000),
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
                             conn_state="SF" if conn.get("service") == "smb" else None,
                             source_system=src_sys,
                             emit_dns=is_internal_src,

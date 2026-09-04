@@ -29,6 +29,8 @@ from evidenceforge.generation.actions.ssh_session import (
     SshSessionRequest,
     _PreparedSshCloseContinuation,
     _ssh_action_deadline_source_tail,
+    _ssh_source_process_terminate_time,
+    _ssh_transport_close_before_source_session_end,
     ssh_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.generator import ActivityGenerator
@@ -350,6 +352,27 @@ def _assert_no_dispatcher_residue(dispatcher: EventDispatcher) -> None:
     assert action.prepared_projections == 0
     assert action.projection_groups == 0
     assert action.projection_retained_bytes == 0
+
+
+def test_ssh_source_teardown_fits_before_authoritative_source_session_end() -> None:
+    """A clamped SSH transport leaves room to terminate its source process."""
+
+    source_session_end = datetime(2024, 3, 18, 17, 55, tzinfo=UTC)
+    close_time = _ssh_transport_close_before_source_session_end(
+        source_hostname="WS-AJOHNSON-01",
+        source_pid=6961,
+        source_port=52317,
+        source_session_end=source_session_end,
+    )
+    terminate_time = _ssh_source_process_terminate_time(
+        source_hostname="WS-AJOHNSON-01",
+        source_pid=6961,
+        source_port=52317,
+        target_hostname="APP-INT-01",
+        transport_close_time=close_time,
+    )
+
+    assert close_time < terminate_time < source_session_end
 
 
 def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path) -> None:

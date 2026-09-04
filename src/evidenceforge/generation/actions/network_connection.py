@@ -2256,6 +2256,11 @@ class NetworkConnectionRequest:
     def __post_init__(self) -> None:
         """Validate occurrence-local lifecycle routing at the request boundary."""
 
+        if self.proto.strip().casefold() == "udp" and self.dst_port == 514:
+            # Classic UDP syslog is a one-way datagram submission. Normalize this at
+            # the canonical network boundary so every caller and renderer shares the
+            # same directional accounting.
+            object.__setattr__(self, "resp_bytes", 0)
         if self.transport_lifecycle_mode not in {"network", "deferred_session"}:
             raise ValueError(
                 f"Unsupported transport lifecycle request mode {self.transport_lifecycle_mode!r}"

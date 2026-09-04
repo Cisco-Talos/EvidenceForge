@@ -79,6 +79,24 @@ _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
     "evidenceforge_active_network_timing_runtime",
     default=None,
 )
+
+
+def _normalize_udp_syslog_flow(
+    *,
+    proto: str,
+    dst_port: int,
+    conn_state: str,
+    history: str,
+    duration: float | None,
+    resp_bytes: int | None,
+) -> tuple[str, str, float | None, int | None]:
+    """Return source-native one-way transport semantics for UDP/514 syslog."""
+
+    if proto != "udp" or dst_port != 514:
+        return conn_state, history, duration, resp_bytes
+    return "S0", "D", None, 0
+
+
 _NETWORK_IDENTITY_CAPTURE_LOCK_TYPE = type(Lock())
 _DNS_TRANSPORT_CLOSE_SLACK_MAXIMUM_US = 12_001
 _TLS_COMPLETED_EXTENSION_MAXIMUM_US = 8_000_000
@@ -3716,6 +3734,15 @@ class NetworkTransactionPlanner:
                 resp_bytes,
                 history,
             )
+
+        conn_state, history, duration, resp_bytes = _normalize_udp_syslog_flow(
+            proto=proto,
+            dst_port=dst_port,
+            conn_state=conn_state,
+            history=history,
+            duration=duration,
+            resp_bytes=resp_bytes,
+        )
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:

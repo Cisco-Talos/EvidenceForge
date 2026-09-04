@@ -580,6 +580,26 @@ def _ssh_source_process_terminate_time(
     )
 
 
+def _ssh_transport_close_before_source_session_end(
+    *,
+    source_hostname: str,
+    source_pid: int,
+    source_port: int,
+    source_session_end: datetime,
+) -> datetime:
+    """Reserve enough source-session headroom for SSH client teardown."""
+
+    canonical_end = ensure_utc(source_session_end)
+    close_margin_ms = 1600 + (
+        _stable_seed(
+            "ssh-before-source-session-end:"
+            f"{source_hostname}:{source_pid}:{source_port}:{canonical_end.isoformat()}"
+        )
+        % 751
+    )
+    return canonical_end - timedelta(milliseconds=close_margin_ms)
+
+
 def _ssh_source_native_session_close_time(
     *,
     target_hostname: str,
@@ -4075,15 +4095,12 @@ class SshSessionActionBundle:
                         source_process.logon_id
                     )
             if source_session_end is not None and state.close_time >= source_session_end:
-                close_margin_ms = 250 + (
-                    _stable_seed(
-                        "ssh-before-source-session-end:"
-                        f"{source_system.hostname}:{source_pid}:{state.source_port}:"
-                        f"{source_session_end.isoformat()}"
-                    )
-                    % 751
+                state.close_time = _ssh_transport_close_before_source_session_end(
+                    source_hostname=source_system.hostname,
+                    source_pid=source_pid,
+                    source_port=state.source_port,
+                    source_session_end=source_session_end,
                 )
-                state.close_time = source_session_end - timedelta(milliseconds=close_margin_ms)
                 state.duration = max(
                     1.0,
                     (state.close_time - ensure_utc(request.time)).total_seconds(),

@@ -160,6 +160,23 @@ def _assert_mutable_payload_race_is_bounded(
     assert completed_cycles[0] > 0
 
 
+def test_udp_syslog_request_normalizes_to_one_way_payload() -> None:
+    """Canonical UDP syslog requests never retain responder payload bytes."""
+
+    request = NetworkConnectionRequest(
+        src_ip="10.10.2.20",
+        dst_ip="10.10.2.40",
+        time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+        dst_port=514,
+        proto="UDP",
+        orig_bytes=842,
+        resp_bytes=16_384,
+    )
+
+    assert request.orig_bytes == 842
+    assert request.resp_bytes == 0
+
+
 def test_network_request_identity_field_census_matches_current_public_model() -> None:
     """Every current semantic field is encoded and only exact carriers are excluded."""
 

@@ -11,6 +11,9 @@ import math
 import random
 from collections import Counter
 
+from evidenceforge.generation.actions.network_transaction_planner import (
+    _normalize_udp_syslog_flow,
+)
 from evidenceforge.generation.activity.generator import (
     _NTP_STRATUM_TIMING,
     _SSL_FAILURE_RATE,
@@ -41,6 +44,21 @@ def _proxy_ua_pool(*path: str) -> list[str]:
     for key in path:
         value = value[key]
     return value
+
+
+def test_udp_syslog_flow_has_no_responder_packets_or_false_success_state() -> None:
+    """UDP/514 preserves sender payload while normalizing one-way Zeek semantics."""
+
+    normalized = _normalize_udp_syslog_flow(
+        proto="udp",
+        dst_port=514,
+        conn_state="SF",
+        history="Dd",
+        duration=1.25,
+        resp_bytes=4096,
+    )
+
+    assert normalized == ("S0", "D", None, 0)
 
 
 class TestProtocolOverhead:

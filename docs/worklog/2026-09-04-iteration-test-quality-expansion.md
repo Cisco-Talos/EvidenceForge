@@ -214,3 +214,63 @@ later engine-quality loops.
 - **Sibling risks:** preserve Marcus as the outbound SMB/proxy principal where authored; retain
   Aisha as the local `runas /netonly` token; allocate and close any distinct stolen-user session;
   avoid changing service-account, RDP, SSH, or network-logon semantics.
+
+### Result
+
+- The generated probe found zero cross-principal uses of the Type 9 LUID. Aisha owns every attached
+  process and local profile path; Marcus remains the outbound credential principal.
+- Automated evaluation was 95.8281 across 111,625 records; temporal integrity remained below its
+  hard gate.
+- The blind panel returned four Synthetic verdicts with scores 88, 68, 84, and 64 (average 76.0).
+  No reviewer repeated the repaired LUID-ownership contradiction.
+
+## Assessment loop 37 — one-way UDP syslog accounting
+
+### Family contract
+
+- **Owning abstraction:** canonical role-profile connection intent and protocol-aware transport
+  accounting for one-way datagram services.
+- **Invariant:** a successful UDP/514 syslog delivery carries application payload only from sender
+  to collector. The collector contributes no responder application bytes or packets; any ICMP error
+  is a separate failed-network occurrence, never a bulk response on the syslog flow.
+- **Entry paths:** log-server inbound role profiles, direct role-profile connections, multi-sensor
+  observations, perimeter-denied attempts, and future explicit UDP syslog actions.
+- **Consumers:** Zeek conn rows on every observing sensor, eCAR FLOW, firewall projections, packet
+  and IP-byte accounting, protocol classifiers, and blind network review.
+- **Layer rationale:** reverse traffic is invented by generic baseline profile sizing before fan-out,
+  so the fix belongs at canonical connection intent rather than in Zeek or another renderer.
+- **Sibling risks:** preserve realistic nonzero sender bytes/packets, UDP header accounting, sensor
+  agreement, denied/S0 zero-payload behavior, TCP/514 semantics, and bidirectional UDP protocols such
+  as DNS, DHCP, and NTP.
+
+### Result
+
+- The generated hard probe found 263 UDP/514 observations across all three sensors with zero
+  responder payload bytes, packets, or IP bytes; 232 retained nonzero sender payload.
+- A generation-time RDP assertion exposed insufficient SSH-client teardown headroom. The SSH
+  transport clamp now reserves the full deterministic source-process termination tail before an
+  authoritative source-session end.
+- Automated evaluation increased to 96.4760 across 115,117 records and passed every hard gate; all
+  four pillars exceed 93.
+- The blind panel returned four Synthetic verdicts with scores 68, 84, 94, and 91 (average 84.25).
+  No reviewer repeated the repaired UDP/syslog contradiction.
+
+## Assessment loop 38 — exact multipart upload ownership
+
+### Family contract
+
+- **Owning abstraction:** explicit-proxy transaction action bundle plus canonical process identity
+  selected for an authored HTTP upload.
+- **Invariant:** one exact process owns the multipart command, local archive read, client-to-proxy
+  tuple, eCAR FLOW, Sysmon Event 3, proxy request, and process termination. A neighboring probe
+  process may not inherit the upload tuple merely because it shares executable, user, host, or URL.
+- **Entry paths:** authored multipart uploads, benign support uploads, explicit proxy CONNECT reuse,
+  curl/browser process discovery, existing process reuse, and source PID inference.
+- **Consumers:** eCAR PROCESS/FILE/FLOW, Sysmon Event 1/3/5/11, proxy access records, Zeek conn/http,
+  multipart and artifact metadata, ground truth, and upload hard probes.
+- **Layer rationale:** the proxy action bundle owns the logical request and must carry the authored
+  process identity into the canonical client leg. Renderer-side PID replacement would leave the
+  source process, endpoint effects, and lifecycle state contradictory.
+- **Sibling risks:** keep benign and malicious multipart uploads distinct, preserve tunnel reuse and
+  source-port identity, avoid duplicating process creation, retain local token versus outbound
+  credential semantics, and keep every process alive through its owned network/file dependents.

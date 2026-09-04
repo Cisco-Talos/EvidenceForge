@@ -6954,7 +6954,14 @@ class ActivityGenerator:
             )
             terminate_at = max(disconnect_at + step * ordinal, minimum)
             if terminate_at >= logout_time:
-                raise StateError("Exact RDP target process cannot terminate before logout")
+                raise StateError(
+                    "Exact RDP target process cannot terminate before logout: "
+                    f"host={identity.hostname}, pid={process.pid}, image={process.image}, "
+                    f"start={process.start_time.isoformat()}, "
+                    f"last_activity={(process.last_activity_time or process.start_time).isoformat()}, "
+                    f"disconnect={disconnect_at.isoformat()}, logout={logout_time.isoformat()}, "
+                    f"minimum={minimum.isoformat()}"
+                )
             planned.append((process_identity, terminate_at))
             prior = terminate_at + timedelta(microseconds=1)
         return tuple(planned)
