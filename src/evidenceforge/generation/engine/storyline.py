@@ -1625,13 +1625,91 @@ class StorylineMixin:
         """Return a User model for service identities that can own process telemetry."""
         normalized = service_account.strip().replace("/", "\\")
         account_key = normalized.upper()
-        if account_key in {"LOCALSYSTEM", "LOCAL SYSTEM", "NT AUTHORITY\\SYSTEM", "SYSTEM"}:
+        builtin_accounts = {
+            "LOCALSYSTEM": ("SYSTEM", "Local System"),
+            "LOCAL SYSTEM": ("SYSTEM", "Local System"),
+            "NT AUTHORITY\\SYSTEM": ("SYSTEM", "Local System"),
+            "SYSTEM": ("SYSTEM", "Local System"),
+            "LOCALSERVICE": ("LOCAL SERVICE", "Local Service"),
+            "LOCAL SERVICE": ("LOCAL SERVICE", "Local Service"),
+            "NT AUTHORITY\\LOCAL SERVICE": ("LOCAL SERVICE", "Local Service"),
+            "NETWORKSERVICE": ("NETWORK SERVICE", "Network Service"),
+            "NETWORK SERVICE": ("NETWORK SERVICE", "Network Service"),
+            "NT AUTHORITY\\NETWORK SERVICE": ("NETWORK SERVICE", "Network Service"),
+        }
+        account = builtin_accounts.get(account_key)
+        if account is not None:
+            username, full_name = account
             return User(
-                username="SYSTEM",
-                full_name="Local System",
-                email="system@example.local",
+                username=username,
+                full_name=full_name,
+                email=f"{username.lower().replace(' ', '.')}@example.local",
             )
         return None
+
+    def _storyline_service_process_identity(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        process_name: str,
+        future_specs: Iterable[Any],
+    ) -> tuple[User, str, str] | None:
+        """Resolve an authored service executable to its configured built-in identity."""
+
+        process_image = self._normalize_storyline_service_file_name(process_name)
+        process_exe = process_image.rsplit("\\", 1)[-1].casefold()
+        recent_service = getattr(self, "_last_storyline_service_by_system", {}).get(
+            system.hostname,
+            {},
+        )
+        installed_image = self._normalize_storyline_service_file_name(
+            str(recent_service.get("service_file_name") or "")
+        )
+        installed_at = recent_service.get("installed_at")
+        if (
+            installed_image.rsplit("\\", 1)[-1].casefold() == process_exe
+            and isinstance(installed_at, datetime)
+            and installed_at <= time
+            and time - installed_at <= timedelta(minutes=30)
+        ):
+            service_user = self._service_account_user(
+                str(recent_service.get("service_account") or "")
+            )
+            if service_user is not None:
+                return (
+                    service_user,
+                    str(recent_service.get("service_name") or process_exe),
+                    str(recent_service.get("lifecycle_group_id") or ""),
+                )
+
+        matching_service_spec = next(
+            (
+                candidate
+                for candidate in future_specs
+                if getattr(candidate, "type", "") == "service_installed"
+                and self._normalize_storyline_service_file_name(
+                    str(getattr(candidate, "service_file_name", "") or "")
+                )
+                .rsplit("\\", 1)[-1]
+                .casefold()
+                == process_exe
+            ),
+            None,
+        )
+        if matching_service_spec is None:
+            return None
+        service_user = self._service_account_user(
+            str(getattr(matching_service_spec, "service_account", "") or "")
+        )
+        if service_user is None:
+            return None
+        service_name = str(getattr(matching_service_spec, "service_name", "") or process_exe)
+        return (
+            service_user,
+            service_name,
+            self._storyline_remote_service_lifecycle_id(system, service_name),
+        )
 
     def _storyline_service_context_for_process(
         self,
@@ -3934,6 +4012,7 @@ class StorylineMixin:
         Each event spec type maps to a specific generate_* method on ActivityGenerator.
         Returns a malicious_event dict for GROUND_TRUTH.md.
         """
+        future_specs = tuple(future_specs)
         rng = _get_rng()
         dispatcher = getattr(self, "dispatcher", None)
         malicious_event = {
@@ -4248,13 +4327,31 @@ class StorylineMixin:
 
             output_file = self._extract_output_file(command_line, os_category)
             process_logon_id = logon_id
+            service_lifecycle_group_id = ""
+            service_process_identity = self._storyline_service_process_identity(
+                system=system,
+                time=time,
+                process_name=process_name,
+                future_specs=future_specs,
+            )
             explicit_parent = self._storyline_process_ref_for_parent(
                 actor=process_actor,
                 system=system,
                 parent_ref=getattr(spec, "parent_ref", None),
             )
-            service_lifecycle_group_id = ""
-            if explicit_parent is not None:
+            if service_process_identity is not None:
+                process_actor, _service_name, service_lifecycle_group_id = service_process_identity
+                process_logon_id = {
+                    "SYSTEM": "0x3e7",
+                    "LOCAL SERVICE": "0x3e5",
+                    "NETWORK SERVICE": "0x3e4",
+                }[process_actor.username]
+                parent_pid = self.activity_generator._get_system_pid(
+                    system.hostname,
+                    "services",
+                    0x1F4,
+                )
+            elif explicit_parent is not None:
                 parent_pid, _parent_image = explicit_parent
             else:
                 service_context = self._storyline_service_context_for_process(
@@ -4312,10 +4409,10 @@ class StorylineMixin:
                 if isinstance(scheduled_bash_time, datetime):
                     time = scheduled_bash_time
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            service_backed_process = "service_installed" in explicit_types and exe_name in {
-                "psexesvc.exe",
-                "healthmonitorsvc.exe",
-            }
+            service_backed_process = service_process_identity is not None or (
+                "service_installed" in explicit_types
+                and exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"}
+            )
             if service_backed_process and not service_lifecycle_group_id:
                 matching_service_spec = next(
                     (

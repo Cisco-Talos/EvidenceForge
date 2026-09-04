@@ -156,3 +156,32 @@ later engine-quality loops.
   reorder it as if it were an ordinary dependent. Renderer sorting cannot repair identity state.
 - **Sibling risks:** retain login-before-process, termination-after-dependent, session closure,
   parent-before-child, immutable PID-generation identity, and bounded cache behavior.
+
+### Result
+
+- The generated hard probe reduced eCAR exact-identity dependents preceding creation from 855
+  across 101 identities to zero across 31,615 records.
+- The same source-timing repair reduced live Sysmon PID-generation overlaps from 55 to zero.
+- Automated evaluation remained 95.8248 across 111,587 records.
+- The blind panel returned four Synthetic verdicts with scores 93, 84, 95, and 88 (average
+  90.0). All endpoint reviewers independently confirmed the repaired process/PID ordering.
+
+## Assessment loop 35 — Windows service execution identity
+
+### Family contract
+
+- **Owning abstraction:** authored Windows service definition plus canonical process/session
+  ownership for the SCM-launched service executable.
+- **Invariant:** a service process inherits the configured built-in service account, logon ID,
+  integrity, and `services.exe` parent; the remote installer remains the subject of installation
+  but never becomes the service process token.
+- **Entry paths:** service installation before process start, process intent before a later
+  same-cluster service definition, remote administration, arbitrary service executable names,
+  and LocalSystem/LocalService/NetworkService aliases.
+- **Consumers:** Security 4688/4689 and 4697, Sysmon Event 1/5 and module records, eCAR process and
+  dependent records, service lifecycle reconciliation, and ground truth.
+- **Layer rationale:** storyline intent binds an authored service definition to canonical process
+  identity. Rewriting only one emitter would preserve contradictory actor/session state elsewhere.
+- **Sibling risks:** preserve the remote installer on 4697, explicit network-logon continuity,
+  service payload ownership, lifecycle grouping, child-command inheritance, and non-built-in
+  domain service accounts.

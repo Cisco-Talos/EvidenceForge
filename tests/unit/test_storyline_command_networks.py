@@ -2977,6 +2977,62 @@ class TestStorylineCommandSideEffects:
             == service_group
         )
 
+    def test_installed_local_system_service_process_uses_service_identity(self):
+        """An SCM child uses the configured token rather than the remote installer."""
+        source = System(
+            hostname="DC-02",
+            ip="10.10.0.11",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(
+            visibility_engine=None,
+            storyline_cluster_id="directory-cache-cluster",
+        )
+        service_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine._record_storyline_service_install(
+            system=source,
+            service_name="DirectoryCacheSvc",
+            service_file_name=r"C:\Windows\System32\DirectoryCacheSvc.exe",
+            service_account="LocalSystem",
+            time=service_time,
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\DirectoryCacheSvc.exe",
+            command_line=r"C:\Windows\System32\DirectoryCacheSvc.exe --service",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=service_time + timedelta(seconds=2),
+            activity="start remote service",
+            explicit_types={"process", "service_installed"},
+        )
+
+        process = engine.activity_generator.processes[0]
+        assert process["user"].username == "SYSTEM"
+        assert process["logon_id"] == "0x3e7"
+        assert process["parent_pid"] == 500
+        assert process["ensure_file_event"] is False
+        assert (
+            process["lifecycle_group_id"]
+            == (engine._last_storyline_service_by_system[source.hostname]["lifecycle_group_id"])
+        )
+
     def test_service_installed_reuses_sc_create_start_type(self):
         source = System(
             hostname="DC-01",
