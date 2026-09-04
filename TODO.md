@@ -117,9 +117,6 @@ without turning `TODO.md` back into a high-conflict work journal.
   [final review report](docs/design/realism-review/final-report.md#dependency-ordered-remediation-roadmap);
   exact evidence, owners, remediation, and tests remain in
   [the machine-readable finding register](docs/design/realism-review/findings.json).
-- [ ] Continue current-dev realism assessment only if a separately approved future loop is needed;
-  use [current-dev assessment worklog](docs/worklog/2026-05-current-dev-assessment-continuation.md)
-  for handoff notes, latest loop outcomes, and next target selection.
 - [x] **P1** Complete the V2 family-level realism foundations: scalable indexed state,
   execution/effect reconciliation, append-only lifecycle authority, one timing/clock runtime,
   compiled deployment/content identity, explicit collection policy, and persistent application
@@ -129,18 +126,6 @@ without turning `TODO.md` back into a high-conflict work journal.
   the immediate Loop 30 baseline, but 17.5 better than the later post-P1 checkpoint. See the
   [implementation worklog](docs/worklog/2026-08-16-v2-family-foundations.md) and
   [final assessment](docs/design/realism-review/v2-family-foundations-final/REPORT.md).
-- [ ] **P1** Close the final V2 blind-panel endpoint contradictions: canonical Sysmon occurrence
-  timing, process-dependent-before-create/after-terminate rejection, complete RDP bootstrap and
-  Windows logon identity, and OS-build-aware bootstrap binary hashes. Keep the independent report
-  evidence and priorities in the
-  [final V2 assessment](docs/design/realism-review/v2-family-foundations-final/REPORT.md).
-- [ ] **P2** Improve the final V2 panel's lower-confidence realism findings: explicit proxy DNS
-  cache causality, role-appropriate NTP coverage, shell-pipeline process ownership, and more
-  user-specific administrator command pacing and vocabulary.
-- [ ] **P1** Feed the latest post-fix Host-review priors into the next
-  assessment loop: dataset-wide uniform Sysmon collection/event-family shape,
-  tight eCAR wrapper/child timing around DC service/task execution, residual
-  service/task parentage edge cases, and regular eCAR `FLOW` actor omission.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider
   switching `proxy_access.log` from W3C Extended format to Apache/Nginx
   combined-style output with absolute URLs and CONNECT targets.
@@ -152,9 +137,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [x] **P1** Add focused machine-readable `eforge schema` selectors, executable minimal examples,
   actionable grouped validation diagnostics, and staged authoring guidance while retaining focused
   references as the semantic authoring guide.
-- [ ] **P1** Add clean-room scenario-agent acceptance tests measuring first-draft structural
-  validity, passes to zero errors, required-reference loading, warning churn, and regressions
-  introduced during repair across representative scenario families.
+- [ ] **P1** Before the final 2.0.0 release, reconcile the roadmap and release documentation:
+  retire completed or stale TODO items, align the README proxy-format description with the
+  implemented combined-log output, update Ruff's target to Python 3.12, and clear release-tree
+  whitespace and working-copy hygiene issues.
 
 Recently completed: Codex fix-family PR review/rework, full slow-suite
 regression cleanup, architecture reset validation, output-target extraction,
@@ -417,6 +403,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Medium-Term
 
+- [ ] Automate clean-room scenario-agent acceptance after the 2.0 release, measuring first-draft
+  structural validity, passes to zero errors, required-reference loading, warning churn, and
+  repair regressions across representative scenario families. Use manual scenario-authoring
+  acceptance for the 2.0 release candidates and final release.
 - [ ] Web UI for scenario creation.
 - [ ] Streaming output to SIEM/data lakes.
 - [ ] Log format auto-detection from samples.
