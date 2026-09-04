@@ -132,3 +132,27 @@ later engine-quality loops.
   Repairing XML after rendering would leave ProcessGuid and sibling timing contracts stale.
 - **Sibling risks:** preserve parent-before-child and create-before-dependent ordering, provider
   latency, deterministic rendering, exact-publication replay, and termination containment.
+
+### Result
+
+- The generated hard probe reduced Sysmon payload/envelope differences over one second from 132
+  to zero across 4,682 rows.
+- Automated evaluation remained 95.8248 across 111,587 records.
+- The blind panel returned four Synthetic verdicts with scores 98, 96, 95, and 94 (average
+  95.75). All endpoint reviewers converged on eCAR process dependents preceding exact creation.
+
+## Assessment loop 34 — process starts before session dependents
+
+### Family contract
+
+- **Owning abstraction:** source-timing process lifecycle and session dependency frontiers.
+- **Invariant:** a process creation follows its visible session login but precedes every module,
+  flow, file, registry, child-process, and termination event carrying its exact process identity.
+- **Entry paths:** baseline applications, SSH/RDP clients and receivers, storyline processes,
+  service processes, causal effects, PID reuse, and terminal lifecycle publication.
+- **Consumers:** eCAR PROCESS/dependent records, Sysmon ProcessGuid lifecycles, Security 4688/4689,
+  parent-child identity, and source-timing validation.
+- **Layer rationale:** process creation is a prerequisite, so session frontier logic must not
+  reorder it as if it were an ordinary dependent. Renderer sorting cannot repair identity state.
+- **Sibling risks:** retain login-before-process, termination-after-dependent, session closure,
+  parent-before-child, immutable PID-generation identity, and bounded cache behavior.

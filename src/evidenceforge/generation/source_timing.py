@@ -5060,6 +5060,11 @@ class SourceTimingPlanner:
                 ),
                 maximum_us=8_000,
             )
+        if event.event_type in _PROCESS_START_EVENT_TYPES:
+            # A process start is a prerequisite for session dependents, not one
+            # more dependent in planning order.  A later admitted flow/module
+            # must never push the process creation behind its own activity.
+            return timestamp
         previous = self._latest_session_dependent_times.get(key)
         if previous is not None and timestamp <= previous:
             self.timing_runtime.audit.record_repair(f"{family}.session.dependent_order")

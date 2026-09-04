@@ -2477,6 +2477,50 @@ def test_ecar_session_process_create_follows_admitted_session_login() -> None:
     assert process_time > login_time
 
 
+def test_process_create_does_not_follow_later_session_dependent() -> None:
+    """A retained session frontier cannot move a prerequisite process start later."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    host = _host_context()
+    session_group = "existing-session-group"
+    identity = replace(
+        _process_identity(
+            hostname=host.hostname,
+            pid=4343,
+            parent_pid=888,
+            started_at=start + timedelta(minutes=5),
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ),
+        parent_lifecycle_group_id=session_group,
+    )
+    event = OccurrenceBuilder(
+        timestamp=identity.started_at,
+        event_type="process_create",
+        src_host=host,
+        auth=AuthContext(username=r"CORP\alice", logon_id="0x12345", logon_type=2),
+        process=_context_from_identity(identity),
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=identity.started_at,
+            phase="start",
+            parent_group_id=session_group,
+        ),
+    )
+    planner._latest_session_start_times[("ecar", session_group)] = start
+    later_dependent = start + timedelta(hours=2)
+    planner._latest_session_dependent_times[("ecar", session_group)] = later_dependent
+
+    planner.plan_event(event, "ecar")
+
+    assert event.source_timing is not None
+    rendered = event.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname, "process_create")
+    ]
+    assert start < rendered < later_dependent
+
+
 def test_ssh_ecar_login_follows_admitted_exact_transport() -> None:
     """SSH remains ordered by its admitted target FLOW after source jitter."""
 
