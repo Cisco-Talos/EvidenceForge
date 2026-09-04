@@ -6,6 +6,67 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.0.0rc2 (2026-09-04)
+
+This second 2.0 release candidate consolidates the architecture and realism work completed after
+RC1, adds portable pack releases and resumable long-running generation, and refreshes the
+authoring and tester experience ahead of the final 2.0 release.
+
+**Deterministic lifecycle and publication foundations**
+
+- Completed the V2 family-level architecture with bounded state registries, authenticated intent
+  and effect receipts, append-only lifecycle authority, atomic action cohorts, immutable
+  deployment/content identity, and one shared source-timing runtime (`42c4136b`, `af0bb0b9`,
+  `d90010fc`, `2678ad09`, `7d3875a2`).
+- Migrated Windows Security, Sysmon, Bash history, Snort, DNS, DHCP, TLS, email, browser, file
+  transfer, Linux shell, and remote-session timing/publication onto exact recoverable contracts
+  (`f6e9d3f9`, `2facf92b`, `b68e53a7`, `670b3843`, `24520c45`, `5880c4de`, `1ebcb4da`).
+
+**Remote access, network, and persistent application channels**
+
+- Added bounded persistent HTTP/proxy, SSH, RDP, and SMB channel state with exact deferred
+  publication, transport receipt binding, terminal drain coordination, and deterministic recovery
+  (`4deb3097`, `af0bb0b9`, `809aa0da`, `a161db38`, `fe0ef69d`, `96e7e557`, `56550e92`,
+  `e5ccb543`).
+- Hardened RDP, SSH, sudo, proxy, DNS, Cisco ASA, Sysmon, and network tuple/source-port ownership
+  across suppression, teardown, retry, and concurrent publication paths (`902ff73d`, `5c29e817`,
+  `e963d182`, `07ebbbf5`, `b01ec93e`, `7b99b9bd`, `463a08eb`, `5912774c`).
+
+**Realism and long-run correctness**
+
+- Incorporated the post-RC1 assessment fixes for Windows service ancestry, authentication and
+  workstation state, Linux foreground/sudo ownership, SSH timing, proxy accounting, SMB transfer
+  identity, registry artifacts, scheduled automation, Kerberos policy, and CIDR-aware nmap effects
+  (`120fe082`, `52346e69`, `08091e34`, `c8cb60cb`, `d7fec6d6`, `f4b549ec`, `e432bd27`,
+  `6e6e03f0`, `af3edef1`, `065c608b`).
+- Added duration-stable retention and admission checks for TLS, DNS, SSH ports, processes,
+  lifecycle state, and evolving SMB files, including 31-day and long-generation regression gates
+  (`617a9c8c`, `541ce9b4`, `3e514c67`, `6e5b98a4`, `f83d5401`).
+
+**Pack distribution and scenario authoring**
+
+- Added portable immutable `.efpack` release, import, hydration, validation, provenance, and
+  publisher-qualified inventory workflows, with restored authoring contracts and modeled host
+  resources (`9668ea07`, `e1e4054f`).
+- Expanded focused schema guidance, IDS signature inventory, skill routing, and the experimental
+  clean-room scenario-agent acceptance harness (`63834b1f`, `7bd36232`, `29be4518`).
+
+**Incremental generation and operator experience**
+
+- Added atomic incremental checkpoints and byte-identical resume for long-running generation,
+  followed by checkpoint inspection, cleanup, CLI recovery guidance, and slow-suite repair
+  (`c77856f3`, `a3905e69`, `2e790f92`).
+- Improved generation progress reporting and narrow-terminal behavior, refreshed the EvidenceForge
+  2.0 README and visual identity, corrected its trademark references, and clarified the
+  release-readiness roadmap (`6631c13f`, `368bc143`, `4333f1fe`, `05914706`, `6f087045`,
+  `5e6c2e5c`, `af8c01f3`).
+
+**Runtime and dependency support**
+
+- Raised the supported runtime to Python 3.12 and refreshed Ruff, pytest-benchmark, pre-commit,
+  python-dotenv, setup-uv, and the final dependency batch (`2f408600`, `e680cab0`, `327e046c`,
+  `322ff67e`, `881a0361`, `a6a1a292`, `13575583`).
+
 ## v2.0.0rc1 (2026-08-14)
 
 This first 2.0 release candidate brings Scenario 2.0 composition, reusable pack authoring, and

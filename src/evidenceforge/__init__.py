@@ -27,5 +27,5 @@ for cybersecurity threat hunting training and research. It uses a two-phase
 architecture combining LLM-driven scenario creation with deterministic log generation.
 """
 
-__version__ = "2.0.0rc1"
+__version__ = "2.0.0rc2"
 __all__ = []  # Will be expanded as modules are implemented
