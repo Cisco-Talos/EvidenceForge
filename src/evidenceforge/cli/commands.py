@@ -1729,6 +1729,7 @@ def generate(
                     "generation_seed": seed,
                 },
             )
+            SIDECAR_REGISTRY.validate_generated(gen_gt_dir)
 
         # Transactional swap: backup old → install new → cleanup backup.
         # If any step fails (including KeyboardInterrupt), old output is
@@ -1792,7 +1793,9 @@ def generate(
         if suspended.requested_by_signal:
             if staging_dir and staging_dir.exists() and not persistent_staging:
                 shutil.rmtree(staging_dir, ignore_errors=True)
-                console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
+                console.print("[dim]Cleaned up staging directory[/dim]")
+            if has_existing:
+                console.print("[dim]Previous output preserved[/dim]")
             console.print(
                 f"\n[bold yellow]Generation interrupted after creating a recovery "
                 f"checkpoint at simulated hour {cursor.completed_simulated_hours} "
@@ -1825,7 +1828,9 @@ def generate(
     except KeyboardInterrupt:
         if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
-            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
+            console.print("[dim]Cleaned up staging directory[/dim]")
+        if has_existing:
+            console.print("[dim]Previous output preserved[/dim]")
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
         recovery_guidance = _checkpoint_recovery_guidance(
             checkpoint_controller,
@@ -1839,7 +1844,9 @@ def generate(
     except Exception as e:
         if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
-            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
+            console.print("[dim]Cleaned up staging directory[/dim]")
+        if has_existing:
+            console.print("[dim]Previous output preserved[/dim]")
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
         recovery_guidance = _checkpoint_recovery_guidance(
             checkpoint_controller,

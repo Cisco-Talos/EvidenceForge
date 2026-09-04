@@ -114,3 +114,22 @@ results, Ruff results, and status-validation timing observations here.
   seconds. The full slow release tier passed 1,808 tests with 8,362 deselected and no coverage
   instrumentation in 692.41 seconds.
 - Repository-wide Ruff check and format-check gates pass across all 746 formatted files.
+- A later full-slow run exposed 17 stale mocked CLI tests after persistent checkpoint staging began
+  at generation startup. Their fake engines searched for the retired `.eforge_staging_*` path and
+  therefore emitted no bundle into `.eforge-generation/staged`; six rollback tests could also pass
+  without reaching their intended injected fault. Earlier checkpoint validation missed this because
+  the full slow tier passed before startup staging changed, that follow-up ran focused tests only,
+  and the whole mocked generate class was marked slow and excluded from the routine gate.
+- The repair makes mocked engines emit through the actual `GenerationEngine` constructor paths,
+  verifies that fault injections are reached, and asserts successful CLI exit codes where tests had
+  previously ignored them. Only fresh-process generation, signal, resume, cross-format, and atomic
+  publication cases remain slow; narrow mocked generate contracts now run in the routine suite.
+- The CLI now validates the complete required generated bundle before reporting success in both
+  direct (`--checkpoint-hours 0`) and staged modes. Failures during replacement report explicitly
+  when existing output was preserved, independently of whether a persistent checkpoint workspace
+  is retained.
+- Post-repair validation passed 77 focused routine CLI tests with 14 slow cases deselected, the full
+  default gate with 8,190 passed and 5 skipped in 235.48 seconds, and the full slow release tier with
+  1,772 passed in 916.42 seconds. Fresh-process SIGINT/SIGKILL, moved-root, all-format-target, and
+  representative iteration-scenario resume tests all retained byte-identical deterministic output.
+  Repository-wide Ruff check and format-check passed across all 753 files.
