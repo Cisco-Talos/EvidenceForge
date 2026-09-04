@@ -54,9 +54,29 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
             console.print(f"[yellow]Hint:[/yellow] {warning}")
         return
     if report.simulated_hour is not None:
-        console.print(
-            f"[bold]Recovery point:[/bold] simulated hour {report.simulated_hour} ({report.phase})"
-        )
+        if (
+            report.phase in {"warmup", "collection"}
+            and report.phase_completed_hours is not None
+            and report.phase_total_hours is not None
+        ):
+            phase_name = "warm-up" if report.phase == "warmup" else "collection"
+            if report.phase == "collection" and report.phase_completed_hours == 0:
+                phase_position = f"before collection hour 1 of {report.phase_total_hours}"
+            else:
+                phase_position = (
+                    f"{phase_name} hour {report.phase_completed_hours} "
+                    f"of {report.phase_total_hours}"
+                )
+            simulated_hour_unit = "hour" if report.simulated_hour == 1 else "hours"
+            console.print(
+                f"[bold]Recovery point:[/bold] {phase_position} "
+                f"({report.simulated_hour} total simulated {simulated_hour_unit} completed)"
+            )
+        else:
+            console.print(
+                f"[bold]Recovery point:[/bold] simulated hour {report.simulated_hour} "
+                f"({report.phase})"
+            )
     if report.checkpoint_hours is not None:
         console.print(f"[bold]Cadence:[/bold] every {report.checkpoint_hours} simulated hours")
     if report.integrity == "pending" and report.simulated_hour is None:

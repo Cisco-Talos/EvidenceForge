@@ -78,6 +78,8 @@ class _Participant:
 def _controller(
     output: Path,
     scenario_path: Path,
+    *,
+    checkpoint_hours: int = 6,
 ) -> tuple[IncrementalCheckpointStore, IncrementalCheckpointController, _Participant]:
     compiled = compile_scenario(scenario_path)
     formats = [str(item["format"]) for item in compiled.scenario.output.logs]
@@ -91,7 +93,7 @@ def _controller(
     controller = IncrementalCheckpointController(
         store=store,
         fingerprint=fingerprint,
-        checkpoint_hours=6,
+        checkpoint_hours=checkpoint_hours,
         resolved_scenario=serialize_resolved_document(build_resolved_document(compiled)),
         run_options={"formats_filter": None, "oob_hosts": [], "output_target": "default"},
         fingerprint_components=run_fingerprint_components(
@@ -209,6 +211,42 @@ def test_status_human_output_keeps_developer_details_verbose(tmp_path: Path) -> 
     assert "Recovery generations" in verbose.stdout
     assert "Developer diagnostics" in verbose.stdout
     assert "spool" not in verbose.stdout.lower()
+
+
+def test_status_reports_phase_local_collection_progress(tmp_path: Path) -> None:
+    scenario_path = tmp_path / "scenario.yaml"
+    scenario_text = Path("tests/fixtures/scenarios/minimal.yaml").read_text(encoding="utf-8")
+    scenario_path.write_text(
+        scenario_text.replace('  duration: "1h"', '  duration: "6h"\n  warmup: "2h"'),
+        encoding="utf-8",
+    )
+    output = tmp_path / "bundle"
+    _store, controller, participant = _controller(
+        output,
+        scenario_path,
+        checkpoint_hours=1,
+    )
+    controller.commit(
+        cursor=CheckpointCursor(
+            phase="collection",
+            completed_simulated_hours=3,
+            next_hour="2024-01-15T11:00:00+00:00",
+        ),
+        participants=(participant,),
+    )
+
+    human = runner.invoke(app, ["checkpoint", "status", str(output)])
+    structured = runner.invoke(app, ["checkpoint", "status", str(output), "--json"])
+
+    assert human.exit_code == 0, human.stdout
+    assert "Recovery point: collection hour 1 of 6 (3 total simulated hours completed)" in " ".join(
+        human.stdout.split()
+    )
+    payload = json.loads(structured.stdout)
+    assert payload["simulated_hour"] == 3
+    assert payload["phase"] == "collection"
+    assert payload["phase_completed_hours"] == 1
+    assert payload["phase_total_hours"] == 6
 
 
 def test_suspend_command_requires_live_owner_and_is_idempotent(tmp_path: Path) -> None:

@@ -29,14 +29,16 @@ directory itself. When generation uses no explicit `--output`, the bundle root i
 scenario's parent directory. If `data/` is supplied by mistake, the command returns immediately
 with the correct bundle-root command instead of scanning generated evidence.
 
-The default human report shows the operational state, last recoverable simulated hour and phase,
-cadence, integrity and runtime compatibility, fallback warnings, generated-data size, recovery
-overhead, total known managed working footprint, and the exact resume command. `--verbose` adds both
-recovery generations, lock ownership, schema/run identities, participant and segment counts,
-fingerprint components, detailed storage categories, and validation work. `--json` always emits the
-complete structured report, independent of `--verbose`. Status is read-only and excludes unrelated
-files from all managed totals. Checkpoint storage includes durable spool content already imported
-into the hidden workspace.
+The default human report shows the operational state, last recoverable phase-local hour, continuous
+simulated-hour count, cadence, integrity and runtime compatibility, fallback warnings,
+generated-data size, recovery overhead, total known managed working footprint, and the exact resume
+command. For example, after a two-hour warm-up and one completed collection hour it reports
+`collection hour 1 of 6 (3 total simulated hours completed)`. `--verbose` adds both recovery
+generations, lock ownership, schema/run identities, participant and segment counts, fingerprint
+components, detailed storage categories, and validation work. `--json` always emits the complete
+structured report, independent of `--verbose`. Status is read-only and excludes unrelated files
+from all managed totals. Checkpoint storage includes durable spool content already imported into
+the hidden workspace.
 
 For every checkpoint-enabled run, the hidden workspace and controller marker are created before
 warm-up begins. Until the first cadence point commits, status reports

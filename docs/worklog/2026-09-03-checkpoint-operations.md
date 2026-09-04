@@ -28,6 +28,10 @@ next completed simulated-hour barrier after publishing an explicit recovery poin
   active run awaiting its first checkpoint from a directory where no checkpoint workspace exists.
 - A mistakenly supplied generated `data/` directory is detected without recursively measuring its
   contents, and status/suspend give the exact command using the parent bundle root.
+- Recovery status leads with phase-local progress while retaining the continuous cadence count. A
+  two-hour warm-up followed by one completed hour of a six-hour output window is rendered as
+  `collection hour 1 of 6 (3 total simulated hours completed)`, matching the generator's phase-local
+  `Hour N/6` display without obscuring the cadence anchor.
 
 ## Validation record
 
@@ -67,6 +71,12 @@ results, Ruff results, and status-validation timing observations here.
 
 ## Validation results
 
+- Phase-local recovery rendering passed the 104-test focused checkpoint, CLI, generation-skill,
+  and installer group with 54 routine-marker deselections. The exact regression fixture uses a
+  two-hour warm-up and six-hour collection window and verifies both the human
+  `collection hour 1 of 6 (3 total simulated hours completed)` output and the corresponding JSON
+  phase counters. Repository-wide Ruff check and format-check passed; the slow tier was not
+  repeated for this presentation-only follow-up.
 - The bundle-root discovery and pre-first-checkpoint UX follow-up passed 103 focused checkpoint,
   CLI, generation-skill contract, and skill-installer tests with 54 deselected. The exact mistaken
   `scenarios/iteration-test/data` status invocation returned immediately with `no checkpoints

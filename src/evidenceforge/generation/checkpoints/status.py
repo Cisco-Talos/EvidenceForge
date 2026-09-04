@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,6 +21,8 @@ from evidenceforge.config.provider import effective_config_scope
 from evidenceforge.generation.resource_forecast import build_resource_forecast
 from evidenceforge.generation.workload import estimate_workload
 from evidenceforge.models.exceptions import EvidenceForgeError
+from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 from .control import read_controller_record, read_suspension_record, read_suspension_request
 from .errors import CheckpointError
@@ -84,6 +88,8 @@ class CheckpointStatusReport(BaseModel):
     compatibility: Literal["passed", "failed", "not-checked", "not-applicable"]
     simulated_hour: int | None = Field(default=None, ge=1)
     phase: str | None = None
+    phase_completed_hours: int | None = Field(default=None, ge=0)
+    phase_total_hours: int | None = Field(default=None, ge=1)
     checkpoint_hours: int | None = Field(default=None, ge=0)
     suspended: bool = False
     suspension_requested: bool = False
@@ -109,6 +115,33 @@ def checkpoint_bundle_root_hint(output_root: Path) -> Path | None:
     has_workspace = workspace.is_dir() and not workspace.is_symlink()
     has_completed_bundle = (parent.output_root / GENERATION_MANIFEST_FILENAME).is_file()
     return parent.output_root if has_workspace or has_completed_bundle else None
+
+
+def _recovery_phase_progress(
+    scenario: Scenario,
+    recovery: CheckpointRecovery,
+) -> tuple[int, int] | None:
+    """Return completed and total hours within a resumable hour-based phase."""
+
+    cursor = recovery.manifest.cursor
+    if cursor.phase == "warmup":
+        warmup = scenario.time_window.warmup
+        duration = parse_duration(warmup) if warmup is not None else parse_duration("8h")
+        total = max(1, math.ceil(duration.total_seconds() / 3600))
+        return cursor.completed_simulated_hours, total
+    if cursor.phase != "collection" or cursor.next_hour is None:
+        return None
+    try:
+        start, end = resolve_time_window(scenario.time_window)
+        next_hour = datetime.fromisoformat(cursor.next_hour)
+        elapsed_seconds = (next_hour - start).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    if elapsed_seconds < 0 or next_hour >= end:
+        return None
+    total = max(1, math.ceil((end - start).total_seconds() / 3600))
+    completed = int(elapsed_seconds // 3600)
+    return completed, total
 
 
 def _managed_files(
@@ -249,6 +282,10 @@ def _compatibility(
         "stored_components": stored_components,
         "current_components": current_components,
     }
+    phase_progress = _recovery_phase_progress(compiled.scenario, recovery)
+    if phase_progress is not None:
+        diagnostics["phase_completed_hours"] = phase_progress[0]
+        diagnostics["phase_total_hours"] = phase_progress[1]
     if type(stored_components) is dict:
         diagnostics["component_mismatches"] = {
             key: {"stored": stored_components.get(key), "current": current_components.get(key)}
@@ -447,6 +484,8 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
     ):
         warnings.append("available disk is smaller than the current recovery overhead")
     cursor = selected.manifest.cursor
+    phase_completed_hours = diagnostics.get("phase_completed_hours")
+    phase_total_hours = diagnostics.get("phase_total_hours")
     diagnostics.update(
         {
             "run_id": selected.manifest.run_id,
@@ -472,6 +511,10 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
         compatibility="passed" if compatible else "failed",
         simulated_hour=cursor.completed_simulated_hours,
         phase=cursor.phase,
+        phase_completed_hours=(
+            phase_completed_hours if type(phase_completed_hours) is int else None
+        ),
+        phase_total_hours=phase_total_hours if type(phase_total_hours) is int else None,
         checkpoint_hours=selected.manifest.checkpoint_hours,
         suspended=suspended is not None and not active,
         suspension_requested=requested is not None,
