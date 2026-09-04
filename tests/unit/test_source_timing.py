@@ -2135,6 +2135,27 @@ def test_smb_ecar_projection_order_retains_latest_endpoint_flow_frontier() -> No
     assert observed[0] == observed[1]
 
 
+def test_smb_ecar_source_only_projection_does_not_constrain_target_auth() -> None:
+    """A source-only SMB FLOW cannot define a target-local authentication window."""
+
+    planner = SourceTimingPlanner()
+    reference = SourceTimingPlanner()
+    flow_event, login_event = _remote_auth_timing_events()
+    assert login_event.auth is not None
+    login_event = replace(
+        login_event,
+        auth=replace(login_event.auth, session_kind="smb"),
+    )
+    reference_login = replace(login_event, source_timing=None)
+
+    planner.plan_event(flow_event, "ecar", projection_role="source_endpoint")
+    planner.record_admitted_source_event(flow_event, "ecar")
+    planner.plan_event(login_event, "ecar")
+    reference.plan_event(reference_login, "ecar")
+
+    assert login_event.source_timing == reference_login.source_timing
+
+
 def test_remote_auth_ecar_source_only_projection_does_not_create_target_anchor() -> None:
     """A source-only connection without a modeled target cannot anchor target auth."""
 

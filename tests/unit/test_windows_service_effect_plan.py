@@ -275,6 +275,32 @@ def test_dropped_remote_service_reconciles_exact_effects_and_external_process_li
         assert outcome.canonical_occurrence_count == 1
 
 
+def test_explicit_remote_source_overrides_users_primary_system() -> None:
+    """Authored remote-service sources own the service-control transport tuple."""
+
+    primary_source, target = _systems()
+    explicit_source = System(
+        hostname="DC-02",
+        ip="10.0.0.11",
+        os="Windows Server 2022",
+        type="domain_controller",
+    )
+    executor = _Executor(source=primary_source, target=target)
+    request = replace(
+        _request(
+            user=_user(primary_source),
+            target=target,
+            service_file_name=r"C:\Windows\Temp\custom-service.exe",
+        ),
+        remote_source_system=explicit_source,
+    )
+
+    WindowsServiceInstallActionBundle(executor, request).execute()
+
+    assert len(executor.connection_calls) == 2
+    assert {call["src_ip"] for call in executor.connection_calls} == {explicit_source.ip}
+
+
 def test_preexisting_local_service_suppresses_optional_transport_and_payload() -> None:
     """A local preinstalled image keeps only the required service-install occurrence."""
 

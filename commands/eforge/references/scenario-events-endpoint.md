@@ -60,9 +60,11 @@ Fields: `type`, required `group_name`, required `member_name`, `scope`, `techniq
 
 ## `service_installed`
 
-Fields: `type`, required `service_name`, required `service_file_name`, `service_account`,
-`technique`, and `description`. `service_account` defaults to `LocalSystem`. Use a Windows-native
-binary path and route remote installation through the bundle-owned service-control behavior.
+Fields: `type`, required `service_name`, required `service_file_name`, `service_account`, optional
+`source_ip`, `technique`, and `description`. `service_account` defaults to `LocalSystem`. Use a
+Windows-native binary path. Set `source_ip` to a modeled system address when the remote
+service-control transport must originate from a specific host; the action bundle owns the
+correlated SMB/RPC evidence.
 
 ## `scheduled_task_created`
 

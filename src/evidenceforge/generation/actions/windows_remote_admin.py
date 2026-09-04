@@ -131,6 +131,7 @@ class WindowsServiceInstallRequest:
     service_account: str = "LocalSystem"
     lifecycle_group_id: str = ""
     source: str = "activity_generator"
+    remote_source_system: System | None = field(default=None, compare=False, repr=False)
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
 
     @property
@@ -141,7 +142,9 @@ class WindowsServiceInstallRequest:
             "action_bundle:windows_service_install:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.service_name}:{self.service_file_name}:{self.service_type}:"
-            f"{self.service_start_type}:{self.service_account}:{self.source}"
+            f"{self.service_start_type}:{self.service_account}:{self.source}:"
+            f"{self.remote_source_system.hostname if self.remote_source_system else ''}:"
+            f"{self.remote_source_system.ip if self.remote_source_system else ''}"
         )
         return f"windows-service-install-{seed:016x}"
 
@@ -937,6 +940,10 @@ class WindowsServiceInstallActionBundle:
 
         if _get_os_category(self._request.system.os) != "windows":
             return None
+        if self._request.remote_source_system is not None:
+            if self._request.remote_source_system.ip == self._request.system.ip:
+                return None
+            return self._request.remote_source_system
         world_model = getattr(self._executor, "_world_model", None)
         source_system = None
         primary_system_name = getattr(self._request.user, "primary_system", None)

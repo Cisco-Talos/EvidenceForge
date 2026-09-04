@@ -4824,6 +4824,16 @@ class SourceTimingPlanner:
         if family == "ecar":
             close_time = self._remote_auth_transport_close_deadline(event)
             if close_time is None:
+                if (
+                    relationship == "ecar.smb_session_after_transport"
+                    and event.auth is not None
+                    and event.auth.session_kind == "smb"
+                ):
+                    # A source-endpoint SMB FLOW can remain visible when the target
+                    # endpoint FLOW is absent under the observation profile.  That
+                    # cross-host timestamp has no target-local close window, so it
+                    # cannot safely constrain the target authentication row.
+                    return preferred
                 raise StateError(
                     "Authentication source window is missing its admitted target transport close: "
                     f"family={family} anchor={anchor.isoformat()}"

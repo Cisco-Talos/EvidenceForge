@@ -1,0 +1,7 @@
+lock_schema_version: "1.0"
+dependencies:
+  - publisher: evidenceforge
+    type: industry
+    name: technology
+    version: "1.0.0"
+    digest: "11e90fb8aa02c2a97d55b6a90fb9b7c192470215174f10f2832da6c253c62928"

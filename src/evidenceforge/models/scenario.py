@@ -1313,6 +1313,7 @@ class ServiceInstalledEventSpec(_EventSpecBase):
     service_name: str
     service_file_name: str
     service_account: str = "LocalSystem"
+    source_ip: str | None = None
 
 
 class ScheduledTaskCreatedEventSpec(_EventSpecBase):

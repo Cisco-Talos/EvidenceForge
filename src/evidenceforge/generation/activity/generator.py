@@ -35664,6 +35664,7 @@ class ActivityGenerator:
         service_start_type: str = "3",
         service_account: str = "LocalSystem",
         lifecycle_group_id: str = "",
+        remote_source_system: System | None = None,
     ) -> None:
         """Generate service installed event (4697) on target system."""
         bundle = WindowsServiceInstallActionBundle(
@@ -35678,6 +35679,7 @@ class ActivityGenerator:
                 service_start_type=service_start_type,
                 service_account=service_account,
                 lifecycle_group_id=lifecycle_group_id,
+                remote_source_system=remote_source_system,
             ),
         )
         bundle.execute()

@@ -5572,6 +5572,8 @@ class StorylineMixin:
                 event_time=time,
                 rng=rng,
             )
+            source_ip = getattr(spec, "source_ip", None)
+            remote_source_system = self.world_model.system_for_ip(source_ip) if source_ip else None
             service_lifecycle_group_id = self._storyline_remote_service_lifecycle_id(
                 system,
                 spec.service_name,
@@ -5588,6 +5590,7 @@ class StorylineMixin:
                 ),
                 service_account=spec.service_account,
                 lifecycle_group_id=service_lifecycle_group_id,
+                remote_source_system=remote_source_system,
             )
             self._record_storyline_service_install(
                 system=system,
