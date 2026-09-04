@@ -2146,6 +2146,37 @@ class StorylineMixin:
                 return logon_id
         return None
 
+    def _storyline_smb_actor_and_spec(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        spec: Any,
+    ) -> tuple[User, Any]:
+        """Separate a Type 9 local token from its outbound SMB credential."""
+
+        logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=time)
+        session = self.state_manager.get_session(logon_id) if logon_id is not None else None
+        if (
+            session is None
+            or session.logon_type != 9
+            or session.username.casefold() == actor.username.casefold()
+        ):
+            return actor, spec
+        users = {
+            candidate.username.casefold(): candidate
+            for candidate in self.scenario.environment.users
+        }
+        local_actor = users.get(session.username.casefold())
+        if local_actor is None:
+            raise StateError(
+                "Storyline SMB activity resolved Type 9 local caller "
+                f"{session.username!r} on {system.hostname}, but that caller is not declared "
+                "in environment.users"
+            )
+        smb_principal = spec.smb_principal or actor.username
+        return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
+
     def _ensure_storyline_session_end_pairs(self) -> None:
         """Pair explicit logoffs with the latest preceding durable session intent."""
         if hasattr(self, "_storyline_start_to_logoff"):
@@ -2829,18 +2860,19 @@ class StorylineMixin:
         read_time = connection_time - timedelta(milliseconds=120)
         if running is not None:
             read_time = max(read_time, running.start_time + timedelta(milliseconds=1))
+        local_username = running.username if running is not None else actor.username
         self.dispatcher.dispatch_builder(
             OccurrenceBuilder(
                 timestamp=read_time,
                 event_type="file_read",
                 src_host=self.activity_generator._build_host_context(system),
-                auth=AuthContext(username=actor.username),
+                auth=AuthContext(username=local_username),
                 process=ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid if running is not None else 0,
                     image=process_image,
                     command_line=command_line,
-                    username=actor.username,
+                    username=local_username,
                     logon_id=running.logon_id if running is not None else "",
                     start_time=running.start_time if running is not None else None,
                 ),
@@ -4798,15 +4830,17 @@ class StorylineMixin:
                     self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
         elif spec.type == "smb_activity":
-            client_system = None if spec.client is not None else system
-            story_pid, story_image = self._last_storyline_process_for_system(client_system)
+            smb_actor, smb_spec = self._storyline_smb_actor_and_spec(
+                actor,
+                system,
+                time,
+                spec,
+            )
             result = self.activity_generator.generate_smb_activity(
-                spec=spec,
-                actor=actor,
+                spec=smb_spec,
+                actor=smb_actor,
                 parent_system=system,
                 time=time,
-                process_pid=story_pid,
-                process_image=story_image,
             )
             malicious_event.update(
                 {

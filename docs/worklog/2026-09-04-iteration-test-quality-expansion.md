@@ -84,3 +84,24 @@ process, impossible bidirectional/zero-payload UDP syslog accounting, and destin
 Windows network-logon fields on the new DC. The full prioritized list is in
 `scenarios/iteration-test/blind-test/v2-loop-31/REPORT.md`; lower-severity findings remain for
 later engine-quality loops.
+
+## Assessment loop 32 — endpoint effect ownership
+
+### Family contract
+
+- **Owning abstraction:** canonical process/session state and the HTTP-upload and SMB action
+  bundles that attach endpoint file/network effects to a process.
+- **Invariant:** a local file effect uses the owning process's local token principal even when
+  the same process has outbound NewCredentials, and every SMB effect with PID/process identity
+  is owned by a process whose executable/command can perform that SMB operation.
+- **Entry paths:** storyline connection multipart staging, baseline and storyline HTTP uploads,
+  Windows-native SMB, mounted-CIFS SMB, direct `smbclient`, causal file effects, and raw
+  storyline process references.
+- **Consumers:** eCAR process/file/flow records, Windows Security/Sysmon process companions,
+  Samba audit, Zeek SMB/files/conn, ground truth, and endpoint ownership probes.
+- **Layer rationale:** process state owns the local token and action bundles own effect-causing
+  process selection. Renderer-only rewriting would leave sibling sources and future callers
+  contradictory.
+- **Sibling risks:** the fix must cover non-sample upload and SMB operations, avoid changing the
+  remote SMB credential/effective identity, and preserve explicit capable process ownership.
+  Broader actor-native Windows registry/file side effects remain outside this loop.
