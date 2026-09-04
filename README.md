@@ -108,10 +108,10 @@ systems and sensors.
 | Snort/Suricata alerts | Fast-format IDS alerts with sensor-aware filtering and correlation to network evidence |
 | Cisco ASA | Connection, teardown, deny, NAT, and threat-detection syslog from modeled firewall control points |
 | Web access | Apache/Nginx combined text or Splunk-compatible JSON, depending on the output target |
-| HTTP proxy | Extended Apache/Nginx combined text, SOF-ELK-compatible combined text, or Splunk-compatible JSON, depending on the output target |
+| HTTP proxy | Extended Apache/Nginx combined text, SOF-ELK®-compatible combined text, or Splunk-compatible JSON, depending on the output target |
 
 The default target uses SIEM-neutral output. `--target sof-elk` produces layouts and source-native
-variants suitable for SOF-ELK®, including Snare Windows events and year-partitioned RFC3164
+variants suitable for SOF-ELK, including Snare Windows events and year-partitioned RFC3164
 syslog. `--target splunk` produces Splunk-friendly Windows event streams and JSON variants for web
 and proxy access logs. Formats whose representation does not need to change remain identical
 across targets.
@@ -294,7 +294,7 @@ coverage gate, coding conventions, and external-parser validation requirements.
   overlays and data catalogs
 - [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) — Safe suspension,
   recovery, status, storage, and filesystem behavior
-- [Output Target Ingest Guides](docs/output-targets/README.md) — Default, SOF-ELK®, and Splunk
+- [Output Target Ingest Guides](docs/output-targets/README.md) — Default, SOF-ELK, and Splunk
   layouts, parsing, and ingestion
 - [Adversarial Payload Testing](docs/reference/adversarial_payload.md) — Safe synthetic payload and
   callback-testing workflow
