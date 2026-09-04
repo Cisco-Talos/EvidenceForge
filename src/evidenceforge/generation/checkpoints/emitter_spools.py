@@ -292,14 +292,24 @@ class EmitterSpoolParticipant:
         captured_paths: set[str] = set()
 
         for format_name, route, writer in self._writers():
+            buffered = getattr(writer, "buffer", None)
+            if type(buffered) is list and buffered:
+                raise RuntimeError(
+                    f"emitter checkpoint retained an unsealed writer buffer: {format_name}/{route}"
+                )
             sorted_writer = getattr(writer, "_sorted_writer", None)
             output_path = getattr(writer, "output_path", None)
             if isinstance(sorted_writer, ExternalSortedLineWriter):
                 prior = self._committed_sorted.get((format_name, route))
                 prior_run_count = 0 if prior is None else prior.run_count
-                event_count, run_sequence, run_count, paths = (
-                    sorted_writer.checkpoint_snapshot_since(prior_run_count)
-                )
+                try:
+                    event_count, run_sequence, run_count, paths = (
+                        sorted_writer.checkpoint_snapshot_since(prior_run_count)
+                    )
+                except RuntimeError as error:
+                    raise RuntimeError(
+                        f"emitter checkpoint could not seal {format_name}/{route}: {error}"
+                    ) from error
                 for index, path in enumerate(paths, start=prior_run_count):
                     key = f"{format_name}\n{route}\n{index}"
                     body, _info = _read_file(path)

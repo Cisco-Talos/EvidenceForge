@@ -52,6 +52,12 @@ def _time(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
+def _duration_microseconds(value: timedelta) -> int:
+    """Encode a timedelta exactly without a floating-point round trip."""
+
+    return ((value.days * 86_400) + value.seconds) * 1_000_000 + value.microseconds
+
+
 def _decode_time(value: object, label: str, *, optional: bool = False) -> datetime | None:
     if value is None and optional:
         return None
@@ -85,7 +91,7 @@ def _encode_channel(snapshot: ApplicationChannelSnapshot) -> list[object]:
         _time(identity.binding.opened_at),
         _time(identity.binding.closes_at),
         _time(identity.opened_at),
-        int(identity.idle_timeout.total_seconds() * 1_000_000),
+        _duration_microseconds(identity.idle_timeout),
         _time(identity.hard_deadline),
         identity.budget.initiator_bytes,
         identity.budget.responder_bytes,

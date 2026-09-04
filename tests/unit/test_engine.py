@@ -41,6 +41,7 @@ from evidenceforge.generation.checkpoints import (
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
+from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -275,8 +276,72 @@ class TestGenerationEngine:
         )
 
         assert observed == [(6, start, "collection"), (12, end, "tail")]
-        assert barrier.call_count == 2
+        assert barrier.call_count == 4
         assert prepare_barrier.call_count == 2
+
+    def test_graceful_interrupt_without_checkpoints_stops_after_hour_cleanup(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """A latched interrupt should enter normal cleanup only after a safe hour boundary."""
+
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hours=0,
+            graceful_interrupt_requested=lambda: True,
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        barrier = Mock()
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", barrier)
+
+        with pytest.raises(KeyboardInterrupt):
+            engine._checkpoint_after_completed_hour(
+                completed_simulated_hours=1,
+                next_hour=start,
+            )
+
+        barrier.assert_called_once_with()
+
+    def test_signal_after_cadence_commit_marks_existing_recovery_suspended(
+        self,
+        minimal_scenario,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """A signal noticed after publication should not create a duplicate checkpoint."""
+
+        controller = Mock()
+        controller.cadence.hours = 1
+        controller.pending_suspension_request.return_value = None
+        interrupt_requested = iter((False, False, True))
+        engine = GenerationEngine(
+            minimal_scenario,
+            tmp_path,
+            checkpoint_hours=1,
+            checkpoint_controller=controller,
+            graceful_interrupt_requested=lambda: next(interrupt_requested),
+        )
+        start = datetime(2026, 1, 2, tzinfo=UTC)
+        engine.start_time = start
+        engine.end_time = start + timedelta(hours=1)
+        monkeypatch.setattr(engine, "_barrier_flush_all_emitters", Mock())
+        monkeypatch.setattr(engine, "_prepare_incremental_checkpoint_barrier", Mock())
+
+        with pytest.raises(GenerationSuspendedError) as raised:
+            engine._checkpoint_after_completed_hour(
+                completed_simulated_hours=1,
+                next_hour=start,
+            )
+
+        controller.commit.assert_called_once()
+        controller.commit_local_suspension.assert_not_called()
+        controller.acknowledge_local_suspension.assert_called_once_with(raised.value.cursor)
+        assert raised.value.requested_by_signal
 
     def test_checkpoint_hour_hook_requires_a_nonnegative_exact_cadence(
         self,
@@ -344,6 +409,7 @@ class TestGenerationEngine:
         engine._red_herring_executed = {1}
         engine._snapd_active_tasks = {"TEST-01": [(1001, 1, "core22")]}
         engine._snapd_next_change_id = {"TEST-01": 1002}
+        engine._system_pids = {"TEST-01": {"systemd": 1, "sssd": 1_449_103}}
         engine._storyline_executed = {0, 2}
         engine._storyline_staged_archives = [
             SimpleNamespace(
@@ -377,6 +443,8 @@ class TestGenerationEngine:
 
         restored_scenario = Scenario.model_validate(minimal_scenario.model_dump(mode="python"))
         restored = GenerationEngine(restored_scenario, tmp_path / "restored")
+        restored._system_pids = {"TEST-01": {"systemd": 1}}
+        rebuilt_system_pids = restored._system_pids
         GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
 
         assert restored._ambient_registry_state == engine._ambient_registry_state
@@ -385,6 +453,8 @@ class TestGenerationEngine:
         assert restored._linux_polkit_agents == engine._linux_polkit_agents
         assert restored._package_maintenance_windows == engine._package_maintenance_windows
         assert restored._snapd_active_tasks == engine._snapd_active_tasks
+        assert restored._system_pids == engine._system_pids
+        assert restored._system_pids is rebuilt_system_pids
         assert len(restored._storyline_staged_archives) == 1
         restored_archive = restored._storyline_staged_archives[0]
         assert restored_archive.actor is restored.scenario.environment.users[0]
@@ -413,12 +483,24 @@ class TestGenerationEngine:
         engine._emit_dhcp_leases = Mock()
         engine._generate_hour = Mock()
         order: list[str] = []
+        engine.activity_generator.advance_application_channel_watermark.side_effect = (
+            lambda _cutoff: order.append("application-watermark")
+        )
+        engine.activity_generator.finalize_ssh_session_lifecycles.side_effect = lambda _cutoff: (
+            order.append("ssh-finalize")
+        )
         engine._emit_sensor_startup = lambda: order.append("sensor-startup")
         engine._checkpoint_after_completed_hour = lambda **_kwargs: order.append("checkpoint")
 
         engine._generate_baseline()
 
-        assert order[:2] == ["sensor-startup", "checkpoint"]
+        assert order[:4] == [
+            "application-watermark",
+            "ssh-finalize",
+            "sensor-startup",
+            "checkpoint",
+        ]
+        assert order[4:] == ["application-watermark", "ssh-finalize", "checkpoint"]
 
     """Tests for GenerationEngine class."""
 

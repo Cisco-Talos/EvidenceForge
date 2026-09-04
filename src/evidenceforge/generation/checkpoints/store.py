@@ -40,6 +40,7 @@ _WORKSPACE_NAME = ".eforge-generation"
 _MANIFEST_NAME = "manifest.json"
 _INDEX_NAME = "CURRENT.json"
 _LOCK_NAME = "run.lock"
+_MAX_LOCK_BYTES = 64 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,15 @@ class HeadDraft:
     schema_version: str
     payload: bytes
     referenced_segments: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunLockInspection:
+    """Read-only ownership assessment for one generation run lock."""
+
+    state: str
+    owner: dict[str, object] | None = None
+    detail: str | None = None
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -187,7 +197,23 @@ class RunLock:
 
     def _read_owner(self) -> dict[str, object]:
         try:
-            raw = self.path.read_bytes()
+            descriptor = os.open(
+                self.path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode):
+                    raise CheckpointLockError("generation output lock is not a regular file")
+                if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                    raise CheckpointLockError("generation output lock has an unsafe owner")
+                if info.st_mode & 0o022:
+                    raise CheckpointLockError("generation output lock is externally writable")
+                raw = os.read(descriptor, _MAX_LOCK_BYTES + 1)
+            finally:
+                os.close(descriptor)
+            if len(raw) > _MAX_LOCK_BYTES:
+                raise CheckpointLockError("generation output lock is too large")
             value = json.loads(raw)
         except (OSError, json.JSONDecodeError) as error:
             raise CheckpointLockError(
@@ -196,6 +222,37 @@ class RunLock:
         if not isinstance(value, dict):
             raise CheckpointLockError("generation output lock has an invalid owner record")
         return value
+
+    def inspect(self) -> RunLockInspection:
+        """Inspect lock ownership without creating, reclaiming, or deleting anything."""
+
+        try:
+            owner = self._read_owner()
+        except CheckpointLockError as error:
+            if not self.path.exists() and not self.path.is_symlink():
+                return RunLockInspection(state="absent")
+            return RunLockInspection(state="invalid", detail=str(error))
+        hostname = owner.get("hostname")
+        pid = owner.get("pid")
+        if type(hostname) is not str or type(pid) is not int:
+            return RunLockInspection(
+                state="invalid",
+                owner=owner,
+                detail="generation output lock has an invalid owner record",
+            )
+        if hostname != socket.gethostname():
+            return RunLockInspection(
+                state="remote",
+                owner=owner,
+                detail="lock belongs to another host and cannot be locally probed",
+            )
+        if _process_is_alive(pid):
+            return RunLockInspection(state="active", owner=owner)
+        return RunLockInspection(
+            state="stale",
+            owner=owner,
+            detail="local lock owner is no longer running and can be reclaimed by resume",
+        )
 
     def release(self) -> None:
         """Release this process's lock without deleting another owner's replacement."""
@@ -267,7 +324,25 @@ class IncrementalCheckpointStore:
         self._probe_filesystem()
         self._initialized = True
 
+    def validate_existing_workspace(self) -> None:
+        """Validate an existing workspace without creating or probing any path."""
+
+        if not self.output_root.exists():
+            raise CheckpointFilesystemError(f"generation output does not exist: {self.output_root}")
+        self._validate_output_ancestry(create=False)
+        if not self.workspace.exists():
+            raise CheckpointFilesystemError(
+                f"generation checkpoint workspace does not exist: {self.workspace}"
+            )
+        self._validate_protected_directory(self.workspace)
+        for directory in (self.objects, self.recovery):
+            if directory.exists():
+                self._validate_protected_directory(directory)
+
     def _validate_output_root(self) -> None:
+        self._validate_output_ancestry(create=True)
+
+    def _validate_output_ancestry(self, *, create: bool) -> None:
         current = self.output_root
         existing: list[Path] = []
         while not current.exists():
@@ -285,7 +360,8 @@ class IncrementalCheckpointStore:
                 raise CheckpointFilesystemError(
                     f"checkpoint output ancestry cannot contain symlinks: {path}"
                 )
-        self.output_root.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.output_root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _validate_protected_directory(path: Path) -> None:
@@ -714,6 +790,15 @@ class IncrementalCheckpointStore:
             raise CheckpointCorruptionError("checkpoint recovery index order changed")
         return entries
 
+    def recovery_index_entries(self, *, read_only: bool = False) -> tuple[tuple[int, str], ...]:
+        """Return authoritative recovery entries without selecting or mutating them."""
+
+        if read_only:
+            self.validate_existing_workspace()
+        else:
+            self.initialize()
+        return tuple(self._read_index())
+
     def _rotate_recoveries(self) -> None:
         directories = self._recovery_directories()
         for stale in directories[2:]:
@@ -827,35 +912,31 @@ class IncrementalCheckpointStore:
             )
         return payload
 
-    def recover(self, *, expected_fingerprint: str | None = None) -> CheckpointRecovery:
-        """Return the newest valid recovery point, falling back once on corruption."""
+    def recover(
+        self,
+        *,
+        expected_fingerprint: str | None = None,
+        read_only: bool = False,
+    ) -> CheckpointRecovery:
+        """Return the newest valid recovery point, falling back once on corruption.
 
-        self.initialize()
+        When ``read_only`` is true, validate only paths that already exist and skip the
+        durability probe so inspection cannot alter the output root.
+        """
+
+        if read_only:
+            self.validate_existing_workspace()
+        else:
+            self.initialize()
         failures: list[str] = []
         entries = self._read_index()
         for index, (sequence, manifest_sha256) in enumerate(entries):
-            directory = self.recovery / f"{sequence:020d}"
             try:
-                manifest = self._load_manifest(
-                    directory,
-                    expected_sha256=manifest_sha256,
+                recovery = self.validate_recovery_entry(
+                    sequence,
+                    manifest_sha256,
+                    expected_fingerprint=expected_fingerprint,
                 )
-                if expected_fingerprint is not None and (
-                    manifest.run_fingerprint != expected_fingerprint
-                ):
-                    raise CheckpointCompatibilityError(
-                        "checkpoint fingerprint does not match the resolved scenario and runtime"
-                    )
-                self._validate_file(
-                    manifest.resolved_scenario_relative_path,
-                    self._object_path(manifest.resolved_scenario_relative_path).stat().st_size,
-                    manifest.resolved_scenario_sha256,
-                )
-                segments = self.segment_references(manifest)
-                for segment in segments:
-                    self._validate_file(segment.relative_path, segment.size, segment.sha256)
-                for head in manifest.participant_heads:
-                    self._validate_file(head.relative_path, head.size, head.sha256)
                 warning = None
                 if failures:
                     warning = (
@@ -863,9 +944,9 @@ class IncrementalCheckpointStore:
                         + "; ".join(failures)
                     )
                 return CheckpointRecovery(
-                    checkpoint_directory=directory.relative_to(self.workspace).as_posix(),
-                    manifest=manifest,
-                    segments=segments,
+                    checkpoint_directory=recovery.checkpoint_directory,
+                    manifest=recovery.manifest,
+                    segments=recovery.segments,
                     used_fallback=index > 0,
                     warning=warning,
                 )
@@ -878,6 +959,38 @@ class IncrementalCheckpointStore:
                 "no valid generation checkpoint remains: " + "; ".join(failures)
             )
         raise CheckpointCorruptionError("no generation checkpoint exists")
+
+    def validate_recovery_entry(
+        self,
+        sequence: int,
+        manifest_sha256: str,
+        *,
+        expected_fingerprint: str | None = None,
+    ) -> CheckpointRecovery:
+        """Thoroughly validate one indexed recovery without changing the workspace."""
+
+        directory = self.recovery / f"{sequence:020d}"
+        manifest = self._load_manifest(directory, expected_sha256=manifest_sha256)
+        if expected_fingerprint is not None and manifest.run_fingerprint != expected_fingerprint:
+            raise CheckpointCompatibilityError(
+                "checkpoint fingerprint does not match the resolved scenario and runtime"
+            )
+        resolved_path = self._object_path(manifest.resolved_scenario_relative_path)
+        self._validate_file(
+            manifest.resolved_scenario_relative_path,
+            resolved_path.stat().st_size,
+            manifest.resolved_scenario_sha256,
+        )
+        segments = self.segment_references(manifest)
+        for segment in segments:
+            self._validate_file(segment.relative_path, segment.size, segment.sha256)
+        for head in manifest.participant_heads:
+            self._validate_file(head.relative_path, head.size, head.sha256)
+        return CheckpointRecovery(
+            checkpoint_directory=directory.relative_to(self.workspace).as_posix(),
+            manifest=manifest,
+            segments=segments,
+        )
 
     def read_head(self, recovery: CheckpointRecovery, owner: str) -> bytes:
         """Read and revalidate one bounded participant head."""

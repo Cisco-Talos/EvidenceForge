@@ -7,6 +7,14 @@ import uuid
 from collections.abc import Iterable
 
 from .cadence import CheckpointCadence
+from .control import (
+    SuspensionRequest,
+    clear_controller_record,
+    mark_suspended,
+    new_suspension_request,
+    publish_controller_record,
+    read_suspension_request,
+)
 from .errors import CheckpointError
 from .models import (
     CheckpointCursor,
@@ -34,6 +42,7 @@ class IncrementalCheckpointController:
         next_sequence: int = 0,
         inherited_catalogs: tuple[SegmentCatalogReference, ...] = (),
         run_options: dict[str, object] | None = None,
+        fingerprint_components: dict[str, object] | None = None,
         last_committed_cursor: CheckpointCursor | None = None,
     ) -> None:
         self.store = store
@@ -44,10 +53,21 @@ class IncrementalCheckpointController:
         self.next_sequence = next_sequence
         self.inherited_catalogs = inherited_catalogs
         self.run_options = {} if run_options is None else dict(run_options)
+        self.fingerprint_components = (
+            {} if fingerprint_components is None else dict(fingerprint_components)
+        )
         self.last_committed_cursor = last_committed_cursor
         self.resolved_scenario_reference = self.store.persist_resolved_scenario(
             self.resolved_scenario
         )
+        if self.cadence.hours > 0:
+            publish_controller_record(
+                self.store,
+                run_id=self.run_id,
+                checkpoint_hours=self.cadence.hours,
+            )
+        else:
+            clear_controller_record(self.store)
 
     @classmethod
     def for_recovery(
@@ -73,6 +93,9 @@ class IncrementalCheckpointController:
             next_sequence=recovery.manifest.sequence + 1,
             inherited_catalogs=recovery.manifest.segment_catalogs,
             run_options=dict(recovery.manifest.metadata.get("run_options", {})),
+            fingerprint_components=dict(
+                recovery.manifest.metadata.get("fingerprint_components", {})
+            ),
             last_committed_cursor=recovery.manifest.cursor,
         )
 
@@ -116,11 +139,14 @@ class IncrementalCheckpointController:
         *,
         cursor: CheckpointCursor,
         participants: Iterable[IncrementalCheckpointParticipant],
+        require_cadence: bool = True,
     ) -> CheckpointManifest:
-        """Prepare all owners and atomically publish one cadence recovery point."""
+        """Prepare all owners and atomically publish one recovery point."""
 
-        if not self.is_due(cursor.completed_simulated_hours):
+        if require_cadence and not self.is_due(cursor.completed_simulated_hours):
             raise ValueError("checkpoint cursor is not scheduled by the configured cadence")
+        if self.cadence.hours == 0:
+            raise ValueError("checkpoint publication is disabled")
         ordered = self._participants(participants)
         sequence = self.next_sequence
         prepared: list[tuple[IncrementalCheckpointParticipant, ParticipantSeal]] = []
@@ -154,6 +180,7 @@ class IncrementalCheckpointController:
                         participant.checkpoint_owner for participant, _ in prepared
                     ],
                     "run_options": self.run_options,
+                    "fingerprint_components": self.fingerprint_components,
                 },
             )
             self.last_committed_cursor = manifest.cursor
@@ -171,6 +198,47 @@ class IncrementalCheckpointController:
             cursor.completed_simulated_hours,
         )
         return manifest
+
+    def pending_suspension_request(self) -> SuspensionRequest | None:
+        """Return a cooperative request observed by this controller, if any."""
+
+        return read_suspension_request(self.store)
+
+    def commit_suspension(
+        self,
+        *,
+        request: SuspensionRequest,
+        cursor: CheckpointCursor,
+        participants: Iterable[IncrementalCheckpointParticipant],
+    ) -> CheckpointManifest:
+        """Publish an explicit off-cadence recovery and acknowledge planned suspension."""
+
+        manifest = self.commit(
+            cursor=cursor,
+            participants=participants,
+            require_cadence=False,
+        )
+        mark_suspended(self.store, request=request, cursor=cursor)
+        return manifest
+
+    def commit_local_suspension(
+        self,
+        *,
+        cursor: CheckpointCursor,
+        participants: Iterable[IncrementalCheckpointParticipant],
+    ) -> CheckpointManifest:
+        """Publish and acknowledge an in-process graceful suspension request."""
+
+        return self.commit_suspension(
+            request=new_suspension_request(),
+            cursor=cursor,
+            participants=participants,
+        )
+
+    def acknowledge_local_suspension(self, cursor: CheckpointCursor) -> None:
+        """Mark a just-published cadence point as an in-process suspension."""
+
+        mark_suspended(self.store, request=new_suspension_request(), cursor=cursor)
 
     def restore_participants(
         self,

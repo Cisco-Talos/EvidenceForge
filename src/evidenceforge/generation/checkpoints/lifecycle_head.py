@@ -68,6 +68,12 @@ def _time(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
+def _duration_microseconds(value: timedelta) -> int:
+    """Encode a timedelta exactly without a floating-point round trip."""
+
+    return ((value.days * 86_400) + value.seconds) * 1_000_000 + value.microseconds
+
+
 def _decode_time(value: object, *, optional: bool = False) -> datetime | None:
     if value is None and optional:
         return None
@@ -981,10 +987,8 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                 )
     return dumps(
         {
-            "closed_retention_us": int(registry.closed_retention.total_seconds() * 1_000_000),
-            "ledger_detail_retention_us": int(
-                registry.ledger_detail_retention.total_seconds() * 1_000_000
-            ),
+            "closed_retention_us": _duration_microseconds(registry.closed_retention),
+            "ledger_detail_retention_us": _duration_microseconds(registry.ledger_detail_retention),
             "partitions": partitions,
             "schema_version": _SCHEMA_VERSION,
             "shard_count": registry.shard_count,

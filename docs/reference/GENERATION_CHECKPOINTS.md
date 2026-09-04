@@ -8,11 +8,70 @@ default. The cadence counts continuously across warm-up and collection. Override
 Checkpointing is cadence-only. Generation does not force recovery points after initialization, at
 phase boundaries, or before finalization. If a run ends before its first cadence point, it has no
 recovery point and must restart after interruption. Otherwise, recovery replays work after the
-latest committed point, including tail work or finalization when necessary. Ctrl+C and process
-termination do not attempt an emergency checkpoint; the last atomically published point remains
-authoritative. On Ctrl+C or an ordinary failure, the CLI reports whether a recovery point exists,
-its simulated hour and phase, and how to resume. A resumed run reports the selected recovery cursor
-and effective cadence before continuing.
+latest committed point, including tail work or finalization when necessary. During hourly
+generation, the first Ctrl+C requests a cooperative stop at the end of the current simulated hour.
+When checkpointing is enabled, that safe boundary publishes a recovery point even when it is off
+cadence; with `--checkpoint-hours 0`, generation stops there without creating one. A second Ctrl+C
+forces immediate exit. Hard process termination never attempts an emergency checkpoint, so the
+last atomically published point remains authoritative. On interruption or an ordinary failure, the
+CLI reports whether a recovery point exists, its simulated hour and phase, and how to resume. A
+resumed run reports the selected recovery cursor and effective cadence before continuing.
+
+## Inspect or intentionally suspend a run
+
+Thoroughly validate an output root without starting or hydrating the generator:
+
+```bash
+eforge checkpoint status ./bundle
+eforge checkpoint status ./bundle --verbose
+eforge checkpoint status ./bundle --json
+```
+
+The positional path is the bundle root—the directory that contains `data/`—not the `data/`
+directory itself. When generation uses no explicit `--output`, the bundle root is the authored
+scenario's parent directory. If `data/` is supplied by mistake, the command returns immediately
+with the correct bundle-root command instead of scanning generated evidence.
+
+The default human report shows the operational state, last recoverable phase-local hour, continuous
+simulated-hour count, cadence, integrity and runtime compatibility, fallback warnings,
+generated-data size, recovery overhead, total known managed working footprint, and the exact resume
+command. For example, after a two-hour warm-up and one completed collection hour it reports
+`collection hour 1 of 6 (3 total simulated hours completed)`. `--verbose` adds both recovery
+generations, lock ownership, schema/run identities, participant and segment counts, fingerprint
+components, detailed storage categories, and validation work. `--json` always emits the complete
+structured report, independent of `--verbose`. Status is read-only and excludes unrelated files
+from all managed totals. Checkpoint storage includes durable spool content already imported into
+the hidden workspace.
+
+For every checkpoint-enabled run, the hidden workspace and controller marker are created before
+warm-up begins. Until the first cadence point commits, status reports
+`Checkpoint state: active — no checkpoint yet`; an interruption in that interval still requires a
+restart with `--overwrite`. A path with no checkpoint workspace reports
+`Checkpoint state: no checkpoints found` without presenting zero-byte validation and storage
+details as though they described a run.
+
+Request a planned stop from another terminal:
+
+```bash
+eforge checkpoint suspend ./bundle
+```
+
+Suspension is cooperative, not immediate. The command returns after publishing the request and
+reminds the operator that generation is still running. The generator finishes its current
+simulated hour, reaches the normal quiescent barrier, publishes an explicit recovery point even
+when that hour is off cadence, reports the suspended cursor, and exits successfully. An
+off-cadence suspension does not move the cadence anchor: with a 24-hour cadence, suspending at hour
+37 still leaves hour 48 as the next automatic checkpoint after resume. Repeating a pending request
+is idempotent. Suspension requires an active checkpoint-enabled run.
+
+In the generator's terminal, one Ctrl+C is a convenient local form of the same safe suspension: it
+immediately acknowledges the request, finishes the current simulated hour, and publishes an
+off-cadence recovery when checkpointing is enabled. The process then exits with status 130 rather
+than the external suspension command's successful status. Press Ctrl+C again to force an immediate
+exit and retain only the last recovery point that had already been published. With checkpointing
+disabled, the first Ctrl+C still waits for the hour boundary but creates no recovery point. A
+request that arrives after the last hourly barrier, while tail work or finalization is already
+running, cannot interrupt that unsafe region and the run finishes normally.
 
 ## Resume an interrupted run
 

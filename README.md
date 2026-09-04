@@ -98,6 +98,8 @@ For scripted or non-interactive use:
 | Command | Description |
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast resources, then generate logs with 24-hour checkpoints; `--seed` overrides the scenario seed |
+| `eforge checkpoint status <bundle-root> [--verbose\|--json]` | Thoroughly inspect recovery health, compatibility, cursor, and managed storage without resuming |
+| `eforge checkpoint suspend <bundle-root>` | Ask an active checkpoint-enabled generator to stop safely after its current simulated hour |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
 | `eforge pack list\|show\|validate\|init\|copy` | Discover, inspect, validate, or create project-local industry/organization packs |
@@ -122,6 +124,11 @@ output.
 
 `validate` also accepts `--checkpoint-hours N`, so its resource forecast uses the intended
 generation cadence; it defaults to 24 and accepts `0` to model checkpointing as disabled.
+
+During generation, the first Ctrl+C requests a safe stop at the end of the current simulated hour
+and creates a recovery point when checkpointing is enabled. Press Ctrl+C a second time to force an
+immediate exit. With `--checkpoint-hours 0`, the first interrupt still waits for the hour boundary
+but cannot create a new recovery point.
 
 See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery,
 filesystem-safety, and output-state behavior.

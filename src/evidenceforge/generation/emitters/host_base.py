@@ -399,6 +399,7 @@ class HostMultiplexEmitter(LogEmitter):
     _sort_key: Callable[[str], Any] | None = None
     _defer_sorted_flush_until_close: bool = False
     _external_sorting: bool = False
+    _checkpoint_external_sorting: bool = True
 
     def __init__(
         self,
@@ -446,7 +447,14 @@ class HostMultiplexEmitter(LogEmitter):
                 sort_on_flush=sort,
                 sort_key=self._sort_key,
                 defer_sorted_flush_until_close=self._defer_sorted_flush_until_close,
-                external_sorting=self._external_sorting,
+                external_sorting=(
+                    self._external_sorting
+                    or (
+                        self._incremental_checkpointing
+                        and self._checkpoint_external_sorting
+                        and sort
+                    )
+                ),
                 checkpoint_mode=self._incremental_checkpointing,
                 defer_publication=self._defer_sorted_publication,
             )

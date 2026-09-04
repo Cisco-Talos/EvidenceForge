@@ -3,9 +3,11 @@
 from .activity_head import ActivityGeneratorStateParticipant
 from .application_channel_head import ApplicationChannelRegistryParticipant
 from .artifact_registry_head import LocalArtifactVersionRegistryParticipant
+from .bash_command_memory import BashCommandMemoryParticipant
 from .cadence import CheckpointCadence
 from .cryptographic_material_head import CryptographicMaterialParticipant
 from .deferred_source_spool import DeferredSourceSpoolParticipant
+from .dispatcher_observation_head import DispatcherObservationParticipant
 from .emitter_spools import EmitterSpoolParticipant
 from .engine_head import GenerationEngineParticipant
 from .http_channel_head import HttpApplicationChannelParticipant
@@ -21,6 +23,7 @@ from .models import (
     SegmentReference,
 )
 from .network_runtime_head import NetworkTransactionRuntimeParticipant
+from .network_visibility_head import NetworkVisibilityParticipant
 from .owner_inventory import (
     APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS,
     APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS,
@@ -72,6 +75,7 @@ from .participant_set import production_checkpoint_participants
 from .participants import IncrementalCheckpointParticipant, OwnerStateField, ParticipantSeal
 from .process_runtime_head import ProcessRuntimeCachesParticipant
 from .proxy_channel_head import ExplicitProxyChannelParticipant
+from .proxy_emitter_head import ProxyEmitterParticipant
 from .rdp_head import RdpSessionManagerParticipant
 from .rng import GenerationRngParticipant
 from .smb_channel_head import SmbApplicationChannelParticipant
@@ -81,6 +85,7 @@ from .sqlite_spool import SQLiteSpoolParticipant
 from .ssh_channel_head import SshApplicationChannelParticipant
 from .state_manager_head import StateManagerParticipant
 from .store import IncrementalCheckpointStore, RunLock
+from .syslog_spool import SyslogSpoolParticipant
 from .timing_runtime_head import TimingRuntimeParticipant
 
 __all__ = [
@@ -88,6 +93,7 @@ __all__ = [
     "APPLICATION_CHANNEL_REGISTRY_CHECKPOINT_FIELDS",
     "APPLICATION_CHANNEL_SHARD_CHECKPOINT_FIELDS",
     "ApplicationChannelRegistryParticipant",
+    "BashCommandMemoryParticipant",
     "BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS",
     "CHECKPOINT_SCHEMA_VERSION",
     "CheckpointCadence",
@@ -102,6 +108,7 @@ __all__ = [
     "GenerationEngineParticipant",
     "EmitterSpoolParticipant",
     "DeferredSourceSpoolParticipant",
+    "DispatcherObservationParticipant",
     "HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS",
     "HTTP_PACKED_TRANSPORT_STORE_CHECKPOINT_FIELDS",
     "HTTP_TRANSPORT_SHARD_CHECKPOINT_FIELDS",
@@ -123,6 +130,7 @@ __all__ = [
     "LocalArtifactVersionRegistryParticipant",
     "NETWORK_TRANSACTION_RUNTIME_CHECKPOINT_FIELDS",
     "NetworkTransactionRuntimeParticipant",
+    "NetworkVisibilityParticipant",
     "PROCESS_RUNTIME_CACHE_BUNDLE_CHECKPOINT_FIELDS",
     "PROCESS_RUNTIME_REVERSE_CHECKPOINT_FIELDS",
     "ProcessRuntimeCachesParticipant",
@@ -130,6 +138,7 @@ __all__ = [
     "PROXY_PACKED_TUNNEL_STORE_CHECKPOINT_FIELDS",
     "PROXY_SIDECAR_SHARD_CHECKPOINT_FIELDS",
     "ExplicitProxyChannelParticipant",
+    "ProxyEmitterParticipant",
     "OwnerStateField",
     "ParticipantSeal",
     "ParticipantHead",
@@ -155,6 +164,7 @@ __all__ = [
     "SshApplicationChannelParticipant",
     "STATE_MANAGER_CHECKPOINT_FIELDS",
     "StateManagerParticipant",
+    "SyslogSpoolParticipant",
     "TIMING_AUDIT_CHECKPOINT_FIELDS",
     "TIMING_RELATIONSHIP_COUNTER_CHECKPOINT_FIELDS",
     "TIMING_RUNTIME_CHECKPOINT_FIELDS",

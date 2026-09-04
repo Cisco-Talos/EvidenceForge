@@ -50,7 +50,9 @@ def _publish_ready_marker(directory: Path, marker: Path, payload: bytes) -> None
         os.close(directory_descriptor)
 
 
-def checkpoint_test_synchronizer_from_environment() -> Callable[[CheckpointCursor], None] | None:
+def checkpoint_test_synchronizer_from_environment(
+    stop_requested: Callable[[], bool] | None = None,
+) -> Callable[[CheckpointCursor], None] | None:
     """Build the explicit subprocess-test barrier requested through the environment."""
 
     raw_directory = os.environ.get(_SYNC_DIRECTORY_ENV)
@@ -97,6 +99,8 @@ def checkpoint_test_synchronizer_from_environment() -> Callable[[CheckpointCurso
         _publish_ready_marker(directory, marker, payload)
         deadline = time.monotonic() + timeout
         while not acknowledgement.exists():
+            if stop_requested is not None and stop_requested():
+                return
             if time.monotonic() >= deadline:
                 raise RuntimeError("checkpoint test synchronization acknowledgement timed out")
             time.sleep(0.01)

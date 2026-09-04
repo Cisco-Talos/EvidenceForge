@@ -1978,6 +1978,24 @@ class _SshApplicationRetirementBinding:
         prepared.require_application_owner_shape()
         self._require_retirement_proof(prepared)
 
+    def acknowledge(self, prepared: _PreparedSshCloseContinuation) -> None:
+        """Release the transient proof after the close journal acknowledges it."""
+
+        with self._lock:
+            if (
+                self._prepared is not prepared
+                or not self._retired
+                or self._retirement_proof is None
+            ):
+                raise StateError("Exact SSH application retirement cannot be acknowledged")
+            # The prepared payload and its one-shot binding intentionally form an
+            # identity cycle. Do not rely on cyclic-GC timing to release the weakly
+            # registered proof before a checkpoint barrier inspects the registry.
+            self._expected_closed_at = None
+            self._expected_close_reason = None
+            self._retirement_proof = None
+            self._retired = False
+
 
 @dataclass(frozen=True, slots=True)
 class _PreparedSshCloseContinuation:
@@ -2136,6 +2154,11 @@ class _PreparedSshCloseContinuation:
         """Prove exact original application retirement before journal acknowledgement."""
 
         self._application_retirement.require_retired(self)
+
+    def acknowledge_application_session_retirement(self) -> None:
+        """Release retirement proof state after the owning journal removes this close."""
+
+        self._application_retirement.acknowledge(self)
 
     def authenticates_bound(self, continuation: _SshCloseContinuation) -> bool:
         """Return whether this exact prepared payload created the supplied carrier."""

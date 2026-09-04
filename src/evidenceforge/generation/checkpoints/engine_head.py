@@ -23,7 +23,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 _SIMPLE_FIELDS = tuple(
     field.name
     for field in GENERATION_ENGINE_CHECKPOINT_FIELDS
@@ -43,6 +43,30 @@ class _EngineHead(BaseModel):
     dhcp_leases: list[list[object]] = Field(default_factory=list)
     hawkes_states: list[list[object]] = Field(default_factory=list)
     staged_archives: list[list[object]] = Field(default_factory=list)
+
+
+def _restore_system_pids(engine: GenerationEngine, value: object) -> None:
+    """Restore the evolved service-role map without breaking shared aliases."""
+
+    if type(value) is not dict:
+        raise CheckpointCorruptionError("generation checkpoint system PID map is invalid")
+    hostnames = {system.hostname for system in engine.scenario.environment.systems}
+    restored: dict[str, dict[str, int]] = {}
+    for hostname, roles in value.items():
+        if type(hostname) is not str or hostname not in hostnames or type(roles) is not dict:
+            raise CheckpointCorruptionError("generation checkpoint system PID map is invalid")
+        restored_roles: dict[str, int] = {}
+        for role, pid in roles.items():
+            if type(role) is not str or not role or type(pid) is not int or pid <= 0:
+                raise CheckpointCorruptionError("generation checkpoint system PID map is invalid")
+            restored_roles[role] = pid
+        restored[hostname] = restored_roles
+    current = getattr(engine, "_system_pids", None)
+    if type(current) is dict:
+        current.clear()
+        current.update(restored)
+    else:
+        engine._system_pids = restored
 
 
 def _capture_dhcp(engine: GenerationEngine) -> list[list[object]]:
@@ -262,7 +286,10 @@ class GenerationEngineParticipant:
                 raise CheckpointCorruptionError("generation checkpoint Hawkes row is invalid")
             hawkes[row[0]] = HawkesState(float(row[1]), float(row[2]))
         for name, value in decoded.items():
-            setattr(self.engine, name, value)
+            if name == "_system_pids":
+                _restore_system_pids(self.engine, value)
+            else:
+                setattr(self.engine, name, value)
         self.engine._dhcp_lease_state = _restore_dhcp(self.engine, document.dhcp_leases)
         self.engine._hawkes_states = hawkes
         self.engine._storyline_staged_archives = _restore_staged_archives(

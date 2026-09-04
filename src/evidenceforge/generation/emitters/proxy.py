@@ -525,8 +525,9 @@ class ProxyEmitter(HostMultiplexEmitter):
         )
         self._dispatch(connect_data)
 
-    def _finalize_pending_tunnels(self) -> None:
-        """Group children chronologically, then finalize complete tunnel summaries."""
+    def _fold_observed_tunnel_children(self) -> None:
+        """Fold newly observed children into bounded pending tunnel summaries."""
+
         for child in sorted(
             self._observed_tunnel_children,
             key=lambda observed: (observed.key, observed.request_time, observed.child_end),
@@ -554,6 +555,20 @@ class ProxyEmitter(HostMultiplexEmitter):
                 child_end=child.child_end,
             )
         self._observed_tunnel_children.clear()
+
+    def prepare_incremental_checkpoint_barrier(self, cutoff: datetime) -> None:
+        """Seal tunnel summaries that cannot receive another in-window child."""
+
+        self._fold_observed_tunnel_children()
+        stale_before = cutoff - timedelta(seconds=_CONNECT_TUNNEL_TIMEOUT_S)
+        for tunnel_key, pending in tuple(self._pending_tunnels.items()):
+            if pending.last_activity_at <= stale_before:
+                self._finalize_tunnel(tunnel_key)
+
+    def _finalize_pending_tunnels(self) -> None:
+        """Group children chronologically, then finalize complete tunnel summaries."""
+
+        self._fold_observed_tunnel_children()
         for tunnel_key in list(self._pending_tunnels):
             self._finalize_tunnel(tunnel_key)
 

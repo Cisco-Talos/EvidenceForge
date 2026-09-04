@@ -63,6 +63,7 @@ from evidenceforge.generation.source_finalization import (
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
@@ -141,6 +142,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         checkpoint_controller: IncrementalCheckpointController | None = None,
         checkpoint_recovery: CheckpointRecovery | None = None,
         checkpoint_synchronization_hook: Callable[[CheckpointCursor], None] | None = None,
+        graceful_interrupt_requested: Callable[[], bool] | None = None,
     ):
         """Initialize generation engine.
 
@@ -165,6 +167,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             checkpoint_recovery: Optional validated recovery selected from the controller's store.
             checkpoint_synchronization_hook: Internal post-publication test barrier. Production CLI
                 wiring exposes it only through the guarded pytest environment seam.
+            graceful_interrupt_requested: Process-local cancellation latch checked only at safe
+                completed-hour boundaries.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -229,6 +233,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._checkpoint_controller = checkpoint_controller
         self._checkpoint_recovery = checkpoint_recovery
         self._checkpoint_synchronization_hook = checkpoint_synchronization_hook
+        self._graceful_interrupt_requested = graceful_interrupt_requested
         self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -294,20 +299,35 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         callback = self.checkpoint_hour_callback
         controller = self._checkpoint_controller
+        suspension_request = None if controller is None else controller.pending_suspension_request()
+        signal_requested = bool(
+            self._graceful_interrupt_requested is not None and self._graceful_interrupt_requested()
+        )
         checkpoint_due = (
             (callback is not None or controller is not None)
             and self.checkpoint_hours > 0
             and completed_simulated_hours % self.checkpoint_hours == 0
         )
         retirement_due = completed_simulated_hours % _RUNTIME_RETIREMENT_HOURS == 0
-        if not checkpoint_due and not retirement_due:
+        if (
+            not checkpoint_due
+            and not retirement_due
+            and suspension_request is None
+            and not signal_requested
+        ):
             return
         if self.start_time is None or self.end_time is None:
             raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
         self._barrier_flush_all_emitters()
         if retirement_due or controller is not None:
             self._prepare_incremental_checkpoint_barrier(next_hour)
-        if not checkpoint_due:
+            # Retirement and channel finalization may emit terminal evidence. Seal
+            # those rows before any checkpoint participant snapshots its spools.
+            self._barrier_flush_all_emitters()
+        signal_requested = signal_requested or bool(
+            self._graceful_interrupt_requested is not None and self._graceful_interrupt_requested()
+        )
+        if not checkpoint_due and suspension_request is None and not signal_requested:
             return
         if next_hour < self.start_time:
             phase = "warmup"
@@ -315,7 +335,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             phase = "collection"
         else:
             phase = "tail"
-        if controller is not None:
+        cursor = None
+        if controller is not None or signal_requested:
             from evidenceforge.generation.checkpoints.models import CheckpointCursor
 
             cursor = CheckpointCursor(
@@ -323,12 +344,51 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 completed_simulated_hours=completed_simulated_hours,
                 next_hour=None if phase == "tail" else next_hour.isoformat(),
             )
-            controller.commit(
-                cursor=cursor,
-                participants=self._checkpoint_participants,
-            )
+        if controller is not None and controller.cadence.hours > 0:
+            assert cursor is not None
+            suspension_pending = suspension_request is not None or signal_requested
+            if suspension_request is not None:
+                self._report_progress(
+                    "suspension_requested",
+                    {
+                        "completed_simulated_hours": completed_simulated_hours,
+                        "phase": phase,
+                    },
+                )
+                controller.commit_suspension(
+                    request=suspension_request,
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            elif signal_requested:
+                controller.commit_local_suspension(
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            else:
+                controller.commit(
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
             if self._checkpoint_synchronization_hook is not None:
                 self._checkpoint_synchronization_hook(cursor)
+            post_commit_signal = bool(
+                self._graceful_interrupt_requested is not None
+                and self._graceful_interrupt_requested()
+            )
+            if post_commit_signal and not suspension_pending:
+                controller.acknowledge_local_suspension(cursor)
+                suspension_pending = True
+            if suspension_pending:
+                raise GenerationSuspendedError(
+                    cursor,
+                    requested_by_signal=signal_requested or post_commit_signal,
+                )
+        elif signal_requested:
+            # The request is now outside all hour transactions. With checkpointing
+            # disabled, take the ordinary abort-cleanup path without attempting a
+            # recovery commit.
+            raise KeyboardInterrupt
         else:
             assert callback is not None
             callback(completed_simulated_hours, next_hour, phase)
@@ -340,6 +400,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.lifecycle_registry.prune_checkpoint_expired_state(cutoff)
         self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
         self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
+        for emitter in self.emitters.values():
+            prepare = getattr(emitter, "prepare_incremental_checkpoint_barrier", None)
+            if callable(prepare):
+                prepare(cutoff)
 
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""
@@ -457,6 +521,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         self._red_herring_executed.add(idx)
                     self._barrier_flush_all_emitters()
             self._generation_body_completed = True
+        except GenerationSuspendedError:
+            raise
         except BaseException as primary:
             self._abort_failed_generation(primary)
             raise

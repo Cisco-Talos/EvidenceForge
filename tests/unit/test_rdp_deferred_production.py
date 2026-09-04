@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import RLock
 from types import SimpleNamespace
 
 import pytest
@@ -976,6 +977,129 @@ def test_directly_missing_rdp_source_session_still_fails_closed(
     with pytest.raises(StateError, match="Action cohort live session target is absent or drifted"):
         harness.generator.advance_rdp_session_lifecycle_watermark(harness.disconnect_at)
 
+    _close_rdp_terminal_harness(harness)
+
+
+def test_lifecycle_watermark_disconnects_nested_rdp_clients_before_parent_logout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parent RDP session remains live until every due nested client is closed."""
+
+    generator = ActivityGenerator.__new__(ActivityGenerator)
+    generator._rdp_lifecycle_watermark = _START
+    generator._rdp_lifecycle_journal_lock = RLock()
+
+    parent_continuation = SimpleNamespace(
+        continuation_id="parent",
+        disconnect_at=_START + timedelta(minutes=10),
+        prepared=SimpleNamespace(hard_deadline=_START + timedelta(minutes=30)),
+        session=SimpleNamespace(identity=SimpleNamespace(logical_session_id="parent-session")),
+    )
+    child_continuation = SimpleNamespace(
+        continuation_id="child",
+        disconnect_at=_START + timedelta(minutes=20),
+        prepared=SimpleNamespace(hard_deadline=_START + timedelta(minutes=40)),
+        session=SimpleNamespace(identity=SimpleNamespace(logical_session_id="child-session")),
+    )
+    parent_entry = SimpleNamespace(continuation=parent_continuation)
+    child_entry = SimpleNamespace(continuation=child_continuation)
+    generator._pending_rdp_lifecycle_continuations = {
+        "parent": parent_entry,
+        "child": child_entry,
+    }
+    generator._rdp_session_manager = SimpleNamespace(
+        get=lambda _logical_id: SimpleNamespace(reconnect_deadline=None)
+    )
+
+    transitions: list[tuple[str, str]] = []
+
+    def record_disconnect(entry: object) -> None:
+        transitions.append(("disconnect", entry.continuation.continuation_id))
+
+    def record_logout(entry: object, _logout_time: datetime) -> None:
+        transitions.append(("logout", entry.continuation.continuation_id))
+
+    monkeypatch.setattr(generator, "_disconnect_exact_rdp_entry", record_disconnect)
+    monkeypatch.setattr(generator, "_logout_exact_rdp_entry", record_logout)
+
+    generator.advance_rdp_session_lifecycle_watermark(_START + timedelta(hours=1))
+
+    assert transitions == [
+        ("disconnect", "parent"),
+        ("disconnect", "child"),
+        ("logout", "parent"),
+        ("logout", "child"),
+    ]
+    assert generator._pending_rdp_lifecycle_continuations == {}
+
+
+def test_rdp_logout_places_parent_process_after_retained_child_close(tmp_path: Path) -> None:
+    """A disconnected RDP session closes its process tree after a late child exit."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    with harness.generator._rdp_lifecycle_journal_lock:
+        (entry,) = harness.generator._pending_rdp_lifecycle_continuations.values()
+    continuation = entry.continuation
+    manager_snapshot = harness.generator.rdp_session_manager.get(
+        continuation.session.identity.logical_session_id
+    )
+    assert manager_snapshot is not None
+    logout_time = min(
+        harness.disconnect_at + manager_snapshot.identity.reconnect_timeout,
+        continuation.prepared.hard_deadline,
+        _END,
+    )
+    child_close = logout_time - timedelta(seconds=1)
+    child_start = harness.disconnect_at - timedelta(minutes=1)
+    assert child_start < child_close
+
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None and session.explorer_pid is not None
+    explorer_identity = harness.state.get_process_identity(
+        harness.target_hostname,
+        session.explorer_pid,
+    )
+    assert explorer_identity is not None
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    child_pid = harness.generator.generate_process(
+        user,
+        target,
+        child_start,
+        harness.logon_id,
+        r"C:\Windows\System32\cmd.exe",
+        r"cmd.exe /c whoami",
+        parent_pid=session.explorer_pid,
+    )
+    harness.generator.generate_process_termination(
+        user,
+        target,
+        child_close,
+        child_pid,
+        r"C:\Windows\System32\cmd.exe",
+        harness.logon_id,
+    )
+
+    harness.generator.advance_rdp_session_lifecycle_watermark(logout_time)
+
+    assert harness.state.get_session(harness.logon_id) is None
+    explorer_lifecycle = harness.generator._lifecycle_authority.registry.get_process(
+        explorer_identity.object_id
+    )
+    assert explorer_lifecycle is not None
+    assert explorer_lifecycle.closed_at is not None
+    assert explorer_lifecycle.closed_at > child_close
+    assert harness.generator.rdp_lifecycle_journal_census().pending_generations == 0
     _close_rdp_terminal_harness(harness)
 
 

@@ -60,6 +60,8 @@ from rich.table import Column, Table
 from rich.text import Text
 
 from evidenceforge import __version__
+from evidenceforge.cli.checkpoint_commands import checkpoint_app
+from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.pack_commands import pack_app
 from evidenceforge.composition import CompiledScenario, compile_scenario, with_runtime_scenario
 from evidenceforge.composition.artifacts import (
@@ -75,13 +77,17 @@ from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.errors import CheckpointError
-from evidenceforge.generation.checkpoints.fingerprint import run_fingerprint
+from evidenceforge.generation.checkpoints.fingerprint import (
+    run_fingerprint,
+    run_fingerprint_components,
+)
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.checkpoints.test_sync import (
     checkpoint_publication_test_synchronizer_from_environment,
     checkpoint_test_synchronizer_from_environment,
 )
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
+from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.workload import estimate_workload
 from evidenceforge.models.exceptions import (
     EvidenceForgeError,
@@ -95,7 +101,6 @@ from evidenceforge.output_targets import (
     normalize_output_target,
     write_output_target_marker,
 )
-from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 if TYPE_CHECKING:
     from evidenceforge.generation.storage_world import StorageWorldModel
@@ -103,17 +108,6 @@ if TYPE_CHECKING:
 
 
 _DEFAULT_CHECKPOINT_HOURS = 24
-
-
-def _completed_simulated_hours(scenario: Scenario) -> int:
-    """Return the cadence counter span across warm-up and collection."""
-
-    start, end = resolve_time_window(scenario.time_window)
-    collection_hours = math.ceil((end - start).total_seconds() / 3600)
-    warmup = scenario.time_window.warmup
-    warmup_duration = parse_duration(warmup) if warmup is not None else parse_duration("8h")
-    warmup_hours = max(1, math.ceil(warmup_duration.total_seconds() / 3600))
-    return warmup_hours + collection_hours
 
 
 def _generation_prompt_available() -> bool:
@@ -213,6 +207,11 @@ class _GenerationProgressTracker:
             self._handle_phase_end(data)
         elif event_type == "storyline_progress":
             self._update_storyline_progress(data)
+        elif event_type == "suspension_requested":
+            self.progress.console.print(
+                "[yellow]Suspension requested; finishing simulated hour "
+                f"{data['completed_simulated_hours']} before checkpointing.[/yellow]"
+            )
 
     def _update_hour_progress(self, event_type: str, data: dict) -> None:
         """Update the combined simulated-hour task without resetting it."""
@@ -321,6 +320,7 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 app.add_typer(pack_app, name="pack")
+app.add_typer(checkpoint_app, name="checkpoint")
 console = Console()
 
 _STORAGE_SAMPLE_SIZE = 3
@@ -1532,11 +1532,7 @@ def generate(
             if resume and preliminary_recovery is not None
             else _DEFAULT_CHECKPOINT_HOURS
         )
-    fresh_checkpoint_enabled = (
-        not resume
-        and selected_checkpoint_hours > 0
-        and _completed_simulated_hours(scenario) >= selected_checkpoint_hours
-    )
+    fresh_checkpoint_enabled = not resume and selected_checkpoint_hours > 0
 
     from evidenceforge.config.provider import effective_config_scope
 
@@ -1622,6 +1618,9 @@ def generate(
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
     gen_artifacts_dir = artifacts_dir
+    interrupt_controller = GenerationInterruptController(
+        checkpoint_enabled=selected_checkpoint_hours > 0
+    )
 
     # Generate logs
     try:
@@ -1663,6 +1662,12 @@ def generate(
                     "oob_hosts": list(oob_hosts),
                     "output_target": output_target.value,
                 },
+                fingerprint_components=run_fingerprint_components(
+                    compiled,
+                    output_target=output_target.value,
+                    formats=checkpoint_formats,
+                    oob_hosts=oob_hosts,
+                ),
             )
 
         if persistent_staging:
@@ -1677,10 +1682,10 @@ def generate(
             gen_gt_dir = staging_dir
             gen_artifacts_dir = staging_dir / "artifacts"
 
-        console.print("\n[bold]Starting log generation...[/bold]")
-
-        # Create progress display with Rich
-        with _generation_progress(console) as progress:
+        # Install cooperative interruption before announcing generation readiness so operators and
+        # subprocess callers can act on that message without racing the signal handler.
+        with interrupt_controller.installed(), _generation_progress(console) as progress:
+            console.print("\n[bold]Starting log generation...[/bold]")
             progress_tracker = _GenerationProgressTracker(progress)
 
             # Generate logs with progress reporting
@@ -1701,10 +1706,13 @@ def generate(
                 checkpoint_controller=checkpoint_controller,
                 checkpoint_recovery=checkpoint_recovery,
                 checkpoint_synchronization_hook=(
-                    checkpoint_test_synchronizer_from_environment()
+                    checkpoint_test_synchronizer_from_environment(
+                        lambda: interrupt_controller.requested
+                    )
                     if checkpoint_controller is not None
                     else None
                 ),
+                graceful_interrupt_requested=lambda: interrupt_controller.requested,
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -1777,6 +1785,41 @@ def generate(
                     console.print(f"    • {file.relative_to(artifacts_dir)} ({size_str})")
 
         # Success - exit normally
+        return
+
+    except GenerationSuspendedError as suspended:
+        cursor = suspended.cursor
+        if suspended.requested_by_signal:
+            if staging_dir and staging_dir.exists() and not persistent_staging:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
+            console.print(
+                f"\n[bold yellow]Generation interrupted after creating a recovery "
+                f"checkpoint at simulated hour {cursor.completed_simulated_hours} "
+                f"({cursor.phase}).[/bold yellow]"
+            )
+            recovery_guidance = _checkpoint_recovery_guidance(
+                checkpoint_controller,
+                ground_truth_dir,
+            )
+            if recovery_guidance is not None:
+                console.print(Text(recovery_guidance, style="yellow"))
+            logger.info(
+                "Generation interrupted safely at simulated hour %s (%s)",
+                cursor.completed_simulated_hours,
+                cursor.phase,
+            )
+            raise typer.Exit(EXIT_SIGINT)
+        console.print(
+            f"\n[bold yellow]Generation suspended at simulated hour "
+            f"{cursor.completed_simulated_hours} ({cursor.phase}).[/bold yellow]"
+        )
+        console.print(f"Resume with: eforge generate --output {ground_truth_dir} --resume")
+        logger.info(
+            "Generation intentionally suspended at simulated hour %s (%s)",
+            cursor.completed_simulated_hours,
+            cursor.phase,
+        )
         return
 
     except KeyboardInterrupt:

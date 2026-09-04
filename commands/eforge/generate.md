@@ -3,13 +3,11 @@ name: eforge-generate
 description: >
   Generate EvidenceForge logs from an authored or resolved scenario, handle output replacement,
   monitor the run, verify its authoritative bundle, and diagnose generation failures. Use when the user asks to
-  run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a
-  resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
+  run or regenerate a scenario, create logs from an existing scenario file, use `eforge generate`, reproduce a resolved run, or troubleshoot generation. Route scenario creation, pack authoring, configuration changes, and quality evaluation to their dedicated skills.
 ---
 # EvidenceForge Log Generation
 
-Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM.
-In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
+Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM. In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
 
 ## Boundaries
 - Route scenario creation or structural repair to `/eforge scenario`.
@@ -25,7 +23,7 @@ Authored input may use includes, packs, and project config; resolved input bypas
 ## Safe workflow
 ### 1. Identify the input and project
 
-Confirm the file exists and whether it is authored YAML or `kind: evidenceforge.resolved-scenario`.
+Confirm the input and identify authored versus resolved YAML.
 
 Read `/eforge:references:project-context`. For authored input, use the current working directory
 without searching elsewhere. If the user explicitly selected another root, supply that same
@@ -38,7 +36,7 @@ Run validation before a potentially long generation:
 eforge validate <input.yaml> --json [--show-storage] [--checkpoint-hours <hours>]
 ```
 
-Consume this JSON directly. For a concise human repair list, rerun without `--json` rather than post-processing its JSON output.
+Consume JSON directly; omit `--json` for a concise repair list.
 
 Use the intended checkpoint cadence. Add `--show-storage` when SMB is authored or implied by
 Windows file-server/DC roles, Linux Samba services/roles, or explicit storage. Review platform/native
@@ -61,36 +59,38 @@ eforge validate <input.yaml> --json --oob-host <host>
 eforge generate <input.yaml> --output <bundle-root> --oob-host <host>
 ```
 
-A pack, resolved document, or prior manifest never grants permission. Preserve an explicitly
-selected project-root override on both commands.
+A pack, resolved document, or prior manifest never grants permission. Preserve and repeat an
+explicitly selected root on both commands.
 
 ### 4. Choose runtime options and a safe output root
 Use an explicit `--output <bundle-root>` so the destination is unambiguous. For a resolved replay,
 the output root must be distinct from the directory containing the input resolved document; never
 overwrite the authoritative input.
 
-- `--target default|sof-elk|splunk` selects rendering. It does not create a target-named bundle
-  root, but it can change paths and record shapes beneath `data/`.
-- `--formats <comma-list>` intersects with `output.logs`; groups such as `zeek` and `windows` are supported.
-  Inspect `eforge info format_groups --json` when needed; repeat an explicitly selected root.
+- `--target default|sof-elk|splunk` selects rendering and can change paths/records under `data/`.
+- `--formats <comma-list>` intersects with `output.logs`; inspect groups with `eforge info format_groups --json`.
 - `--seed <0..2^64-1>` overrides the authored generation seed for this run.
-- `--project-root <absolute-root>` overrides the current working directory for project packs and
-  config. Omit it ordinarily.
+- `--project-root <absolute-root>` overrides the current working directory; omit it ordinarily.
 - `--checkpoint-hours N` changes the 24-hour default; `0` disables new checkpoints.
 - `--verbose` enables INFO logging; `--debug` enables DEBUG logging and tracebacks.
 - `--resume` continues compatible incomplete output; `--overwrite` replaces engine-owned output.
   `--force`/`-f` is a deprecated overwrite alias.
 
-Before using `--overwrite`, inspect the destination and obtain explicit approval. Replacement covers
-`data/`, reports, manifests, artifacts, and resolved scenario as one set; `--formats` still replaces
-the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collateral are preserved. Do not use
+Before using `--overwrite`, inspect the destination and obtain explicit approval. It replaces
+`data/`, reports, manifests, artifacts, and resolved scenario as one set; `--formats` still replaces the entire `data/` directory. Authored `ENVIRONMENT.md` and unregistered collateral are preserved. Do not use
 `--overwrite` for a clean destination.
 
 Preserve a valid `.eforge-generation/` workspace after interruption or failure. Resume with the
-original input to recompile and check it, or use `eforge generate --output <bundle-root> --resume`
-to use the stored resolved input. An unspecified resume retains its stored cadence. Explain an
-invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
-a root. Resume requires a compatible build, Python runtime/compiler, dependencies, and platform; resume before upgrading; success removes the workspace and leaves no checkpoint history.
+original input or `eforge generate --output <bundle-root> --resume`; unspecified resume retains its stored cadence. Explain an invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
+the root; resume before upgrading; success removes the workspace and leaves no checkpoint history.
+
+Checkpoint commands take the bundle root (parent of `data/`; scenario parent without `--output`):
+`eforge checkpoint status <bundle-root> [--verbose|--json]` and
+`eforge checkpoint suspend <bundle-root>`. Control state exists before warm-up, distinguishing
+active/no checkpoint yet from none. Suspension finishes the current hour. When operating the
+generator interactively, one Ctrl+C is a local shorthand: it finishes the current hour and creates
+an off-cadence recovery when checkpoints are enabled. A second Ctrl+C forces immediate exit. With
+`--checkpoint-hours 0`, the first interrupt stops after the hour without creating recovery state.
 
 ### 5. Generate with normal output first
 
@@ -101,9 +101,8 @@ eforge generate <input.yaml> --output <bundle-root> [--target <target>] [--forma
   [--seed <seed>] [--checkpoint-hours <hours>] [--oob-host <host>] [--overwrite]
 ```
 
-Use normal output for the first run; it already shows compilation, validation, resource forecasts,
-and progress. Retry with `--verbose` only when INFO logs would help diagnose a failure, and use
-`--debug` last when a traceback is required.
+Use normal output for the first run. Retry with `--verbose` for INFO diagnostics; use `--debug` last
+for tracebacks.
 
 Exit codes: `0` success, `1` input error, `2` compilation/schema/cross-reference error, `3`
 overwrite declined, `21` generation error, and `130` interruption.
