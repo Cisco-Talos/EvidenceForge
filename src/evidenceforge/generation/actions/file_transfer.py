@@ -1138,6 +1138,7 @@ class StagedArchiveSmbReadRequest:
     upload_bytes: int
     source_system: System | None
     target_system: System
+    smb_principal: str = ""
     source_pid: int = -1
     source_process: str = ""
     source_command: str = ""
@@ -1156,6 +1157,7 @@ class StagedArchiveSmbReadRequest:
         seed = _stable_seed(
             "action_bundle:staged_archive_smb_read:"
             f"{self.actor.username}:{self.source_ip}:{self.staging_ip}:"
+            f"{self.smb_principal}:"
             f"{self.archive_path}:{self.smb_filename}:{self.staged_at.isoformat()}:"
             f"{self.exfil_time.isoformat()}:{self.upload_bytes}:"
             f"{self.source_pid}:{self.reader_pid}:{self.source_file_read_path}:"
@@ -1375,6 +1377,7 @@ class StagedArchiveSmbReadActionBundle:
                         type="client",
                         path=self._request.source_file_read_path or None,
                     ),
+                    smb_principal=self._request.smb_principal or self._request.actor.username,
                 ),
                 actor=self._request.actor,
                 parent_system=self._request.source_system or self._request.target_system,

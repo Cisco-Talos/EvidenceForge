@@ -185,3 +185,32 @@ later engine-quality loops.
 - **Sibling risks:** preserve the remote installer on 4697, explicit network-logon continuity,
   service payload ownership, lifecycle grouping, child-command inheritance, and non-built-in
   domain service accounts.
+
+### Result
+
+- The generated hard probe confirmed `DirectoryCacheSvc` keeps Marcus Chen as the 4697 installer
+  while Security, Sysmon, and eCAR render the running process as LocalSystem with logon ID `0x3e7`,
+  System integrity, and `services.exe` parentage.
+- Automated evaluation was 95.8280 across 111,587 records; temporal integrity remained below its
+  hard gate.
+- The blind panel returned four Synthetic verdicts with scores 92, 90, 94, and 68 (average 86.0).
+  No reviewer repeated the repaired service-process identity finding.
+
+## Assessment loop 36 — immutable Windows logon-session identity
+
+### Family contract
+
+- **Owning abstraction:** canonical Windows authentication/session state, with local token identity
+  distinct from outbound NewCredentials identity.
+- **Invariant:** one Windows LUID is permanently bound to one local SID/account for its lifetime.
+  Type 9 credentials may change only outbound authentication fields; a process attributed locally
+  to another principal requires a distinct session and LUID.
+- **Entry paths:** `runas /netonly`, explicit credentials, stolen-session storyline actions,
+  Windows-native SMB, archive staging, HTTP upload, interactive bootstrap, and process inheritance.
+- **Consumers:** Security 4624/4688/4689, Sysmon Event 1/5, eCAR process/file/flow rows, outbound SMB
+  and proxy authentication, session lifecycle validation, and ground truth.
+- **Layer rationale:** the contradiction is shared by three endpoint sources, so the session/token
+  owner must be corrected in canonical state rather than rewritten independently by emitters.
+- **Sibling risks:** preserve Marcus as the outbound SMB/proxy principal where authored; retain
+  Aisha as the local `runas /netonly` token; allocate and close any distinct stolen-user session;
+  avoid changing service-account, RDP, SSH, or network-logon semantics.

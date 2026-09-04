@@ -2255,6 +2255,34 @@ class StorylineMixin:
         smb_principal = spec.smb_principal or actor.username
         return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
 
+    def _storyline_local_process_actor_for_logon(
+        self,
+        actor: User,
+        system: System,
+        logon_id: str,
+    ) -> User:
+        """Return the immutable local token owner for a Windows process session."""
+
+        session = self.state_manager.get_session(logon_id)
+        if (
+            _get_os_category(system.os) != "windows"
+            or session is None
+            or session.logon_type != 9
+            or session.username.casefold() == actor.username.casefold()
+        ):
+            return actor
+        users = {
+            candidate.username.casefold(): candidate
+            for candidate in self.scenario.environment.users
+        }
+        local_actor = users.get(session.username.casefold())
+        if local_actor is None:
+            raise StateError(
+                "NewCredentials process ownership requires declared local caller "
+                f"{session.username!r} on {system.hostname}"
+            )
+        return local_actor
+
     def _ensure_storyline_session_end_pairs(self) -> None:
         """Pair explicit logoffs with the latest preceding durable session intent."""
         if hasattr(self, "_storyline_start_to_logoff"):
@@ -2531,6 +2559,7 @@ class StorylineMixin:
         actor: User,
         source_system: System | None,
         source_pid: int,
+        logon_id: str,
         archive_smb_path: str,
         local_staging_path: str,
         exfil_time: datetime,
@@ -2540,12 +2569,6 @@ class StorylineMixin:
 
         if source_system is None or _get_os_category(source_system.os) != "windows":
             return source_pid, "", "", "", False
-        logon_id = self._storyline_logon_for_process_owner(
-            actor,
-            source_system,
-            source_pid,
-            exfil_time,
-        )
         process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
         command_line = (
             "powershell.exe -NoProfile -Command "
@@ -3068,10 +3091,22 @@ class StorylineMixin:
         transfer_process = source_process
         transfer_command = source_command
         transfer_logon_id = ""
+        transfer_actor = actor
         terminate_transfer_process = False
         if source_system is not None:
-            source_file_read_path = self._local_staging_path_for_archive(
+            transfer_logon_id = self._storyline_logon_for_process_owner(
                 actor,
+                source_system,
+                source_pid,
+                exfil_time,
+            )
+            transfer_actor = self._storyline_local_process_actor_for_logon(
+                actor,
+                source_system,
+                transfer_logon_id,
+            )
+            source_file_read_path = self._local_staging_path_for_archive(
+                transfer_actor,
                 source_system,
                 archive.archive_path,
             )
@@ -3082,9 +3117,10 @@ class StorylineMixin:
                 transfer_logon_id,
                 terminate_transfer_process,
             ) = self._staged_archive_copy_process(
-                actor=actor,
+                actor=transfer_actor,
                 source_system=source_system,
                 source_pid=source_pid,
+                logon_id=transfer_logon_id,
                 archive_smb_path=archive.smb_filename,
                 local_staging_path=source_file_read_path,
                 exfil_time=exfil_time,
@@ -3093,7 +3129,8 @@ class StorylineMixin:
         emitted = StagedArchiveSmbReadActionBundle(
             self,
             StagedArchiveSmbReadRequest(
-                actor=actor,
+                actor=transfer_actor,
+                smb_principal=actor.username,
                 source_ip=source_ip,
                 staging_ip=archive.staging_ip,
                 archive_path=archive.archive_path,
@@ -4259,23 +4296,11 @@ class StorylineMixin:
                 system,
                 time,
             )
-            process_session = self.state_manager.get_session(logon_id)
-            if (
-                os_category == "windows"
-                and process_session is not None
-                and process_session.logon_type == 9
-                and process_session.username != process_actor.username
-            ):
-                local_users = {
-                    candidate.username: candidate for candidate in self.scenario.environment.users
-                }
-                local_process_actor = local_users.get(process_session.username)
-                if local_process_actor is None:
-                    raise StateError(
-                        "NewCredentials process ownership requires declared local caller "
-                        f"{process_session.username!r} on {system.hostname}"
-                    )
-                process_actor = local_process_actor
+            process_actor = self._storyline_local_process_actor_for_logon(
+                process_actor,
+                system,
+                logon_id,
+            )
             process_name = _normalize_storyline_process_image(
                 spec.process_name,
                 os_category,

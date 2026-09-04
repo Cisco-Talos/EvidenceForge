@@ -182,6 +182,36 @@ class TestStorylineCommandNetworks:
         assert captured[0]["actor"] == local_actor
         assert captured[0]["spec"].smb_principal == actor.username
 
+    def test_new_credentials_logon_keeps_local_process_actor_immutable(self):
+        """A Type 9 LUID must never acquire the outbound credential principal."""
+        local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
+        outbound_actor = User(username="admin", full_name="Admin", email="admin@example.com")
+        system = System(
+            hostname="WS-ALICE-01",
+            ip="10.10.1.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.state_manager.sessions["0x900"] = SimpleNamespace(
+            username=local_actor.username,
+            system=system.hostname,
+            logon_id="0x900",
+            logon_type=9,
+        )
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(users=[local_actor, outbound_actor])
+        )
+
+        resolved = engine._storyline_local_process_actor_for_logon(
+            outbound_actor,
+            system,
+            "0x900",
+        )
+
+        assert resolved == local_actor
+
     def test_storyline_shell_friction_renderer_rejects_unsafe_formatting(self):
         """Overlay-controlled shell-friction templates should not use Python format specs."""
         values = {
