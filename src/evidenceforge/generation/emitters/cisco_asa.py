@@ -33,7 +33,9 @@ partitioned by event year.
 import hashlib
 import ipaddress
 import math
+import os
 import re
+import tempfile
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -57,7 +59,7 @@ from evidenceforge.formats.format_def import (
     FormatDefinition,
     OutputTemplate,
 )
-from evidenceforge.generation.emitters.base import ExactPublicationError
+from evidenceforge.generation.emitters.base import ExactPublicationError, fsync_directory
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog_family import (
     bounded_syslog_int,
@@ -72,6 +74,14 @@ from evidenceforge.output_targets import OutputTarget
 
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
+_ASA_CONNECTION_ID_RE = re.compile(
+    r"(?P<prefix>%ASA-6-30201[3456]: "
+    r"(?:Built (?:inbound|outbound) (?:TCP|UDP)|Teardown (?:TCP|UDP)) connection )"
+    r"(?P<connection_id>[0-9]+)(?P<suffix> for )"
+)
+_ASA_LINE_HOST_RE = re.compile(
+    r"^<\d+>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+(?P<hostname>\S+)\s+%ASA-"
+)
 _EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
     (FieldConstraint, "field_constraint"),
     (FieldDefinition, "field_definition"),
@@ -462,7 +472,110 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_burst_window: int = 20  # seconds for burst rate calculation
         self._td_avg_window: int = 60  # seconds for average rate calculation
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
+        self._canonical_connection_ids: set[tuple[str, int]] = set()
+        self._final_connection_id_replacements: dict[tuple[str, int], int] | None = None
+        self._connection_ids_finalized = False
         _bind_cisco_exact_projection_publication(self, format_def, buffer_size)
+
+    @staticmethod
+    def _source_year(path: Path) -> int:
+        """Return the archive year carried by a SOF-ELK route path."""
+
+        for part in reversed(path.parts):
+            if len(part) == 4 and part.isdecimal():
+                return int(part)
+        return 0
+
+    def _build_final_connection_id_replacements(self) -> dict[tuple[str, int], int]:
+        """Allocate one monotonically increasing connection-ID lane per appliance."""
+
+        builds: dict[str, list[tuple[int, Any, int, int]]] = {}
+        for writer in self._writers.values():
+            path = writer.output_path
+            if not path.exists():
+                continue
+            year = self._source_year(path)
+            for ordinal, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
+                match = _ASA_CONNECTION_ID_RE.search(line)
+                host_match = _ASA_LINE_HOST_RE.match(line)
+                if match is None or host_match is None or " Built " not in match.group("prefix"):
+                    continue
+                connection_id = int(match.group("connection_id"))
+                hostname = host_match.group("hostname")
+                if (hostname, connection_id) not in self._canonical_connection_ids:
+                    continue
+                builds.setdefault(hostname, []).append(
+                    (year, rfc3164_timestamp_sort_key(line), ordinal, connection_id)
+                )
+
+        replacements: dict[tuple[str, int], int] = {}
+        for hostname, rows in builds.items():
+            rows.sort()
+            digest = hashlib.sha256(f"asa-sensor:{hostname.casefold()}".encode()).digest()
+            next_id = 1_000_000 + int.from_bytes(digest[:4], "big") % 1_000_000
+            for _year, _timestamp, _ordinal, old_id in rows:
+                replacements[(hostname, old_id)] = next_id
+                next_id += 1
+        return replacements
+
+    def _finalize_connection_ids(self) -> None:
+        """Rewrite sorted ASA lifecycles with source-native chronological IDs."""
+
+        if self._connection_ids_finalized:
+            return
+        if self._final_connection_id_replacements is None:
+            self._final_connection_id_replacements = self._build_final_connection_id_replacements()
+        replacements = self._final_connection_id_replacements
+        for writer in self._writers.values():
+            path = writer.output_path
+            if not path.exists():
+                continue
+            changed = False
+            rendered: list[str] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                host_match = _ASA_LINE_HOST_RE.match(line)
+                hostname = host_match.group("hostname") if host_match is not None else ""
+
+                def replace_id(match: re.Match[str], source_hostname: str = hostname) -> str:
+                    nonlocal changed
+                    if not source_hostname:
+                        return match.group(0)
+                    old_id = int(match.group("connection_id"))
+                    new_id = replacements.get((source_hostname, old_id))
+                    if new_id is None or new_id == old_id:
+                        return match.group(0)
+                    changed = True
+                    return f"{match.group('prefix')}{new_id}{match.group('suffix')}"
+
+                rendered.append(_ASA_CONNECTION_ID_RE.sub(replace_id, line))
+            if not changed:
+                continue
+            descriptor, raw_pending = tempfile.mkstemp(
+                prefix=f".{path.name}.",
+                suffix=".connection-ids",
+                dir=path.parent,
+            )
+            os.close(descriptor)
+            pending = Path(raw_pending)
+            try:
+                with pending.open("w", encoding="utf-8", newline="\n") as stream:
+                    for line in rendered:
+                        stream.write(line)
+                        stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(pending, path)
+                fsync_directory(path.parent)
+            except BaseException:
+                pending.unlink(missing_ok=True)
+                raise
+        self._connection_ids_finalized = True
+
+    def close(self) -> None:
+        """Publish sorted rows, then allocate IDs in appliance chronology."""
+
+        super().close()
+        self._finalize_connection_ids()
 
     def _safe_writer_key(self, sensor_hostname: str) -> str:
         return sanitize_syslog_family_route_key(sensor_hostname)
@@ -701,6 +814,9 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     if fw is not None and fw.connection_id > 0
                     else self._connection_id(event, sensor_hostname)
                 )
+                canonical_connection_ids = getattr(self, "_canonical_connection_ids", None)
+                if canonical_connection_ids is not None:
+                    canonical_connection_ids.add((fw_hostname, conn_id))
                 if nat_view is not None and nat_view.nat_type != "static":
                     self._emit_nat_built(
                         sensor_net,

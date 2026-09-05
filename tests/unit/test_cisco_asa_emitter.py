@@ -246,7 +246,7 @@ class TestConnectionIdFinalization:
         assert teardown_id is not None
         assert built_id.group(1) == teardown_id.group(1)
         assert len(attempted_ids) == 2
-        assert attempted_ids[0] == attempted_ids[1] == int(built_id.group(1))
+        assert attempted_ids[0] == attempted_ids[1]
 
     def test_sorted_output_preserves_final_connection_ids(self, asa_emitter, tmp_path):
         late_event = _make_connection_event(
@@ -262,7 +262,7 @@ class TestConnectionIdFinalization:
 
         asa_emitter.emit(late_event)
         asa_emitter.emit(early_event)
-        asa_emitter.flush()
+        asa_emitter.close()
 
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         built_lines = [
@@ -276,6 +276,7 @@ class TestConnectionIdFinalization:
 
         assert built_lines == sorted(built_lines)
         assert len(built_ids) == len(set(built_ids))
+        assert built_ids == list(range(built_ids[0], built_ids[0] + len(built_ids)))
 
     def test_repeated_close_is_byte_idempotent(self, asa_emitter, tmp_path):
         asa_emitter.emit(_make_connection_event())
