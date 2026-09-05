@@ -95,6 +95,7 @@ from evidenceforge.models.scenario import (
     BeaconHttpSequenceEntry,
     ConnectionEventSpec,
     EventSpacingConfig,
+    SmbClientLocation,
     System,
     User,
 )
@@ -2288,6 +2289,51 @@ class StorylineMixin:
             )
         smb_principal = spec.smb_principal or actor.username
         return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
+
+    @staticmethod
+    def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:
+        """Return one platform-aware key for a storyline-local file placement."""
+
+        normalized = path.replace("/", "\\") if _get_os_category(system.os) == "windows" else path
+        if _get_os_category(system.os) == "windows":
+            normalized = normalized.casefold()
+        return system.hostname.casefold(), normalized
+
+    def _remember_storyline_file_available(
+        self,
+        *,
+        system: System,
+        path: str,
+        available_at: datetime,
+    ) -> None:
+        """Record when a canonical transfer first makes a local path consumable."""
+
+        if not hasattr(self, "_storyline_file_available_at"):
+            self._storyline_file_available_at: dict[tuple[str, str], datetime] = {}
+        key = self._storyline_local_file_key(system, path)
+        current = self._storyline_file_available_at.get(key)
+        if current is None or available_at < current:
+            self._storyline_file_available_at[key] = ensure_utc(available_at)
+
+    def _storyline_smb_file_ready_time(
+        self,
+        *,
+        system: System,
+        spec: Any,
+        requested_at: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Delay a local-file SMB upload until its canonical source exists."""
+
+        source = getattr(spec, "source", None)
+        if not isinstance(source, SmbClientLocation) or not source.path:
+            return requested_at
+        available_at = getattr(self, "_storyline_file_available_at", {}).get(
+            self._storyline_local_file_key(system, source.path)
+        )
+        if available_at is None or requested_at > available_at:
+            return requested_at
+        return available_at + timedelta(milliseconds=rng.randint(120, 700))
 
     def _storyline_local_process_actor_for_logon(
         self,
@@ -5017,6 +5063,13 @@ class StorylineMixin:
                     self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
         elif spec.type == "smb_activity":
+            time = self._storyline_smb_file_ready_time(
+                system=system,
+                spec=spec,
+                requested_at=time,
+                rng=rng,
+            )
+            malicious_event["time"] = time
             smb_actor, smb_spec = self._storyline_smb_actor_and_spec(
                 actor,
                 system,
@@ -8357,9 +8410,9 @@ class StorylineMixin:
         transfer_time: datetime,
         source_port: int,
         rng: random.Random,
-    ) -> None:
+    ) -> datetime | None:
         """Emit target-side file evidence after the SSH bundle models the transfer session."""
-        ScpReceiverFileActionBundle(
+        bundle = ScpReceiverFileActionBundle(
             self,
             ScpReceiverFileRequest(
                 source_system=source_system,
@@ -8375,7 +8428,17 @@ class StorylineMixin:
                 source_port=source_port,
             ),
             rng,
-        ).execute()
+        )
+        plan = bundle.plan_execution()
+        if plan is None or not bundle.execute():
+            return None
+        available_at = plan.receiver_create.timestamp
+        self._remember_storyline_file_available(
+            system=target_system,
+            path=target_path,
+            available_at=available_at,
+        )
+        return available_at
 
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:

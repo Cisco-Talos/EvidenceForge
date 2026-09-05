@@ -2634,6 +2634,63 @@ class TestStorylineCommandSideEffects:
         assert file_events
         assert file_events[0].event_type == "file_create"
 
+    def test_scp_receiver_file_delays_following_smb_upload_until_file_exists(self):
+        """A local SMB source cannot be consumed before SCP creates the receiver path."""
+
+        source = System(
+            hostname="DB-PROD-01",
+            ip="10.10.2.31",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(dispatch_builder=lambda event: None)
+        transfer_time = datetime(2024, 3, 18, 17, 21, 23, tzinfo=UTC)
+
+        available_at = engine._emit_scp_receiver_artifacts(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command=("scp /tmp/rpt.sql.gz root@APP-INT-01:/tmp/.cache/rpt.sql.gz"),
+            source_path="/tmp/rpt.sql.gz",
+            target_user="root",
+            target_path="/tmp/.cache/rpt.sql.gz",
+            transfer_time=transfer_time,
+            source_port=40117,
+            rng=random.Random(7),
+        )
+
+        assert available_at is not None
+        smb_spec = SmbActivityEventSpec(
+            operation="copy",
+            source={"type": "client", "path": "/tmp/.cache/rpt.sql.gz"},
+            destination={"type": "share", "share": "FILE-LNX-01.research"},
+        )
+        requested_at = transfer_time - timedelta(minutes=2)
+        ready_at = engine._storyline_smb_file_ready_time(
+            system=target,
+            spec=smb_spec,
+            requested_at=requested_at,
+            rng=random.Random(9),
+        )
+
+        assert ready_at > available_at
+
     def test_scp_receiver_file_waits_for_visible_source_process_create(self):
         source = System(
             hostname="SRC",

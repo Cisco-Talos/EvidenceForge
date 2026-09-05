@@ -343,3 +343,34 @@ later engine-quality loops.
 - **Sibling risks:** preserve authored event order where feasible, do not duplicate SCP receiver
   creation, keep process ownership and authentication identity distinct, and retain deterministic
   explicit offsets for independent storyline events.
+
+### Result
+
+- SCP receiver publication now records the exact host/path availability frontier, and storyline SMB
+  uploads of that local path wait until the canonical receiver file exists.
+- The generated chain rendered the APP-INT-01 receiver create at `17:21:34.302Z`, SMB client read at
+  `17:21:36.765Z`, and FILE-LNX-01 server write at `17:21:36.853Z`.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation rose to 95.8512 across 110,715 records. Pivot linkability reached 80.0 and
+  passed, leaving temporal integrity as the only failed hard gate.
+- The blind panel returned four Synthetic verdicts with scores 72, 91, 72, and 74 (average 77.25,
+  spread 19). No reviewer repeated the premature-read contradiction, and reviewers described Samba
+  timing and lifecycle correlation as especially strong.
+
+## Assessment loop 41 — protocol-independent Zeek file hash rendering
+
+### Family contract
+
+- **Owning abstraction:** Zeek Files-framework source renderer.
+- **Invariant:** one Zeek sensor renders MD5, SHA-1, and SHA-256 using the same lowercase hexadecimal
+  convention regardless of whether file analysis originated from SMB, HTTP, SMTP, or TLS.
+- **Entry paths:** SMB reads/writes, HTTP request and response bodies, SMTP attachments, TLS
+  certificate analysis, capture-loss projections, and repeated file observations.
+- **Consumers:** Zeek `files.log` JSON, FUID/content pivots, SMB durability checks, TLS fingerprint
+  agreement, deterministic evaluator field agreement, and blind network review.
+- **Layer rationale:** canonical content identity deliberately remains source-neutral; hexadecimal
+  presentation belongs to the source-native Zeek renderer and must not leak the capitalization used
+  by endpoint-oriented identity objects.
+- **Sibling risks:** preserve digest values and lengths, TLS SHA-1-to-x509 fingerprint agreement,
+  repeated-file stability, sparse/absent hashes, and all non-Zeek consumers of canonical digests.
