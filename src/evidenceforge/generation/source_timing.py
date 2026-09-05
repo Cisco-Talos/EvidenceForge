@@ -5098,6 +5098,11 @@ class SourceTimingPlanner:
             # more dependent in planning order.  A later admitted flow/module
             # must never push the process creation behind its own activity.
             return timestamp
+        if event.event_type in _PROCESS_END_EVENT_TYPES:
+            # Process lifecycle timing already accounts for the process's own
+            # admitted dependents. A session-wide frontier may include unrelated
+            # later activity and must not stretch a one-shot process lifetime.
+            return timestamp
         previous = self._latest_session_dependent_times.get(key)
         if previous is not None and timestamp <= previous:
             self.timing_runtime.audit.record_repair(f"{family}.session.dependent_order")

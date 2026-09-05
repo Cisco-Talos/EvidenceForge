@@ -2578,6 +2578,52 @@ def test_process_create_does_not_follow_later_session_dependent() -> None:
     assert start < rendered < later_dependent
 
 
+def test_process_terminate_does_not_follow_unrelated_later_session_dependent() -> None:
+    """A session frontier cannot stretch a completed one-shot process lifetime."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    host = _linux_host_context()
+    session_group = "existing-session-group"
+    process_start = start + timedelta(minutes=5)
+    process_end = process_start + timedelta(seconds=12)
+    identity = replace(
+        _process_identity(
+            hostname=host.hostname,
+            pid=4343,
+            parent_pid=888,
+            started_at=process_start,
+            image="/usr/bin/smbclient",
+        ),
+        parent_lifecycle_group_id=session_group,
+    )
+    event = OccurrenceBuilder(
+        timestamp=process_end,
+        event_type="process_terminate",
+        src_host=host,
+        auth=AuthContext(username="alice", logon_id="0x12345", logon_type=2),
+        process=_context_from_identity(identity),
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=process_start,
+            phase="end",
+            parent_group_id=session_group,
+        ),
+    )
+    planner._latest_session_start_times[("ecar", session_group)] = start
+    later_dependent = start + timedelta(hours=2)
+    planner._latest_session_dependent_times[("ecar", session_group)] = later_dependent
+
+    planner.plan_event(event, "ecar")
+
+    assert event.source_timing is not None
+    rendered = event.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname, "process_terminate")
+    ]
+    assert process_end <= rendered < later_dependent
+
+
 def test_ssh_ecar_login_follows_admitted_exact_transport() -> None:
     """SSH remains ordered by its admitted target FLOW after source jitter."""
 
