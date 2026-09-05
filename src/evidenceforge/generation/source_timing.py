@@ -4365,23 +4365,51 @@ class SourceTimingPlanner:
             lifecycle_id=lifecycle_id,
             phase=latency_phase,
         )
-        process_scope = self._endpoint_process_scope(event, hostname)
+        query_process = event.dns.query_process if event.dns is not None else None
+        if (
+            family == "sysmon"
+            and phase == "dns"
+            and query_process is not None
+            and query_process.pid > 0
+        ):
+            query_started_at = query_process.start_time or event.timestamp
+            query_identity = (
+                f"process:{hostname}:{query_process.pid}:{ensure_utc(query_started_at).isoformat()}"
+            )
+            process_scope = (
+                query_identity,
+                query_identity,
+                query_process.pid,
+                query_started_at,
+            )
+        else:
+            process_scope = self._endpoint_process_scope(event, hostname)
         if process_scope is None or event.event_type in (
             _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
         ):
             return timestamp
         process_object_id, process_lifecycle_id, pid, started_at = process_scope
-        create_time = self._runtime_process_create_time(
-            event,
-            family=family,
-            source_key=self._endpoint_process_source_key(family),
-            source_instance=source_instance,
-            hostname=hostname,
-            os_category=os_category,
-            object_id=process_object_id,
-            lifecycle_id=process_lifecycle_id,
-            canonical_start=started_at,
-        )
+        if family == "sysmon":
+            process_object_id = self._sysmon_process_object_id(hostname, pid, started_at)
+            _create_native, create_time = self._runtime_shared_sysmon_process_create_time(
+                event,
+                hostname=hostname,
+                object_id=process_object_id,
+                lifecycle_id=process_lifecycle_id,
+                canonical_start=started_at,
+            )
+        else:
+            create_time = self._runtime_process_create_time(
+                event,
+                family=family,
+                source_key=self._endpoint_process_source_key(family),
+                source_instance=source_instance,
+                hostname=hostname,
+                os_category=os_category,
+                object_id=process_object_id,
+                lifecycle_id=process_lifecycle_id,
+                canonical_start=started_at,
+            )
         if event.image_load is not None:
             timestamp = self._runtime_process_module_time(
                 event,

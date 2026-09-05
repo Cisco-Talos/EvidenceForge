@@ -310,3 +310,36 @@ later engine-quality loops.
 - **Sibling risks:** preserve DNS-before-transport semantics, cross-source jitter, session readiness,
   RDP transport-before-auth ordering, collection-boundary behavior, and valid pre-window processes
   whose creation is intentionally absent.
+
+### Result
+
+- Sysmon dependent timing now keys DNS events to their exact query process and shares the Event 1
+  source frontier for every process-visible dependent family.
+- The generated hard probe checked 578 Event 3/7/8/10/11/12-14/22 records with visible matching
+  Event 1 identities and found zero inversions. The reported `mstsc.exe` PID `5380` Event 1 rendered
+  at `13:15:14.241643Z`; its first DNS event followed at `13:15:14.244244Z`.
+- The routine suite passed 8,205 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation remained 95.8011 across 110,715 records. All pillars exceeded 91, but pivot
+  linkability and temporal integrity remained below their hard thresholds.
+- The blind panel returned four Synthetic verdicts with scores 82, 64, 72, and 72 (average 72.5,
+  spread 18). Neither endpoint reviewer repeated the fixed process-ordering contradiction.
+
+## Assessment loop 40 — receiver file availability before SMB upload
+
+### Family contract
+
+- **Owning abstraction:** ordered storyline action execution and canonical file-transfer lifecycle.
+- **Invariant:** an SMB client may read a local source file only after that exact path has been
+  created on the client host. When SCP supplies the file, receiver creation must precede every
+  SMB process read, network transfer, and server-side write derived from it.
+- **Entry paths:** storyline SCP commands, receiver file materialization, direct `smbclient` writes,
+  mounted CIFS writes, HTTP multipart reads, and archive/staging chains.
+- **Consumers:** source-host eCAR file events, SMB client processes, Zeek SMB/file records, Samba or
+  Windows server audit, causal ordering, and ground-truth chronology.
+- **Layer rationale:** availability is shared canonical state owned by the transfer/storyline
+  lifecycle. Moving one rendered file row would leave the SMB transport and server mutation able to
+  consume a file that does not yet exist.
+- **Sibling risks:** preserve authored event order where feasible, do not duplicate SCP receiver
+  creation, keep process ownership and authentication identity distinct, and retain deterministic
+  explicit offsets for independent storyline events.

@@ -1561,6 +1561,63 @@ def test_sysmon_startup_module_renders_after_process_create(tmp_path: Path) -> N
     assert times[7] - times[1] < timedelta(seconds=1)
 
 
+def test_sysmon_dns_query_process_renders_after_exact_process_create() -> None:
+    """Event 22 must use the query process's shared Event 1 source frontier."""
+    planner = SourceTimingPlanner()
+    base = _base_time()
+    host = _host_context()
+    query_process = replace(
+        _unresolved_process_context(base),
+        pid=5380,
+        image=r"C:\Windows\System32\mstsc.exe",
+        command_line="mstsc.exe /v:DC-02 /admin",
+    )
+    process_event = OccurrenceBuilder(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=query_process,
+        auth=AuthContext(username="alice", logon_id=query_process.logon_id),
+        identity_plan=_sysmon_process_create_identity_plan(host, query_process),
+    )
+    dns_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=10),
+        event_type="connection",
+        src_host=host,
+        network=_network_context(),
+        dns=DnsContext(
+            query="_ldap._tcp.corp.local",
+            query_type="SRV",
+            response_ip="10.0.0.53",
+            answers=["dc-01.corp.local"],
+            TTLs=[600.0],
+            rtt=0.02,
+            query_process=query_process,
+        ),
+    )
+    source_instance = "sysmon:win-test-01"
+    planner.plan_event(
+        process_event,
+        "windows_event_sysmon",
+        source_instance=source_instance,
+        source_hostname=host.hostname,
+    )
+    planner.plan_event(
+        dns_event,
+        "windows_event_sysmon",
+        source_instance=source_instance,
+        source_hostname=host.hostname,
+    )
+
+    process_create_time = process_event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_event_sysmon", host.hostname, "process_create")
+    ]
+    dns_time = dns_event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_event_sysmon", host.hostname, "dns")
+    ]
+    assert dns_time > process_create_time
+
+
 def test_ecar_type3_login_uses_upstream_canonical_transport_order(tmp_path: Path) -> None:
     """eCAR preserves bundle-owned transport-before-auth canonical ordering."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
