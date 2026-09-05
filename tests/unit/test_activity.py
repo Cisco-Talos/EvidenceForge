@@ -3692,6 +3692,7 @@ class TestActivityGenerator:
         assert len(requests) == 254
         assert len(silent) == 253
         assert all(request["resp_bytes"] == 0 for request in silent)
+        assert len({request["orig_bytes"] for request in requests}) == 1
         rendered = [
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list

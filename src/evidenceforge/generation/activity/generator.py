@@ -22157,8 +22157,8 @@ class ActivityGenerator:
             maximum_window_seconds=window_seconds[1],
             rng=rng,
         )
+        payload_bytes = rng.choice((56, 64, 84))
         for target, offset in zip(targets, offsets, strict=True):
-            payload_bytes = rng.choice((56, 64, 84))
             responded = bool(target.modeled)
             self.generate_connection(
                 src_ip=request.system.ip,

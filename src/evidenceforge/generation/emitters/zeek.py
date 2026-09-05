@@ -124,6 +124,8 @@ class ZeekEmitter(SensorMultiplexEmitter):
             planned_duration = direct_zeek_source_duration(event, timing_key)
         if planned_duration is not None:
             duration = planned_duration
+        if net.protocol == "icmp" and (net.orig_pkts or 0) + (net.resp_pkts or 0) <= 1:
+            duration = None
         event_data = {
             "ts": event_ts,
             "uid": net.zeek_uid,
@@ -132,7 +134,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "id.resp_h": dst_ip,
             "id.resp_p": dst_port,
             "proto": net.protocol,
-            "service": self._render_service_name(net.service),
+            "service": (None if net.protocol == "icmp" else self._render_service_name(net.service)),
             "duration": duration,
             "_min_duration": event.dns.rtt if event.dns is not None else None,
             "_lock_duration": event.dns is not None

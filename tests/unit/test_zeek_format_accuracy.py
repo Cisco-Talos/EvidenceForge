@@ -109,6 +109,47 @@ class TestZeekConnFormatAccuracy:
         assert "service" not in without_service
         assert "service" in with_service
 
+    def test_unanswered_one_packet_icmp_omits_duration_and_service(self, tmp_path):
+        """Zeek cannot derive positive duration or analyzer service from one ICMP packet."""
+        from datetime import UTC
+
+        from evidenceforge.events.base import OccurrenceBuilder
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
+
+        output_file = tmp_path / "conn.json"
+        emitter = ZeekEmitter(load_format("zeek_conn"), output_file)
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=network_plan(
+                src_ip="10.0.0.10",
+                src_port=0,
+                dst_ip="10.0.0.99",
+                dst_port=0,
+                protocol="icmp",
+                service="icmp",
+                zeek_uid="CicmpOnePacket",
+                duration=2.25,
+                conn_state="OTH",
+                history="-",
+                orig_bytes=56,
+                resp_bytes=0,
+                orig_pkts=1,
+                resp_pkts=0,
+                orig_ip_bytes=84,
+                resp_ip_bytes=0,
+                ip_proto=1,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        row = json.loads(output_file.read_text().strip())
+        assert "duration" not in row
+        assert "service" not in row
+
     def test_service_uses_ssl_not_https(self):
         """Real Zeek conn.log uses 'ssl' for TLS connections, not 'https'."""
         # Verified against sample_data/Zeek-JSON/conn.log line 46

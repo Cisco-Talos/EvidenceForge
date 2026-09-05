@@ -569,3 +569,30 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   of 87.25. No reviewer repeated the SMB lifetime defect.
 - The next highest-impact independent contradiction is positive duration on unanswered one-packet
   ICMP scan flows; this becomes the loop-46 family.
+
+## Assessment loop 46 — ICMP packet-observation semantics
+
+### Finding classification
+
+- Positive Zeek duration on unanswered one-packet ICMP probes: `new_family`, confirmed as a hard
+  contradiction by the loop-45 network reviewer and accepted by all four reviewers in deliberation.
+- Scan-only `service:icmp`: `same_family_sibling`; Zeek analyzer service inference must not depend
+  on whether ICMP came from a scanner or baseline ping.
+- Independently varied echo payload size per target in one discovery sweep: `same_family_sibling`;
+  invocation-level scanner settings should remain stable across targets.
+
+### Family contract
+
+- **Owning abstraction:** canonical ICMP transaction planning for invocation-level request shape,
+  followed by the Zeek conn renderer for packet-observed duration and analyzer service semantics.
+- **Invariant:** a one-packet ICMP observation has no positive first-to-last-packet duration; ICMP
+  does not claim a Zeek analyzer service; one nmap discovery invocation retains one payload size.
+- **Entry paths:** baseline ping, nmap discovery, modeled and unmodeled responders, multi-sensor
+  projection, storyline connection, direct compatibility generation, and collection boundaries.
+- **Consumers:** Zeek conn, ASA ICMP lifecycle, IDS tuple correlation, network evaluation, and blind
+  network/detection review.
+- **Layer rationale:** canonical planning owns the scanner's shared invocation parameters and
+  internal timeout interval, while only the Zeek renderer owns what packet capture can calculate
+  from actually observed packets.
+- **Sibling risks:** preserve canonical timeout/state closure, responding RTTs, packet and byte
+  accounting, sensor-local loss, tuple/UID correlation, IDS timing, and non-ICMP service inference.
