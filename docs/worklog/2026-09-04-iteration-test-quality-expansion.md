@@ -274,3 +274,39 @@ later engine-quality loops.
 - **Sibling risks:** keep benign and malicious multipart uploads distinct, preserve tunnel reuse and
   source-port identity, avoid duplicating process creation, retain local token versus outbound
   credential semantics, and keep every process alive through its owned network/file dependents.
+
+### Result
+
+- The proxy transaction now treats a validated caller-owned PID as authoritative for its nested
+  client transport, so CONNECT semantics cannot replace the multipart upload process with a nearby
+  generic curl process. Anonymous multipart activity may still materialize a suitable owner.
+- The generated probe found PID `7140` and process object `c6e27dd8-a08d-4357-8d08-003808c23911`
+  consistently across the upload command, ZIP read, eCAR flow, Sysmon Event 3, proxy source port
+  `57936`, and later termination.
+- The routine suite passed 8,204 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation scored 95.8011 across 110,715 records. The four pillars remained above 91,
+  but pivot linkability and temporal integrity missed their hard thresholds, so acceptance failed.
+- The blind panel returned four Synthetic verdicts with scores 94, 66, 94, and 86 (average 85.0).
+  No reviewer repeated the upload-ownership contradiction; multiple reviewers explicitly praised
+  the repaired exfiltration correlation.
+
+## Assessment loop 39 — process-visible ordering for dependent endpoint effects
+
+### Family contract
+
+- **Owning abstraction:** canonical process lifecycle and source-timing planner for process-dependent
+  endpoint effects.
+- **Invariant:** when a process creation is visible in a source, every dependent event carrying that
+  exact process identity must render after the source-local create. No DNS, network, module, file,
+  registry, access, or remote-thread event may precede Event 1/PROCESS CREATE for the same identity.
+- **Entry paths:** RDP client startup and DNS prerequisites, ordinary process-to-network expansion,
+  explicit proxy and SSH clients, storyline processes, baseline applications, and observation delay.
+- **Consumers:** Sysmon Event 1/3/7/8/10/11/12-14/22, eCAR PROCESS and dependent objects, RDP and
+  network action bundles, process source bounds, and lifecycle validators.
+- **Layer rationale:** the inversion is created by independent source-time planning for a shared
+  canonical process and its dependent event. The source planner/lifecycle owner must enforce one
+  atomic frontier rather than patching Sysmon DNS output.
+- **Sibling risks:** preserve DNS-before-transport semantics, cross-source jitter, session readiness,
+  RDP transport-before-auth ordering, collection-boundary behavior, and valid pre-window processes
+  whose creation is intentionally absent.

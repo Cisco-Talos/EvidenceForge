@@ -391,6 +391,40 @@ def _is_exfil_connection_spec(spec: Any) -> bool:
     return "exfil" in desc or "t1041" in tech or "t1048" in tech
 
 
+def _process_owns_storyline_multipart_upload(
+    process: Any,
+    image: str,
+    spec: Any,
+) -> bool:
+    """Return whether one live curl process owns an authored multipart upload."""
+
+    multipart = getattr(spec, "request_multipart", None)
+    if multipart is None:
+        return False
+    if image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].casefold() not in {"curl", "curl.exe"}:
+        return False
+    command = str(getattr(process, "command_line", "") or "")
+    command_lower = command.casefold()
+    if not any(marker in command_lower for marker in (" -f ", " --form ")):
+        return False
+    target = f"{getattr(spec, 'hostname', '') or getattr(spec, 'dst_ip', '')}"
+    target += str(getattr(spec, "uri", "") or "/")
+    if target.casefold() not in command_lower:
+        return False
+
+    local_paths: list[str] = []
+
+    def collect(parts: Any) -> None:
+        for part in parts or ():
+            local_path = str(getattr(part, "local_source_path", "") or "")
+            if local_path:
+                local_paths.append(local_path)
+            collect(getattr(part, "parts", ()))
+
+    collect(getattr(multipart, "parts", ()))
+    return bool(local_paths) and all(path.casefold() in command_lower for path in local_paths)
+
+
 def _is_c2_http_request(
     *,
     description: str | None,
@@ -3183,11 +3217,42 @@ class StorylineMixin:
             if _get_os_category(system.os) == "windows"
             else ""
         )
-        if image_name in {"chrome.exe", "msedge.exe", "firefox.exe", "curl", "curl.exe"} and (
-            not expected_windows_browser
-            or (current_image or "").lower() == expected_windows_browser.lower()
+        multipart_requires_exact_owner = getattr(spec, "request_multipart", None) is not None
+        if (
+            running is not None
+            and multipart_requires_exact_owner
+            and _process_owns_storyline_multipart_upload(
+                running, current_image or running.image, spec
+            )
         ):
             return current_pid, current_image, current_command
+        if (
+            not multipart_requires_exact_owner
+            and image_name
+            in {
+                "chrome.exe",
+                "msedge.exe",
+                "firefox.exe",
+                "curl",
+                "curl.exe",
+            }
+            and (
+                not expected_windows_browser
+                or (current_image or "").lower() == expected_windows_browser.lower()
+            )
+        ):
+            return current_pid, current_image, current_command
+
+        if multipart_requires_exact_owner:
+            matching_processes = [
+                process
+                for process in self.state_manager.get_processes_on_system(system.hostname)
+                if ensure_utc(process.start_time) <= ensure_utc(time)
+                and _process_owns_storyline_multipart_upload(process, process.image, spec)
+            ]
+            if matching_processes:
+                exact_owner = max(matching_processes, key=lambda process: process.start_time)
+                return exact_owner.pid, exact_owner.image, exact_owner.command_line
 
         os_category = _get_os_category(system.os)
         scheme = "https" if spec.dst_port == 443 else "http"

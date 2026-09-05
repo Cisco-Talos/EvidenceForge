@@ -616,8 +616,10 @@ class ProxyTransactionActionBundle:
         caller_owned_client_pid = (
             client_pid if request.pid > 0 and client_pid == request.pid else -1
         )
-        suppress_client_pid_inference = request.suppress_source_pid_inference or (
-            request.pid > 0 and client_pid <= 0
+        suppress_client_pid_inference = (
+            request.suppress_source_pid_inference
+            or caller_owned_client_pid > 0
+            or (request.pid > 0 and client_pid <= 0)
         )
 
         if src_port is None:
@@ -1262,6 +1264,26 @@ class ProxyTransactionActionBundle:
                     request.time,
                 )
         else:
+            if (
+                request.pid > 0
+                and request.http is not None
+                and request.http.request_multipart is not None
+            ):
+                running = (
+                    executor.state_manager.get_process(
+                        request.source_system.hostname,
+                        request.pid,
+                    )
+                    if request.source_system is not None and request.pid > 0
+                    else None
+                )
+                raise StateError(
+                    "Multipart proxy request lost its exact caller process: "
+                    f"host={getattr(request.source_system, 'hostname', '')} "
+                    f"pid={request.pid} image={request.process_image!r} "
+                    f"command={getattr(running, 'command_line', '')!r} "
+                    f"target={request.http.host}{request.http.uri}"
+                )
             client_pid = -1
             client_process_image = None
             if request.suppress_source_pid_inference:

