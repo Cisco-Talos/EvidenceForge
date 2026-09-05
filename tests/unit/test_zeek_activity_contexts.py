@@ -4140,6 +4140,23 @@ class TestHttpContextPopulation:
         assert event.network.resp_bytes == event.network.orig_bytes
         assert event.network.duration <= 0.15
 
+    def test_icmp_accounting_preserves_explicit_payload_size(self, activity_gen):
+        """An invocation-owned echo size must not be resampled per connection."""
+        gen, events = activity_gen
+
+        for destination in ("10.0.10.1", "10.0.10.2", "10.0.10.3"):
+            gen.generate_connection(
+                src_ip="10.0.10.50",
+                dst_ip=destination,
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                proto="icmp",
+                duration=1.0,
+                orig_bytes=84,
+                resp_bytes=0,
+            )
+
+        assert {event.network.orig_bytes for event in events[-3:]} == {84}
+
     def test_duplicate_icmp_tuple_times_are_disambiguated(self, activity_gen):
         """Repeated ICMP observations should not render exact same tuple and microsecond."""
         gen, events = activity_gen

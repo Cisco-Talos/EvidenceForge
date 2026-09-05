@@ -3660,9 +3660,8 @@ def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
     """Return a varied but source-native ICMP echo payload size."""
     common_sizes = [32, 48, 56, 64, 84, 120, 256, 512, 1024, 1200, 1472]
     weights = [8, 10, 18, 18, 10, 8, 7, 7, 5, 4, 5]
-    if requested is not None and 32 <= requested <= 1472 and rng.random() < 0.45:
-        jitter = rng.choice([-16, -8, 0, 0, 0, 8, 16])
-        return max(32, min(1472, requested + jitter))
+    if requested is not None and 32 <= requested <= 1472:
+        return requested
     return rng.choices(common_sizes, weights=weights, k=1)[0]
 
 

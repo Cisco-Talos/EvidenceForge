@@ -717,13 +717,16 @@ class SensorMultiplexEmitter(LogEmitter):
 
         if self.format_def.name == "zeek_conn":
             ledger = observation.traffic
+            packet_observed_duration = (
+                frozen_duration
+                if source_duration_key is not None
+                else observation.observed_duration
+            )
+            if ledger.orig.packets + ledger.resp.packets <= 1:
+                packet_observed_duration = None
             render_data.update(
                 {
-                    "duration": (
-                        frozen_duration
-                        if source_duration_key is not None
-                        else observation.observed_duration
-                    ),
+                    "duration": packet_observed_duration,
                     "orig_bytes": ledger.orig.payload_bytes,
                     "resp_bytes": ledger.resp.payload_bytes,
                     "orig_pkts": ledger.orig.packets,
