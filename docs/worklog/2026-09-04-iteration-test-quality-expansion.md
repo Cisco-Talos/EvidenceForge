@@ -483,3 +483,39 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   required, and no reviewer repeated the immutable ProcessGuid contradiction.
 - Two reviewers independently retained ASA connection-ID chronology as a dataset-wide defect; it
   is the next highest-leverage repeated source-native family.
+
+## Assessment loop 44 — ASA connection-ID chronology
+
+### Family contract
+
+- **Owning abstraction:** the ASA source finalizer over the appliance's timestamp-sorted build and
+  teardown stream.
+- **Invariant:** each appliance allocates one unique, monotonically increasing connection ID when a
+  built record enters final source chronology, and every teardown retains that exact ID.
+- **Entry paths:** baseline and storyline permits, TCP and UDP, NAT and identity-NAT paths, retries,
+  external sorted runs, incremental checkpoints, output-target year partitioning, and final close.
+- **Consumers:** ASA 302013/302014 and 302015/302016 joins, firewall hunting pivots, SIEM sequence
+  analytics, deterministic parsers, and blind network/detection review.
+- **Layer rationale:** canonical connection identity is generation-order truth, while an ASA counter
+  is source-local runtime order. The latter cannot be finalized until the appliance's rows are
+  globally sorted, so the source finalizer owns allocation and pair-preserving projection.
+- **Sibling risks:** retain build/teardown pairing across year-split files, deterministic retry,
+  atomic replacement, multiple appliance lanes, NAT companion ordering, explicit deny records,
+  checkpoint-restored runs, and byte-identical repeated close.
+
+### Result
+
+- Canonical ASA permits now receive appliance-local IDs only after the definitive source stream is
+  timestamp sorted. Raw caller-supplied records remain byte-faithful, and teardown rows retain their
+  build ID through atomic finalization.
+- The hard probe inspected 6,751 generated build/teardown lifecycles: build IDs were unique and
+  strictly consecutive, with zero orphaned build or teardown references.
+- Focused ASA, output-target, and constructor-bypass compatibility tests passed. The final routine
+  suite passed 8,208 tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format
+  checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records, with temporal integrity as the only
+  failed hard gate.
+- Blind scores were 72, 84, 67, and 78 (average 75.25; spread 17), all Synthetic. No deliberation
+  was required, and no reviewer repeated the backward ASA connection-ID defect.
+- Two reviewers independently prioritized operation-detached one-shot command lifetimes and
+  millisecond-scale retirement sweeps; this is the next family for loop 45.
