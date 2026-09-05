@@ -2276,8 +2276,19 @@ class TestActivityGenerator:
                 timestamp + timedelta(seconds=1),
                 logon_id,
             )
-            is None
+            == first_explorer_pid
         )
+
+        reused_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=2),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+        assert reused_pid == first_explorer_pid
 
         activity_gen.generate_logon(
             test_user,

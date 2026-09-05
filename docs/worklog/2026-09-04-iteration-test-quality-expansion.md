@@ -612,3 +612,33 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   was required, and no reviewer repeated the ICMP family defect.
 - The next highest-impact repeated hard contradiction is ordinary user Explorers parented by
   `services.exe`, together with repeated desktop bootstraps under unchanged logon IDs.
+
+## Assessment loop 47 — historical Windows desktop-shell ownership
+
+### Finding classification
+
+- Ordinary user `explorer.exe` processes parented by `services.exe`: `existing_family_regression`,
+  reproduced 17 times across five workstations by the loop-46 host reviewer.
+- Repeated `userinit.exe`/Explorer bootstrap chains under one unchanged interactive Logon ID:
+  `same_family_sibling`; future-dated teardown removes the original shell from the mutable live map
+  even while its retained identity still spans the earlier activity timestamp.
+
+### Family contract
+
+- **Owning abstraction:** canonical Windows session/process interval state and the Explorer
+  reuse/parent-resolution boundary.
+- **Invariant:** one interactive Logon ID owns one initial `winlogon.exe` → `userinit.exe` →
+  `explorer.exe` bootstrap. Any later activity whose canonical timestamp falls inside that Explorer
+  identity's retained lifetime reuses the same shell identity; it must not emit another bootstrap
+  or create an ordinary user's Explorer beneath a service process.
+- **Entry paths:** Type 2/10/11 session bootstrap, baseline `process_system` selection, GUI-parent
+  resolution, late-planned activity evaluated before an eagerly applied logoff, explicit process
+  requests, and genuine post-termination shell repair.
+- **Consumers:** StateManager process identities, Windows 4688, Sysmon 1/5, eCAR PROCESS and
+  dependent actor joins, parent-image lookup, user-process history, and blind host/detection review.
+- **Layer rationale:** the original start/end interval is already canonical truth. The defect comes
+  from treating absence in a mutable live map as absence at an earlier event timestamp, so the fix
+  belongs in temporal process lookup and reuse rather than in any Windows emitter.
+- **Sibling risks:** preserve genuine shell repair after the recorded end, source-visible parent
+  ordering, retained parent snapshots for GUI children, PID-reuse identity isolation, network and
+  service logons that cannot own desktops, and deterministic out-of-order planning.
