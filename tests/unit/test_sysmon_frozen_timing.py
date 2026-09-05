@@ -390,6 +390,55 @@ def test_sysmon_dependent_uses_frozen_dropped_event_one_guid(tmp_path: Path) -> 
     )
 
 
+def test_sysmon_dependent_prefers_durable_actor_start_over_thin_process_context(
+    tmp_path: Path,
+) -> None:
+    """A PID-only carrier cannot replace its canonical process-lifetime identity."""
+
+    started_at = T0 - timedelta(days=6)
+    actor = ProcessIdentity(
+        hostname="WIN-01",
+        object_id="boot-process-win-01-system",
+        pid=4,
+        parent_pid=0,
+        image="System",
+        command_line="System",
+        principal="SYSTEM",
+        logon_id="0x3e7",
+        started_at=started_at,
+        lifecycle_group_id="boot-process-win-01-system-lifecycle",
+    )
+    event = OccurrenceBuilder(
+        timestamp=T0,
+        event_type="file_create",
+        src_host=_host(),
+        process=ProcessContext(
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="System",
+            username="SYSTEM",
+            logon_id="0x3e7",
+        ),
+        file=FileContext(path=r"C:\Windows\PSEXESVC.exe", action="create", pid=4),
+        identity_plan=EventIdentityPlan(actor=actor),
+    )
+    planner = SourceTimingPlanner(
+        timing_runtime=TimingRuntime(reference_time=T0, namespace="sysmon-durable-actor")
+    )
+    _plan(event, planner)
+    assert event.source_timing is not None
+    create_render = event.source_timing.finalized_times[
+        sysmon_process_identity_render_key("WIN-01", 4, started_at)
+    ]
+
+    emitter = SysmonEventEmitter(load_format("windows_event_sysmon"), tmp_path / "sysmon.xml")
+    emitter.emit(event)
+
+    row = next(row for row in emitter._event_dicts if row["EventID"] == 11)
+    assert row["ProcessGuid"] == emitter._generate_process_guid("WIN-01", 4, create_render)
+
+
 def test_sysmon_incomplete_production_plan_fails_closed(tmp_path: Path) -> None:
     """Only an explicitly marked compatibility plan may be extended in the emitter."""
 

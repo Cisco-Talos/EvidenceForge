@@ -1334,6 +1334,14 @@ class SysmonEventEmitter(LogEmitter):
         """Return process fields whose Sysmon identity was frozen upstream."""
 
         process = event.process
+        actor = event.identity_plan.actor if event.identity_plan is not None else None
+        if (
+            process is not None
+            and isinstance(actor, ProcessIdentity)
+            and actor.pid == process.pid
+            and actor.hostname.casefold() == host.hostname.casefold()
+        ):
+            return actor.pid, actor.image or process.image, actor.principal, actor.started_at
         if process is not None and process.pid > 0:
             return (
                 process.pid,
@@ -1341,7 +1349,6 @@ class SysmonEventEmitter(LogEmitter):
                 process.username,
                 process.start_time or event.timestamp,
             )
-        actor = event.identity_plan.actor if event.identity_plan is not None else None
         if (
             isinstance(actor, ProcessIdentity)
             and actor.pid > 0
