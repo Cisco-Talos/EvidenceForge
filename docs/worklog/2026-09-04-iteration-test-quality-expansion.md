@@ -596,3 +596,19 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   from actually observed packets.
 - **Sibling risks:** preserve canonical timeout/state closure, responding RTTs, packet and byte
   accounting, sensor-local loss, tuple/UID correlation, IDS timing, and non-ICMP service inference.
+
+### Result
+
+- Zeek conn projection now omits duration when the sensor observed only one packet, and ICMP rows
+  no longer claim an analyzer service. Explicit ICMP payload sizes remain exact, allowing one nmap
+  discovery invocation to retain one request shape across its targets.
+- The hard probe inspected 725 ICMP rows: all 489 one-packet observations omitted duration, all 725
+  omitted service, and the 254-target discovery sweep used one 64-byte payload size.
+- Focused Zeek observation, format, multiplexing, ICMP-accounting, and exact slow nmap tests passed.
+  The final routine suite passed 8,213 tests with 5 skipped and 2,003 deselected; Ruff passed across
+  753 files.
+- Automated evaluation improved to 96.4266 across 120,631 records, with every hard gate passing.
+- Blind scores were 64, 69, 68, and 76 (average 69.25; spread 12), all Synthetic. No deliberation
+  was required, and no reviewer repeated the ICMP family defect.
+- The next highest-impact repeated hard contradiction is ordinary user Explorers parented by
+  `services.exe`, together with repeated desktop bootstraps under unchanged logon IDs.

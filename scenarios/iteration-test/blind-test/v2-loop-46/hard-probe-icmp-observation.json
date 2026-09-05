@@ -1,0 +1,19 @@
+{
+  "loop": 46,
+  "family": "Zeek ICMP packet-observation semantics",
+  "source": "scenarios/iteration-test/data/*/zeek-*/conn.json",
+  "icmp_rows": 725,
+  "one_packet_rows": 489,
+  "one_packet_rows_with_duration": 0,
+  "icmp_rows_with_service": 0,
+  "discovery_sweep": {
+    "source_ip": "10.10.3.10",
+    "window_epoch_seconds": [1710769765, 1710769771],
+    "sensor_rows": 507,
+    "unique_destinations": 254,
+    "payload_sizes": [64],
+    "one_packet_rows_with_duration": 0,
+    "rows_with_service": 0
+  },
+  "passed": true
+}
