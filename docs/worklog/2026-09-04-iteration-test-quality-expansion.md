@@ -467,3 +467,19 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve native versus provider-envelope timestamps, PID reuse isolation,
   cross-source Security 4688 ordering, parent identity, collection-dropped creates, cache retention,
   checkpoint recovery, and deterministic replay.
+
+### Result
+
+- Parent-order repairs now update the host-shared Sysmon create anchor, and dependent renderers
+  prefer the durable canonical actor over a thinner same-PID process carrier.
+- The definitive hard probe joined 759 visible create/terminate lifecycles with zero ProcessGuid
+  mismatches. All seven hosts with PID 4 evidence retained one GUID.
+- Focused Sysmon tests passed twice while closing the discovered PID 4 sibling. The final routine
+  suite passed 8,208 tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format
+  checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records, with temporal integrity as the only
+  failed hard gate.
+- Blind scores were 84, 84, 76, and 78 (average 80.5; spread 8), all Synthetic. No deliberation was
+  required, and no reviewer repeated the immutable ProcessGuid contradiction.
+- Two reviewers independently retained ASA connection-ID chronology as a dataset-wide defect; it
+  is the next highest-leverage repeated source-native family.
