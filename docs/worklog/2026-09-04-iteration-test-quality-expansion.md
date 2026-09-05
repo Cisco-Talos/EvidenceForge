@@ -431,3 +431,18 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   source-native channel lifetime.
 - **Sibling risks:** preserve exact child byte aggregation, inactivity-timeout channel splitting,
   setup timing, denied/cache terminal actions, output-target parity, and collection-boundary rules.
+
+### Result
+
+- Proxy setup lifetime now spans both the canonical transport and the last visible child request.
+- The hard probe parsed 548 setup rows and 792 children; zero children ended after their owning
+  tunnel, eliminating the loop-41 contradiction.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  lint and format checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records. Temporal integrity at 83.67 remains
+  the only failed hard gate.
+- Standalone blind scores were 44, 88, 64, and 89 (average 71.25; spread 45). Verdict disagreement
+  triggered deliberation; after cross-specialty evidence was shared, all four positions were
+  Synthetic with an average revised synthetic confidence of 84.25.
+- No reviewer repeated the proxy-lifetime defect. The next highest proven root contract is durable
+  Sysmon process identity across create, terminate, PID 4, and dependent-event projections.
