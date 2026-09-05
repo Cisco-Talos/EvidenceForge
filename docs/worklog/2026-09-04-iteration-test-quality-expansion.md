@@ -551,3 +551,21 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   terminate persistent Explorer or mounted transport owners, keep client and server processes
   distinct, respect authoritative session deadlines and collection bounds, and retain exact retry
   behavior for persistent SMB publication.
+
+### Result
+
+- Operation-lived SMB clients now close after definitive publication, bounded foreground
+  finalizers run before their hourly watermark, and eCAR process termination remains governed by
+  the process's own dependent frontier rather than unrelated later session activity.
+- The hard probe joined 26 direct `smbclient -c` lifecycles with zero missing or duplicate endpoint
+  events, zero lifetimes over 60 seconds, and a 43.018-second maximum.
+- Focused source-timing and process-lifecycle tests passed. The final routine suite passed 8,211
+  tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format checks passed
+  across 753 files.
+- Automated evaluation improved to 96.2822 across 123,124 records, and every hard acceptance gate
+  passed.
+- Initial blind scores were 43, 78, 72, and 84 (average 69.25; spread 41), with one Inconclusive
+  and three Synthetic verdicts. Deliberation revised all four to Synthetic with an average score
+  of 87.25. No reviewer repeated the SMB lifetime defect.
+- The next highest-impact independent contradiction is positive duration on unanswered one-packet
+  ICMP scan flows; this becomes the loop-46 family.

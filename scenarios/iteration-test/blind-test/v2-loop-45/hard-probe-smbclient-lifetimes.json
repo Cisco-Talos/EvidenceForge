@@ -1,0 +1,13 @@
+{
+  "loop": 45,
+  "family": "direct Linux smbclient process lifetimes",
+  "source": "scenarios/iteration-test/data/*/ecar.json",
+  "command_selector": "PROCESS/CREATE command_line matches smbclient.* -c ",
+  "process_count": 26,
+  "unpaired_processes": 0,
+  "lifetimes_over_60_seconds": 0,
+  "lifetimes_over_300_seconds": 0,
+  "minimum_lifetime_seconds": 6.64,
+  "maximum_lifetime_seconds": 43.018,
+  "passed": true
+}
