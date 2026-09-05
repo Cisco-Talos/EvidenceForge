@@ -1219,6 +1219,51 @@ def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
         engine._close_emitters()
 
 
+def test_direct_smbclient_process_terminates_after_transport_completion(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """An operation-lived direct client exits after its final SMB dependent."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    client = scenario.environment.systems[0]
+    client.os = "Ubuntu 24.04"
+    client.services = ["smbclient"]
+    actor = scenario.environment.users[0]
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        generator.generate_logon(
+            actor,
+            client,
+            engine.start_time + timedelta(minutes=1),
+            logon_type=2,
+        )
+
+        result = _invoke_windows_read(engine, scenario)
+
+        assert not [
+            process
+            for process in generator.state_manager.get_processes_on_system(client.hostname)
+            if process.image == "/usr/bin/smbclient"
+        ]
+    finally:
+        engine._close_emitters()
+
+    process_rows = [
+        row
+        for row in _json_records(tmp_path, "ecar.json")
+        if row.get("hostname") == client.hostname
+        and row.get("object") == "PROCESS"
+        and row.get("properties", {}).get("image_path") == "/usr/bin/smbclient"
+    ]
+    assert [row["action"] for row in process_rows] == ["CREATE", "TERMINATE"]
+    assert process_rows[0]["timestamp_ms"] < int(result.completed_at.timestamp() * 1000)
+    assert int(result.completed_at.timestamp() * 1000) < process_rows[1]["timestamp_ms"]
+    assert process_rows[1]["timestamp_ms"] - int(result.completed_at.timestamp() * 1000) <= 15_000
+
+
 @pytest.mark.parametrize(
     "mode",
     (

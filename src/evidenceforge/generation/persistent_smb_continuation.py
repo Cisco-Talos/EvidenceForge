@@ -458,6 +458,7 @@ class PersistentSmbTerminalFacts:
     finalization: SmbConnectionFinalizationResult
     activity_result: SmbActivityResult
     source_timing_capacity: SourceTimingActionCapacityReservation
+    action_preparation: PersistentSmbActionPreparation
     handoff: PersistentSmbRootHandoff | None
     receipt: object | None
 
@@ -1724,6 +1725,7 @@ class PersistentSmbTerminalContinuationAuthority:
                 or record.activity_capture is None
                 or record.source_timing_capacity is None
                 or record.source_preparation is None
+                or record.action_preparation is None
             ):
                 raise EventContractError("Persistent SMB terminal source is not published")
             snapshot = self._validate_activity_capture(
@@ -1750,6 +1752,7 @@ class PersistentSmbTerminalContinuationAuthority:
                 finalization=record.finalization,
                 activity_result=self._thaw_activity_snapshot(snapshot),
                 source_timing_capacity=record.source_timing_capacity,
+                action_preparation=record.action_preparation,
                 handoff=record.handoff,
                 receipt=(
                     None if record.materialization is None else record.materialization.receipt
@@ -1764,7 +1767,7 @@ class PersistentSmbTerminalContinuationAuthority:
     ) -> None:
         """Generation-CAS advance one authenticated terminal acknowledgement."""
 
-        if type(expected_cursor) is not int or not 0 <= expected_cursor < 6:
+        if type(expected_cursor) is not int or not 0 <= expected_cursor < 7:
             raise EventContractError("Persistent SMB terminal cursor is out of range")
         with self._lock:
             record = self._record_locked(continuation, require_active=True)
@@ -1847,7 +1850,7 @@ class PersistentSmbTerminalContinuationAuthority:
 
         with self._lock:
             record = self._record_locked(continuation, require_active=True)
-            if record.cursor != 6 or record.activity_capture is None:
+            if record.cursor != 7 or record.activity_capture is None:
                 raise EventContractError("Persistent SMB terminal continuation is incomplete")
             publication_binding = (
                 None

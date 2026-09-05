@@ -494,6 +494,7 @@ class SmbClientProcessPlan:
     transport_image: str
     access_mode: str
     path_style: str
+    terminate_after_operation: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -10400,6 +10401,7 @@ class ActivityGenerator:
                 transport_image="",
                 access_mode=profile.access_mode,
                 path_style=profile.path_style,
+                terminate_after_operation=False,
             )
         local_operand = local_path
         if process_profile.operand_mode in {"download", "upload"}:
@@ -10442,6 +10444,7 @@ class ActivityGenerator:
                 transport_image="",
                 access_mode=profile.access_mode,
                 path_style=profile.path_style,
+                terminate_after_operation=False,
             )
         if running is None:
             session = self._smb_actor_session(client_system, actor, time)
@@ -10494,6 +10497,7 @@ class ActivityGenerator:
             transport_image=transport_image,
             access_mode=profile.access_mode,
             path_style=profile.path_style,
+            terminate_after_operation=rendered.lifecycle == "operation",
         )
 
     def _smb_actor_session(

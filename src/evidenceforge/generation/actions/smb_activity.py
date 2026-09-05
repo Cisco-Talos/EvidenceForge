@@ -1278,6 +1278,33 @@ class SmbActivityActionBundle:
                 primary=primary,
             )
             raise
+        if (
+            client_system is not None
+            and process_plan is not None
+            and process_plan.actor_pid > 0
+            and process_plan.terminate_after_operation
+        ):
+            termination_time = self.executor.foreground_process_termination_time(
+                client_system.hostname,
+                process_plan.actor_pid,
+            )
+            running_process = self.executor.state_manager.get_process(
+                client_system.hostname,
+                process_plan.actor_pid,
+            )
+            if (
+                termination_time is not None
+                and running_process is not None
+                and self.executor._is_within_scenario_window(termination_time)
+            ):
+                self.executor.generate_process_termination(
+                    user=self.request.actor,
+                    system=client_system,
+                    time=termination_time,
+                    pid=process_plan.actor_pid,
+                    process_name=running_process.image,
+                    logon_id=running_process.logon_id,
+                )
         return SmbActivityResult(
             session_id=first_lease.session_id,
             tree_ids=(first_lease.tree_id,),
@@ -3761,6 +3788,60 @@ class SmbActivityActionBundle:
                 "Persistent SMB connection acknowledgement did not retire its exact owner"
             )
 
+    def _terminate_persistent_smb_operation_client(
+        self,
+        facts: _PersistentSmbTerminalFacts,
+    ) -> None:
+        """Close one operation-lived client after its durable SMB dependents."""
+
+        preparation = facts.action_preparation.client_process
+        if preparation.lifecycle != "operation" or preparation.disposition == "none":
+            return
+        handoff = facts.handoff
+        if type(handoff) is not PersistentSmbRootHandoff:
+            raise StateError("Persistent SMB client termination lost its root handoff")
+        if preparation.disposition == "materialize":
+            committed = handoff.materialization.connection.state.processes
+            if len(committed) != 1:
+                raise StateError("Persistent SMB client termination lost its materialized process")
+            pid = committed[0].pid
+        else:
+            pid = preparation.pid
+        running = self.executor.state_manager.get_process(preparation.hostname, pid)
+        if running is None:
+            return
+        if (
+            running.image != preparation.image
+            or running.command_line != preparation.command_line
+            or running.username != preparation.username
+            or running.logon_id != preparation.logon_id
+            or running.start_time != preparation.started_at
+        ):
+            raise StateError("Persistent SMB client termination crossed process identity")
+        termination_time = self.executor.foreground_process_termination_time(
+            preparation.hostname,
+            pid,
+        )
+        if termination_time is None:
+            seed = _stable_seed(
+                "persistent-smb-operation-client-close:"
+                f"{facts.action_id}:{preparation.hostname}:{pid}:"
+                f"{facts.activity_result.completed_at.isoformat()}"
+            )
+            termination_time = facts.activity_result.completed_at + timedelta(
+                milliseconds=250 + seed % 2751
+            )
+        if not self.executor._is_within_scenario_window(termination_time):
+            return
+        self.executor.generate_process_termination(
+            user=self.request.actor,
+            system=self.request.parent_system,
+            time=termination_time,
+            pid=pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+        )
+
     def _resume_persistent_windows_terminal(
         self,
         continuation: PersistentSmbTerminalContinuation,
@@ -3799,6 +3880,10 @@ class SmbActivityActionBundle:
                         facts.source_result,
                     )
                     authority.advance(continuation, expected_cursor=5)
+                    continue
+                if facts.cursor == 6:
+                    self._terminate_persistent_smb_operation_client(facts)
+                    authority.advance(continuation, expected_cursor=6)
                     continue
                 result = authority.complete_no_fail(continuation)
                 completed = True
