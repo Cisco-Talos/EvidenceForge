@@ -201,6 +201,41 @@ def test_sysmon_process_pair_does_not_mix_a_stale_instance_envelope() -> None:
     assert timedelta(0) < rendered - native < timedelta(seconds=1)
 
 
+def test_sysmon_parent_repair_updates_later_lifecycle_identity() -> None:
+    """A parent-order repair remains the shared ProcessGuid anchor for Event 5."""
+
+    planner = SourceTimingPlanner(
+        timing_runtime=TimingRuntime(reference_time=T0, namespace="sysmon-parent-repair")
+    )
+    create = _process_event()
+    terminate = _process_event(
+        event_type="process_terminate",
+        timestamp=T0 + timedelta(seconds=4),
+    )
+    parent_started_at = T0 - timedelta(days=7)
+    parent_object_id = planner._sysmon_process_object_id("WIN-01", 4, parent_started_at)
+    parent_native = T0 + timedelta(seconds=2)
+    parent_render = parent_native + timedelta(milliseconds=200)
+    planner._runtime_cross_source_sysmon_create_times[("win-01", parent_object_id)] = (
+        parent_native,
+        parent_render,
+    )
+
+    _plan(create, planner)
+    _plan(terminate, planner)
+
+    assert create.source_timing is not None
+    assert terminate.source_timing is not None
+    create_anchor = create.source_timing.finalized_times[
+        sysmon_process_render_key("create", "WIN-01")
+    ]
+    terminate_anchor = terminate.source_timing.finalized_times[
+        sysmon_process_render_key("create", "WIN-01")
+    ]
+    assert create_anchor > parent_render
+    assert terminate_anchor == create_anchor
+
+
 def test_sysmon_process_pair_moves_together_after_session_constraint() -> None:
     """A post-specialization session repair shifts payload and envelope together."""
 

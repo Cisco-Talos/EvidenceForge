@@ -446,3 +446,24 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   Synthetic with an average revised synthetic confidence of 84.25.
 - No reviewer repeated the proxy-lifetime defect. The next highest proven root contract is durable
   Sysmon process identity across create, terminate, PID 4, and dependent-event projections.
+
+## Assessment loop 43 — durable Sysmon process identity
+
+### Family contract
+
+- **Owning abstraction:** the host-shared Sysmon process-create timing anchor in
+  `SourceTimingPlanner`.
+- **Invariant:** one host/PID/start lifecycle renders one immutable `ProcessGuid` across Event 1,
+  Event 5, DNS, network, file, registry, module, process-access, and remote-thread projections.
+- **Entry paths:** direct process create/terminate, long-running baseline services, PID 4 dependent
+  activity, parent-before-child timing repair, dropped Event 1 collection, checkpointed batches, and
+  compatibility rendering.
+- **Consumers:** Sysmon lifecycle joins, eCAR-to-Sysmon process correlation, parent GUIDs, evaluator
+  causality checks, detection process graphs, and blind endpoint review.
+- **Layer rationale:** `ProcessGuid` encodes the visible Event 1 anchor. A parent-order repair changed
+  that anchor only in an instance-local cache, allowing later events to recover the unrepaired
+  host-shared value. The repaired anchor must be published by the timing owner, not rewritten by an
+  emitter.
+- **Sibling risks:** preserve native versus provider-envelope timestamps, PID reuse isolation,
+  cross-source Security 4688 ordering, parent identity, collection-dropped creates, cache retention,
+  checkpoint recovery, and deterministic replay.

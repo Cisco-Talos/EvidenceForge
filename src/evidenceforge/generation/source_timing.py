@@ -4001,6 +4001,11 @@ class SourceTimingPlanner:
                 ),
                 maximum_us=2_500,
             )
+            shared_key = (hostname.casefold(), object_id)
+            self._runtime_cross_source_sysmon_create_times[shared_key] = (
+                create_native,
+                create_render,
+            )
         self._sysmon_process_render_create_times[create_cache_key] = create_render
         plan = self._ensure_plan(event)
         plan.finalized_times[sysmon_process_native_key("create", hostname)] = create_native
