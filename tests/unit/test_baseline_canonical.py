@@ -36,6 +36,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
@@ -267,6 +268,35 @@ def test_planned_baseline_logoff_is_published_to_all_session_consumers():
 
     assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=14)) is not None
     assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=16)) is None
+
+
+def test_planned_baseline_logoff_preserves_action_bundle_deadline():
+    """Generic baseline planning cannot replace an action-owned session fence."""
+
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    state_manager = StateManager()
+    state_manager.set_current_time(current_hour - timedelta(hours=2))
+    logon_id = state_manager.create_session(
+        "analyst",
+        "WS-01",
+        2,
+        "-",
+        logon_guid_required=False,
+    )
+    action_deadline = SessionEndPlan(
+        canonical_end=current_hour + timedelta(hours=2),
+        authority="action_bundle",
+    )
+    state_manager.plan_session_end(logon_id, action_deadline)
+    engine = object.__new__(BaselineMixin)
+    engine.state_manager = state_manager
+
+    engine._publish_planned_session_end_plans(
+        current_hour,
+        {("WS-01", logon_id): 15 * 60},
+    )
+
+    assert state_manager.get_session_end_plan(logon_id) == action_deadline
 
 
 def test_locked_workstation_activity_defers_until_after_unlock():

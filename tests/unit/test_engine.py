@@ -486,6 +486,9 @@ class TestGenerationEngine:
         engine.activity_generator.advance_application_channel_watermark.side_effect = (
             lambda _cutoff: order.append("application-watermark")
         )
+        engine.activity_generator.finalize_foreground_process_lifetimes.side_effect = (
+            lambda _cutoff: order.append("foreground-finalize")
+        )
         engine.activity_generator.finalize_ssh_session_lifecycles.side_effect = lambda _cutoff: (
             order.append("ssh-finalize")
         )
@@ -494,13 +497,19 @@ class TestGenerationEngine:
 
         engine._generate_baseline()
 
-        assert order[:4] == [
+        assert order[:5] == [
+            "foreground-finalize",
             "application-watermark",
             "ssh-finalize",
             "sensor-startup",
             "checkpoint",
         ]
-        assert order[4:] == ["application-watermark", "ssh-finalize", "checkpoint"]
+        assert order[5:] == [
+            "foreground-finalize",
+            "application-watermark",
+            "ssh-finalize",
+            "checkpoint",
+        ]
 
     """Tests for GenerationEngine class."""
 

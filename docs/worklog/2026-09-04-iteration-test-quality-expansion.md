@@ -519,3 +519,35 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   was required, and no reviewer repeated the backward ASA connection-ID defect.
 - Two reviewers independently prioritized operation-detached one-shot command lifetimes and
   millisecond-scale retirement sweeps; this is the next family for loop 45.
+
+## Assessment loop 45 — operation-owned SMB client lifetime
+
+### Finding classification
+
+- Direct `smbclient -c` processes surviving completed SMB transports by tens of minutes or hours:
+  `new_family`, independently confirmed by threat-hunting and host-forensics review.
+- Millisecond-scale retirement sweeps: `same_family_sibling`; these are the delayed consequence of
+  leaving bounded operation processes in live State until a later stale/session drain.
+- Other bounded utilities (`git log`, `head`, and `cmd.exe /c`) with delayed exits:
+  `same_family_sibling`, retained for the hard probe and follow-on expansion if the SMB owner fix
+  does not remove their common lifecycle cause.
+
+### Family contract
+
+- **Owning abstraction:** the canonical SMB action bundle and its resolved client-process plan.
+- **Invariant:** a process profile marked as operation-lived remains active through its SMB
+  transport and file effects, then terminates independently within bounded jitter after transport
+  close; session-lived clients such as Explorer and mounted-kernel transport remain unaffected.
+- **Entry paths:** direct Linux `smbclient`, Windows-native access, mounted CIFS operations,
+  downloads, uploads, remote copies, multi-file channel reuse, denied operations, storyline and
+  baseline actions, and explicit preferred process ownership.
+- **Consumers:** client eCAR process lifecycle, endpoint FLOW actor joins, SMB source file effects,
+  Zeek transport close, session teardown, stale-process cleanup, shell serialization, and blind
+  host/threat review.
+- **Layer rationale:** executable lifetime is an action-bundle fact because only the SMB owner knows
+  both the profile's lifecycle class and the definitive transport/file completion frontier. A
+  generic hourly drain sees the process but not the completed operation it should follow.
+- **Sibling risks:** preserve source-process visibility through every dependent effect, do not
+  terminate persistent Explorer or mounted transport owners, keep client and server processes
+  distinct, respect authoritative session deadlines and collection bounds, and retain exact retry
+  behavior for persistent SMB publication.

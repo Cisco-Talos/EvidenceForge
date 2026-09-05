@@ -5556,6 +5556,7 @@ class BaselineMixin:
                 self.state_manager.sweep_closed_connections(next_hour)
                 allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
                 self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+                self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
                 self.activity_generator.advance_process_state_watermark(allocation_cutoff)
                 self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
                 # The application watermark may retire a deferred SSH channel and
@@ -5623,6 +5624,7 @@ class BaselineMixin:
             self.state_manager.sweep_closed_connections(next_hour)
             allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
             self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+            self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
             self.activity_generator.advance_process_state_watermark(allocation_cutoff)
             self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
             self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
@@ -7649,7 +7651,7 @@ class BaselineMixin:
             if session is None:
                 continue
             existing = session.end_plan
-            if existing is not None and existing.is_authoritative:
+            if existing is not None and existing.is_hard_deadline:
                 continue
             self.state_manager.plan_session_end(
                 logon_id,
