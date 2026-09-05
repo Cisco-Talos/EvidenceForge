@@ -1632,11 +1632,7 @@ class SmbActivityActionBundle:
                 transport_attribution=(
                     "process" if profile.transport_attribution == "process" else "kernel"
                 ),
-                lifecycle=(
-                    "operation"
-                    if running.pid == preferred_pid and bool(self.request.process_image)
-                    else rendered.lifecycle
-                ),
+                lifecycle=rendered.lifecycle,
             )
 
         seed = _stable_seed(

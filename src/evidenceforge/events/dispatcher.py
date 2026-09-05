@@ -7870,7 +7870,7 @@ class EventDispatcher:
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
 
-        if self._projection_is_exact_warmup_suppressed(projection):
+        if self._ssh_terminal_projection_is_exact_omission(projection):
             return ()
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
@@ -7908,6 +7908,52 @@ class EventDispatcher:
                 "Exact SSH terminal projection permits at most one Syslog target"
             )
         return tuple(participants)
+
+    def _ssh_terminal_projection_is_exact_omission(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Authenticate an SSH terminal omitted by warm-up or collection policy."""
+
+        from evidenceforge.generation.emitters.ecar import EcarEmitter
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        if self._projection_is_exact_warmup_suppressed(projection):
+            return True
+        if self._exact_projection_targets(projection):
+            return False
+        exact_types_by_format: dict[str, type[LogEmitter]] = {
+            "ecar": EcarEmitter,
+            "syslog": SyslogEmitter,
+        }
+        if any(
+            type(item) is not tuple
+            or len(item) != 2
+            or item[0] not in exact_types_by_format
+            or item[1] != "filtered"
+            for item in projection.initial_statuses
+        ):
+            return False
+        if projection.mode == "legacy":
+            return all(
+                type(target) is _LegacyProjectionTarget
+                and type(target.emitter) is exact_types_by_format.get(target.format_name)
+                and target.status in {"dropped", "out_of_window"}
+                and target.occurrence is None
+                for target in projection.legacy_targets
+            )
+        if projection.mode == "compiled":
+            return all(
+                type(target) is _ProjectionTarget
+                and type(target.emitter) is exact_types_by_format.get(target.format_name)
+                and self._action_cohort_compiled_projection_status(
+                    projection.occurrence,
+                    target,
+                )
+                in {"filtered", "dropped", "out_of_window"}
+                for target in projection.compiled_targets
+            )
+        return False
 
     def _rdp_terminal_exact_projection_participants(
         self,
@@ -8012,6 +8058,8 @@ class EventDispatcher:
             and (
                 self._linux_sudo_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("linux_sudo_")
+                else self._ssh_terminal_projection_is_exact_omission(projection)
+                if exact_kind.startswith("ssh_")
                 else self._projection_is_exact_warmup_suppressed(projection)
             )
         )
@@ -8059,6 +8107,8 @@ class EventDispatcher:
             and (
                 self._linux_sudo_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("linux_sudo_")
+                else self._ssh_terminal_projection_is_exact_omission(projection)
+                if exact_kind.startswith("ssh_")
                 else self._projection_is_exact_warmup_suppressed(projection)
             )
         )

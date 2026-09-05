@@ -2235,6 +2235,43 @@ class TestActivityGenerator:
             for event in emitted
         )
 
+    def test_explorer_namespace_process_does_not_reuse_session_shell(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """An argument-bearing Explorer client must not become the durable shell owner."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        session = state_manager.get_session(logon_id)
+        assert session is not None and session.explorer_pid is not None
+        desktop_shell_pid = session.explorer_pid
+        mock_emitters["windows_event_security"].reset_mock()
+
+        namespace_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            r'explorer.exe "\\FILE-SRV-01\Shared"',
+            parent_pid=desktop_shell_pid,
+        )
+
+        assert namespace_pid != desktop_shell_pid
+        namespace_process = state_manager.get_process(test_system.hostname, namespace_pid)
+        assert namespace_process is not None
+        assert namespace_process.parent_pid == desktop_shell_pid
+
     def test_repeated_logon_render_does_not_duplicate_session_shell(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

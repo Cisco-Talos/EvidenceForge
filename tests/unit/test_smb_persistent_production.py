@@ -1264,6 +1264,56 @@ def test_direct_smbclient_process_terminates_after_transport_completion(
     assert process_rows[1]["timestamp_ms"] - int(result.completed_at.timestamp() * 1000) <= 15_000
 
 
+def test_windows_native_smb_does_not_retire_preferred_desktop_shell(
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """A preferred resident Explorer remains owned by its interactive session."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    client = scenario.environment.systems[0]
+    actor = scenario.environment.users[0]
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        logon_id = generator.generate_logon(
+            actor,
+            client,
+            engine.start_time + timedelta(minutes=1),
+            logon_type=2,
+        )
+        session = generator.state_manager.get_session(logon_id)
+        assert session is not None and session.explorer_pid is not None
+        explorer_pid = session.explorer_pid
+
+        storyline = scenario.storyline[0]
+        with generation_seed_scope(scenario.generation_seed):
+            reset_thread_rng()
+            result = generator.generate_smb_activity(
+                spec=storyline.events[0],
+                actor=actor,
+                parent_system=client,
+                time=engine.start_time + timedelta(minutes=10),
+                process_pid=explorer_pid,
+                process_image=r"C:\Windows\explorer.exe",
+                activity_source="storyline",
+            )
+    finally:
+        engine._close_emitters()
+
+    shell_rows = [
+        row
+        for row in _json_records(tmp_path, "ecar.json")
+        if row.get("hostname") == client.hostname
+        and row.get("object") == "PROCESS"
+        and row.get("pid") == explorer_pid
+    ]
+    assert [row["action"] for row in shell_rows] == ["CREATE"]
+    assert shell_rows[0]["properties"]["command_line"] == "explorer.exe"
+    assert int(result.completed_at.timestamp() * 1000) > shell_rows[0]["timestamp_ms"]
+
+
 @pytest.mark.parametrize(
     "mode",
     (

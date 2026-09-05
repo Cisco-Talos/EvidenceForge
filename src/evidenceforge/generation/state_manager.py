@@ -14043,17 +14043,6 @@ class StateManager:
                 return None
             return self._process_identity(process)
 
-    def get_process_identity_at(
-        self,
-        system: str,
-        pid: int,
-        time: datetime,
-    ) -> ProcessIdentity | None:
-        """Return the exact live or retained PID incarnation spanning ``time``."""
-
-        with self._lock:
-            return self._process_identity_active_at_locked(system, pid, time)
-
     def get_process_identity_by_object_id(self, object_id: str) -> ProcessIdentity | None:
         """Resolve a live or ended process by its durable process object identity."""
 

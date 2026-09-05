@@ -2263,6 +2263,19 @@ def _windows_foreground_lifetime(
     return None
 
 
+def _is_bare_windows_explorer_launch(process_name: str, command_line: str) -> bool:
+    """Return whether Explorer represents the durable desktop shell itself."""
+
+    process_exe = process_name.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+    if process_exe != "explorer.exe":
+        return False
+    normalized_command = command_line.strip().strip('"').replace("/", "\\").casefold()
+    return normalized_command in {
+        "explorer.exe",
+        r"c:\windows\explorer.exe",
+    }
+
+
 def _process_termination_delay_after_activity_seconds(
     *,
     hostname: str,
@@ -20494,6 +20507,7 @@ class ActivityGenerator:
             and source_visible_by is None
             and _get_os_category(system.os) == "windows"
             and _exe_lower == "explorer.exe"
+            and _is_bare_windows_explorer_launch(process_name, command_line)
             and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
         ):
             explorer_pid = self._ensure_session_explorer_pid(
@@ -20855,21 +20869,10 @@ class ActivityGenerator:
                 integrity_level=_integrity,
                 logon_id=process_logon_id,
                 parent_image=self._lookup_process_name(
-                    system.hostname,
-                    parent_pid,
-                    _get_os_category(system.os),
-                    time=time,
+                    system.hostname, parent_pid, _get_os_category(system.os)
                 ),
-                parent_command_line=self._lookup_parent_command_line(
-                    system.hostname,
-                    parent_pid,
-                    time=time,
-                ),
-                parent_start_time=self._lookup_parent_start_time(
-                    system.hostname,
-                    parent_pid,
-                    time=time,
-                ),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
+                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
                 token_elevation=_token_elevation,
                 mandatory_label=_mandatory_label,
                 start_time=process_identity.started_at,
@@ -40202,14 +40205,7 @@ class ActivityGenerator:
             return None
         return pid
 
-    def _lookup_process_name(
-        self,
-        hostname: str,
-        pid: int,
-        os_category: str = "windows",
-        *,
-        time: datetime | None = None,
-    ) -> str:
+    def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
         PID 4 is always the Windows System process (ntoskrnl.exe). Unknown
@@ -40222,10 +40218,6 @@ class ActivityGenerator:
         proc = self.state_manager.state.running_processes.get(key)
         if proc:
             return proc.image
-        if time is not None:
-            identity = self.state_manager.get_process_identity_at(hostname, pid, time)
-            if identity is not None:
-                return identity.image
         if os_category == "linux":
             return "-"
         return r"C:\Windows\explorer.exe"
@@ -40631,7 +40623,8 @@ class ActivityGenerator:
         """Check whether a PID exists and has started by the requested time."""
         if pid == 4 and _get_os_category(system.os) == "windows":
             return True
-        return self.state_manager.is_process_active_at(system.hostname, pid, time)
+        proc = self.state_manager.get_process(system.hostname, pid)
+        return proc is not None and proc.start_time <= time
 
     def _is_valid_process_parent_at(
         self,
@@ -40645,7 +40638,7 @@ class ActivityGenerator:
             return True
         if parent_pid == 4 and _get_os_category(system.os) == "windows":
             return True
-        return self.state_manager.is_process_active_at(system.hostname, parent_pid, time)
+        return self._is_pid_active_at(system, parent_pid, time)
 
     def _prune_user_process_history(
         self,
@@ -40888,56 +40881,24 @@ class ActivityGenerator:
             return parent_pid
         return self._linux_system_parent_fallback(system, time)
 
-    def _lookup_parent_image(
-        self,
-        hostname: str,
-        parent_pid: int,
-        *,
-        time: datetime | None = None,
-    ) -> str:
+    def _lookup_parent_image(self, hostname: str, parent_pid: int) -> str:
         """Look up parent process image from StateManager, with fallback."""
         proc = self.state_manager.get_process(hostname, parent_pid)
         if proc:
             return proc.image
-        if time is not None:
-            identity = self.state_manager.get_process_identity_at(hostname, parent_pid, time)
-            if identity is not None:
-                return identity.image
         return "-"
 
-    def _lookup_parent_command_line(
-        self,
-        hostname: str,
-        parent_pid: int,
-        *,
-        time: datetime | None = None,
-    ) -> str:
+    def _lookup_parent_command_line(self, hostname: str, parent_pid: int) -> str:
         """Look up parent process command line from StateManager."""
         proc = self.state_manager.get_process(hostname, parent_pid)
         if proc:
             return proc.command_line
-        if time is not None:
-            identity = self.state_manager.get_process_identity_at(hostname, parent_pid, time)
-            if identity is not None:
-                return identity.command_line
         return "-"
 
-    def _lookup_parent_start_time(
-        self,
-        hostname: str,
-        parent_pid: int,
-        *,
-        time: datetime | None = None,
-    ) -> datetime | None:
+    def _lookup_parent_start_time(self, hostname: str, parent_pid: int) -> datetime | None:
         """Look up parent process start time at event construction time."""
         proc = self.state_manager.get_process(hostname, parent_pid)
-        if proc is not None:
-            return proc.start_time
-        if time is not None:
-            identity = self.state_manager.get_process_identity_at(hostname, parent_pid, time)
-            if identity is not None:
-                return identity.started_at
-        return None
+        return proc.start_time if proc else None
 
     def _parent_process_matches_logon(
         self,
@@ -41818,6 +41779,15 @@ class ActivityGenerator:
             command_line,
         )
         if os_category == "windows" and process_exe == "explorer.exe":
+            if not _is_bare_windows_explorer_launch(process_name, command_line):
+                explorer_pid = self._get_session_explorer_pid(
+                    system,
+                    user,
+                    time=time,
+                    logon_id=logon_id,
+                )
+                if explorer_pid is not None:
+                    return explorer_pid
             return self._windows_explorer_parent_pid(system, user, time, logon_id)
 
         if os_category == "windows":
