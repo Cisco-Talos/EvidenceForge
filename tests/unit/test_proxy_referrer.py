@@ -500,6 +500,7 @@ class TestProxyActionSemantics:
                     protocol="tcp",
                     service="http",
                     zeek_uid="Cproxyreused",
+                    duration=0.398,
                     application_layer_only=idx > 0,
                 ),
                 proxy=ProxyContext(

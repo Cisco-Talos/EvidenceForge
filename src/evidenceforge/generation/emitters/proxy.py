@@ -518,10 +518,9 @@ class ProxyEmitter(HostMultiplexEmitter):
             0,
             round((latest_child_end - pending.opened_at).total_seconds() * 1000) + 999,
         )
-        connect_data["tunnel_duration_ms"] = (
-            pending.transport_duration_ms
-            if pending.transport_duration_ms is not None
-            else visible_duration_ms
+        connect_data["tunnel_duration_ms"] = max(
+            visible_duration_ms,
+            pending.transport_duration_ms or 0,
         )
         self._dispatch(connect_data)
 

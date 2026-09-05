@@ -405,3 +405,29 @@ remains below its hard threshold. Blind review also leaves systemic realism work
 GUIDs, remote-execution attribution, proxy tunnel lifetimes, ASA ID chronology, one-shot Linux
 process duration, SSH observation coherence, collection-boundary handling, public DNS/PTR identity,
 TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not scenario edits.
+
+## Assessment loop 42 — proxy tunnel lifetime ownership
+
+### Finding classification
+
+- Proxy setup rows ending before visible inspected children: `new_family`, confirmed across 114
+  tunnels by the loop-41 network reviewer.
+- Near-universal zero Sysmon `LogonGuid`: `false_positive_or_unproven`; native Microsoft examples
+  legitimately use the null GUID for local Negotiate, NTLM, and several RDP paths, and the current
+  generator already produces stable nonzero GUIDs for Kerberos-backed sessions.
+
+### Family contract
+
+- **Owning abstraction:** proxy emitter's bounded pending-tunnel summary, which owns the
+  source-native CONNECT lifetime after all visible child requests have been folded.
+- **Invariant:** `tunnel_duration_ms` must span both the canonical client transport and every
+  proxy-visible child transaction assigned to the CONNECT channel.
+- **Entry paths:** explicit HTTPS proxy transactions, reused CONNECT channels, raw compatibility
+  proxy events, incremental checkpoint finalization, and final emitter closure.
+- **Consumers:** combined proxy logs, Splunk proxy JSON, tunnel/child correlation probes, evaluator
+  proxy parsing, and blind network review.
+- **Layer rationale:** the canonical transport duration and visible child frontier are both known
+  only when the proxy source finalizes its summary; rendering either input alone can understate the
+  source-native channel lifetime.
+- **Sibling risks:** preserve exact child byte aggregation, inactivity-timeout channel splitting,
+  setup timing, denied/cache terminal actions, output-target parity, and collection-boundary rules.
