@@ -10628,6 +10628,7 @@ class ActivityGenerator:
             ]
             | None
         ) = None
+        process_lifetime: tuple[float, float] | None = None
         if resident_resource_owner:
             resource_key = self._singleton_application_key(
                 source_system,
@@ -10756,6 +10757,16 @@ class ActivityGenerator:
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(source_system.hostname, pid)
         if running is not None:
+            if process_lifetime is not None:
+                self._remember_foreground_process_finalizer(
+                    system=source_system,
+                    user=user,
+                    pid=pid,
+                    process_name=running.image,
+                    logon_id=running.logon_id,
+                    termination_time=time
+                    + timedelta(seconds=process_rng.uniform(*process_lifetime)),
+                )
             return pid, running.image
         return pid, image
 

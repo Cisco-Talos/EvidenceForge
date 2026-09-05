@@ -3831,6 +3831,14 @@ class SmbActivityActionBundle:
             termination_time = facts.activity_result.completed_at + timedelta(
                 milliseconds=250 + seed % 2751
             )
+        self.executor._remember_foreground_process_finalizer(
+            system=self.request.parent_system,
+            user=self.request.actor,
+            pid=pid,
+            process_name=running.image,
+            logon_id=running.logon_id,
+            termination_time=termination_time,
+        )
         if not self.executor._is_within_scenario_window(termination_time):
             return
         self.executor.generate_process_termination(
@@ -3882,11 +3890,11 @@ class SmbActivityActionBundle:
                     authority.advance(continuation, expected_cursor=5)
                     continue
                 if facts.cursor == 6:
-                    self._terminate_persistent_smb_operation_client(facts)
                     authority.advance(continuation, expected_cursor=6)
                     continue
                 result = authority.complete_no_fail(continuation)
                 completed = True
+                self._terminate_persistent_smb_operation_client(facts)
                 return result
         finally:
             if not completed:
