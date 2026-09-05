@@ -94,9 +94,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "missing_bytes": ft.missing_bytes,
                 "overflow_bytes": ft.overflow_bytes,
                 "timedout": ft.timedout,
-                "md5": ft.md5 or None,
-                "sha1": ft.sha1 or None,
-                "sha256": ft.sha256 or None,
+                "md5": _zeek_file_digest(ft.md5),
+                "sha1": _zeek_file_digest(ft.sha1),
+                "sha256": _zeek_file_digest(ft.sha256),
                 "_source_timing_key": timing_key,
                 "_source_duration_key": timing_key,
                 **sensor_metadata,
@@ -176,9 +176,16 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     seed = f"zeek-cert-file:{fingerprint}"
     return {
         "md5": hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest(),
-        "sha1": fingerprint,
+        "sha1": _zeek_file_digest(fingerprint),
         "sha256": hashlib.sha256(seed.encode()).hexdigest(),
     }
+
+
+def _zeek_file_digest(value: str) -> str | None:
+    """Render a canonical digest using Zeek's lowercase hexadecimal convention."""
+
+    normalized = value.strip().lower()
+    return normalized or None
 
 
 def _tls_certificate_file_timestamp(

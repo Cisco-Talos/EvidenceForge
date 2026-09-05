@@ -374,3 +374,34 @@ later engine-quality loops.
   by endpoint-oriented identity objects.
 - **Sibling risks:** preserve digest values and lengths, TLS SHA-1-to-x509 fingerprint agreement,
   repeated-file stability, sparse/absent hashes, and all non-Zeek consumers of canonical digests.
+
+### Result
+
+- The Zeek Files renderer now normalizes every present MD5, SHA-1, and SHA-256 digest to lowercase
+  without changing canonical source-neutral content identities.
+- The generated hard probe inspected 1,941 Zeek files rows and 3,507 digest values across `zeek-db`,
+  `zeek-core`, and `zeek-dmz`. All 480 SMB and 3,027 non-SMB values were lowercase.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files. The exact legacy slow SMB test remains independently red because
+  it assumes every observed row has hashes and every client read belongs to `robocopy.exe`; this
+  loop did not weaken that unrelated assertion.
+- Automated evaluation remained 95.8512 across 110,715 records. Temporal integrity at 83.67 is the
+  sole failed hard gate.
+- The blind panel returned four Synthetic verdicts with scores 99, 99, 99, and 97 (average 98.5,
+  spread 2). No reviewer repeated the hash-capitalization defect; the network reviewer explicitly
+  praised SMB hashes and complete Zeek joins.
+
+## Ten-loop assessment summary — loops 32–41
+
+The requested ten-loop run repaired ten bounded evidence-family contracts and produced one fresh,
+standalone four-reviewer panel per loop. Exact reports and per-loop scores are archived under
+`scenarios/iteration-test/blind-test/v2-loop-32` through `v2-loop-41`; the final directory also
+contains a 20-loop dashboard spanning loops 22–41.
+
+The strongest final capabilities are deterministic parseability, network/endpoint tuple agreement,
+IDS pivots, SMB auditing, attack-chain reconstruction, multipart exfiltration ownership, Windows
+service identity, and endpoint process ordering. Acceptance is not complete: temporal integrity
+remains below its hard threshold. Blind review also leaves systemic realism work in Sysmon session
+GUIDs, remote-execution attribution, proxy tunnel lifetimes, ASA ID chronology, one-shot Linux
+process duration, SSH observation coherence, collection-boundary handling, public DNS/PTR identity,
+TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not scenario edits.

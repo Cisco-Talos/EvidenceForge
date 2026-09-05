@@ -916,9 +916,9 @@ class TestFilesUidCorrelation:
                     source="SMB",
                     analyzers=["MD5", "SHA1", "SHA256"],
                     seen_bytes=4096,
-                    md5="0" * 32,
-                    sha1="1" * 40,
-                    sha256="2" * 64,
+                    md5="A" * 32,
+                    sha1="B" * 40,
+                    sha256="C" * 64,
                 ),
             )
             emitter.emit(event)
@@ -927,9 +927,9 @@ class TestFilesUidCorrelation:
             with open(output) as f:
                 data = json.loads(f.readline())
 
-            assert data["md5"] == "0" * 32
-            assert data["sha1"] == "1" * 40
-            assert data["sha256"] == "2" * 64
+            assert data["md5"] == "a" * 32
+            assert data["sha1"] == "b" * 40
+            assert data["sha256"] == "c" * 64
 
     def test_smb_filename_renders_when_present(self):
         """SMB files.log rows should include Zeek filename when the context has one."""
