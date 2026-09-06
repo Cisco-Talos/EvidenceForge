@@ -747,7 +747,7 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - The next repeated cross-source contradiction is the RDP login identity, process ancestry,
   terminal-session, and initializer-lifetime family; this becomes loop 50.
 
-## Assessment loop 50 — RDP login and desktop-bootstrap lifecycle
+## Assessment loop 50 — RDP login and desktop-bootstrap identity
 
 ### Finding classification
 
@@ -755,26 +755,27 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   visible RDP sessions.
 - Missing parent images and wrong parent principals across RDP process triplets:
   `same_family_sibling`, despite exact parent process identities already existing canonically.
-- Session-long RDP `userinit.exe` and session-0 `winlogon.exe`: `same_family_sibling`; executable
-  lifetime and terminal-session projection incorrectly follow account or session-close shortcuts.
+- Session-0 `winlogon.exe`: `same_family_sibling`; terminal-session projection incorrectly follows
+  SYSTEM-account defaults despite an explicit nonzero RDP terminal session.
+- Session-long RDP `userinit.exe`: `adjacent_family`, reserved for a dedicated early process-close
+  loop because it requires a distinct lifecycle transition before disconnect.
 
 ### Family contract
 
-- **Owning abstraction:** the deferred RDP action bundle's initial-session materialization batch,
-  dependent occurrence projection, and executable-specific terminal lifecycle.
+- **Owning abstraction:** the deferred RDP action bundle's initial-session materialization batch and
+  dependent occurrence projection.
 - **Invariant:** one successful RDP session carries one immutable target SID/LUID/GUID and terminal
   session ID through its 4624, `winlogon.exe`, `userinit.exe`, and Explorer evidence. Canonical
-  parent snapshots populate every source; `userinit.exe` terminates seconds after shell readiness,
-  independently of later disconnect and shell teardown.
+  parent snapshots populate every source regardless of the owning account's privilege class.
 - **Entry paths:** RDP to workstation, member server, file server, and domain controller; local and
   remote source hosts; elevated and standard users; reconnect, bounded-window, observation-drop,
   exact-publication retry, and collection-boundary paths.
 - **Consumers:** Security 4624/4688/4689/4634/4779, Sysmon 1/5, eCAR process/session telemetry,
-  process and session registries, source timing, reconnect state, terminal cleanup, evaluation,
-  and blind detection/host review.
+  process and session registries, source timing, reconnect state, evaluation, and blind
+  detection/host review.
 - **Layer rationale:** the deferred RDP owner already allocates the complete session and bootstrap
-  process graph atomically. Identity, ancestry, terminal session, and executable close intent must
-  be attached there before source-native renderers consume the graph.
+  process graph atomically. Identity, ancestry, and terminal session must be attached there before
+  source-native renderers consume the graph.
 - **Sibling risks:** preserve SYSTEM token ownership for `winlogon.exe`, user token ownership for
-  `userinit.exe` and Explorer, parent-before-child source ordering, durable Explorer lifetime,
-  reconnect continuity, process-dependent close barriers, exact recovery, and end-window omission.
+  `userinit.exe` and Explorer, parent-before-child source ordering, reconnect continuity, exact
+  recovery, and end-window omission.

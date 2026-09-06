@@ -2641,6 +2641,9 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     winlogon = target_identities["winlogon.exe"]
     userinit = target_identities["userinit.exe"]
     explorer = target_identities["explorer.exe"]
+    session_identity = harness.state.get_session_identity(harness.logon_id)
+    assert session_identity is not None
+    expected_terminal_session_id = session_identity.session_id
     pid4 = harness.state.get_process_identity(harness.target_hostname, 4)
     assert pid4 is not None
     assert pid4.started_at < output_start
@@ -2698,6 +2701,55 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert _field(target_rows["explorer.exe"], "ParentProcessGuid") == _field(
         target_rows["userinit.exe"],
         "ProcessGuid",
+    )
+    assert _field(target_rows["winlogon.exe"], "ParentImage") == "System"
+    assert (
+        _field(target_rows["userinit.exe"], "ParentImage")
+        .casefold()
+        .endswith("system32\\winlogon.exe")
+    )
+    assert (
+        _field(target_rows["explorer.exe"], "ParentImage")
+        .casefold()
+        .endswith("system32\\userinit.exe")
+    )
+    terminal_session_ids = {
+        _field(target_rows[image], "TerminalSessionId")
+        for image in ("winlogon.exe", "userinit.exe", "explorer.exe")
+    }
+    assert terminal_session_ids == {str(expected_terminal_session_id)}
+
+    security_rendered = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    type_ten = next(
+        event
+        for event in _xml_events(security_rendered, 4624)
+        if _field(event, "LogonType") == "10"
+    )
+    assert _field(type_ten, "TargetUserSid").startswith("S-")
+    assert re.fullmatch(r"\{[0-9a-f-]{36}\}", _field(type_ten, "LogonGuid"), re.I)
+
+    process_rows = {
+        _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
+        for event in _xml_events(security_rendered, 4688)
+        if _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        in {"winlogon.exe", "userinit.exe", "explorer.exe"}
+    }
+    assert _field(process_rows["winlogon.exe"], "SubjectUserSid") == "S-1-5-18"
+    assert _field(process_rows["winlogon.exe"], "SubjectUserName") == "SYSTEM"
+    assert _field(process_rows["winlogon.exe"], "SubjectLogonId") == "0x3e7"
+    assert _field(process_rows["winlogon.exe"], "ParentProcessName") == "System"
+    assert (
+        _field(process_rows["userinit.exe"], "ParentProcessName")
+        .casefold()
+        .endswith("system32\\winlogon.exe")
+    )
+    assert (
+        _field(process_rows["explorer.exe"], "ParentProcessName")
+        .casefold()
+        .endswith("system32\\userinit.exe")
     )
     rendered_times = {
         image: _event_time(target_rows[image])

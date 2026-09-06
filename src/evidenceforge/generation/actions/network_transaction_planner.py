@@ -975,7 +975,6 @@ class NetworkTransactionPlanner:
         from evidenceforge.events.identity import EventIdentityPlan
         from evidenceforge.events.lifecycle import ActionLifecycleContext
         from evidenceforge.generation.actions.network_connection import (
-            DeferredRdpApplicationIntent,
             DeferredSessionNetworkAuthority,
         )
         from evidenceforge.generation.deferred_session_composition import DeferredSessionKind
@@ -1038,11 +1037,6 @@ class NetworkTransactionPlanner:
             if type(member) in {SessionMaterializationPlan, ConnectionExistingSessionPatch}:
                 if event.dst_host is None:
                     raise StateError("Deferred session login projection requires its target host")
-                rdp_intent = (
-                    authority.application_intent
-                    if type(authority.application_intent) is DeferredRdpApplicationIntent
-                    else None
-                )
                 is_rdp = authority.kind is DeferredSessionKind.RDP
                 is_reconnect = type(member) is ConnectionExistingSessionPatch
                 if is_reconnect and (not is_rdp or spec.event_type is not EventKind.RDP_RECONNECT):
@@ -1054,17 +1048,17 @@ class NetworkTransactionPlanner:
                     dst_host=event.dst_host,
                     auth=AuthContext(
                         username=identity.principal,
-                        user_sid=rdp_intent.user_sid if rdp_intent is not None else "",
+                        user_sid=(
+                            self._executor._preview_sid(identity.principal) if is_rdp else ""
+                        ),
                         logon_id=identity.logon_id,
                         session_id=identity.session_id,
                         logon_type=10,
                         auth_package="Negotiate" if is_rdp else "SSH",
                         source_ip=transaction.src_ip,
                         source_port=transaction.src_port,
-                        elevated=rdp_intent.elevated if rdp_intent is not None else False,
-                        emit_special_privileges=(
-                            rdp_intent.elevated if rdp_intent is not None else False
-                        ),
+                        elevated=False,
+                        emit_special_privileges=False,
                         logon_process="User32" if is_rdp else "",
                         lm_package="-" if is_rdp else "",
                         logon_guid=identity.logon_guid,
@@ -1072,9 +1066,7 @@ class NetworkTransactionPlanner:
                         subject_username="SYSTEM" if is_rdp else "",
                         subject_domain="NT AUTHORITY" if is_rdp else "",
                         subject_logon_id="0x3e7" if is_rdp else "",
-                        privilege_list=(
-                            rdp_intent.privilege_list if rdp_intent is not None else ""
-                        ),
+                        privilege_list="",
                         session_kind=authority.kind.value,
                         auth_protocol="rdp" if is_rdp else "ssh",
                     ),
@@ -1107,6 +1099,8 @@ class NetworkTransactionPlanner:
                     if is_rdp
                     else ""
                 )
+                parent_identity = member.parent_identity
+                system_subject = identity.principal.casefold() == "system"
                 builder = OccurrenceBuilder(
                     timestamp=spec.canonical_time,
                     event_type=spec.event_type.value,
@@ -1120,6 +1114,10 @@ class NetworkTransactionPlanner:
                         integrity_level=member.integrity_level,
                         logon_id=identity.logon_id,
                         start_time=identity.started_at,
+                        parent_image=(parent_identity.image if parent_identity is not None else ""),
+                        parent_command_line=(
+                            parent_identity.command_line if parent_identity is not None else ""
+                        ),
                     ),
                     auth=(
                         AuthContext(
@@ -1128,6 +1126,10 @@ class NetworkTransactionPlanner:
                             logon_id=identity.logon_id,
                             session_id=member.auth_session_id or 0,
                             logon_type=member.auth_logon_type or 0,
+                            subject_sid="S-1-5-18" if system_subject else "",
+                            subject_username="SYSTEM" if system_subject else "",
+                            subject_domain="NT AUTHORITY" if system_subject else "",
+                            subject_logon_id="0x3e7" if system_subject else "",
                             session_kind="rdp",
                             auth_protocol="rdp",
                         )

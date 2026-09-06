@@ -1420,6 +1420,7 @@ class RdpSessionActionBundle:
             source_port=source_port,
             session_kind="rdp",
             start_time=session_start,
+            logon_guid_required=True,
             lifecycle_group_id=action_id,
             auth_protocol="rdp",
             network_close_time=transport_close,
@@ -1439,6 +1440,8 @@ class RdpSessionActionBundle:
             lifecycle_group_id=stable_uuid("rdp-winlogon-lifecycle", action_id),
             parent_lifecycle_group_id=session_plan.identity.lifecycle_group_id,
             start_time=session_start,
+            auth_session_id=session_plan.identity.session_id,
+            auth_logon_type=10,
         )
         userinit = batch_builder.plan_process(
             system=self._request.target_system.hostname,

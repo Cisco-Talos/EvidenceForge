@@ -1793,6 +1793,8 @@ class SysmonEventEmitter(LogEmitter):
         """Return the canonical TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
+        if auth.session_id > 0:
+            return auth.session_id
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
