@@ -925,3 +925,41 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
   semantics, packet-direction and tuple identity, proxy ingress versus origin egress, alert
   timestamps, sensor-local filtering, deterministic signature selection, and duplicate
   suppression.
+
+### Result
+
+- Commit `55dec82c0` adds exact HTTP User-Agent predicates, derives baseline HTTP evidence from the
+  same signature truth, and excludes plaintext Python-urllib assertions from opaque TLS baselines.
+- Focused IDS tests and all 93 config validations passed; the routine suite passed 8,224 tests with
+  5 skipped and 2,003 deselected; Ruff gates passed.
+- Generation produced 114,286 records. Five curl and two APT alerts match their exact Zeek HTTP
+  values; zero Python-urllib content alerts remain on opaque TLS. Evaluation passed at 96.1232.
+- Initial blind scores were 55, 78, 68, and 61. Deliberation ended unanimously Synthetic at 74,
+  84, 81, and 76.
+- The strongest new positive contradiction is HTTP error response artifact ownership; this becomes
+  loop 54.
+
+## Assessment loop 54 — HTTP terminal response artifact ownership
+
+### Finding classification
+
+- A 403 Citrix installer request renders a fully observed 1,474-byte PE with matching hash and
+  detailed PE analysis at two sensors: `new_family`, a terminal-outcome/content contradiction.
+- Error MIME, file transfer, hash, and analyzer projection are `same_family_sibling` consumers of
+  the same response artifact.
+
+### Family contract
+
+- **Owning abstraction:** canonical HTTP response terminal outcome and response-artifact builder.
+- **Invariant:** status, body size, MIME, file identity, hash, and analyzer metadata describe one
+  response body. Error outcomes cannot retain requested-success PE identity unless the authored
+  error body is independently modeled as that executable.
+- **Entry paths:** direct and proxied HTTP/HTTPS; success, redirect, 304, 403, 407, and 5xx; GET and
+  download responses; multi-sensor projection; capture loss; cache outcomes; and explicit files.
+- **Consumers:** Zeek HTTP/files/PE, proxy access, connection bytes, hashes, IDS content rules,
+  evaluation, and blind network/detection review.
+- **Layer rationale:** terminal HTTP planning owns the response before file/analyzer companions are
+  created. Renderers must consume that frozen response artifact.
+- **Sibling risks:** preserve successful downloads, partial captures, FUID locality, hash agreement,
+  MIME normalization, redirects/HEAD/304 bodylessness, proxy error templates, and deterministic
+  multi-sensor identity.
