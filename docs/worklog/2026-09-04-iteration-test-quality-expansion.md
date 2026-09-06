@@ -689,3 +689,45 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve Security-after-Sysmon latency, stable per-process source timestamps,
   parent recursion without cycles, PID-reuse isolation, collection missingness, process-close
   dependents, and deterministic timing audit behavior.
+
+### Result
+
+- `SourceTimingPlanner` now recursively fixes each visible Windows Security parent's source time
+  before its child and records the adjustment in the timing audit relationship.
+- The hard probe joined 188 source-visible parent/child pairs with zero inversions.
+- Focused tests passed. The routine suite passed 8,219 tests with 5 skipped and 2,003 deselected;
+  repository-wide Ruff lint and format checks passed across 753 files.
+- Automated evaluation scored 96.2468 across 114,409 records, with all hard gates passing.
+- Initial blind scores were 29, 68, 38, and 69 (average 51; spread 40), with Real, Synthetic,
+  Inconclusive, and Synthetic verdicts. Required deliberation revised all four to Synthetic at 68,
+  74, 67, and 75 (average 71). No reviewer repeated the ancestry-timing inversion.
+- The next highest-impact repeated source-native defect is the malformed SMB Type 3 authentication
+  family; this becomes loop 49.
+
+## Assessment loop 49 — Windows SMB network-logon identity
+
+### Finding classification
+
+- 151 successful Type 3 logons with empty subject, GUID, logon-process, and LM-package fields:
+  `new_family`, repeated across DC-01, DC-02, and FILE-SRV-01.
+- Receiver-owned `WorkstationName` on those same records: `same_family_sibling`; modeled client
+  identity exists but is not carried into the logon occurrence.
+
+### Family contract
+
+- **Owning abstraction:** the canonical SMB action bundle's accepted authentication occurrence and
+  durable SMB session identity.
+- **Invariant:** each modeled Windows SMB acceptance renders one source-native Type 3 logon whose
+  SYSTEM subject, client workstation, authentication process/package, target SID, LUID, and GUID
+  are derived from the same canonical client/session truth used by transport and SMB effects.
+- **Entry paths:** persistent and one-shot SMB channels, Kerberos and NTLMSSP authentication,
+  Windows-native clients, Linux clients reaching Windows servers, baseline and storyline actions,
+  denied operations, channel reuse, and modeled or unavailable client hosts.
+- **Consumers:** Security 4624/4634, Sysmon/eCAR session joins, SMB tree/file auditing, transport
+  correlation, detection rules, deterministic evaluation, and blind host/detection review.
+- **Layer rationale:** the SMB action bundle owns the accepted protocol session, source endpoint,
+  authentication mechanism, and durable session identity before rendering. Emitters must project
+  that complete canonical truth rather than infer missing ownership from the destination host.
+- **Sibling risks:** preserve Samba-native authentication semantics, fixed-principal SMB use,
+  client-process ownership, session reuse and close timing, source-port correlation, null-GUID
+  policy, denied-auth behavior, and collection missingness.
