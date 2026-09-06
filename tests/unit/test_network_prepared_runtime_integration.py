@@ -50,6 +50,10 @@ from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
     NetworkConnectionPublicationOutcome,
 )
+from evidenceforge.generation.actions.ssh_session import (
+    SshSessionActionBundle,
+    SshSessionRequest,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
@@ -270,12 +274,14 @@ def _generate_ssh(
     capture: NetworkConnectionIdentityCapture,
     *,
     time: datetime = _START,
+    source_port: int | None = None,
     suppress_prereq_dns: bool = False,
 ) -> str:
     """Generate one successful generic SSH transport with an auto source port."""
 
     return generator.generate_connection(
         src_ip="10.0.1.10",
+        src_port=source_port,
         dst_ip=target.ip,
         time=time,
         dst_port=22,
@@ -1131,6 +1137,119 @@ def test_auto_port_ssh_responder_commits_inside_the_network_root() -> None:
         responder_plan,
         receipt,
     )
+
+
+def test_ssh_responder_binding_expires_before_tuple_reuse() -> None:
+    """A completed transport must not lend its responder process to a later tuple reuse."""
+
+    generator, state, _emitter, target = _ssh_generator()
+    first_capture = NetworkConnectionIdentityCapture()
+    _generate_ssh(generator, target, first_capture)
+    first = first_capture.require()
+    assert first.closed_at is not None
+    assert first.responding_pid is not None
+    assert (
+        generator.ssh_responder_pid_for_tuple(
+            first.src_ip,
+            first.src_port,
+            first.dst_ip,
+            at=first.started_at,
+        )
+        == first.responding_pid
+    )
+    assert (
+        generator.ssh_responder_pid_for_tuple(
+            first.src_ip,
+            first.src_port,
+            first.dst_ip,
+            at=first.closed_at,
+        )
+        is None
+    )
+
+    second_capture = NetworkConnectionIdentityCapture()
+    _generate_ssh(
+        generator,
+        target,
+        second_capture,
+        time=first.closed_at + timedelta(milliseconds=1),
+        source_port=first.src_port,
+    )
+    second = second_capture.require()
+
+    assert second.responding_pid is not None
+    assert second.responding_pid != first.responding_pid
+    assert state.get_process(target.hostname, first.responding_pid) is not None
+    assert state.get_process(target.hostname, second.responding_pid) is not None
+
+
+def test_legacy_ssh_binding_cannot_reassign_a_session_owned_responder() -> None:
+    """A restored window-long binding must not cross SSH session ownership."""
+
+    generator, state, _emitter, target = _ssh_generator()
+    user = User(username="deploy", full_name="Deploy User", email="deploy@example.test")
+    request = SshSessionRequest(
+        user=user,
+        target_system=target,
+        time=_START,
+        source_ip="10.0.1.10",
+        source_port=51_111,
+        duration=30.0,
+        emit_session_close=True,
+        defer_session_close=True,
+    )
+
+    SshSessionActionBundle(request=request, executor=generator).execute_with_identity()
+    first_session = next(
+        session
+        for session in state.get_sessions_for_user(user.username)
+        if session.system == target.hostname
+    )
+    assert first_session.transport_pid is not None
+    first_responder = state.get_process(target.hostname, first_session.transport_pid)
+    assert first_responder is not None
+    first_responder_object_id = state.get_process_object_id(
+        target.hostname,
+        first_responder.pid,
+    )
+    assert first_responder_object_id is not None
+
+    tuple_key = generator._network_responder_runtime_key(
+        "ssh",
+        request.source_ip,
+        request.source_port,
+        target.ip,
+    )
+    generator._network_transaction_runtime.set_point(
+        NetworkRuntimePointFamily.RESPONDER_BINDING,
+        tuple_key,
+        (target.hostname, first_responder.pid, first_responder_object_id),
+        expires_at=_START + timedelta(minutes=59),
+    )
+    second_time = _START + timedelta(seconds=60)
+    assert (
+        generator.ssh_responder_pid_for_tuple(
+            request.source_ip,
+            request.source_port,
+            target.ip,
+            at=second_time,
+        )
+        == first_responder.pid
+    )
+
+    SshSessionActionBundle(
+        request=replace(request, time=second_time),
+        executor=generator,
+    ).execute_with_identity()
+    sessions = [
+        session
+        for session in state.get_sessions_for_user(user.username)
+        if session.system == target.hostname
+    ]
+
+    assert len(sessions) == 2
+    assert len({session.transport_pid for session in sessions}) == 2
+    assert first_responder.pid in {session.transport_pid for session in sessions}
 
 
 def test_rejected_auto_port_ssh_responder_is_state_runtime_and_output_neutral() -> None:

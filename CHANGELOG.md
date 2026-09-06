@@ -6,6 +6,12 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+**Fixed**
+
+- Prevented a later SSH transport that reuses a completed network tuple from inheriting the
+  earlier session's `sshd` worker, including when resuming a legacy checkpoint with a retained
+  window-long responder binding.
+
 ## v2.0.0rc3 (2026-09-06)
 
 This third 2.0 release candidate completes another ten-loop realism assessment cycle, hardens

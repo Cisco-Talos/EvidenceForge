@@ -1310,6 +1310,60 @@ class TestSslContextPopulation:
             for event in events
         )
 
+    def test_deferred_ssh_tuple_reuse_allocates_a_new_session_responder(self, activity_gen):
+        """A later transport reusing one tuple must not inherit the prior session worker."""
+
+        gen, _events = activity_gen
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            duration=30.0,
+            emit_session_close=True,
+            defer_session_close=True,
+        )
+
+        SshSessionActionBundle(request=request, executor=gen).execute_with_identity()
+        first_responder_pid = gen.ssh_responder_pid_for_tuple(
+            request.source_ip,
+            request.source_port,
+            target.ip,
+        )
+        assert first_responder_pid is not None
+
+        second_time = base_time + timedelta(seconds=60)
+        SshSessionActionBundle(
+            request=replace(request, time=second_time),
+            executor=gen,
+        ).execute_with_identity()
+        sessions = [
+            session
+            for session in gen.state_manager.get_sessions_for_user(user.username)
+            if session.system == target.hostname and session.session_kind == "ssh"
+        ]
+        assert len(sessions) == 2
+        responder_pids = {session.transport_pid for session in sessions}
+        assert len(responder_pids) == 2
+        assert first_responder_pid in responder_pids
+        second_responder_pid = next(pid for pid in responder_pids if pid != first_responder_pid)
+        assert second_responder_pid is not None
+
+        gen.finalize_ssh_session_lifecycles(base_time + timedelta(hours=1))
+
+        assert gen.state_manager.get_process(target.hostname, first_responder_pid) is None
+        assert gen.state_manager.get_process(target.hostname, second_responder_pid) is None
+
     def test_ssh_compat_session_logoff_terminates_receiver(self, activity_gen):
         """A later generic logoff should close a compatibility-owned SSH responder."""
         gen, events = activity_gen

@@ -2598,6 +2598,8 @@ class SshSessionExecutor(Protocol):
         source_ip: str,
         source_port: int,
         target_ip: str,
+        *,
+        at: datetime | None = None,
     ) -> int | None:
         """Return a remembered responder-side sshd PID for a tuple."""
         ...
@@ -2610,6 +2612,7 @@ class SshSessionExecutor(Protocol):
         source_ip: str,
         source_port: int,
         target_user: str | None = None,
+        allow_session_owned: bool = False,
     ) -> int:
         """Return or materialize the destination-side sshd process."""
         ...
@@ -5249,23 +5252,31 @@ class SshSessionActionBundle:
 
         request = self.request
         executor = self.executor
+        transport_open_time = self._predicted_transport_open_time(state)
         remembered_sshd_pid = executor.ssh_responder_pid_for_tuple(
             request.source_ip,
             state.source_port,
             request.target_system.ip,
+            at=transport_open_time,
         )
         sshd_pid = request.sshd_pid
         if sshd_pid is None and remembered_sshd_pid is not None:
             sshd_pid = remembered_sshd_pid
-        if (
-            sshd_pid is None
-            or executor.state_manager.get_process(
-                request.target_system.hostname,
-                sshd_pid,
-            )
-            is None
-        ):
-            transport_open_time = self._predicted_transport_open_time(state)
+        responder = (
+            executor.state_manager.get_process(request.target_system.hostname, sshd_pid)
+            if sshd_pid is not None
+            else None
+        )
+        responder_logon_id = responder.logon_id if responder is not None else ""
+        responder_is_unassigned = not responder_logon_id or responder_logon_id in {
+            "0x3e4",
+            "0x3e5",
+            "0x3e7",
+        }
+        responder_matches_session = bool(
+            request.logon_id and responder_logon_id == request.logon_id
+        )
+        if responder is None or not (responder_is_unassigned or responder_matches_session):
             return executor.ensure_linux_ssh_responder_process(
                 target_system=request.target_system,
                 time=transport_open_time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),

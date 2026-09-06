@@ -113,7 +113,10 @@ class _Activity:
         source_ip: str,
         source_port: int,
         target_ip: str,
+        *,
+        at: datetime | None = None,
     ) -> int | None:
+        del at
         return self._responder_pids.get((source_ip, source_port, target_ip))
 
     def ssh_session_ready_time_for_tuple(

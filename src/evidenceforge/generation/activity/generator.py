@@ -22260,6 +22260,8 @@ class ActivityGenerator:
         source_ip: str,
         source_port: int,
         target_ip: str,
+        *,
+        at: datetime | None = None,
     ) -> int | None:
         """Return a committed network-runtime responder PID when one exists."""
 
@@ -22272,6 +22274,7 @@ class ActivityGenerator:
                 target_ip,
             ),
             None,
+            at=at,
         )
         if type(value) is not tuple or len(value) != 3 or type(value[1]) is not int:
             return None
@@ -22348,15 +22351,23 @@ class ActivityGenerator:
         source_ip: str,
         source_port: int,
         target_ip: str,
+        *,
+        at: datetime | None = None,
     ) -> int | None:
         runtime_pid = self._runtime_responder_pid(
             "ssh",
             source_ip,
             source_port,
             target_ip,
+            at=at,
         )
         if runtime_pid is not None:
             return runtime_pid
+        if at is not None:
+            # The compatibility cache has no temporal identity. It can answer
+            # untimed legacy correlation lookups, but must not bind a later
+            # transport that happens to reuse the same network tuple.
+            return None
         if not hasattr(self, "_ssh_responder_pids"):
             return None
         return self._ssh_responder_pids.get(
@@ -22457,6 +22468,9 @@ class ActivityGenerator:
             source_port,
             target_system.ip,
         )
+        responder_expires_at = runtime_expires_at
+        if kind == "ssh" and close_time is not None:
+            responder_expires_at = min(runtime_expires_at, ensure_utc(close_time))
         staged = network_preparation.read_point(
             NetworkRuntimePointFamily.RESPONDER_BINDING,
             tuple_key,
@@ -22474,7 +22488,12 @@ class ActivityGenerator:
         candidate_pid = responding_pid if responding_pid > 0 else staged_pid
         if candidate_pid is None:
             candidate_pid = (
-                self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+                self.ssh_responder_pid_for_tuple(
+                    source_ip,
+                    source_port,
+                    target_system.ip,
+                    at=ensure_utc(time),
+                )
                 if kind == "ssh"
                 else self.smb_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
             )
@@ -22488,7 +22507,7 @@ class ActivityGenerator:
                     NetworkRuntimePointFamily.RESPONDER_BINDING,
                     tuple_key,
                     (target_system.hostname, identity.pid, identity.object_id),
-                    expires_at=runtime_expires_at,
+                    expires_at=responder_expires_at,
                 )
                 return _PreparedNetworkResponder(
                     kind=kind,
@@ -22713,7 +22732,7 @@ class ActivityGenerator:
                 responder_plan.identity.pid,
                 responder_plan.identity.object_id,
             ),
-            expires_at=runtime_expires_at,
+            expires_at=responder_expires_at,
         )
         return _PreparedNetworkResponder(
             kind=kind,
@@ -22783,12 +22802,26 @@ class ActivityGenerator:
         source_ip: str,
         source_port: int,
         target_user: str | None = None,
+        allow_session_owned: bool = False,
     ) -> int:
         """Return the destination-side sshd process that owns one SSH 5-tuple."""
-        remembered = self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+        remembered = self.ssh_responder_pid_for_tuple(
+            source_ip,
+            source_port,
+            target_system.ip,
+            # Source-native SSH messages may be observed just after the
+            # canonical transport close. Correlation may use the latest
+            # committed tuple binding; process allocation must stay bounded
+            # by the transport interval.
+            at=None if allow_session_owned else ensure_utc(time),
+        )
         if remembered is not None:
             running = self.state_manager.get_process(target_system.hostname, remembered)
-            if running is not None:
+            session_unassigned = bool(
+                running is not None
+                and (not running.logon_id or running.logon_id in {"0x3e4", "0x3e5", "0x3e7"})
+            )
+            if running is not None and (allow_session_owned or session_unassigned):
                 return remembered
 
         sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
@@ -23365,6 +23398,7 @@ class ActivityGenerator:
             source_ip=source_ip,
             source_port=source_port,
             target_user=target_user,
+            allow_session_owned=True,
         )
         self._remember_ssh_pid_alias(system.hostname, pid, responder_pid)
         return responder_pid

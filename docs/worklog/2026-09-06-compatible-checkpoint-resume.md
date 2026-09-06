@@ -124,3 +124,30 @@ migration provenance, installed skill references, and package contents.
 The validated implementation commit is `d353e40b2` (`feat: allow behavior-aware checkpoint
 drift`). Local `dev` was integrated by fast-forward only; release versioning and remote publication
 remain deferred to the normal release boundary.
+
+## Post-resume SSH tuple ownership repair
+
+The first remote continuation hydrated and migrated successfully, then later stopped while
+creating a baseline SSH session because a retained destination-side `sshd` worker already belonged
+to an earlier LogonID. A local two-session reproduction showed this was not corrupted checkpoint
+state: non-overlapping SSH connections can legitimately reuse the same source tuple, while the
+older compatibility path retained the tuple-to-responder binding for the full runtime window.
+Deferred closure kept the first per-session worker alive, so the later session found that stale
+binding and the state ownership invariant correctly rejected reassignment.
+
+The repair is integrated directly on `dev`, leaving the exact-behavior recovery branch and
+wheel unchanged:
+
+- New SSH responder bindings expire at the canonical transport close instead of the full runtime
+  window.
+- Timed SSH lookups do not fall back to the unbounded legacy compatibility cache.
+- Restored legacy bindings remain loadable, but a responder owned by another session is rejected
+  and a distinct worker is materialized for the new session.
+- Behavior revision 2 records `ssh-responder-tuple-reuse` as a localized change affecting SSH
+  lifecycle and responder identity in eCAR, Syslog, and Zeek connection output.
+- Routine tests cover binding expiry and restored window-long bindings. Slow tests cover deferred
+  lifecycle closure and byte-identical checkpoint continuation against an uninterrupted control.
+
+Validation passed with 148 affected routine tests, 216 SSH-focused slow tests, the complete
+default suite (8,286 passed and five optional external-parser tests skipped), the behavior-surface
+contract, repository-wide Ruff lint/format checks, and `git diff --check`.

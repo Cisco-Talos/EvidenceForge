@@ -489,6 +489,24 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
     ).prepare_checkpoint(0)
     rng_seal = GenerationRngParticipant().prepare_checkpoint(0)
 
+    first_session = next(
+        session
+        for session in original.state.get_sessions_for_user(original.user.username)
+        if session.system == original.target.hostname
+    )
+    assert first_session.transport_pid is not None
+    first_transport_pid = first_session.transport_pid
+    SshSessionActionBundle(
+        replace(request, time=_START + timedelta(seconds=60)),
+        original.generator,
+    ).execute()
+    original_sessions = [
+        session
+        for session in original.state.get_sessions_for_user(original.user.username)
+        if session.system == original.target.hostname
+    ]
+    assert len(original_sessions) == 2
+    assert len({session.transport_pid for session in original_sessions}) == 2
     original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     original_bytes = original.frozen_bytes()
 
@@ -542,6 +560,23 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
         == loads(activity_seal.head.payload)["ssh_lifecycles"]
     )
     assert fresh.generator.ssh_close_journal_census().legacy_pending == 1
+    restored_first_session = next(
+        session
+        for session in fresh.state.get_sessions_for_user(fresh.user.username)
+        if session.system == fresh.target.hostname
+    )
+    assert restored_first_session.transport_pid == first_transport_pid
+    SshSessionActionBundle(
+        replace(request, time=_START + timedelta(seconds=60)),
+        fresh.generator,
+    ).execute()
+    restored_sessions = [
+        session
+        for session in fresh.state.get_sessions_for_user(fresh.user.username)
+        if session.system == fresh.target.hostname
+    ]
+    assert len(restored_sessions) == 2
+    assert len({session.transport_pid for session in restored_sessions}) == 2
     fresh.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
 
     assert fresh.frozen_bytes() == original_bytes

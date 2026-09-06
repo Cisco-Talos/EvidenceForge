@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 1
+current_revision: 2
 history_start_revision: 1
-behavior_surface_sha256: "5ff6938b5e03ef8ccd9b5912e9d370595df7646cc3485fc1e3d46cf40bfe1a07"
+behavior_surface_sha256: "b70f7c13f032a45e8c1f0597d848f6caba00f07d94fb3ed15ee4657bea4e3f99"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -10,3 +10,14 @@ changes:
       - all-generation
     formats: []
     summary: Establishes the behavior-aware checkpoint resume baseline for EvidenceForge 2.0 development.
+  - revision: 2
+    id: ssh-responder-tuple-reuse
+    impact: localized
+    domains:
+      - network-responder-identity
+      - ssh-session-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - zeek_conn
+    summary: Prevents a later SSH transport from reusing an sshd worker owned by an earlier session.
