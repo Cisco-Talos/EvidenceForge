@@ -383,6 +383,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   recoveries, resume portably, and reproduce byte-identical deterministic bundle content. The
   selected default is 24 simulated hours. See
   [the incremental checkpoint worklog](docs/worklog/2026-09-02-incremental-generation-checkpoints.md).
+- [x] **Compatible checkpoint resume and exact-behavior recovery.** Build-only differences now
+  warn and migrate only after full participant hydration, while runtime, input, and schema
+  differences remain hard failures. Lifecycle restoration distinguishes aged-out parents from
+  cycles and restores large retained graphs in near-linear time. See the
+  [compatible-resume worklog](docs/worklog/2026-09-06-compatible-checkpoint-resume.md).
 - [ ] Consolidate checkpoint-capable emitter spools into the protected
   `.eforge-generation/` workspace. Active spools intentionally remain in their established
   runtime locations for the initial checkpoint release; revisit placement only after production

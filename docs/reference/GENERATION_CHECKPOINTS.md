@@ -27,6 +27,19 @@ eforge checkpoint status ./bundle --verbose
 eforge checkpoint status ./bundle --json
 ```
 
+Status authenticates the stored recovery objects but deliberately does not instantiate the
+generator. To validate all participant schemas and deserialize every retained lifecycle, session,
+emitter, and RNG state into isolated scratch storage, run:
+
+```bash
+eforge checkpoint verify ./bundle
+eforge checkpoint verify ./bundle --json
+```
+
+Verification never writes to the bundle. Its report includes the selected recovery, compatibility
+level, output-equivalence status, full-hydration result, and any retained processes whose original
+parents legitimately aged out of the checkpoint window.
+
 The positional path is the bundle root—the directory that contains `data/`—not the `data/`
 directory itself. When generation uses no explicit `--output`, the bundle root is the authored
 scenario's parent directory. If `data/` is supplied by mistake, the command returns immediately
@@ -93,11 +106,23 @@ output root may be moved or copied before resume because checkpoint metadata con
 paths and its resolved input and immutable segments are self-contained. Stop the generator before
 copying the root; copying an active workspace can capture an inconsistent set of files.
 
-Portability is path portability, not runtime migration. Resume requires the same compatible
-EvidenceForge code/resources, Python implementation, version, and compiler, dependency versions,
-operating system, architecture, byte order, effective options, and resolved-scenario fingerprint.
-Resume an incomplete run before upgrading its environment. An incompatibility is reported rather
-than bypassed because relaxing this check could change the supposedly deterministic continuation.
+Resume uses `--resume-policy compatible` by default. An exact fingerprint match guarantees a
+byte-identical continuation. When only the EvidenceForge version or build digest differs, the
+checkpoint is `load-compatible`: resume proceeds with a prominent warning, and remaining output
+equivalence is not guaranteed. Use `--resume-policy exact` to reject that case and require the
+original build.
+
+Every other difference is a hard incompatibility. EvidenceForge rejects changes to the resolved
+scenario, formats, output target, out-of-band settings, checkpoint or participant schemas,
+dependencies, Python runtime or ABI, operating system, architecture, or byte order. There is no
+unconditional bypass for these checks.
+
+After a load-compatible recovery fully hydrates, EvidenceForge atomically publishes a migration
+checkpoint at the same cursor before generating another simulated hour. The original recovery
+remains the fallback until normal rotation replaces it. Later checkpoints and the final generation
+manifest record the originating and resuming build identities, compatibility classification,
+cursor, and bounded migration lineage. If hydration or migration publication fails, generation
+does not advance.
 
 Interactive generation distinguishes a compatible incomplete run, an invalid or incompatible
 checkpoint, and a completed bundle before offering valid actions. Scripts and redirected input
@@ -121,7 +146,8 @@ Tampering, incompatible inputs or runtime fingerprints, unsupported schemas, and
 are rejected with an explanation. Checkpoints from unreleased development schemas are not migrated.
 
 Successful generation publishes through the normal bundle replacement rules, preserves unrelated
-files, and removes `.eforge-generation/`. The completed generation manifest contains no resume
-history. Deterministic evidence, resolved input, ground truth, artifacts, and deterministic
-sidecars are byte-identical to uninterrupted generation; `generation.log` and the time-bearing
-generation manifest retain their established nondeterministic fields.
+files, and removes `.eforge-generation/`. The completed generation manifest retains bounded resume
+provenance when recovery occurred. Under an exact resume, deterministic evidence, resolved input,
+ground truth, artifacts, and deterministic sidecars are byte-identical to uninterrupted
+generation. A load-compatible resume makes no byte-equivalence promise; `generation.log` and the
+time-bearing generation manifest retain their established nondeterministic fields in either case.
