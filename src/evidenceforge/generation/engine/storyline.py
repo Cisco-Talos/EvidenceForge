@@ -8470,7 +8470,12 @@ class StorylineMixin:
         plan = bundle.plan_execution()
         if plan is None or not bundle.execute():
             return None
-        available_at = plan.receiver_create.timestamp
+        available_at = max(
+            plan.receiver_create.timestamp,
+            ensure_utc(transfer_completed_at)
+            if transfer_completed_at is not None
+            else plan.receiver_create.timestamp,
+        )
         self._remember_storyline_file_available(
             system=target_system,
             path=target_path,

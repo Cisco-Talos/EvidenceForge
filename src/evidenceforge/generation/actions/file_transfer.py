@@ -2171,24 +2171,39 @@ class ScpReceiverFileActionBundle:
         if source_read_time <= ready_time:
             source_read_time = ready_time + timedelta(milliseconds=1)
 
-        transfer_completed_at = max(
-            transfer_time,
-            ensure_utc(self._request.transfer_completed_at)
+        transfer_completed_at = (
+            max(transfer_time, ensure_utc(self._request.transfer_completed_at))
             if self._request.transfer_completed_at is not None
-            else transfer_time,
+            else None
         )
-        receiver_create_delay = _sample_transfer_value(
-            self._timing_runtime,
-            relationship_key="file_transfer.scp.receiver_create_after_completion",
-            stable_id=self._request.stable_id,
-            host=self._request.target_system.hostname,
-            lifecycle_id=self.anchor.action_id,
-            sample_key="receiver_create_delay",
-            minimum=0.12,
-            mode=0.31,
-            maximum=0.9,
-        )
-        receiver_create_time = transfer_completed_at + timedelta(seconds=receiver_create_delay)
+        if transfer_completed_at is not None:
+            receiver_completion_lead = _sample_transfer_value(
+                self._timing_runtime,
+                relationship_key="file_transfer.scp.receiver_create_before_completion",
+                stable_id=self._request.stable_id,
+                host=self._request.target_system.hostname,
+                lifecycle_id=self.anchor.action_id,
+                sample_key="receiver_create_completion_lead",
+                minimum=0.08,
+                mode=0.19,
+                maximum=0.4,
+            )
+            receiver_create_time = transfer_completed_at - timedelta(
+                seconds=receiver_completion_lead
+            )
+        else:
+            receiver_create_delay = _sample_transfer_value(
+                self._timing_runtime,
+                relationship_key="file_transfer.scp.receiver_create_delay",
+                stable_id=self._request.stable_id,
+                host=self._request.target_system.hostname,
+                lifecycle_id=self.anchor.action_id,
+                sample_key="receiver_create_delay",
+                minimum=1.2,
+                mode=1.7,
+                maximum=3.0,
+            )
+            receiver_create_time = transfer_time + timedelta(seconds=receiver_create_delay)
         if source_process_time is not None and receiver_create_time <= source_process_time:
             receiver_create_time = source_process_time + _sample_transfer_gap(
                 self._timing_runtime,
@@ -2215,6 +2230,11 @@ class ScpReceiverFileActionBundle:
             )
         if receiver_create_time <= source_read_time:
             receiver_create_time = source_read_time + timedelta(milliseconds=1)
+        if transfer_completed_at is not None and receiver_create_time >= transfer_completed_at:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "SCP transfer has no interval for receiver file completion",
+            )
 
         window_end = _exclusive_effect_window_end(
             self._executor,

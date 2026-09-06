@@ -1818,7 +1818,8 @@ class TestFileTransferActionBundles:
         assert receiver_create.file.path == "/tmp/rpt.sql.gz"
         assert receiver_create.file.action == "create"
         assert source_read.timestamp < receiver_create.timestamp
-        assert receiver_create.timestamp > timestamp + timedelta(seconds=31)
+        assert timestamp + timedelta(seconds=30) < receiver_create.timestamp
+        assert receiver_create.timestamp < timestamp + timedelta(seconds=31)
 
 
 class TestStorylineScpCorrelation:
