@@ -731,3 +731,50 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve Samba-native authentication semantics, fixed-principal SMB use,
   client-process ownership, session reuse and close timing, source-port correlation, null-GUID
   policy, denied-auth behavior, and collection missingness.
+
+### Result
+
+- The persistent SMB owner now projects complete SYSTEM subject, client workstation, protocol-
+  specific authentication, target SID/LUID/GUID, and LSASS reporter identity into Type 3 logons.
+- The hard probe inspected all 433 Type 3 logons: every required field was populated, no remote
+  record named its receiver as the workstation, and only coherent Kerberos and NTLM combinations
+  remained.
+- Focused production tests passed. The routine suite passed 8,220 tests with 5 skipped and 2,003
+  deselected; Ruff lint and format checks passed across 753 files.
+- Automated evaluation improved to 96.2686 across 114,409 records, with all hard gates passing.
+- All four blind verdicts were Synthetic at 84, 66, 86, and 84 (average 80; spread 20), so no
+  deliberation was required. No reviewer repeated the prior SMB blank-field/receiver signature.
+- The next repeated cross-source contradiction is the RDP login identity, process ancestry,
+  terminal-session, and initializer-lifetime family; this becomes loop 50.
+
+## Assessment loop 50 — RDP login and desktop-bootstrap lifecycle
+
+### Finding classification
+
+- Empty Type 10 target SID/GUID and SYSTEM creator fields: `new_family`, repeated for all four
+  visible RDP sessions.
+- Missing parent images and wrong parent principals across RDP process triplets:
+  `same_family_sibling`, despite exact parent process identities already existing canonically.
+- Session-long RDP `userinit.exe` and session-0 `winlogon.exe`: `same_family_sibling`; executable
+  lifetime and terminal-session projection incorrectly follow account or session-close shortcuts.
+
+### Family contract
+
+- **Owning abstraction:** the deferred RDP action bundle's initial-session materialization batch,
+  dependent occurrence projection, and executable-specific terminal lifecycle.
+- **Invariant:** one successful RDP session carries one immutable target SID/LUID/GUID and terminal
+  session ID through its 4624, `winlogon.exe`, `userinit.exe`, and Explorer evidence. Canonical
+  parent snapshots populate every source; `userinit.exe` terminates seconds after shell readiness,
+  independently of later disconnect and shell teardown.
+- **Entry paths:** RDP to workstation, member server, file server, and domain controller; local and
+  remote source hosts; elevated and standard users; reconnect, bounded-window, observation-drop,
+  exact-publication retry, and collection-boundary paths.
+- **Consumers:** Security 4624/4688/4689/4634/4779, Sysmon 1/5, eCAR process/session telemetry,
+  process and session registries, source timing, reconnect state, terminal cleanup, evaluation,
+  and blind detection/host review.
+- **Layer rationale:** the deferred RDP owner already allocates the complete session and bootstrap
+  process graph atomically. Identity, ancestry, terminal session, and executable close intent must
+  be attached there before source-native renderers consume the graph.
+- **Sibling risks:** preserve SYSTEM token ownership for `winlogon.exe`, user token ownership for
+  `userinit.exe` and Explorer, parent-before-child source ordering, durable Explorer lifetime,
+  reconnect continuity, process-dependent close barriers, exact recovery, and end-window omission.
