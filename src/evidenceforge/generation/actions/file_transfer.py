@@ -2136,6 +2136,19 @@ class ScpReceiverFileActionBundle:
                 tags=("runtime", "scp-receiver"),
                 seed_ref=receiver_record.content.seed_ref,
             )
+        elif source_content is not None:
+            from evidenceforge.generation.storage_world import CompiledStorageFile
+
+            self._receiver_source_file = CompiledStorageFile(
+                file_id=plan.receiver_create.identity_plan.object_id,
+                version=source_content.version,
+                share=f"client:{self._request.target_system.hostname}",
+                path=self._request.target_path,
+                size_bytes=source_content.size_bytes,
+                mime_type=source_content.mime_type,
+                tags=("runtime", "scp-receiver"),
+                seed_ref=source_content.seed_ref,
+            )
         _publish_prepared_file_occurrences(
             self._executor,
             (

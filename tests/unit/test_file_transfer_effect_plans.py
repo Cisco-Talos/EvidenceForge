@@ -12,7 +12,7 @@ import runpy
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.contracts import OccurrenceRole
 from evidenceforge.generation.actions.command_effects import (
@@ -452,6 +453,32 @@ def test_scp_reuses_source_content_identity_and_publishes_exact_receiver_artifac
     assert source_read.identity_plan.object_id == source_record.artifact.artifact_id
     assert receiver_create.identity_plan.object_id == receiver_record.artifact.artifact_id
     assert source_read.identity_plan.object_id != receiver_create.identity_plan.object_id
+
+
+def test_scp_exposes_receiver_source_without_runtime_artifact_registry() -> None:
+    """The chained transfer handoff retains exact content in compatibility runtimes."""
+
+    fixture = _fixture()
+    source_content = FileContentIdentity(
+        file_object_id="source-archive",
+        version=3,
+        size_bytes=817_203,
+        mime_type="application/gzip",
+        seed_ref="source-archive-v3",
+    )
+    request = replace(fixture.scp_request, source_content=source_content)
+    bundle = ScpReceiverFileActionBundle(fixture.executor, request, random.Random(73))
+    plan = bundle.plan_execution()
+    assert plan is not None
+
+    assert bundle.execute()
+
+    assert bundle.receiver_source_file is not None
+    assert bundle.receiver_source_file.file_id == plan.receiver_create.identity_plan.object_id
+    assert bundle.receiver_source_file.version == source_content.version
+    assert bundle.receiver_source_file.size_bytes == source_content.size_bytes
+    assert bundle.receiver_source_file.mime_type == source_content.mime_type
+    assert bundle.receiver_source_file.seed_ref == source_content.seed_ref
 
 
 def test_staged_smb_channel_omission_leaves_endpoint_and_audit_state_untouched() -> None:
