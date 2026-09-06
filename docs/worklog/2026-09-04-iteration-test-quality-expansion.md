@@ -827,3 +827,52 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve canonical timestamps, cross-source latency texture, process GUID and
   object identity, parent/child close barriers, observation-cohort coherence, retry neutrality,
   collection-boundary omission, and bounded retained state.
+
+### Result
+
+- Commit `983a45cbf` removes the accidental Sysmon-style re-keying of eCAR process lifecycle
+  timing, so source-local dependents and terminalization now share the canonical process object.
+- Focused source-timing and eCAR integration suites passed (73 and 137 tests), followed by the
+  full routine gate (8,221 passed, 5 skipped, 2,003 deselected) and clean Ruff gates.
+- Supported generation produced 114,409 records. Across 32,914 eCAR rows, the hard probe found
+  19,765 process-attributed dependents with zero before create and zero after terminate. The cited
+  Teams object now terminates 5 ms after its last startup module.
+- Automated evaluation remained 96.2705 with every hard gate passing.
+- Initial blind verdicts were three Synthetic and one Real at 63, 56, 24, and 68 (average 52.75;
+  spread 44). Required deliberation ended at three Synthetic and one Inconclusive, with scores 71,
+  67, 45, and 75 (average 64.5).
+- The panel ranked successful proxy-upload payload non-conservation as its strongest remaining
+  shared-truth defect; this becomes loop 52.
+
+## Assessment loop 52 — explicit proxy upload payload conservation
+
+### Finding classification
+
+- A successful multipart upload carries approximately 44 MB on the client-to-proxy leg but only
+  18.8 MB on the proxy-to-origin leg, with zero reported loss: `same_family_sibling` in the
+  explicit proxy transaction's shared transfer accounting.
+- Proxy access and ASA independently corroborate the contradictory totals on both legs, making
+  this a four-source transaction contract rather than a single-renderer formatting defect.
+- Download accounting, cache/deny behavior, and direct HTTP transfers are sibling paths whose
+  existing semantics must remain unchanged.
+
+### Family contract
+
+- **Owning abstraction:** the explicit proxy transaction action bundle and its immutable transfer
+  accounting carried into both canonical network legs.
+- **Invariant:** one successful forwarded request has one canonical request-body truth. Client
+  upload, proxy ingress, proxy access, proxy egress, origin request, and firewall observations may
+  add separately modeled framing/transport overhead, but their decoded payload cannot diverge.
+  Transformations, retries, truncation, denial, and capture loss require explicit outcomes.
+- **Entry paths:** cleartext HTTP and CONNECT/TLS proxying; GET/POST/PUT; multipart and raw body;
+  upload/download; keep-alive/tunnel reuse; cache hit/miss; deny/auth/error; partial capture;
+  observation delay/drop; exact retry; and collection boundaries.
+- **Consumers:** client/proxy eCAR FLOW and FILE evidence, proxy access logs, Zeek conn/http/files,
+  ASA build/teardown accounting, IDS, transfer evaluation, storyline reconciliation, and blind
+  threat/network review.
+- **Layer rationale:** the proxy bundle owns both transport legs and the logical request before any
+  source renderer. Payload size must be computed once there and carried to every consumer; no
+  emitter may independently invent a successful leg's body volume.
+- **Sibling risks:** preserve directional overhead, TLS framing, packet counts, loss accounting,
+  response bytes, tunnel reuse, multiple requests per connection, file hashes/FUIDs, proxy status,
+  deterministic identity, and bounded runtime state.

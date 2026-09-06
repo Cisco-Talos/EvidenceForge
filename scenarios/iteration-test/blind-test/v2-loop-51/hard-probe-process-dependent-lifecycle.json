@@ -1,0 +1,19 @@
+{
+  "contract": "process-dependent evidence before terminalization",
+  "result": "pass",
+  "ecar_rows": 32914,
+  "process_creates": 1929,
+  "process_terminates": 1787,
+  "process_attributed_dependents": 19765,
+  "dependents_before_create": 0,
+  "dependents_after_terminate": 0,
+  "teams_regression": {
+    "host": "WS-AJOHNSON-01.meridianhcs.local",
+    "process_object_id": "83166db9-4507-45e7-8353-7ffe35c45eb4",
+    "pid": 6212,
+    "create_timestamp_ms": 1710778237468,
+    "last_startup_module_timestamp_ms": 1710778237575,
+    "terminate_timestamp_ms": 1710778237580,
+    "ordering": "create < all startup modules < terminate"
+  }
+}
