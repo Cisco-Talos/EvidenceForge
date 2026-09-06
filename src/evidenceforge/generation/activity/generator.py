@@ -1016,7 +1016,7 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
                 mime_type,
                 response_body_len,
             )
-    if not resp_mime_types or response_body_len <= 0 or bodyless_status:
+    if not resp_mime_types or response_body_len <= 0 or bodyless_status or status_code >= 400:
         mime_type = resp_mime_types[0] if resp_mime_types else ""
         if not mime_type and response_body_len > 0 and status_code < 300:
             mime_type = normalize_mime_type_for_path(

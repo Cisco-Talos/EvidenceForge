@@ -198,6 +198,8 @@ def response_mime_types_for_status(
     """Return Zeek-style response MIME metadata only when a body is observable."""
     if not http_response_has_entity_body(method, status_code, response_body_len):
         return []
+    if status_code >= 400 and is_download_scale_mime(mime_type):
+        return ["text/html"]
     if mime_type:
         return [mime_type]
     if 300 <= status_code < 400 or status_code >= 400:
