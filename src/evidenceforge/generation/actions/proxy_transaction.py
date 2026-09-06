@@ -1225,12 +1225,24 @@ class ProxyTransactionActionBundle:
             )
 
         request_overhead = 0 if request_body == 0 and proxy_context.cs_bytes > 0 else 80
+        if request.http is not None and request_body > 0:
+            # The HTTP entity is canonical.  Proxy planning can occur before the
+            # network planner replaces a generator-owned payload estimate with
+            # the authored HTTP body, so preserve only the already-planned
+            # source-side header overhead instead of retaining that stale body.
+            planned_payload = max(0, int(request.orig_bytes or 0))
+            planned_overhead = int(proxy_context.cs_bytes) - planned_payload
+            if planned_overhead >= 0:
+                request_overhead = planned_overhead
         response_overhead = 0 if response_body == 0 and proxy_context.sc_bytes > 0 else 50
+        finalized_cs_bytes = max(proxy_context.cs_bytes, request_body + request_overhead)
+        if request.http is not None and request_body > 0:
+            finalized_cs_bytes = request_body + request_overhead
         return replace(
             proxy_context,
             request_body_bytes=request_body,
             response_body_bytes=response_body,
-            cs_bytes=max(proxy_context.cs_bytes, request_body + request_overhead),
+            cs_bytes=finalized_cs_bytes,
             sc_bytes=max(proxy_context.sc_bytes, response_body + response_overhead),
         )
 
