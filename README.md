@@ -155,6 +155,7 @@ resumed from another terminal:
 
 ```bash
 uv run eforge checkpoint status ./output
+uv run eforge checkpoint verify ./output
 uv run eforge checkpoint suspend ./output
 uv run eforge generate --output ./output --resume
 ```
@@ -190,6 +191,7 @@ For scripted or non-interactive use:
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir> [--seed N]` | Forecast resources, then generate logs with 24-hour checkpoints; `--seed` overrides the scenario seed |
 | `eforge checkpoint status <bundle-root> [--verbose\|--json]` | Thoroughly inspect recovery health, compatibility, cursor, and managed storage without resuming |
+| `eforge checkpoint verify <bundle-root> [--verbose\|--json]` | Read-only full hydration with phased progress and behavior/runtime drift diagnostics |
 | `eforge checkpoint suspend <bundle-root>` | Ask an active checkpoint-enabled generator to stop safely after its current simulated hour |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
@@ -205,6 +207,12 @@ Useful `generate` flags include `--verbose` / `--debug`, `--formats` / `-F`,
 `--target default|sof-elk|splunk`, `--resume`, `--overwrite`, and `--checkpoint-hours N`. The
 default checkpoint cadence is 24 simulated hours; `0` disables new checkpoints. `validate` accepts
 the same checkpoint-cadence option so its resource forecast reflects the intended run.
+
+Resume defaults to `--resume-policy compatible`. It attempts environment drift such as Python,
+dependency, OS, and architecture changes, while preserving hard integrity, state-schema, immutable
+run-input, and fresh OOB-authorization boundaries. Material or unknown EvidenceForge behavior
+changes require interactive confirmation (default no) or explicit `--resume-policy attempt` after
+read-only verification; exact policy retains the byte-equivalent fingerprint requirement.
 
 See [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) for recovery and
 filesystem-safety details, and the [Output Target Ingest Guides](docs/output-targets/README.md) for

@@ -85,7 +85,9 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
     else:
         console.print(
             f"[bold]Validation:[/bold] integrity {report.integrity}; "
-            f"runtime compatibility {report.compatibility_level}; "
+            f"run identity {report.run_identity}; "
+            f"loadability {report.loadability}; "
+            f"behavior {report.behavior_change}; "
             f"output equivalence {report.output_equivalence}"
         )
         hydration = "verified" if report.restore_verified else "not run (use checkpoint verify)"
@@ -194,6 +196,12 @@ def checkpoint_status(
 @checkpoint_app.command("verify")
 def checkpoint_verify(
     directory: Path = typer.Argument(..., help="Generation output root to verify."),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed drift records and bounded dangling-parent examples.",
+    ),
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -202,15 +210,51 @@ def checkpoint_verify(
 ) -> None:
     """Hydrate every participant in scratch storage without changing the bundle."""
 
+    def report_progress(phase: str, detail: dict[str, object]) -> None:
+        if phase == "integrity":
+            console.print("[dim]1/5 Checking checkpoint integrity...[/dim]")
+        elif phase == "initialization":
+            console.print("[dim]2/5 Initializing isolated scratch runtime...[/dim]")
+        elif phase == "hydration":
+            console.print(
+                f"[dim]3/5 Hydrating participant {detail['completed']}/{detail['total']}: "
+                f"{detail['owner']}[/dim]",
+                end="\r",
+            )
+        elif phase == "cleanup":
+            console.print("\n[dim]4/5 Disposing scratch runtime...[/dim]")
+        elif phase == "completion":
+            console.print("[dim]5/5 Verification complete.[/dim]")
+
     try:
         if json_output:
-            report = verify_checkpoint_recovery(directory)
+            report = (
+                verify_checkpoint_recovery(directory, verbose=True)
+                if verbose
+                else verify_checkpoint_recovery(directory)
+            )
         else:
-            with console.status("Verifying checkpoint integrity and participant hydration..."):
-                report = verify_checkpoint_recovery(directory)
+            report = verify_checkpoint_recovery(
+                directory,
+                verbose=verbose,
+                progress=report_progress,
+            )
     except CheckpointError as error:
         if json_output:
-            typer.echo(json.dumps({"error": str(error), "restore_verified": False}, sort_keys=True))
+            typer.echo(
+                json.dumps(
+                    {
+                        "behavior_change": "unknown",
+                        "confirmation_required": False,
+                        "error": str(error),
+                        "loadability": "failed",
+                        "restore_verified": False,
+                        "run_identity": "not-checked",
+                        "schema_version": "1.1",
+                    },
+                    sort_keys=True,
+                )
+            )
         else:
             console.print(f"[bold red]Error:[/bold red] {error}")
         raise typer.Exit(1) from None
@@ -223,7 +267,7 @@ def checkpoint_verify(
     )
     console.print(
         f"[bold]Compatibility:[/bold] {report.compatibility_level}; "
-        f"output equivalence {report.output_equivalence}"
+        f"behavior {report.behavior_change}; output equivalence {report.output_equivalence}"
     )
     console.print(
         f"[bold]Participants:[/bold] {report.participant_count}; "
@@ -234,6 +278,29 @@ def checkpoint_verify(
             "[bold]Compatibility differences:[/bold] "
             + ", ".join(sorted(report.component_mismatches))
         )
+    if verbose and report.dangling_process_parents:
+        console.print("[bold]Aged-out parent examples:[/bold]")
+        for example in report.dangling_process_parents:
+            console.print("  " + json.dumps(example, sort_keys=True))
+    if verbose:
+        if report.behavior_summaries:
+            console.print("[bold]Declared behavior changes:[/bold]")
+            for change_id, summary in zip(
+                report.behavior_change_ids,
+                report.behavior_summaries,
+                strict=True,
+            ):
+                console.print(f"  {change_id}: {summary}")
+        for label, differences in (
+            ("Run identity", report.run_differences),
+            ("Runtime", report.runtime_differences),
+            ("Behavior", report.behavior_differences),
+            ("State contract", report.state_contract_differences),
+        ):
+            if differences:
+                console.print(f"[bold]{label} differences:[/bold]")
+                for key, value in sorted(differences.items()):
+                    console.print(f"  {key}: {json.dumps(value, sort_keys=True)}")
     for warning in report.warnings:
         console.print(f"[yellow]Warning:[/yellow] {warning}")
 

@@ -1188,7 +1188,7 @@ def generate(
     resume_policy: str = typer.Option(
         "compatible",
         "--resume-policy",
-        help="Resume policy: compatible permits build-only differences; exact requires a match",
+        help="Resume policy: exact, compatible (default), or explicit drift consent via attempt",
     ),
     checkpoint_hours: int | None = typer.Option(
         None,
@@ -1250,9 +1250,9 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
-    if resume_policy not in {"compatible", "exact"}:
+    if resume_policy not in {"exact", "compatible", "attempt"}:
         console.print(
-            "[bold red]Error:[/bold red] --resume-policy must be compatible or exact",
+            "[bold red]Error:[/bold red] --resume-policy must be exact, compatible, or attempt",
             style="red",
         )
         raise typer.Exit(EXIT_INPUT_ERROR)
@@ -1313,6 +1313,7 @@ def generate(
                     console.print("[dim]Aborted.[/dim]")
                     raise typer.Exit(EXIT_ABORTED)
 
+    scenario_was_explicit = scenario_file is not None
     preliminary_store: IncrementalCheckpointStore | None = None
     preliminary_recovery = None
     stored_run_options: dict[str, object] = {}
@@ -1360,14 +1361,18 @@ def generate(
     # --oob-host IS the explicit opt-in, and only the explicitly-registered host(s) become
     # allowlisted, so a payload can never silently point anywhere else. Normalize + validate
     # at the boundary (fail fast) via the shared helper that generate and validate share.
-    if resume and not oob_host:
-        retained_oob_hosts = stored_run_options.get("oob_hosts", [])
-        if type(retained_oob_hosts) is not list or any(
-            type(value) is not str for value in retained_oob_hosts
-        ):
-            console.print("[bold red]Error:[/bold red] Checkpoint OOB settings are malformed")
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        oob_host = retained_oob_hosts
+    retained_oob_hosts = stored_run_options.get("oob_hosts", []) if resume else []
+    if type(retained_oob_hosts) is not list or any(
+        type(value) is not str for value in retained_oob_hosts
+    ):
+        console.print("[bold red]Error:[/bold red] Checkpoint OOB settings are malformed")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if resume and retained_oob_hosts and not oob_host:
+        console.print(
+            "[bold red]Error:[/bold red] This checkpoint used live callback hosts. A checkpoint "
+            "never grants callback authorization; repeat every matching --oob-host explicitly."
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
     oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
 
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
@@ -1620,6 +1625,7 @@ def generate(
         oob_hosts=oob_hosts,
     )
     resume_compatibility: ResumeCompatibility | None = None
+    resume_confirmation_status = "not-required"
     if resume and preliminary_recovery is not None:
         resume_compatibility = classify_resume_compatibility(
             stored_fingerprint=preliminary_recovery.manifest.run_fingerprint,
@@ -1628,6 +1634,7 @@ def generate(
                 "fingerprint_components", {}
             ),
             current_components=fingerprint_components,
+            authoritative_resolved_scenario=not scenario_was_explicit,
         )
         if not resume_compatibility.can_resume:
             detail = resume_compatibility.reason or "hard compatibility fields differ"
@@ -1643,17 +1650,47 @@ def generate(
             raise typer.Exit(EXIT_INPUT_ERROR)
         if resume_policy == "exact" and resume_compatibility.level != "exact":
             console.print(
-                "[bold red]Error:[/bold red] --resume-policy exact requires the checkpoint's "
-                "original EvidenceForge build",
+                "[bold red]Error:[/bold red] --resume-policy exact requires the complete "
+                "original fingerprint, including build and runtime environment",
                 style="red",
             )
             raise typer.Exit(EXIT_INPUT_ERROR)
+        if resume_compatibility.confirmation_required:
+            affected: list[str] = []
+            if resume_compatibility.behavior_domains:
+                affected.append("domains=" + ",".join(resume_compatibility.behavior_domains))
+            if resume_compatibility.behavior_formats:
+                affected.append("formats=" + ",".join(resume_compatibility.behavior_formats))
+            scope = "; ".join(affected) or "affected output cannot be bounded"
+            console.print(
+                "[bold yellow]Behavior warning:[/bold yellow] EvidenceForge behavior drift is "
+                f"{resume_compatibility.behavior_change} ({scope})."
+            )
+            for summary in resume_compatibility.behavior_summaries:
+                console.print(f"  [yellow]• {summary}[/yellow]")
+            if resume_policy == "attempt":
+                resume_confirmation_status = "explicit-attempt"
+            elif not _generation_prompt_available():
+                console.print(
+                    "[bold red]Error:[/bold red] Non-interactive compatible resume cannot accept "
+                    "material or unknown behavior drift. Run 'eforge checkpoint verify <bundle>' "
+                    "first, then rerun with '--resume-policy attempt' only if you accept the risk."
+                )
+                raise typer.Exit(EXIT_INPUT_ERROR)
+            elif not typer.confirm(
+                "Continue despite material or unknown EvidenceForge behavior drift?",
+                default=False,
+            ):
+                console.print("[dim]Resume aborted; the checkpoint bundle is unchanged.[/dim]")
+                raise typer.Exit(EXIT_ABORTED)
+            else:
+                resume_confirmation_status = "confirmed"
         if resume_compatibility.level == "load-compatible":
             console.print(
                 "[bold yellow]Warning:[/bold yellow] This checkpoint was created by a different "
-                "EvidenceForge build. Its runtime and serialized-state contracts match, but "
-                "remaining output equivalence is not guaranteed. Recovery provenance will be "
-                "recorded."
+                "EvidenceForge build or runtime environment. EvidenceForge will attempt full "
+                "state hydration, but remaining output "
+                "equivalence is not guaranteed. Recovery provenance will be recorded."
             )
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
     checkpoint_store = IncrementalCheckpointStore(
@@ -1670,12 +1707,27 @@ def generate(
     generation_succeeded = False
     persistent_staging = resume or fresh_checkpoint_enabled
     staging_dir: Path | None = None
+    pre_migration_staging_backup: Path | None = None
     gen_data_dir = data_dir
     gen_gt_dir = ground_truth_dir
     gen_artifacts_dir = artifacts_dir
     interrupt_controller = GenerationInterruptController(
         checkpoint_enabled=selected_checkpoint_hours > 0
     )
+
+    def restore_pre_migration_staging() -> None:
+        backup = pre_migration_staging_backup
+        if backup is None or not backup.exists():
+            return
+        staged = checkpoint_store.staged_bundle
+        if staged.exists():
+            shutil.rmtree(staged)
+        os.replace(backup, staged)
+
+    def discard_pre_migration_staging_backup() -> None:
+        backup = pre_migration_staging_backup
+        if backup is not None and backup.exists():
+            shutil.rmtree(backup)
 
     # Generate logs
     try:
@@ -1699,6 +1751,12 @@ def generate(
                 checkpoint_hours=checkpoint_hours,
                 fingerprint_components=fingerprint_components,
                 compatibility_level=resume_compatibility.level,
+                resume_policy=resume_policy,
+                behavior_change=resume_compatibility.behavior_change,
+                behavior_change_ids=resume_compatibility.behavior_change_ids,
+                runtime_differences=resume_compatibility.runtime_differences,
+                confirmation_status=resume_confirmation_status,
+                migration_published=discard_pre_migration_staging_backup,
             )
             cursor = checkpoint_recovery.manifest.cursor
             cadence_message = (
@@ -1727,7 +1785,18 @@ def generate(
         if persistent_staging:
             staging_dir = checkpoint_store.staged_bundle
             if staging_dir.exists():
-                shutil.rmtree(staging_dir)
+                if resume_compatibility is not None and resume_compatibility.level != "exact":
+                    pre_migration_staging_backup = (
+                        checkpoint_store.workspace / "pre-migration-staged-bundle"
+                    )
+                    if pre_migration_staging_backup.exists():
+                        raise CheckpointError(
+                            "pre-migration staging backup already exists; inspect the incomplete "
+                            "workspace before retrying"
+                        )
+                    os.replace(staging_dir, pre_migration_staging_backup)
+                else:
+                    shutil.rmtree(staging_dir)
             staging_dir.mkdir(parents=True, mode=0o700)
         elif has_existing:
             staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
@@ -1848,6 +1917,7 @@ def generate(
         return
 
     except GenerationSuspendedError as suspended:
+        restore_pre_migration_staging()
         cursor = suspended.cursor
         if suspended.requested_by_signal:
             if staging_dir and staging_dir.exists() and not persistent_staging:
@@ -1885,6 +1955,7 @@ def generate(
         return
 
     except KeyboardInterrupt:
+        restore_pre_migration_staging()
         if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory[/dim]")
@@ -1901,6 +1972,7 @@ def generate(
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
+        restore_pre_migration_staging()
         if staging_dir and staging_dir.exists() and not persistent_staging:
             shutil.rmtree(staging_dir, ignore_errors=True)
             console.print("[dim]Cleaned up staging directory[/dim]")

@@ -7,7 +7,7 @@ import importlib.metadata
 import json
 import platform
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,6 +15,12 @@ from evidenceforge import __version__
 from evidenceforge.composition.artifacts import build_resolved_document
 from evidenceforge.composition.models import CompiledScenario
 
+from .behavior import (
+    BehaviorChange,
+    BehaviorClassification,
+    behavior_fingerprint_components,
+    classify_behavior_change,
+)
 from .models import CHECKPOINT_SCHEMA_VERSION
 
 _RUNTIME_DISTRIBUTIONS = (
@@ -26,11 +32,30 @@ _RUNTIME_DISTRIBUTIONS = (
     "typer",
 )
 _OUTPUT_RESOURCE_SUFFIXES = {".json", ".j2", ".jinja", ".py", ".yaml", ".yml"}
-_LOAD_COMPATIBLE_BUILD_FIELDS = frozenset(
+_BUILD_FIELDS = frozenset({"evidenceforge_build_sha256", "evidenceforge_version"})
+_RUNTIME_FIELDS = frozenset(
     {
-        "evidenceforge_build_sha256",
-        "evidenceforge_version",
+        "dependencies",
+        "interpreter_cache_tag",
+        "machine",
+        "platform",
+        "python",
+        "python_compiler",
+        "python_implementation",
+        "sys_byteorder",
     }
+)
+_BEHAVIOR_FIELDS = frozenset(
+    {
+        "behavior_history_sha256",
+        "behavior_history_start_revision",
+        "behavior_manifest_schema",
+        "behavior_revision",
+        "behavior_surface_sha256",
+    }
+)
+_RUN_IDENTITY_FIELDS = frozenset(
+    {"checkpoint_schema", "formats", "oob_hosts", "output_target", "resolved_sha256"}
 )
 
 
@@ -42,6 +67,17 @@ class ResumeCompatibility:
     output_equivalence: Literal["exact", "not-guaranteed", "incompatible"]
     component_mismatches: dict[str, dict[str, object]]
     hard_mismatches: tuple[str, ...] = ()
+    run_identity: Literal["matched", "mismatched", "not-checked"] = "not-checked"
+    behavior_change: BehaviorChange = "unknown"
+    confirmation_required: bool = False
+    behavior_change_ids: tuple[str, ...] = ()
+    behavior_domains: tuple[str, ...] = ()
+    behavior_formats: tuple[str, ...] = ()
+    behavior_summaries: tuple[str, ...] = ()
+    run_differences: dict[str, dict[str, object]] = field(default_factory=dict)
+    runtime_differences: dict[str, dict[str, object]] = field(default_factory=dict)
+    behavior_differences: dict[str, dict[str, object]] = field(default_factory=dict)
+    state_contract_differences: dict[str, dict[str, object]] = field(default_factory=dict)
     reason: str | None = None
 
     @property
@@ -57,8 +93,9 @@ def classify_resume_compatibility(
     current_fingerprint: str,
     stored_components: object,
     current_components: dict[str, object],
+    authoritative_resolved_scenario: bool = False,
 ) -> ResumeCompatibility:
-    """Classify exact, build-only, and hard checkpoint incompatibilities."""
+    """Classify immutable identity, attemptable drift, and behavior risk."""
 
     if type(stored_components) is not dict:
         if stored_fingerprint == current_fingerprint:
@@ -66,11 +103,15 @@ def classify_resume_compatibility(
                 level="exact",
                 output_equivalence="exact",
                 component_mismatches={},
+                run_identity="matched",
+                behavior_change="exact",
             )
         return ResumeCompatibility(
-            level="incompatible",
-            output_equivalence="incompatible",
+            level="load-compatible",
+            output_equivalence="not-guaranteed",
             component_mismatches={},
+            behavior_change="unknown",
+            confirmation_required=True,
             reason="checkpoint lacks fingerprint components required for compatibility checking",
         )
     mismatches = {
@@ -81,7 +122,38 @@ def classify_resume_compatibility(
         for key in sorted(set(stored_components) | set(current_components))
         if stored_components.get(key) != current_components.get(key)
     }
-    hard = tuple(sorted(set(mismatches) - _LOAD_COMPATIBLE_BUILD_FIELDS))
+    run_differences = {
+        key: value
+        for key, value in mismatches.items()
+        if key in _RUN_IDENTITY_FIELDS
+        and not (authoritative_resolved_scenario and key == "resolved_sha256")
+    }
+    runtime_differences = {
+        key: value for key, value in mismatches.items() if key in _RUNTIME_FIELDS
+    }
+    behavior_differences = {
+        key: value
+        for key, value in mismatches.items()
+        if key in _BEHAVIOR_FIELDS or key in _BUILD_FIELDS
+    }
+    known = _RUN_IDENTITY_FIELDS | _RUNTIME_FIELDS | _BEHAVIOR_FIELDS | _BUILD_FIELDS
+    state_contract_differences = {
+        key: value for key, value in mismatches.items() if key not in known
+    }
+    hard = tuple(sorted(set(run_differences) | set(state_contract_differences)))
+    same_build = stored_components.get("evidenceforge_build_sha256") == current_components.get(
+        "evidenceforge_build_sha256"
+    )
+    behavior: BehaviorClassification = classify_behavior_change(
+        same_build=same_build,
+        stored_components=stored_components,
+    )
+    categories = {
+        "run_differences": run_differences,
+        "runtime_differences": runtime_differences,
+        "behavior_differences": behavior_differences,
+        "state_contract_differences": state_contract_differences,
+    }
     if stored_fingerprint == current_fingerprint:
         if mismatches:
             return ResumeCompatibility(
@@ -89,12 +161,21 @@ def classify_resume_compatibility(
                 output_equivalence="incompatible",
                 component_mismatches=mismatches,
                 hard_mismatches=tuple(sorted(mismatches)),
+                run_identity="mismatched",
+                behavior_change="unknown",
+                **categories,
                 reason="checkpoint fingerprint and component metadata disagree",
             )
         return ResumeCompatibility(
             level="exact",
             output_equivalence="exact",
             component_mismatches={},
+            run_identity="matched",
+            behavior_change="exact",
+            run_differences={},
+            runtime_differences={},
+            behavior_differences={},
+            state_contract_differences={},
         )
     if hard:
         return ResumeCompatibility(
@@ -102,19 +183,39 @@ def classify_resume_compatibility(
             output_equivalence="incompatible",
             component_mismatches=mismatches,
             hard_mismatches=hard,
-            reason="checkpoint runtime or resolved inputs differ in hard compatibility fields",
+            run_identity="mismatched" if run_differences else "matched",
+            behavior_change=behavior.change,
+            behavior_change_ids=behavior.change_ids,
+            behavior_domains=behavior.domains,
+            behavior_formats=behavior.formats,
+            behavior_summaries=behavior.summaries,
+            **categories,
+            reason="checkpoint immutable run identity or state contracts differ",
         )
     if not mismatches:
         return ResumeCompatibility(
             level="incompatible",
             output_equivalence="incompatible",
             component_mismatches={},
+            run_identity="not-checked",
+            behavior_change="unknown",
+            confirmation_required=True,
+            **categories,
             reason="checkpoint fingerprint changed without a diagnosable component difference",
         )
     return ResumeCompatibility(
         level="load-compatible",
         output_equivalence="not-guaranteed",
         component_mismatches=mismatches,
+        run_identity="matched",
+        behavior_change=behavior.change,
+        confirmation_required=behavior.change in {"material", "unknown"},
+        behavior_change_ids=behavior.change_ids,
+        behavior_domains=behavior.domains,
+        behavior_formats=behavior.formats,
+        behavior_summaries=behavior.summaries,
+        **categories,
+        reason=behavior.reason,
     )
 
 
@@ -191,6 +292,7 @@ def run_fingerprint_payload(
     """Return the canonical compatibility inputs used by ``run_fingerprint``."""
 
     return {
+        **behavior_fingerprint_components(),
         "checkpoint_schema": CHECKPOINT_SCHEMA_VERSION,
         "dependencies": _dependency_versions(),
         "evidenceforge_build_sha256": installed_build_digest(),

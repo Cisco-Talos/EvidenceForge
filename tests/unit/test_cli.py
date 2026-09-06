@@ -795,6 +795,31 @@ class TestGenerateCheckpointResume:
         assert status.suspended
         assert status.simulated_hour is not None
         assert status.simulated_hour < 24
+        recovery_index_before_verify = (
+            suspended_root / ".eforge-generation" / "CURRENT.json"
+        ).read_bytes()
+        verified = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "checkpoint",
+                "verify",
+                str(suspended_root),
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert verified.returncode == EXIT_SUCCESS, verified.stdout
+        assert "1/5 Checking checkpoint integrity" in verified.stdout
+        assert "5/5 Verification complete" in verified.stdout
+        assert (
+            suspended_root / ".eforge-generation" / "CURRENT.json"
+        ).read_bytes() == recovery_index_before_verify
 
         resumed = subprocess.run(
             [

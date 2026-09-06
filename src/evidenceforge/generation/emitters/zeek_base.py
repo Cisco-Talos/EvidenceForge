@@ -964,7 +964,10 @@ class SensorMultiplexEmitter(LogEmitter):
                     self._event_queue.task_done()
             except Empty:
                 continue
-        self.flush()
+        # behavior-surface: checkpoint-control-start
+        if not self._verification_discard:
+            self.flush()
+        # behavior-surface: checkpoint-control-end
         logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def flush(self) -> None:

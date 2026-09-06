@@ -19,6 +19,7 @@ REFERENCE_ROOT = REPOSITORY_ROOT / "commands" / "eforge" / "references"
 FOCUSED_REFERENCES = {
     "project-context": REFERENCE_ROOT / "project-context.md",
     "generation-bundle-targets": REFERENCE_ROOT / "generation-bundle-targets.md",
+    "checkpoint-recovery": REFERENCE_ROOT / "checkpoint-recovery.md",
     "evidence-windows": REFERENCE_ROOT / "evidence-windows.md",
     "evidence-network-ids": REFERENCE_ROOT / "evidence-network-ids.md",
     "evidence-web-email": REFERENCE_ROOT / "evidence-web-email.md",
@@ -121,6 +122,7 @@ def test_generate_skill_preserves_and_resumes_checkpoints() -> None:
     assert "Explain an invalid/incompatible checkpoint" in normalized
     assert "`--force`/`-f` is a deprecated overwrite alias" in normalized
     assert "success removes the workspace and leaves no checkpoint history" in normalized
+    assert "Never supply `--resume-policy attempt`" in normalized
 
 
 def test_generate_skill_verifies_the_authoritative_bundle() -> None:
@@ -167,6 +169,7 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     network = references["evidence-network-ids"]
     web = references["evidence-web-email"]
     endpoint = references["evidence-endpoint-linux"]
+    recovery = references["checkpoint-recovery"]
 
     assert "Apache TA-compatible JSON" in targets
     assert "CIM tagging" in targets
@@ -178,6 +181,11 @@ def test_evidence_references_are_focused_and_track_current_formats() -> None:
     assert "retirement remains provable after the shared channel tombstone expires" in endpoint
     assert "`sleep 30`, `sleep 30.5`, and `sleep .5`" in endpoint
     assert "1,425 ms release" in endpoint
+    assert "uv tool list --show-paths" in recovery
+    assert 'uv pip install --python "$EFORGE_TOOL_ENV/bin/python"' in recovery
+    assert "not the project `.venv` or a\nnew global location" in recovery
+    assert "checkpoint never grants authorization" in recovery
+    assert "Do not supply `attempt`" in " ".join(recovery.split())
     assert "Every successfully transmitted visible nonempty" in web
     assert "Client submission uses port 587 and may upgrade to\nSTARTTLS" in web
     assert "Client submission is currently plaintext" not in web

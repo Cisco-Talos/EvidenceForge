@@ -115,14 +115,15 @@ manifest never contains credential secrets or file payloads.
 
 ## Checkpoint workspace, replacement, and verification
 
-Fresh runs checkpoint every 24 completed simulated hours unless `--checkpoint-hours 0` is passed.
-An incomplete bundle may be resumed with `--resume`; checkpoint-only resume requires an explicit
-`--output`. Move only a stopped complete root; success removes `.eforge-generation/`. Resume needs a
-compatible exact build/resources, runtime, dependencies, platform, options, and resolved input.
-
-Use `eforge checkpoint status <root> [--verbose|--json]` for read-only recovery/storage inspection.
+Fresh runs checkpoint every 24 hours unless `--checkpoint-hours 0` is passed. Resume needs
+`--resume`; checkpoint-only resume also needs explicit `--output`. Compatible resume may attempt
+environment drift, but run identity, state schemas, integrity, and fresh OOB authorization remain
+hard boundaries. Move only a stopped root; success removes `.eforge-generation/`.
+Use `eforge checkpoint status <root> [--verbose|--json]` for static inspection and `checkpoint
+verify` for isolated hydration. Non-exact resume migrates at the same cursor and retains fallback.
+Provenance records builds, runtime drift, behavior risk/change IDs, policy, confirmation, and cursor.
 `eforge checkpoint suspend <root>` queues a request; generation finishes the current hour, commits
-an off-cadence recovery, then stops. Ctrl+C remains immediate and creates no checkpoint.
+an off-cadence recovery, then stops. First Ctrl+C uses the same safe boundary; a second forces exit.
 
 An approved `--overwrite` run replaces engine-owned data, reports, manifests, generated artifacts,
 and resolved scenario as one unit. `--force` / `-f` is a deprecated alias. A format-filtered overwrite
@@ -130,5 +131,4 @@ still replaces the entire `data/` directory; it does not retain formats from an 
 Unregistered authored collateral is preserved.
 
 After exit code 0, report effective manifest values. Use `eforge eval <bundle-root>` for independent
-containment, hash, resolved-document, and compiled-identity verification. Run manifests contain a
-timestamp, so deterministic replays need not have byte-identical manifest files.
+containment/hash verification. Timestamped run manifests need not be byte-identical across replays.

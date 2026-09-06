@@ -137,6 +137,7 @@ eforge validate SCENARIO_FILE
 #### Workflow 5: Generate Logs
 ```bash
 eforge generate [SCENARIO_FILE] [--output DIR] [--checkpoint-hours N] [--resume|--overwrite]
+                [--resume-policy exact|compatible|attempt]
 ```
 1. Load and validate scenario file (schema + cross-reference validation)
 2. Load format definitions for requested log types
@@ -565,6 +566,7 @@ Checks performed:
 **Command: generate**
 ```
 eforge generate [SCENARIO_FILE] [--output DIR] [--checkpoint-hours N] [--resume|--overwrite]
+                [--resume-policy exact|compatible|attempt]
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
@@ -573,6 +575,7 @@ Options:
   --output, -o     Override output directory from scenario file
   --checkpoint-hours N  Checkpoint every N simulated hours (default 24; 0 disables)
   --resume         Resume compatible incomplete output; SCENARIO_FILE may be omitted with --output
+  --resume-policy  exact, compatible (default), or explicit output-drift consent with attempt
   --overwrite      Replace engine-owned output or an incompatible incomplete run
   --force, -f      Deprecated alias for --overwrite
   --verbose, -v    Enable INFO level logging
@@ -587,11 +590,20 @@ Performs schema + cross-reference validation before generation starts.
 **Command: checkpoint**
 ```
 eforge checkpoint status OUTPUT_ROOT [--verbose] [--json]
+eforge checkpoint verify OUTPUT_ROOT [--verbose] [--json]
 eforge checkpoint suspend OUTPUT_ROOT
 
 status thoroughly validates retained recovery generations, compatibility, and managed storage
-without modifying or hydrating the run. suspend cooperatively stops a live checkpoint-enabled run
-after its current simulated hour and a durable recovery commit.
+without modifying or hydrating the run. verify performs read-only isolated full hydration with
+ordered phase progress and schema 1.1 run-identity/loadability/behavior diagnostics. suspend
+cooperatively stops a live checkpoint-enabled run after its current simulated hour and a durable
+recovery commit.
+
+Compatible resume attempts Python, dependency, OS, architecture, cache-tag, compiler, and byte-order
+drift. It continues declared non-material behavior automatically, prompts with a default refusal
+for material or unknown EvidenceForge behavior, and gives noninteractive callers verification plus
+`attempt` guidance. Integrity, ownership, unsupported state schemas, missing participants,
+conflicting explicit run inputs, and fresh matching OOB authorization remain hard boundaries.
 
 During active hourly generation, the first Ctrl+C requests the same end-of-hour safe stop. It
 creates an off-cadence recovery when checkpointing is enabled and creates none when

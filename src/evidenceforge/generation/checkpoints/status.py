@@ -86,7 +86,7 @@ class RecoveryHealth(BaseModel):
 class CheckpointStatusReport(BaseModel):
     """Stable complete report emitted by checkpoint status JSON output."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     output_root: str
     state: Literal["active", "resumable", "completed", "absent", "invalid"]
     integrity: Literal["passed", "failed", "not-applicable", "pending"]
@@ -98,6 +98,16 @@ class CheckpointStatusReport(BaseModel):
         "exact", "not-guaranteed", "incompatible", "not-checked", "not-applicable"
     ] = "not-checked"
     restore_verified: bool = False
+    run_identity: Literal["matched", "mismatched", "not-checked"] = "not-checked"
+    loadability: Literal["not-verified", "verified", "failed"] = "not-verified"
+    behavior_change: Literal["exact", "none-declared", "localized", "material", "unknown"] = (
+        "unknown"
+    )
+    confirmation_required: bool = False
+    run_differences: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    runtime_differences: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    behavior_differences: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    state_contract_differences: dict[str, dict[str, Any]] = Field(default_factory=dict)
     simulated_hour: int | None = Field(default=None, ge=1)
     phase: str | None = None
     phase_completed_hours: int | None = Field(default=None, ge=0)
@@ -303,9 +313,14 @@ def _compatibility(
         current_fingerprint=actual,
         stored_components=stored_components,
         current_components=current_components,
+        authoritative_resolved_scenario=True,
     )
     diagnostics["component_mismatches"] = compatibility.component_mismatches
     diagnostics["hard_component_mismatches"] = list(compatibility.hard_mismatches)
+    diagnostics["behavior_change_ids"] = list(compatibility.behavior_change_ids)
+    diagnostics["behavior_domains"] = list(compatibility.behavior_domains)
+    diagnostics["behavior_formats"] = list(compatibility.behavior_formats)
+    diagnostics["behavior_summaries"] = list(compatibility.behavior_summaries)
     try:
         with effective_config_scope(compiled.effective_config):
             forecast = build_resource_forecast(
@@ -501,8 +516,20 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
     compatible = compatibility_result is not None and compatibility_result.can_resume
     if compatibility_result is not None and compatibility_result.level == "load-compatible":
         warnings.append(
-            "checkpoint was created by a different EvidenceForge build; serialized state is "
-            "load-compatible, but remaining output equivalence is not guaranteed"
+            "checkpoint has attemptable build or runtime drift; serialized state must be fully "
+            "verified, and remaining output equivalence is not guaranteed"
+        )
+    if compatibility_result is not None and compatibility_result.confirmation_required:
+        warnings.append(
+            f"EvidenceForge behavior change is {compatibility_result.behavior_change}; "
+            "resume confirmation is required"
+        )
+    stored_options = selected.manifest.metadata.get("run_options", {})
+    stored_oob_hosts = stored_options.get("oob_hosts", []) if type(stored_options) is dict else []
+    requires_oob_reauthorization = type(stored_oob_hosts) is list and bool(stored_oob_hosts)
+    if requires_oob_reauthorization:
+        warnings.append(
+            "resume requires fresh authorization and explicit repetition of every stored OOB host"
         )
     if not compatible:
         detail = None if compatibility_result is None else compatibility_result.reason
@@ -549,6 +576,27 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             if compatibility_result is None
             else compatibility_result.output_equivalence
         ),
+        run_identity=(
+            "not-checked" if compatibility_result is None else compatibility_result.run_identity
+        ),
+        behavior_change=(
+            "unknown" if compatibility_result is None else compatibility_result.behavior_change
+        ),
+        confirmation_required=(
+            False if compatibility_result is None else compatibility_result.confirmation_required
+        ),
+        run_differences=(
+            {} if compatibility_result is None else compatibility_result.run_differences
+        ),
+        runtime_differences=(
+            {} if compatibility_result is None else compatibility_result.runtime_differences
+        ),
+        behavior_differences=(
+            {} if compatibility_result is None else compatibility_result.behavior_differences
+        ),
+        state_contract_differences=(
+            {} if compatibility_result is None else compatibility_result.state_contract_differences
+        ),
         simulated_hour=cursor.completed_simulated_hours,
         phase=cursor.phase,
         phase_completed_hours=(
@@ -561,7 +609,7 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
         used_fallback=selected.used_fallback,
         resume_command=(
             f"eforge generate --output {store.output_root} --resume"
-            if compatible and not active
+            if compatible and not active and not requires_oob_reauthorization
             else None
         ),
         warnings=tuple(warnings),

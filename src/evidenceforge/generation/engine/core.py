@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -420,7 +421,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         finally:
             self._generate_owner.release()
 
-    def verify_checkpoint_recovery(self) -> dict[str, object]:
+    # behavior-surface: checkpoint-control-start
+    def verify_checkpoint_recovery(
+        self,
+        *,
+        progress: Callable[[str, dict[str, object]], None] | None = None,
+    ) -> dict[str, object]:
         """Hydrate every checkpoint participant without generating another hour."""
 
         from evidenceforge.config.provider import effective_config_scope
@@ -434,16 +440,27 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             raise ValueError("checkpoint verification requires a recovery and controller")
         if not self._generate_owner.acquire(blocking=False):
             raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
-        initialized = False
+        initialization_started = False
+        primary_error: BaseException | None = None
         try:
             with effective_config_scope(self.compiled_scenario.effective_config):
                 with generation_seed_scope(self.generation_seed):
                     reset_thread_rng()
+                    if progress is not None:
+                        progress("initialization", {})
+                    initialization_started = True
                     self._initialize()
-                    initialized = True
                     controller.restore_participants(
                         recovery=recovery,
                         participants=self._checkpoint_participants,
+                        progress=(
+                            None
+                            if progress is None
+                            else lambda completed, total, owner: progress(
+                                "hydration",
+                                {"completed": completed, "total": total, "owner": owner},
+                            )
+                        ),
                     )
                     lifecycle = next(
                         (
@@ -472,14 +489,101 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             for object_id, parent_object_id, image, role in dangling_parents
                         ],
                     }
-        except BaseException as primary:
-            if initialized:
-                self._abort_failed_generation(primary)
+        except BaseException as error:
+            primary_error = error
             raise
         finally:
-            if initialized and not self._finalization_aborted:
-                self._abort_failed_generation(RuntimeError("checkpoint verification cleanup"))
+            cleanup_errors: list[BaseException] = []
+            if initialization_started:
+                if progress is not None:
+                    try:
+                        progress("cleanup", {})
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+                try:
+                    self._dispose_checkpoint_verification_scratch()
+                except BaseException as error:
+                    cleanup_errors.append(error)
             self._generate_owner.release()
+            if cleanup_errors:
+                if primary_error is not None:
+                    for error in cleanup_errors:
+                        primary_error.add_note(
+                            f"Checkpoint verification cleanup also failed: {error!r}"
+                        )
+                else:
+                    first, *additional = cleanup_errors
+                    for error in additional:
+                        first.add_note(f"Additional scratch disposal failure: {error!r}")
+                    raise first
+
+    def _dispose_checkpoint_verification_scratch(self) -> None:
+        """Stop scratch workers and handles without normal source finalization."""
+
+        import io
+        import os
+
+        visited: set[int] = set()
+        closed_descriptors: set[int] = set()
+        emitters = getattr(self, "emitters", {})
+        pending: list[object] = list(emitters.values()) if type(emitters) is dict else []
+        failures: list[BaseException] = []
+        while pending:
+            owner = pending.pop()
+            identity = id(owner)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            stop_event = getattr(owner, "_stop_event", None)
+            worker = getattr(owner, "_thread", None)
+            if stop_event is not None and worker is not None and worker.is_alive():
+                owner._verification_discard = True
+                stop_event.set()
+                worker.join(timeout=5.0)
+                if worker.is_alive():
+                    failures.append(RuntimeError("checkpoint verification worker did not stop"))
+            attributes = getattr(owner, "__dict__", {})
+            if type(attributes) is not dict:
+                continue
+            for name, value in attributes.items():
+                if isinstance(value, sqlite3.Connection):
+                    try:
+                        value.close()
+                    except sqlite3.Error as error:
+                        failures.append(error)
+                    else:
+                        setattr(owner, name, None)
+                elif isinstance(value, io.IOBase):
+                    try:
+                        value.close()
+                    except OSError as error:
+                        failures.append(error)
+                    else:
+                        setattr(owner, name, None)
+                elif (
+                    name.endswith("_descriptor")
+                    and type(value) is int
+                    and value > 2
+                    and value not in closed_descriptors
+                ):
+                    try:
+                        os.close(value)
+                    except OSError as error:
+                        failures.append(error)
+                    else:
+                        closed_descriptors.add(value)
+                        setattr(owner, name, None)
+                elif type(value) is dict:
+                    pending.extend(value.values())
+                elif value.__class__.__module__.startswith("evidenceforge.generation.emitters"):
+                    pending.append(value)
+        if failures:
+            first, *additional = failures
+            for failure in additional:
+                first.add_note(f"Additional scratch disposal failure: {failure!r}")
+            raise first
+
+    # behavior-surface: checkpoint-control-end
 
     def _generate_scoped(self) -> None:
         """Main generation flow.

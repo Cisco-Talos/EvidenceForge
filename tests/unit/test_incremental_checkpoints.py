@@ -221,6 +221,7 @@ from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.web import WebEmitter
+from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.http_channels import (
     HttpApplicationChannelManager,
     HttpChannelAffinity,
@@ -3915,7 +3916,7 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
     assert not disabled.cadence.enabled
 
 
-def test_resume_compatibility_allows_only_build_identity_differences() -> None:
+def test_resume_compatibility_allows_build_and_runtime_differences() -> None:
     current = {
         "checkpoint_schema": "2.0",
         "evidenceforge_build_sha256": "b" * 64,
@@ -3935,7 +3936,7 @@ def test_resume_compatibility_allows_only_build_identity_differences() -> None:
     )
     hard_changed = dict(stored)
     hard_changed["python"] = "3.12.8"
-    incompatible = classify_resume_compatibility(
+    runtime_drift = classify_resume_compatibility(
         stored_fingerprint="1" * 64,
         current_fingerprint="2" * 64,
         stored_components=hard_changed,
@@ -3945,26 +3946,21 @@ def test_resume_compatibility_allows_only_build_identity_differences() -> None:
     assert compatible.level == "load-compatible"
     assert compatible.output_equivalence == "not-guaranteed"
     assert not compatible.hard_mismatches
-    assert incompatible.level == "incompatible"
-    assert incompatible.hard_mismatches == ("python",)
+    assert runtime_drift.level == "load-compatible"
+    assert runtime_drift.runtime_differences == {
+        "python": {"stored": "3.12.8", "current": "3.12.9"}
+    }
+    assert not runtime_drift.hard_mismatches
 
 
 @pytest.mark.parametrize(
     "hard_field",
     (
         "checkpoint_schema",
-        "dependencies",
         "formats",
-        "interpreter_cache_tag",
-        "machine",
         "oob_hosts",
         "output_target",
-        "platform",
-        "python",
-        "python_compiler",
-        "python_implementation",
         "resolved_sha256",
-        "sys_byteorder",
     ),
 )
 def test_resume_compatibility_rejects_every_hard_component(hard_field: str) -> None:
@@ -3999,6 +3995,76 @@ def test_resume_compatibility_rejects_every_hard_component(hard_field: str) -> N
     assert compatibility.hard_mismatches == (hard_field,)
 
 
+@pytest.mark.parametrize(
+    "runtime_field",
+    (
+        "dependencies",
+        "interpreter_cache_tag",
+        "machine",
+        "platform",
+        "python",
+        "python_compiler",
+        "python_implementation",
+        "sys_byteorder",
+    ),
+)
+def test_resume_compatibility_attempts_every_runtime_component(runtime_field: str) -> None:
+    current: dict[str, object] = {
+        "checkpoint_schema": "2.0",
+        "dependencies": {"pydantic": "2.13.5"},
+        "evidenceforge_build_sha256": "b" * 64,
+        "evidenceforge_version": "2.0.0rc2",
+        "formats": ["json"],
+        "interpreter_cache_tag": "cpython-312",
+        "machine": "arm64",
+        "oob_hosts": [],
+        "output_target": "default",
+        "platform": "darwin",
+        "python": "3.12.9",
+        "python_compiler": "Clang 16.0.0",
+        "python_implementation": "CPython",
+        "resolved_sha256": "c" * 64,
+        "sys_byteorder": "little",
+    }
+    stored = dict(current)
+    stored[runtime_field] = "changed"
+
+    compatibility = classify_resume_compatibility(
+        stored_fingerprint="1" * 64,
+        current_fingerprint="2" * 64,
+        stored_components=stored,
+        current_components=current,
+    )
+
+    assert compatibility.level == "load-compatible"
+    assert runtime_field in compatibility.runtime_differences
+    assert not compatibility.hard_mismatches
+
+
+def test_verification_disposal_closes_sqlite_without_normal_emitter_close() -> None:
+    connection = sqlite3.connect(":memory:")
+
+    class ScratchEmitter:
+        def __init__(self) -> None:
+            self._connection = connection
+            self._thread = None
+            self._stop_event = None
+            self.close_called = False
+
+        def close(self) -> None:
+            self.close_called = True
+
+    emitter = ScratchEmitter()
+    engine = object.__new__(GenerationEngine)
+    engine.emitters = {"scratch": emitter}
+
+    engine._dispose_checkpoint_verification_scratch()
+
+    assert emitter.close_called is False
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+
 @pytest.mark.parametrize("resumed_cadence", (6, 0))
 def test_load_compatible_controller_publishes_same_cursor_migration(
     tmp_path: Path,
@@ -4024,6 +4090,11 @@ def test_load_compatible_controller_publishes_same_cursor_migration(
         fingerprint_components={"evidenceforge_build_sha256": "b" * 64},
         compatibility_level="load-compatible",
         checkpoint_hours=resumed_cadence,
+        resume_policy="attempt",
+        behavior_change="material",
+        behavior_change_ids=("changed-rendering",),
+        runtime_differences={"python": {"stored": "3.12.9", "current": "3.13.0"}},
+        confirmation_status="explicit-attempt",
     )
     resumed.restore_participants(recovery=recovery, participants=(restored,))
 
@@ -4041,6 +4112,15 @@ def test_load_compatible_controller_publishes_same_cursor_migration(
     assert resumed.resume_provenance["origin_build"] == {"evidenceforge_build_sha256": "a" * 64}
     assert resumed.resume_provenance["current_build"] == {"evidenceforge_build_sha256": "b" * 64}
     assert resumed.resume_provenance["transitions"][-1]["classification"] == "load-compatible"
+    assert resumed.resume_provenance["transitions"][-1]["accepted_policy"] == "attempt"
+    assert resumed.resume_provenance["transitions"][-1]["behavior_change"] == "material"
+    assert resumed.resume_provenance["transitions"][-1]["behavior_change_ids"] == [
+        "changed-rendering"
+    ]
+    assert resumed.resume_provenance["transitions"][-1]["confirmation_status"] == (
+        "explicit-attempt"
+    )
+    assert "python" in resumed.resume_provenance["transitions"][-1]["runtime_differences"]
     assert [sequence for sequence, _digest in store.recovery_index_entries()] == [1, 0]
 
 

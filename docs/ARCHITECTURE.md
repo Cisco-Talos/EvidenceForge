@@ -936,6 +936,22 @@ corrupt newest recovery falls back to the previous valid point. Successful bundl
 removes the hidden workspace and records no resume history in the final manifest. See
 [Generation Checkpoints and Resume](reference/GENERATION_CHECKPOINTS.md) for the user contract.
 
+Resume compatibility is modeled on orthogonal axes. Immutable run identity covers authoritative
+resolved input, seed, formats, output target, and OOB settings; explicit conflicts are rejected.
+State loadability is established only after every required participant and supported schema
+hydrates. Python/compiler/implementation, dependency, OS, architecture, cache-tag, and byte-order
+differences are portable restore attempts rather than static failures. They always remove the
+byte-equivalence guarantee.
+
+The packaged `config/generation_behavior.yaml` supplies a monotonic, gap-free revision history for
+output-affecting changes, including stable IDs, impact, and affected domains/formats. CI hashes the
+generation behavior surface and requires a manifest revision whenever that surface changes;
+checkpoint-control-only blocks are explicitly excluded. Behavior risk and runtime drift are stored
+with the accepted policy and confirmation state in same-cursor migration checkpoints and final
+manifest provenance. Read-only verification uses a scratch-disposal lifecycle that stops workers
+and closes database handles without terminal evidence, source sorting/merging, footer output, or
+checkpoint publication.
+
 ### Format Definition System
 
 Log formats are defined declaratively in YAML files (`src/evidenceforge/formats/definitions/`), not in code:

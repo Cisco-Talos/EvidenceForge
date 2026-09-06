@@ -1,0 +1,12 @@
+schema_version: "1.0"
+current_revision: 1
+history_start_revision: 1
+behavior_surface_sha256: "5ff6938b5e03ef8ccd9b5912e9d370595df7646cc3485fc1e3d46cf40bfe1a07"
+changes:
+  - revision: 1
+    id: initial-generation-behavior-contract
+    impact: none
+    domains:
+      - all-generation
+    formats: []
+    summary: Establishes the behavior-aware checkpoint resume baseline for EvidenceForge 2.0 development.

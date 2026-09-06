@@ -81,16 +81,13 @@ Before using `--overwrite`, inspect the destination and obtain explicit approval
 `--overwrite` for a clean destination.
 
 Preserve a valid `.eforge-generation/` workspace after interruption or failure. Resume with the
-original input or `eforge generate --output <bundle-root> --resume`; unspecified resume retains its stored cadence. Explain an invalid/incompatible checkpoint before requesting overwrite approval. Stop generation before moving
-the root; resume before upgrading; success removes the workspace and leaves no checkpoint history.
+original input or `eforge generate --output <bundle-root> --resume`; unspecified resume retains its
+stored cadence. Explain an invalid/incompatible checkpoint before requesting overwrite approval.
+Stop generation before moving the root; success removes the workspace and leaves no checkpoint history.
 
-Checkpoint commands take the bundle root (parent of `data/`; scenario parent without `--output`):
-`eforge checkpoint status <bundle-root> [--verbose|--json]` and
-`eforge checkpoint suspend <bundle-root>`. Control state exists before warm-up, distinguishing
-active/no checkpoint yet from none. Suspension finishes the current hour. When operating the
-generator interactively, one Ctrl+C is a local shorthand: it finishes the current hour and creates
-an off-cadence recovery when checkpoints are enabled. A second Ctrl+C forces immediate exit. With
-`--checkpoint-hours 0`, the first interrupt stops after the hour without creating recovery state.
+For any interrupted-run, drift, verification, migration, OOB-resume, recovery-wheel, or apparently
+stuck hydration question, read `/eforge:references:checkpoint-recovery` before acting. Never supply
+`--resume-policy attempt` unless the user explicitly accepts material or unknown behavior drift.
 
 ### 5. Generate with normal output first
 
@@ -148,6 +145,7 @@ so otherwise reproducible replays need not have byte-identical manifest files.
 Read only the smallest relevant reference when exact paths, fields, joins, or limitations matter:
 
 - `/eforge:references:generation-bundle-targets` for bundle paths, checkpoints, and targets.
+- `/eforge:references:checkpoint-recovery` for status, verification, drift, and safe resume.
 - `/eforge:references:evidence-windows` for Windows Security and Sysmon.
 - `/eforge:references:evidence-network-ids` for Zeek, IDS, and Cisco ASA.
 - `/eforge:references:evidence-web-email` for HTTP/files, web, proxy, email, and SMTP.

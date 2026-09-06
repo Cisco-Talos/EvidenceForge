@@ -67,3 +67,56 @@ EvidenceForge build-only migrations without weakening hard runtime or input chec
   The transfer wheel is `dist/recovery-af8c01f3/evidence_forge-2.0.0rc1-py3-none-any.whl`
   (SHA-256 `9ede93903d0570e5a5c1fe539cf6fa006132aaaa73492e02c37fb074ab5ea557`).
   A clean wheel installation reproduced the same installed build digest.
+
+## Attemptable drift policy pivot
+
+The follow-on implementation is isolated on `codex/checkpoint-permissive-resume` from integrated
+local `dev`; the exact-behavior `af8c01f3` recovery branch, commit, and wheel above remain unchanged.
+The compatibility contract now asks three independent questions: immutable run identity,
+serialized-state loadability, and expected EvidenceForge behavior drift.
+
+- Python version/compiler/implementation, dependencies, OS, architecture, interpreter cache tag,
+  and byte order are attemptable. They no longer fail static compatibility, but successful restore
+  cannot promise equivalent remaining bytes.
+- Explicit scenario/seed/formats/target conflicts, integrity and ownership failures, missing
+  participants, and unsupported checkpoint or participant schemas remain hard failures. Omitted
+  ordinary inputs adopt checkpoint authority. Stored OOB hosts never confer authorization and must
+  be supplied again exactly.
+- `compatible` remains the default. Declared non-material behavior continues after hydration;
+  material or unknown behavior prompts with default refusal, and noninteractive use receives
+  verify-plus-`attempt` guidance. `attempt` is explicit output-risk consent, never a state or safety
+  bypass. `exact` still requires the complete original fingerprint.
+- `config/generation_behavior.yaml` starts revision 1 at the integrated `dev` baseline. Its
+  gap-free history declares stable IDs, impact, domains, and formats. CI checks a behavior-surface
+  digest that excludes checkpoint-control code but covers generation, canonical events/formats,
+  composition/config/model inputs, output targets, and deterministic RNG/time utilities.
+- Status and verify report schema 1.1 retain `compatibility_level` while adding run identity,
+  loadability, behavior change, confirmation, and categorized differences. Non-exact migration
+  provenance adds runtime drift, behavior IDs/risk, accepted policy, and confirmation status.
+- Verification now reports integrity, initialization, participant `N/M` hydration, cleanup, and
+  completion. Its scratch-disposal path stops workers and closes SQLite handles without ordinary
+  terminal source finalization. Detailed aged-out-parent examples are verbose-only.
+- Before a non-exact actual restore, staged evidence is atomically retained. Failed pre-migration
+  restore reinstates it; successful same-cursor migration releases that temporary fallback while
+  the normal two-recovery index continues to retain the prior recovery point.
+
+## Attemptable drift validation and integration
+
+Final validation covered the behavior-manifest validator/digest and retained-history lineage,
+runtime drift matrix, hard run-identity fields, severity aggregation, legacy/downgrade handling,
+policy consent paths, fresh OOB authorization, progress ordering, scratch SQLite disposal,
+migration provenance, installed skill references, and package contents.
+
+- Focused checkpoint, behavior, CLI, and skill-contract runs passed, including the final 104-test
+  combined gate and the 46-test lineage/checkpoint gate.
+- The default suite passed with 8,284 tests and five optional external-parser tests skipped.
+- The full checkpoint slow gate passed 57 tests in 9m32s, including exact resumed-versus-control
+  evidence comparisons for every output target and the checkpoint-publication crash matrix.
+- The Python 3.12 to 3.13 portability fixture fully hydrated, published migration lineage,
+  completed generation, and passed authoritative bundle verification.
+- Ruff check, Ruff format check, `git diff --check`, and the generation-behavior surface checker
+  passed. A temporary wheel confirmed that the behavior manifest, behavior classifier, and
+  checkpoint-recovery skill reference are packaged.
+- `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock` remain unchanged. The
+  `codex/checkpoint-recovery-af8c01f3` branch still resolves to `3942c478d`, and its recovery wheel
+  remains untouched. No remote branch was pushed.

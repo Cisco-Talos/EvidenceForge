@@ -182,9 +182,13 @@ def test_status_json_validates_recovery_and_reports_nonoverlapping_storage(
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
+    assert payload["schema_version"] == "1.1"
     assert payload["state"] == "resumable"
     assert payload["integrity"] == "passed"
     assert payload["compatibility"] == "passed"
+    assert payload["run_identity"] == "matched"
+    assert payload["loadability"] == "not-verified"
+    assert payload["behavior_change"] == "exact"
     assert payload["simulated_hour"] == 6
     assert payload["checkpoint_hours"] == 6
     assert payload["storage"]["generated_bytes"] == len(b"generated")
@@ -251,8 +255,61 @@ def test_checkpoint_verify_cli_reports_full_hydration(
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
     assert payload["restore_verified"] is True
+    assert payload["schema_version"] == "1.1"
+    assert payload["loadability"] == "verified"
     assert payload["selected_sequence"] == 23
     assert payload["dangling_process_parent_count"] == 47
+
+
+def test_checkpoint_verify_reports_ordered_progress_and_verbose_examples(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    report = CheckpointVerifyReport(
+        output_root=str(output),
+        selected_sequence=23,
+        simulated_hour=557,
+        phase="collection",
+        compatibility_level="load-compatible",
+        output_equivalence="not-guaranteed",
+        participant_count=2,
+        dangling_process_parent_count=1,
+        dangling_process_parents=[
+            {
+                "object_id": "child",
+                "parent_object_id": "aged-out-parent",
+                "image": "explorer.exe",
+                "role": "application",
+            }
+        ],
+    )
+
+    def fake_verify(
+        _path: Path,
+        *,
+        verbose: bool,
+        progress: object,
+    ) -> CheckpointVerifyReport:
+        assert verbose is True
+        assert callable(progress)
+        progress("integrity", {})
+        progress("initialization", {})
+        progress("hydration", {"completed": 1, "total": 2, "owner": "first"})
+        progress("hydration", {"completed": 2, "total": 2, "owner": "second"})
+        progress("cleanup", {})
+        progress("completion", {})
+        return report
+
+    monkeypatch.setattr(checkpoint_commands, "verify_checkpoint_recovery", fake_verify)
+
+    result = runner.invoke(app, ["checkpoint", "verify", str(output), "--verbose"])
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 0, result.stdout
+    assert normalized.index("1/5") < normalized.index("2/5") < normalized.index("3/5")
+    assert normalized.index("3/5") < normalized.index("4/5") < normalized.index("5/5")
+    assert "aged-out-parent" in normalized
 
 
 def test_generate_exact_policy_rejects_build_only_checkpoint_difference(
@@ -295,7 +352,7 @@ def test_generate_default_policy_warns_before_load_compatible_hydration(
     monkeypatch: MonkeyPatch,
 ) -> None:
     output = tmp_path / "bundle"
-    _store, controller, participant = _controller(
+    store, controller, participant = _controller(
         output,
         Path("tests/fixtures/scenarios/minimal.yaml"),
     )
@@ -319,6 +376,129 @@ def test_generate_default_policy_warns_before_load_compatible_hydration(
     assert "different EvidenceForge build" in normalized
     assert "output equivalence is not guaranteed" in normalized
     assert "injected stop" in normalized
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_compatible_defaults_to_refusing_unknown_behavior_drift(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.fingerprint_components = {
+        key: value
+        for key, value in controller.fingerprint_components.items()
+        if not key.startswith("behavior_")
+    }
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+
+    result = runner.invoke(
+        app,
+        ["generate", "--output", str(output), "--resume"],
+        input="\n",
+    )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 3
+    assert "behavior drift is unknown" in normalized
+    assert "[y/N]" in result.stdout
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_noninteractive_compatible_explains_attempt_consent(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.fingerprint_components = {
+        key: value
+        for key, value in controller.fingerprint_components.items()
+        if not key.startswith("behavior_")
+    }
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+    monkeypatch.setattr("evidenceforge.cli.commands._generation_prompt_available", lambda: False)
+
+    result = runner.invoke(app, ["generate", "--output", str(output), "--resume"])
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 1
+    assert "checkpoint verify" in normalized
+    assert "--resume-policy attempt" in normalized
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_attempt_explicitly_accepts_unknown_behavior_drift(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.fingerprint_components = {
+        key: value
+        for key, value in controller.fingerprint_components.items()
+        if not key.startswith("behavior_")
+    }
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+
+    with patch(
+        "evidenceforge.cli.commands.GenerationEngine",
+        side_effect=CheckpointError("injected after explicit attempt consent"),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--output",
+                str(output),
+                "--resume",
+                "--resume-policy",
+                "attempt",
+            ],
+        )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 21
+    assert "Continue despite" not in normalized
+    assert "injected after explicit attempt consent" in normalized
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_resume_requires_fresh_matching_oob_authorization(tmp_path: Path) -> None:
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.run_options["oob_hosts"] = ["authorized.example"]
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+
+    result = runner.invoke(app, ["generate", "--output", str(output), "--resume"])
+
+    assert result.exit_code == 1
+    assert "never grants callback authorization" in " ".join(result.stdout.split())
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
 
 
 def test_status_human_output_keeps_developer_details_verbose(tmp_path: Path) -> None:

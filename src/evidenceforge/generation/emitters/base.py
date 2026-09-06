@@ -1174,6 +1174,9 @@ class LogEmitter(ABC):
         self._stop_event: Event | None = None
         self._thread: Thread | None = None
         self._thread_error: Exception | None = None
+        # behavior-surface: checkpoint-control-start
+        self._verification_discard = False
+        # behavior-surface: checkpoint-control-end
 
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
@@ -1315,9 +1318,11 @@ class LogEmitter(ABC):
             except Empty:
                 continue
 
-        # Final flush before thread exits
-        logger.debug(f"Emitter thread stopping for {self.format_def.name}, final flush")
-        self.flush()
+        logger.debug(f"Emitter thread stopping for {self.format_def.name}")
+        # behavior-surface: checkpoint-control-start
+        if not self._verification_discard:
+            self.flush()
+        # behavior-surface: checkpoint-control-end
         logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def _emit_threaded(self, event_data: dict[str, Any]) -> None:

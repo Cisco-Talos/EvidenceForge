@@ -33,12 +33,16 @@ emitter, and RNG state into isolated scratch storage, run:
 
 ```bash
 eforge checkpoint verify ./bundle
+eforge checkpoint verify ./bundle --verbose
 eforge checkpoint verify ./bundle --json
 ```
 
-Verification never writes to the bundle. Its report includes the selected recovery, compatibility
-level, output-equivalence status, full-hydration result, and any retained processes whose original
-parents legitimately aged out of the checkpoint window.
+Verification never writes to the bundle and never runs normal generator finalization. It reports
+integrity, scratch initialization, participant `N/M` hydration, scratch cleanup, and completion so
+large restores do not appear stuck. Its report includes the selected recovery, run identity,
+loadability, behavior risk, output-equivalence status, and full-hydration result. Add `--verbose`
+for bounded aged-out-parent examples and detailed drift records. JSON output remains free of
+progress text.
 
 The positional path is the bundle root—the directory that contains `data/`—not the `data/`
 directory itself. When generation uses no explicit `--output`, the bundle root is the authored
@@ -106,23 +110,47 @@ output root may be moved or copied before resume because checkpoint metadata con
 paths and its resolved input and immutable segments are self-contained. Stop the generator before
 copying the root; copying an active workspace can capture an inconsistent set of files.
 
-Resume uses `--resume-policy compatible` by default. An exact fingerprint match guarantees a
-byte-identical continuation. When only the EvidenceForge version or build digest differs, the
-checkpoint is `load-compatible`: resume proceeds with a prominent warning, and remaining output
-equivalence is not guaranteed. Use `--resume-policy exact` to reject that case and require the
-original build.
+Resume separates immutable run identity, serialized-state loadability, and expected output drift.
+`compatibility_level` remains the backward-oriented `exact|load-compatible|incompatible` summary;
+status and verification schema 1.1 also report `run_identity`, `loadability`, `behavior_change`,
+`confirmation_required`, and categorized run, runtime, behavior, and state-contract differences.
 
-Every other difference is a hard incompatibility. EvidenceForge rejects changes to the resolved
-scenario, formats, output target, out-of-band settings, checkpoint or participant schemas,
-dependencies, Python runtime or ABI, operating system, architecture, or byte order. There is no
-unconditional bypass for these checks.
+| Policy | Runtime/environment drift | Material or unknown EvidenceForge behavior |
+|---|---|---|
+| `exact` | Reject | Reject; the complete original fingerprint is required |
+| `compatible` (default) | Attempt hydration | Ask interactively, default no; noninteractive use stops with verification guidance |
+| `attempt` | Attempt hydration | Explicitly accepted without a prompt |
+
+Python version/compiler/implementation, dependency versions, OS, architecture, interpreter cache
+tag, and byte order are attemptable drift. Successful hydration permits continuation, but output
+equivalence becomes `not-guaranteed`. `attempt` is consent to output risk, not a safety bypass.
+
+Corruption, unsafe paths or ownership, missing checkpoint objects or participants, unsupported
+checkpoint/participant schemas without an explicit decoder, and hydration failures always stop.
+An explicitly supplied scenario, seed, format filter, or output target must match immutable run
+identity. When those inputs are omitted, resume adopts the checkpoint's authoritative resolved
+scenario, effective seed, formats, target, and other non-OOB run settings.
+
+Live callbacks are a separate authorization boundary. A checkpoint never grants OOB permission.
+If it records non-empty OOB hosts, every host must be supplied again with matching `--oob-host`
+options; new or different hosts conflict with run identity.
+
+EvidenceForge behavior risk comes from validated packaged `config/generation_behavior.yaml`
+history. Exact builds are `exact`; different builds at the same revision are `none-declared`;
+intervening `none`/`localized` records aggregate to `localized`; any intervening material record is
+`material`. Missing history, gaps, downgrade, malformed metadata, or legacy build lineage are
+`unknown`. For `material` or `unknown`, compatible interactive resume describes affected
+domains/formats and defaults to refusal. Noninteractive use must run read-only verification and
+then explicitly choose `--resume-policy attempt` if the risk is acceptable. `checkpoint verify`
+always attempts statically load-compatible state because it is read-only.
 
 After a load-compatible recovery fully hydrates, EvidenceForge atomically publishes a migration
 checkpoint at the same cursor before generating another simulated hour. The original recovery
 remains the fallback until normal rotation replaces it. Later checkpoints and the final generation
-manifest record the originating and resuming build identities, compatibility classification,
-cursor, and bounded migration lineage. If hydration or migration publication fails, generation
-does not advance.
+manifest record originating/resuming builds, runtime drift, behavior risk and change IDs, accepted
+policy, confirmation status, cursor, and bounded migration lineage. If hydration or migration
+publication fails, generation does not advance; the pre-migration staged bundle is restored and
+the recovery index remains unchanged.
 
 Interactive generation distinguishes a compatible incomplete run, an invalid or incompatible
 checkpoint, and a completed bundle before offering valid actions. Scripts and redirected input
@@ -142,8 +170,9 @@ those guarantees; use another filesystem or explicitly pass `--checkpoint-hours 
 stale lock may be reclaimed, but concurrent generation against the same output root is rejected.
 
 The newest corrupt recovery point produces a warning and falls back to the previous valid point.
-Tampering, incompatible inputs or runtime fingerprints, unsupported schemas, and unsafe ownership
-are rejected with an explanation. Checkpoints from unreleased development schemas are not migrated.
+Tampering, incompatible run inputs, unsupported schemas, failed hydration, and unsafe ownership are
+rejected with an explanation. Checkpoints from unreleased development schemas are not migrated
+without an explicit supported decoder.
 
 Successful generation publishes through the normal bundle replacement rules, preserves unrelated
 files, and removes `.eforge-generation/`. The completed generation manifest retains bounded resume

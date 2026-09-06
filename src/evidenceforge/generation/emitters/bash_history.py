@@ -3786,7 +3786,10 @@ class BashHistoryEmitter(LogEmitter):
             except Empty:
                 continue
         logger.debug("Emitter thread stopping for %s", self.format_def.name)
-        self._flush_all_writers()
+        # behavior-surface: checkpoint-control-start
+        if not self._verification_discard:
+            self._flush_all_writers()
+        # behavior-surface: checkpoint-control-end
 
     def _drain_threaded_before_exact(self) -> None:
         """Drain preceding FIFO work without creating a physical flush boundary."""

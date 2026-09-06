@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Literal
 
 from .cadence import CheckpointCadence
@@ -60,6 +60,7 @@ class IncrementalCheckpointController:
         recovery_store: IncrementalCheckpointStore | None = None,
         compatibility_level: Literal["exact", "load-compatible"] = "exact",
         resume_provenance: dict[str, object] | None = None,
+        migration_published: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.fingerprint = fingerprint
@@ -76,6 +77,7 @@ class IncrementalCheckpointController:
         self.recovery_store = store if recovery_store is None else recovery_store
         self.compatibility_level = compatibility_level
         self.resume_provenance = {} if resume_provenance is None else dict(resume_provenance)
+        self._migration_published = migration_published
         self.migration_required = compatibility_level == "load-compatible"
         self.restore_diagnostics: dict[str, object] = {}
         self.resolved_scenario_reference = self.store.persist_resolved_scenario(
@@ -102,6 +104,12 @@ class IncrementalCheckpointController:
         fingerprint_components: dict[str, object] | None = None,
         compatibility_level: Literal["exact", "load-compatible"] = "exact",
         recovery_store: IncrementalCheckpointStore | None = None,
+        resume_policy: Literal["exact", "compatible", "attempt"] = "compatible",
+        behavior_change: str = "exact",
+        behavior_change_ids: tuple[str, ...] = (),
+        runtime_differences: dict[str, dict[str, object]] | None = None,
+        confirmation_status: str = "not-required",
+        migration_published: Callable[[], None] | None = None,
     ) -> IncrementalCheckpointController:
         """Continue sequence and segment ownership from one validated recovery point."""
 
@@ -123,10 +131,15 @@ class IncrementalCheckpointController:
         transition_rows.append(
             {
                 "classification": compatibility_level,
+                "accepted_policy": resume_policy,
+                "behavior_change": behavior_change,
+                "behavior_change_ids": list(behavior_change_ids),
+                "confirmation_status": confirmation_status,
                 "cursor": recovery.manifest.cursor.model_dump(mode="json"),
                 "from_fingerprint": recovery.manifest.run_fingerprint,
                 "originating_build": _build_identity(stored_components),
                 "resuming_build": _build_identity(current_components),
+                "runtime_differences": ({} if runtime_differences is None else runtime_differences),
                 "to_fingerprint": fingerprint,
             }
         )
@@ -162,6 +175,7 @@ class IncrementalCheckpointController:
             recovery_store=recovery_store,
             compatibility_level=compatibility_level,
             resume_provenance=provenance,
+            migration_published=migration_published,
         )
 
     def is_due(self, completed_simulated_hours: int) -> bool:
@@ -326,6 +340,8 @@ class IncrementalCheckpointController:
             allow_disabled=True,
         )
         self.migration_required = False
+        if self._migration_published is not None:
+            self._migration_published()
         return manifest
 
     def restore_participants(
@@ -333,6 +349,7 @@ class IncrementalCheckpointController:
         *,
         recovery: CheckpointRecovery,
         participants: Iterable[IncrementalCheckpointParticipant],
+        progress: Callable[[int, int, str], None] | None = None,
     ) -> None:
         """Hydrate explicit owners from bounded heads and their immutable segments."""
 
@@ -345,7 +362,8 @@ class IncrementalCheckpointController:
                 f"stored={sorted(expected)}, runtime={sorted(actual)}"
             )
         heads = {head.owner: head for head in recovery.manifest.participant_heads}
-        for participant in ordered:
+        total = len(ordered)
+        for index, participant in enumerate(ordered, start=1):
             head = heads.get(participant.checkpoint_owner)
             if head is None:
                 raise CheckpointError(
@@ -381,6 +399,8 @@ class IncrementalCheckpointController:
                 self.recovery_store.read_head(recovery, participant.checkpoint_owner),
                 tuple(self.recovery_store.read_segment(reference) for reference in references),
             )
+            if progress is not None:
+                progress(index, total, participant.checkpoint_owner)
             diagnostics = getattr(participant, "last_restore_diagnostics", None)
             if diagnostics is not None:
                 self.restore_diagnostics[participant.checkpoint_owner] = diagnostics

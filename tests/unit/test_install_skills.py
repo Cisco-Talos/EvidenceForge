@@ -78,7 +78,9 @@ EXPECTED_CHATGPT_REFERENCES = {
         "references/config-validation.md",
     },
     "evaluate": EVIDENCE_REFERENCES,
-    "generate": EVIDENCE_REFERENCES | PROJECT_CONTEXT_REFERENCE,
+    "generate": EVIDENCE_REFERENCES
+    | PROJECT_CONTEXT_REFERENCE
+    | {"references/checkpoint-recovery.md"},
     "industry-pack": PROJECT_CONTEXT_REFERENCE
     | {
         "references/pack-reference.md",
@@ -447,8 +449,8 @@ class TestInstallChatGPTSkills:
         )
 
         assert set(_CHATGPT_REFERENCES_BY_SKILL["evaluate"]) == EVIDENCE_REFERENCES
-        assert set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == (
-            EVIDENCE_REFERENCES | PROJECT_CONTEXT_REFERENCE
+        assert (
+            set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == EXPECTED_CHATGPT_REFERENCES["generate"]
         )
         assert set(_CHATGPT_REFERENCES_BY_SKILL["validate"]) == {
             "references/project-context.md",

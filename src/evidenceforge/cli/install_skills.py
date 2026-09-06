@@ -62,6 +62,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
     ),
     "generate": (
         "references/project-context.md",
+        "references/checkpoint-recovery.md",
         "references/evidence-endpoint-linux.md",
         "references/evidence-network-ids.md",
         "references/evidence-web-email.md",
