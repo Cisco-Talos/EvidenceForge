@@ -199,6 +199,7 @@ class _GenerationProgressTracker:
         self.hour_task: TaskID | None = None
         self.storyline_task: TaskID | None = None
         self._generation_started_at: float | None = None
+        self._generation_started_completed: float | None = None
         self._warmup_hours: int | None = None
 
     def __call__(self, event_type: str, data: dict) -> None:
@@ -228,6 +229,7 @@ class _GenerationProgressTracker:
 
         if self.hour_task is None:
             self._generation_started_at = time.monotonic()
+            self._generation_started_completed = float(data["completed_simulated_hours"])
             self.hour_task = self.progress.add_task(
                 description,
                 total=data["total_simulated_hours"],
@@ -243,12 +245,16 @@ class _GenerationProgressTracker:
         self._update_average_speed()
 
     def _update_average_speed(self) -> None:
-        """Update the full-run throughput field without affecting task timing."""
-        if self.hour_task is None or self._generation_started_at is None:
+        """Update this invocation's throughput field without affecting task timing."""
+        if (
+            self.hour_task is None
+            or self._generation_started_at is None
+            or self._generation_started_completed is None
+        ):
             return
         task = self.progress.tasks[self.hour_task]
         elapsed = time.monotonic() - self._generation_started_at
-        completed = task.completed
+        completed = task.completed - self._generation_started_completed
         average = elapsed / completed if completed > 0 else None
         self.progress.update(self.hour_task, average_seconds_per_hour=average)
 

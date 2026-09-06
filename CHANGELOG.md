@@ -11,6 +11,8 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 - Prevented a later SSH transport that reuses a completed network tuple from inheriting the
   earlier session's `sshd` worker, including when resuming a legacy checkpoint with a retained
   window-long responder binding.
+- Corrected the progress average after checkpoint resume so previously completed simulated hours
+  no longer make the displayed generation rate artificially fast.
 
 ## v2.0.0rc3 (2026-09-06)
 
