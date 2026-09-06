@@ -13051,6 +13051,23 @@ class BaselineMixin:
                         orig_bytes = rng.randint(40, 2000)
                         resp_bytes = rng.randint(0, 1000)
 
+                    ids_http = None
+                    signature_predicate = sig.get("predicate") or {}
+                    signature_user_agents = signature_predicate.get("http_user_agents") or []
+                    if service == "http" and signature_user_agents:
+                        from evidenceforge.events.contexts import HttpContext
+
+                        ids_http = HttpContext(
+                            method="GET",
+                            host=dst_ip,
+                            uri="/",
+                            version="1.1",
+                            user_agent=rng.choice(signature_user_agents),
+                            response_body_len=max(0, int(resp_bytes or 0)),
+                            status_code=200,
+                            status_msg="OK",
+                        )
+
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
@@ -13064,6 +13081,7 @@ class BaselineMixin:
                         conn_state=ids_conn_state,
                         source_system=source_system,
                         dns=ids_result.dns,
+                        http=ids_http,
                         ids_alerts=[ids_result.alert],
                         firewall=firewall,
                     )

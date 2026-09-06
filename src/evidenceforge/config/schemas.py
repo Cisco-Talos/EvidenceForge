@@ -64,6 +64,7 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
     inspection: Literal["metadata", "payload_cleartext", "payload_decrypted"] = "metadata"
     http_methods: list[str] = Field(default_factory=list)
     http_statuses: list[int] = Field(default_factory=list)
+    http_user_agents: list[str] = Field(default_factory=list)
     requires_http_body: bool = False
     tls_server_names: list[str] = Field(default_factory=list)
     file_mime_types: list[str] = Field(default_factory=list)
@@ -101,6 +102,19 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
         if len(values) != len(set(values)):
             raise ValueError("http_statuses must not contain duplicates")
         return values
+
+    @field_validator("http_user_agents")
+    @classmethod
+    def normalize_http_user_agents(cls, values: list[str]) -> list[str]:
+        """Normalize and deduplicate exact HTTP User-Agent requirements."""
+
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("http_user_agents must contain non-empty values")
+        casefolded = [value.casefold() for value in normalized]
+        if len(casefolded) != len(set(casefolded)):
+            raise ValueError("http_user_agents must not contain case-insensitive duplicates")
+        return normalized
 
     @field_validator("file_mime_types")
     @classmethod

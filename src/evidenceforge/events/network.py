@@ -71,6 +71,7 @@ class SignaturePredicate:
     inspection: InspectionCapability = "metadata"
     http_methods: tuple[str, ...] = ()
     http_statuses: tuple[int, ...] = ()
+    http_user_agents: tuple[str, ...] = ()
     requires_http_body: bool = False
     tls_server_names: tuple[str, ...] = ()
     file_mime_types: tuple[str, ...] = ()
@@ -87,9 +88,12 @@ class SignaturePredicate:
             raise ValueError("IDS predicate minimum_payload_bytes cannot be negative")
         if self.minimum_payload_bytes and self.payload_direction == "none":
             raise ValueError("IDS payload thresholds require a payload direction")
-        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
-            self.application_protocol != "http"
-        ):
+        if (
+            self.http_methods
+            or self.http_statuses
+            or self.http_user_agents
+            or self.requires_http_body
+        ) and (self.application_protocol != "http"):
             raise ValueError("HTTP-specific IDS predicates require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("HTTP request bodies require orig/either payload direction")

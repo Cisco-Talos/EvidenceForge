@@ -204,6 +204,62 @@ def test_upload_signature_requires_successful_body_bearing_http_method() -> None
     assert ids_alert_matches_transaction(alert, _planned_transaction(), http=post)
 
 
+def test_user_agent_signature_requires_exact_visible_http_value() -> None:
+    """A named User-Agent alert cannot survive a contradictory HTTP record."""
+
+    signature = signature_by_sid(2013028)
+    assert signature is not None
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=80,
+            proto="tcp",
+            rng=random.Random(14),
+        )
+    ).execute()
+
+    assert alert.predicate is not None
+    assert alert.predicate.http_user_agents == ("curl/8.4.0",)
+    assert ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(),
+        http=HttpContext(method="GET", user_agent="curl/8.4.0"),
+    )
+    assert not ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(),
+        http=HttpContext(method="GET", user_agent="Wget/1.21.3"),
+    )
+
+
+def test_python_urllib_signature_requires_cleartext_http_visibility() -> None:
+    """An origin-side opaque TLS flow cannot expose an HTTP User-Agent rule."""
+
+    signature = signature_by_sid(2023672)
+    assert signature is not None
+    assert signature["baseline_fp_allowed"] is False
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=443,
+            proto="tcp",
+            rng=random.Random(15),
+        )
+    ).execute()
+
+    assert not ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(service="ssl", dst_port=443),
+        http=HttpContext(method="GET", user_agent="Python-urllib/3.12"),
+    )
+
+
 def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> None:
     """Response claims require response evidence while scan metadata may fire on S0."""
 
