@@ -518,6 +518,21 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 next_id += 1
         return replacements
 
+    def checkpoint_sorted_runs_restored(self, paths: tuple[Path, ...]) -> None:
+        """Rebuild canonical ASA lifecycle IDs from authenticated sorted runs."""
+
+        if self._connection_ids_finalized or self._final_connection_id_replacements is not None:
+            raise RuntimeError("Cisco ASA checkpoint restore requires unfinalized emitter state")
+        for path in paths:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = _ASA_CONNECTION_ID_RE.search(line)
+                host_match = _ASA_LINE_HOST_RE.match(line)
+                if match is None or host_match is None or " Built " not in match.group("prefix"):
+                    continue
+                self._canonical_connection_ids.add(
+                    (host_match.group("hostname"), int(match.group("connection_id")))
+                )
+
     def _finalize_connection_ids(self) -> None:
         """Rewrite sorted ASA lifecycles with source-native chronological IDs."""
 

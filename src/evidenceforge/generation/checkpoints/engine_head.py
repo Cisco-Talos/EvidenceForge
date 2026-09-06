@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.timing import HawkesState
 
@@ -28,7 +29,14 @@ _SIMPLE_FIELDS = tuple(
     field.name
     for field in GENERATION_ENGINE_CHECKPOINT_FIELDS
     if field.disposition == "bounded-live-head"
-    and field.name not in {"_dhcp_lease_state", "_hawkes_states", "_storyline_staged_archives"}
+    and field.name
+    not in {
+        "_dhcp_lease_state",
+        "_hawkes_states",
+        "_storyline_file_available_at",
+        "_storyline_file_source_overrides",
+        "_storyline_staged_archives",
+    }
 )
 _SIMPLE_FIELD_SET = frozenset(_SIMPLE_FIELDS)
 
@@ -42,6 +50,8 @@ class _EngineHead(BaseModel):
     fields: dict[str, object] = Field(default_factory=dict)
     dhcp_leases: list[list[object]] = Field(default_factory=list)
     hawkes_states: list[list[object]] = Field(default_factory=list)
+    storyline_file_availability: list[list[object]] = Field(default_factory=list)
+    storyline_file_source_overrides: list[list[object]] = Field(default_factory=list)
     staged_archives: list[list[object]] = Field(default_factory=list)
 
 
@@ -196,6 +206,108 @@ def _restore_staged_archives(
     return restored
 
 
+def _capture_storyline_file_availability(engine: GenerationEngine) -> list[list[object]]:
+    """Capture canonical local-file availability timestamps in stable key order."""
+
+    rows: list[list[object]] = []
+    for key, available_at in sorted(getattr(engine, "_storyline_file_available_at", {}).items()):
+        if (
+            type(key) is not tuple
+            or len(key) != 2
+            or any(type(value) is not str or not value for value in key)
+            or type(available_at) is not datetime
+            or available_at.tzinfo is not UTC
+        ):
+            raise TypeError("generation checkpoint storyline file availability is invalid")
+        rows.append([key[0], key[1], available_at.isoformat()])
+    return rows
+
+
+def _restore_storyline_file_availability(rows: object) -> dict[tuple[str, str], datetime]:
+    """Restore validated canonical local-file availability timestamps."""
+
+    if type(rows) is not list:
+        raise CheckpointCorruptionError(
+            "generation checkpoint storyline file availability table is invalid"
+        )
+    restored: dict[tuple[str, str], datetime] = {}
+    for row in rows:
+        if (
+            type(row) is not list
+            or len(row) != 3
+            or any(type(value) is not str or not value for value in row)
+        ):
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file availability row is invalid"
+            )
+        key = (row[0], row[1])
+        try:
+            available_at = datetime.fromisoformat(row[2])
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file availability timestamp is invalid"
+            ) from error
+        if available_at.tzinfo is not UTC or key in restored:
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file availability row is invalid"
+            )
+        restored[key] = available_at
+    return restored
+
+
+def _capture_storyline_file_overrides(engine: GenerationEngine) -> list[list[object]]:
+    """Capture exact source-file metadata retained for later storyline uploads."""
+
+    rows: list[list[object]] = []
+    for key, source_file in sorted(getattr(engine, "_storyline_file_source_overrides", {}).items()):
+        if (
+            type(key) is not tuple
+            or len(key) != 2
+            or any(type(value) is not str or not value for value in key)
+            or type(source_file) is not CompiledStorageFile
+        ):
+            raise TypeError("generation checkpoint storyline file override is invalid")
+        rows.append([key[0], key[1], source_file.model_dump(mode="json")])
+    return rows
+
+
+def _restore_storyline_file_overrides(
+    rows: object,
+) -> dict[tuple[str, str], CompiledStorageFile]:
+    """Restore exact source-file metadata retained for later storyline uploads."""
+
+    if type(rows) is not list:
+        raise CheckpointCorruptionError(
+            "generation checkpoint storyline file override table is invalid"
+        )
+    restored: dict[tuple[str, str], CompiledStorageFile] = {}
+    for row in rows:
+        if (
+            type(row) is not list
+            or len(row) != 3
+            or type(row[0]) is not str
+            or not row[0]
+            or type(row[1]) is not str
+            or not row[1]
+        ):
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file override row is invalid"
+            )
+        key = (row[0], row[1])
+        try:
+            source_file = CompiledStorageFile.model_validate(row[2])
+        except (TypeError, ValueError, ValidationError) as error:
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file override row is invalid"
+            ) from error
+        if key in restored:
+            raise CheckpointCorruptionError(
+                "generation checkpoint storyline file override key is duplicated"
+            )
+        restored[key] = source_file
+    return restored
+
+
 class GenerationEngineParticipant:
     """Persist only history-sensitive engine scheduling and reporting fields."""
 
@@ -237,6 +349,8 @@ class GenerationEngineParticipant:
             },
             dhcp_leases=_capture_dhcp(self.engine),
             hawkes_states=hawkes,
+            storyline_file_availability=_capture_storyline_file_availability(self.engine),
+            storyline_file_source_overrides=_capture_storyline_file_overrides(self.engine),
             staged_archives=_capture_staged_archives(self.engine),
         )
         return ParticipantSeal(
@@ -292,6 +406,12 @@ class GenerationEngineParticipant:
                 setattr(self.engine, name, value)
         self.engine._dhcp_lease_state = _restore_dhcp(self.engine, document.dhcp_leases)
         self.engine._hawkes_states = hawkes
+        self.engine._storyline_file_available_at = _restore_storyline_file_availability(
+            document.storyline_file_availability
+        )
+        self.engine._storyline_file_source_overrides = _restore_storyline_file_overrides(
+            document.storyline_file_source_overrides
+        )
         self.engine._storyline_staged_archives = _restore_staged_archives(
             self.engine,
             document.staged_archives,

@@ -541,6 +541,9 @@ class EmitterSpoolParticipant:
                 event_count=event_count,
                 run_sequence=run_sequence,
             )
+            restore_runtime = getattr(emitter, "checkpoint_sorted_runs_restored", None)
+            if callable(restore_runtime):
+                restore_runtime(tuple(paths))
             writer.event_count = event_count
             restored_sorted[(format_name, route)] = _SortedWriterState(
                 event_count=event_count,

@@ -41,6 +41,7 @@ from evidenceforge.generation.checkpoints import (
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.models import (
     BaselineActivity,
@@ -411,6 +412,18 @@ class TestGenerationEngine:
         engine._snapd_next_change_id = {"TEST-01": 1002}
         engine._system_pids = {"TEST-01": {"systemd": 1, "sssd": 1_449_103}}
         engine._storyline_executed = {0, 2}
+        storyline_file = CompiledStorageFile(
+            file_id="storyline-upload",
+            share="ADMIN$",
+            path=r"C:\Temp\payload.bin",
+            size_bytes=4096,
+            mime_type="application/octet-stream",
+            tags=("storyline", "transferred"),
+        )
+        engine._storyline_file_available_at = {("test-01", r"c:\temp\payload.bin"): moment}
+        engine._storyline_file_source_overrides = {
+            ("test-01", r"c:\temp\payload.bin"): storyline_file
+        }
         engine._storyline_staged_archives = [
             SimpleNamespace(
                 actor=engine.scenario.environment.users[0],
@@ -461,6 +474,8 @@ class TestGenerationEngine:
         assert restored_archive.archive_path == r"C:\Temp\evidence.zip"
         assert restored._pending_unlocks == engine._pending_unlocks
         assert restored._storyline_executed == engine._storyline_executed
+        assert restored._storyline_file_available_at == engine._storyline_file_available_at
+        assert restored._storyline_file_source_overrides == engine._storyline_file_source_overrides
         assert restored.malicious_events == engine.malicious_events
         restored_lease = restored._dhcp_lease_state["TEST-01"]
         assert restored_lease["system"] is restored.scenario.environment.systems[0]

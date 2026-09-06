@@ -973,6 +973,8 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_spillage_seq",
         "_storyline_account_create_commands",
         "_storyline_executed",
+        "_storyline_file_available_at",
+        "_storyline_file_source_overrides",
         "_storyline_host_available_at",
         "_storyline_logoff_to_logon",
         "_storyline_logon_registry",
