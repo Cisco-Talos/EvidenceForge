@@ -1109,6 +1109,12 @@ class ProxyTransactionActionBundle:
                 and request.http.response_body_len == response_body_len
                 and proxy_context.cache_result not in {"DENIED", "ERROR"}
             )
+            response_content_type = (
+                proxy_context.content_type
+                or (request.http.resp_mime_types[0] if request.http.resp_mime_types else "")
+                if preserve_response_entity
+                else ""
+            )
             return HttpContext(
                 method=request.http.method,
                 host=proxy_context.host,
@@ -1137,8 +1143,7 @@ class ProxyTransactionActionBundle:
                 tags=list(request.http.tags),
                 resp_mime_types=response_mime_types_for_status(
                     proxy_context.status_code,
-                    proxy_context.content_type
-                    or (request.http.resp_mime_types[0] if request.http.resp_mime_types else ""),
+                    response_content_type,
                     response_body_len,
                     method=request.http.method,
                 ),

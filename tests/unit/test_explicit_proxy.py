@@ -5484,10 +5484,12 @@ class TestExplicitProxyVisibility:
             http=HttpContext(
                 method="GET",
                 host="example.com",
-                uri="/private",
+                uri="/CitrixWorkspaceApp.exe",
                 version="1.1",
                 status_code=200,
                 status_msg="OK",
+                response_body_len=75_000_000,
+                resp_mime_types=["application/x-msdownload"],
             ),
             ids_alerts=(
                 IdsAlertPlan(
