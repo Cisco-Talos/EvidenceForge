@@ -446,6 +446,9 @@ def test_scp_reuses_source_content_identity_and_publishes_exact_receiver_artifac
     assert source_read.file.artifact_identity == source_record.artifact
     assert receiver_create.file.artifact_identity == receiver_record.artifact
     assert source_read.file.content_identity == receiver_create.file.content_identity
+    assert source_read.identity_plan.object_id == source_record.artifact.artifact_id
+    assert receiver_create.identity_plan.object_id == receiver_record.artifact.artifact_id
+    assert source_read.identity_plan.object_id != receiver_create.identity_plan.object_id
 
 
 def test_staged_smb_channel_omission_leaves_endpoint_and_audit_state_untouched() -> None:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import random
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import urlsplit
@@ -920,6 +920,17 @@ def _build_file_occurrence(
                 plan.path,
                 platform,
             )
+    identity_plan = plan.identity_plan
+    if record is not None:
+        identity_plan = replace(
+            identity_plan,
+            subject=EntityIdentity(
+                object_id=record.artifact.artifact_id,
+                kind="file",
+                hostname=plan.system.hostname,
+                semantic_key=f"{plan.system.hostname}:{plan.path.casefold()}",
+            ),
+        )
     return OccurrenceBuilder(
         timestamp=plan.timestamp,
         event_type=plan.event_type,
@@ -939,7 +950,7 @@ def _build_file_occurrence(
             artifact_identity=record.artifact if record is not None else None,
             content_identity=record.content if record is not None else None,
         ),
-        identity_plan=plan.identity_plan,
+        identity_plan=identity_plan,
         effect_provenance=EffectOccurrenceProvenance.planned(
             kind=EffectOccurrenceKind.FILE,
             root_action_id=plan.plan_action_id,

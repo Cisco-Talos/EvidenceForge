@@ -178,9 +178,13 @@ def test_client_path_upload_reuses_runtime_artifact_identity_and_size() -> None:
         mime_type="application/gzip",
         seed_ref="database-archive",
     )
+    artifact_id = "app-int-local-archive-placement"
     executor = SimpleNamespace(
         _runtime_content_manager=SimpleNamespace(
-            resolve_record=lambda *_args: SimpleNamespace(content=content)
+            resolve_record=lambda *_args: SimpleNamespace(
+                content=content,
+                artifact=SimpleNamespace(artifact_id=artifact_id),
+            )
         )
     )
     bundle = object.__new__(SmbActivityActionBundle)
@@ -201,7 +205,7 @@ def test_client_path_upload_reuses_runtime_artifact_identity_and_size() -> None:
     )
 
     assert resolved is not None
-    assert resolved.file_id == content.file_object_id
+    assert resolved.file_id == artifact_id
     assert resolved.version == content.version
     assert resolved.size_bytes == content.size_bytes
     assert resolved.mime_type == content.mime_type

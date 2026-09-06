@@ -4915,6 +4915,31 @@ class StorylineMixin:
                         )
                         if source_record is not None:
                             source_content = source_record.content
+                    if source_content is None and source_path:
+                        content_rng = random.Random(
+                            _stable_seed(
+                                "storyline_scp_source_content:"
+                                f"{system.hostname}:{source_path}:{transfer_time.isoformat()}"
+                            )
+                        )
+                        source_content = FileContentIdentity(
+                            file_object_id=stable_uuid(
+                                "file-identity",
+                                f"{system.hostname}:{source_path.casefold()}",
+                            ),
+                            version=1,
+                            size_bytes=content_rng.randint(600_000, 1_800_000),
+                            mime_type=(
+                                "application/gzip"
+                                if source_path.casefold().endswith((".gz", ".tgz"))
+                                else "application/octet-stream"
+                            ),
+                            seed_ref=stable_uuid(
+                                "storyline-scp-content",
+                                system.hostname,
+                                source_path,
+                            ),
+                        )
                     orig_bytes = (
                         source_content.size_bytes + rng.randint(8_192, 32_768)
                         if source_content is not None

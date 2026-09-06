@@ -4266,7 +4266,7 @@ class SmbActivityActionBundle:
             return None
         content = record.content
         return CompiledStorageFile(
-            file_id=content.file_object_id,
+            file_id=record.artifact.artifact_id,
             version=content.version,
             share=f"client:{self.request.parent_system.hostname}",
             path=location.path,
