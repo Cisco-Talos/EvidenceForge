@@ -1007,3 +1007,50 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve streamable transfers, encryption overhead, independent sensor timing,
   local versus remote object authority, source process lifetime, content hashes, file sizes,
   destination service identity, retry neutrality, and bounded retained state.
+
+### Result
+
+- Commits `372ad0e2b`, `0ee1c37dd`, `9843b327c`, `4acf035a2`, `ac3bda9e2`, and
+  `a09169084` move SCP completion and receiver-placement identity into the canonical transfer
+  lifecycle, then hand that exact artifact to the dependent SMB action even when no runtime
+  artifact registry is installed.
+- Focused SCP, SMB, and storyline tests passed (157 tests), followed by the routine suite (8,228
+  passed, 5 skipped, 2,003 deselected) and clean Ruff gates.
+- Generation produced 114,250 evaluated records. The 823,965-byte archive is covered by 833,491
+  SCP originator bytes and 826,794 SMB originator bytes; SCP closes before SMB starts, and the APP
+  receiver's create/read preserve object `0c591283-7383-4f9b-9575-a5abc466dcd9`.
+- Automated evaluation passed at 96.1262. Initial blind scores were 65, 72, 30, and 74. Required
+  deliberation retained a 3-1 Synthetic majority at 76, 82, 44, and 82.
+- The panel ranked the repeated Type-10 RDP process identity, ordering, parentage, and userinit
+  lifetime contradictions first; this becomes loop 56.
+
+## Assessment loop 56 — exact RDP bootstrap identity and lifecycle
+
+### Finding classification
+
+- All four visible Type-10 logons name a different ProcessId than their session winlogon; three
+  logons render before that process, and two overlapping sessions reuse one caller PID:
+  `same_family_sibling`, a repeated hard RDP identity and ordering contradiction.
+- Every RDP winlogon is parented directly by System and four userinit processes survive for 30
+  minutes to 2.7 hours: `same_family_sibling` bootstrap-parent and child-lifetime defects.
+
+### Family contract
+
+- **Owning abstraction:** the exact RDP session action bundle, its deferred session materialization
+  graph, and the shared source-timing cohort for bootstrap dependents.
+- **Invariant:** one Type-10 session owns one distinct winlogon identity created through the
+  host's live smss process before authentication; 4624 names that exact PID. Userinit is a
+  short-lived bootstrap child that terminates seconds after launching explorer, independently of
+  the RDP session or desktop lifetime.
+- **Entry paths:** first RDP logon, overlapping sessions, reconnect/disconnect/logoff, modeled and
+  unmodeled clients, elevated and ordinary users, source observation delay/drop, collection
+  boundaries, exact publication recovery, and compatibility paths.
+- **Consumers:** Security 4624/4688/4689, Sysmon 1/5, eCAR PROCESS and USER_SESSION, State session
+  role links, RDP application state, lifecycle finalizers, source timing, and blind host/detection
+  review.
+- **Layer rationale:** the RDP bundle allocates the session and bootstrap graph before renderers
+  see it. It must attach the exact winlogon identity to authentication and assign parent/lifetime
+  semantics before source-specific timing and rendering split.
+- **Sibling risks:** preserve transport-before-auth, per-session PID/GUID uniqueness, local Type-2
+  behavior, reconnect reuse, explorer/session lifetime, parent visibility, observation-cohort
+  integrity, exact retry neutrality, and bounded terminal state.

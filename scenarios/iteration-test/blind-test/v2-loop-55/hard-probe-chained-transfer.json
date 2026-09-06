@@ -1,0 +1,44 @@
+{
+  "family": "chained_scp_to_smb_transfer",
+  "status": "PASS",
+  "artifact": "rpt_0318.sql.gz",
+  "scp": {
+    "uid": "Cep4Tk2vigAMACjdXO",
+    "start": 1710783293.42672,
+    "duration_seconds": 27.609304,
+    "close": 1710783321.036024,
+    "originator_bytes": 833491,
+    "missed_bytes": 0
+  },
+  "receiver": {
+    "host": "APP-INT-01",
+    "path": "/tmp/.cache/rpt_0318.sql.gz",
+    "create_observed": 1710783321.855,
+    "read_observed": 1710783324.88,
+    "create_object_id": "0c591283-7383-4f9b-9575-a5abc466dcd9",
+    "read_object_id": "0c591283-7383-4f9b-9575-a5abc466dcd9",
+    "create_owner": "/usr/sbin/sshd",
+    "create_pid": 1937678
+  },
+  "smb": {
+    "uid": "CGZBLGNKxuPxJ0cXSi",
+    "start": 1710783323.039698,
+    "file_open": 1710783323.646093,
+    "file_write": 1710783323.718411,
+    "artifact_bytes": 823965,
+    "originator_bytes": 826794,
+    "missed_bytes": 0,
+    "source_object_id": "0c591283-7383-4f9b-9575-a5abc466dcd9",
+    "destination_object_id": "file-254798fd-542e-4ace-97c5-907c2dff0bad",
+    "destination_owner": "/usr/sbin/smbd",
+    "destination_principal": "svc_mhsync"
+  },
+  "assertions": {
+    "scp_payload_covers_artifact": true,
+    "scp_closes_before_smb_starts": true,
+    "receiver_create_precedes_smb_start": true,
+    "receiver_object_is_stable_through_read": true,
+    "copy_uses_distinct_destination_object": true,
+    "both_transports_cover_artifact_with_overhead": true
+  }
+}
