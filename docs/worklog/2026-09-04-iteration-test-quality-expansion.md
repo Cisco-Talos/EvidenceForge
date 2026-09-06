@@ -779,3 +779,51 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve SYSTEM token ownership for `winlogon.exe`, user token ownership for
   `userinit.exe` and Explorer, parent-before-child source ordering, reconnect continuity, exact
   recovery, and end-window omission.
+
+### Result
+
+- Commit `a99cd68a4` makes deferred RDP login and bootstrap identity complete before source
+  projection: Type 10 logons receive canonical SID/GUID values, bootstrap processes carry their
+  frozen parent snapshots, and explicit nonzero terminal sessions override SYSTEM defaults.
+- The focused 63-test exact RDP production module and the full routine suite passed (8,220 passed,
+  5 skipped, 2,003 deselected); Ruff check and format gates passed.
+- Supported generation produced 114,409 records. The hard probe found four complete Type 10
+  sessions, four nonempty target SIDs/GUIDs, twelve correct bootstrap parent rows, and four
+  triplets with one shared nonzero terminal-session ID.
+- Automated evaluation scored 96.2705 with all hard gates passing.
+- The fresh blind panel returned four Synthetic verdicts with synthetic-confidence scores 74,
+  86, 58, and 74 (average 73; spread 28). No deliberation was required.
+- The eCAR Teams post-termination module-load contradiction repeated from loop 49 at P0 and
+  becomes loop 51.
+
+## Assessment loop 51 — process-dependent evidence before terminalization
+
+### Finding classification
+
+- Six eCAR `MODULE/LOAD` rows for one Teams utility process occur after the same durable process
+  object's eCAR `PROCESS/TERMINATE`: `same_family_sibling`, repeated in loops 49 and 50.
+- Sysmon observes the same process lifecycle without post-termination dependents, localizing the
+  defect to source-local eCAR timing/finalization rather than process identity allocation.
+- Other process-dependent families (flow, file, registry, process access, remote thread) share the
+  same terminal-ordering risk and are included as sibling paths.
+
+### Family contract
+
+- **Owning abstraction:** action-cohort source timing and the process lifecycle authority that
+  freezes source-visible dependent frontiers before process termination publication.
+- **Invariant:** for each durable process identity in one source, every visible dependent record
+  must render at or after its visible create and no later than its visible terminate. A terminal
+  projection must wait for the latest source-local dependent frontier; it must never rewrite a
+  dependent timestamp in an emitter.
+- **Entry paths:** baseline application launches, storyline processes, nested process trees,
+  foreground and background applications, short-lived processes, process/network and
+  process/file bundles, observation delay/drop, bounded-window, exact retry, and session drain.
+- **Consumers:** eCAR process/module/flow/file/registry/process-access/thread evidence, Sysmon
+  process/dependent/terminate evidence, Security process audit, lifecycle registry, source timing,
+  evaluation, and blind endpoint/detection review.
+- **Layer rationale:** the canonical process graph is correct and Sysmon already respects it. The
+  shared source-timing/finalization owner must enforce source-local dependent-before-terminal
+  ordering before renderers consume immutable projections.
+- **Sibling risks:** preserve canonical timestamps, cross-source latency texture, process GUID and
+  object identity, parent/child close barriers, observation-cohort coherence, retry neutrality,
+  collection-boundary omission, and bounded retained state.

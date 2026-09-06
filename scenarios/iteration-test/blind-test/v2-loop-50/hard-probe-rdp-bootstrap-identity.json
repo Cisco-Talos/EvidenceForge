@@ -1,0 +1,43 @@
+{
+  "contract": "RDP login and desktop-bootstrap identity",
+  "result": "pass",
+  "rdp_sessions_checked": 4,
+  "security_4624": {
+    "nonempty_target_sid": 4,
+    "nonempty_logon_guid": 4,
+    "full_guid_shape": 4
+  },
+  "sysmon_process_create": {
+    "complete_triplets": 4,
+    "winlogon_parent_system": 4,
+    "userinit_parent_winlogon": 4,
+    "explorer_parent_userinit": 4,
+    "one_nonzero_terminal_session_per_triplet": 4
+  },
+  "sessions": [
+    {
+      "host": "DC-01.meridianhcs.local",
+      "principal": "marcus.chen",
+      "logon_id": "0x55df795",
+      "terminal_session_id": 5
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "principal": "aisha.johnson",
+      "logon_id": "0x26d9655",
+      "terminal_session_id": 4
+    },
+    {
+      "host": "WS-AJOHNSON-01.meridianhcs.local",
+      "principal": "aisha.johnson",
+      "logon_id": "0x2701ac7",
+      "terminal_session_id": 5
+    },
+    {
+      "host": "FILE-SRV-01.meridianhcs.local",
+      "principal": "aisha.johnson",
+      "logon_id": "0xf88fcda",
+      "terminal_session_id": 7
+    }
+  ]
+}
