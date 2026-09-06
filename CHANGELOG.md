@@ -6,6 +6,111 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.0.0rc3 (2026-09-06)
+
+This third 2.0 release candidate completes another ten-loop realism assessment cycle, hardens
+cross-source lifecycle and artifact correlations, and makes checkpoint recovery portable across
+attemptable runtime drift with explicit behavior-risk reporting.
+
+**Expanded assessment coverage and source-native ordering**
+
+- Expanded the canonical iteration-test scenario and repaired endpoint effect ownership, Sysmon
+  timing and identity, process/dependent ordering, Windows service and NewCredentials identity,
+  one-way UDP syslog, multipart ownership, SMB receiver ordering, Zeek hash rendering, proxy tunnel
+  spans, and ASA chronology (`e9fc6d01`, `9d5171d0`, `b3dcd4d4`, `6e1c6d62`, `ffdc97fe`,
+  `26c1f8ef`, `93b4f111`, `0a017f89`, `09980406`, `98a4a9a4`, `ce7f79aa`, `7f232f0b`,
+  `3e620a0d`, `f3bd418c`, `7a1713d0`, `db6ff201`, `a7e16540`, `6bc3a862`).
+
+**Lifecycle, session, and network realism**
+
+- Closed operation-lived SMB clients, finalized bounded process state safely, preserved independent
+  closure timelines, aligned ICMP packet observations with Zeek duration, and retained historical
+  Explorer/desktop-shell ownership with valid SMB actors and partial SSH observation
+  (`c9c01ed4`, `d615bfe8`, `c0a7cb54`, `059e971c`, `4799780b`, `65c90a01`, `17ed7570`,
+  `6a3b4a7a`, `47b672a6`, `c62723e2`, `b3e221fe`, `9665c3b5`, `71352a16`).
+- Repaired Windows ancestry, SMB logon identity, RDP bootstrap identity, and eCAR dependent
+  lifecycles, with each blind-assessment result recorded alongside its targeted hard probe
+  (`e8e4776e`, `c0423671`, `42a56402`, `0539bcd0`, `a99cd68a`, `995234ca`, `983a45cb`,
+  `b6495431`).
+
+**Payload, alert, and transfer lineage**
+
+- Conserved explicit-proxy upload payloads, bound IDS alerts to visible triggers, and tied HTTP
+  artifacts and error MIME to terminal outcomes (`58efa45c`, `013f13bf`, `55dec82c`, `d7439744`,
+  `536ee7ad`, `928f2492`, `c3eb1ce4`).
+- Enforced chained-transfer availability and exact SCP close, lineage, source handoff, receiver
+  placement, and source retention, then bound RDP logons to their session `winlogon` bootstrap
+  (`372ad0e2`, `0ee1c37d`, `9843b327`, `4acf035a`, `ac3bda9e`, `a0916908`, `75ae3eeb`,
+  `1597c643`, `42d92f41`).
+
+**Portable checkpoint recovery**
+
+- Completed iteration-scenario checkpoint state, repaired compatible restore performance and
+  aged-out-parent semantics, and added behavior-aware runtime drift, read-only hydration
+  verification, same-cursor migration, provenance, skills, documentation, and portability gates
+  (`ff86dde1`, `6758209b`, `e50e6cf5`, `d353e40b`, `7552fbfd`).
+
+## v2.0.0rc2 (2026-09-04)
+
+This second 2.0 release candidate consolidates the architecture and realism work completed after
+RC1, adds portable pack releases and resumable long-running generation, and refreshes the
+authoring and tester experience ahead of the final 2.0 release.
+
+**Deterministic lifecycle and publication foundations**
+
+- Completed the V2 family-level architecture with bounded state registries, authenticated intent
+  and effect receipts, append-only lifecycle authority, atomic action cohorts, immutable
+  deployment/content identity, and one shared source-timing runtime (`42c4136b`, `af0bb0b9`,
+  `d90010fc`, `2678ad09`, `7d3875a2`).
+- Migrated Windows Security, Sysmon, Bash history, Snort, DNS, DHCP, TLS, email, browser, file
+  transfer, Linux shell, and remote-session timing/publication onto exact recoverable contracts
+  (`f6e9d3f9`, `2facf92b`, `b68e53a7`, `670b3843`, `24520c45`, `5880c4de`, `1ebcb4da`).
+
+**Remote access, network, and persistent application channels**
+
+- Added bounded persistent HTTP/proxy, SSH, RDP, and SMB channel state with exact deferred
+  publication, transport receipt binding, terminal drain coordination, and deterministic recovery
+  (`4deb3097`, `af0bb0b9`, `809aa0da`, `a161db38`, `fe0ef69d`, `96e7e557`, `56550e92`,
+  `e5ccb543`).
+- Hardened RDP, SSH, sudo, proxy, DNS, Cisco ASA, Sysmon, and network tuple/source-port ownership
+  across suppression, teardown, retry, and concurrent publication paths (`902ff73d`, `5c29e817`,
+  `e963d182`, `07ebbbf5`, `b01ec93e`, `7b99b9bd`, `463a08eb`, `5912774c`).
+
+**Realism and long-run correctness**
+
+- Incorporated the post-RC1 assessment fixes for Windows service ancestry, authentication and
+  workstation state, Linux foreground/sudo ownership, SSH timing, proxy accounting, SMB transfer
+  identity, registry artifacts, scheduled automation, Kerberos policy, and CIDR-aware nmap effects
+  (`120fe082`, `52346e69`, `08091e34`, `c8cb60cb`, `d7fec6d6`, `f4b549ec`, `e432bd27`,
+  `6e6e03f0`, `af3edef1`, `065c608b`).
+- Added duration-stable retention and admission checks for TLS, DNS, SSH ports, processes,
+  lifecycle state, and evolving SMB files, including 31-day and long-generation regression gates
+  (`617a9c8c`, `541ce9b4`, `3e514c67`, `6e5b98a4`, `f83d5401`).
+
+**Pack distribution and scenario authoring**
+
+- Added portable immutable `.efpack` release, import, hydration, validation, provenance, and
+  publisher-qualified inventory workflows, with restored authoring contracts and modeled host
+  resources (`9668ea07`, `e1e4054f`).
+- Expanded focused schema guidance, IDS signature inventory, skill routing, and the experimental
+  clean-room scenario-agent acceptance harness (`63834b1f`, `7bd36232`, `29be4518`).
+
+**Incremental generation and operator experience**
+
+- Added atomic incremental checkpoints and byte-identical resume for long-running generation,
+  followed by checkpoint inspection, cleanup, CLI recovery guidance, and slow-suite repair
+  (`c77856f3`, `a3905e69`, `2e790f92`).
+- Improved generation progress reporting and narrow-terminal behavior, refreshed the EvidenceForge
+  2.0 README and visual identity, corrected its trademark references, and clarified the
+  release-readiness roadmap (`6631c13f`, `368bc143`, `4333f1fe`, `05914706`, `6f087045`,
+  `5e6c2e5c`, `af8c01f3`).
+
+**Runtime and dependency support**
+
+- Raised the supported runtime to Python 3.12 and refreshed Ruff, pytest-benchmark, pre-commit,
+  python-dotenv, setup-uv, and the final dependency batch (`2f408600`, `e680cab0`, `327e046c`,
+  `322ff67e`, `881a0361`, `a6a1a292`, `13575583`).
+
 ## v2.0.0rc1 (2026-08-14)
 
 This first 2.0 release candidate brings Scenario 2.0 composition, reusable pack authoring, and
