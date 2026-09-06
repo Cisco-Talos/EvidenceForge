@@ -2343,13 +2343,26 @@ class SmbActivityActionBundle:
             )
             for observation in handoff.observations
         )
+        normalized_auth_protocol = auth_protocol.casefold()
+        kerberos_auth = normalized_auth_protocol == "kerberos"
         auth = AuthContext(
             username=self.smb_principal,
             user_sid=self.executor._get_sid(self.smb_principal),
             logon_id=session_identity.logon_id,
+            session_id=session_identity.session_id,
             logon_type=3,
+            auth_package="Kerberos" if kerberos_auth else "NTLM",
             source_ip=client_ip,
             source_port=opening.src_port,
+            logon_process="Kerberos" if kerberos_auth else "NtLmSsp",
+            lm_package="-" if kerberos_auth else "NTLM V2",
+            logon_guid=session_identity.logon_guid,
+            subject_sid="S-1-5-18",
+            subject_username="SYSTEM",
+            subject_domain="NT AUTHORITY",
+            subject_logon_id="0x3e7",
+            reporting_pid=self.executor._get_system_pid(server.hostname, "lsass", 0x2E0),
+            workstation_name=client_system.hostname if client_system is not None else "-",
             session_kind="smb",
             auth_protocol=auth_protocol,
             smb_principal=self.smb_principal,
@@ -2445,6 +2458,11 @@ class SmbActivityActionBundle:
                 OccurrenceBuilder(
                     timestamp=auth_time,
                     event_type="logon",
+                    src_host=(
+                        self.executor._build_host_context(client_system)
+                        if client_system is not None
+                        else None
+                    ),
                     dst_host=self.executor._build_host_context(server),
                     auth=auth,
                     identity_plan=EventIdentityPlan(

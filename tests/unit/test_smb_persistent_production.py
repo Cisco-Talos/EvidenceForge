@@ -594,6 +594,43 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
     )
 
 
+def test_persistent_windows_smb_logon_renders_canonical_network_identity(
+    windows_read_control: tuple[tuple[str, bytes], ...],
+) -> None:
+    """The accepted Type 3 logon projects complete protocol and client identity."""
+
+    security_xml = next(
+        payload.decode("utf-8")
+        for path, payload in windows_read_control
+        if path.endswith("windows_event_security.xml")
+    )
+    logon = next(
+        event
+        for event in re.findall(r"<Event\b.*?</Event>", security_xml, flags=re.DOTALL)
+        if "<EventID>4624</EventID>" in event
+    )
+
+    assert '<Data Name="SubjectUserSid">S-1-5-18</Data>' in logon
+    assert '<Data Name="SubjectUserName">SYSTEM</Data>' in logon
+    assert '<Data Name="SubjectDomainName">NT AUTHORITY</Data>' in logon
+    assert '<Data Name="SubjectLogonId">0x3e7</Data>' in logon
+    assert '<Data Name="WorkstationName">SMBCLIENT-09</Data>' in logon
+    assert (
+        '<Data Name="LogonProcessName">Kerberos</Data>' in logon
+        and '<Data Name="AuthenticationPackageName">Kerberos</Data>' in logon
+        and '<Data Name="LmPackageName">-</Data>' in logon
+    ) or (
+        '<Data Name="LogonProcessName">NtLmSsp</Data>' in logon
+        and '<Data Name="AuthenticationPackageName">NTLM</Data>' in logon
+        and '<Data Name="LmPackageName">NTLM V2</Data>' in logon
+    )
+    assert re.search(
+        r'<Data Name="LogonGuid">\{[0-9a-f-]{36}\}</Data>',
+        logon,
+        flags=re.IGNORECASE,
+    )
+
+
 @pytest.mark.slow
 def test_smb_preparation_is_exact_repeatable_and_runtime_neutral(
     scenarios_dir: Path,
