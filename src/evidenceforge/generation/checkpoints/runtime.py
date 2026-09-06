@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from typing import Literal
 
 from .cadence import CheckpointCadence
 from .control import (
@@ -28,6 +29,18 @@ from .store import IncrementalCheckpointStore
 logger = logging.getLogger(__name__)
 
 
+def _build_identity(components: object) -> dict[str, object]:
+    """Return the bounded build identity recorded in recovery provenance."""
+
+    if type(components) is not dict:
+        return {}
+    return {
+        key: components[key]
+        for key in ("evidenceforge_version", "evidenceforge_build_sha256")
+        if key in components
+    }
+
+
 class IncrementalCheckpointController:
     """Publish cadence points from explicit transactional state owners."""
 
@@ -44,6 +57,9 @@ class IncrementalCheckpointController:
         run_options: dict[str, object] | None = None,
         fingerprint_components: dict[str, object] | None = None,
         last_committed_cursor: CheckpointCursor | None = None,
+        recovery_store: IncrementalCheckpointStore | None = None,
+        compatibility_level: Literal["exact", "load-compatible"] = "exact",
+        resume_provenance: dict[str, object] | None = None,
     ) -> None:
         self.store = store
         self.fingerprint = fingerprint
@@ -57,6 +73,11 @@ class IncrementalCheckpointController:
             {} if fingerprint_components is None else dict(fingerprint_components)
         )
         self.last_committed_cursor = last_committed_cursor
+        self.recovery_store = store if recovery_store is None else recovery_store
+        self.compatibility_level = compatibility_level
+        self.resume_provenance = {} if resume_provenance is None else dict(resume_provenance)
+        self.migration_required = compatibility_level == "load-compatible"
+        self.restore_diagnostics: dict[str, object] = {}
         self.resolved_scenario_reference = self.store.persist_resolved_scenario(
             self.resolved_scenario
         )
@@ -78,12 +99,51 @@ class IncrementalCheckpointController:
         fingerprint: str,
         resolved_scenario: bytes,
         checkpoint_hours: int | None = None,
+        fingerprint_components: dict[str, object] | None = None,
+        compatibility_level: Literal["exact", "load-compatible"] = "exact",
+        recovery_store: IncrementalCheckpointStore | None = None,
     ) -> IncrementalCheckpointController:
         """Continue sequence and segment ownership from one validated recovery point."""
 
         interval = (
             recovery.manifest.checkpoint_hours if checkpoint_hours is None else checkpoint_hours
         )
+        stored_components = recovery.manifest.metadata.get("fingerprint_components", {})
+        current_components = (
+            stored_components if fingerprint_components is None else fingerprint_components
+        )
+        stored_provenance = recovery.manifest.metadata.get("resume_provenance", {})
+        provenance = dict(stored_provenance) if type(stored_provenance) is dict else {}
+        transitions = provenance.get("transitions", [])
+        transition_rows = list(transitions) if type(transitions) is list else []
+        omitted = provenance.get("omitted_transition_count", 0)
+        omitted_count = omitted if type(omitted) is int and omitted >= 0 else 0
+        migration_value = provenance.get("migration_count", 0)
+        migration_count = migration_value if type(migration_value) is int else 0
+        transition_rows.append(
+            {
+                "classification": compatibility_level,
+                "cursor": recovery.manifest.cursor.model_dump(mode="json"),
+                "from_fingerprint": recovery.manifest.run_fingerprint,
+                "originating_build": _build_identity(stored_components),
+                "resuming_build": _build_identity(current_components),
+                "to_fingerprint": fingerprint,
+            }
+        )
+        if len(transition_rows) > 8:
+            omitted_count += len(transition_rows) - 8
+            transition_rows = transition_rows[-8:]
+        provenance = {
+            "origin_build": provenance.get("origin_build", _build_identity(stored_components)),
+            "origin_fingerprint": provenance.get(
+                "origin_fingerprint", recovery.manifest.run_fingerprint
+            ),
+            "current_build": _build_identity(current_components),
+            "current_fingerprint": fingerprint,
+            "migration_count": migration_count + (compatibility_level == "load-compatible"),
+            "omitted_transition_count": omitted_count,
+            "transitions": transition_rows,
+        }
         return cls(
             store=store,
             fingerprint=fingerprint,
@@ -93,10 +153,15 @@ class IncrementalCheckpointController:
             next_sequence=recovery.manifest.sequence + 1,
             inherited_catalogs=recovery.manifest.segment_catalogs,
             run_options=dict(recovery.manifest.metadata.get("run_options", {})),
-            fingerprint_components=dict(
-                recovery.manifest.metadata.get("fingerprint_components", {})
+            fingerprint_components=(
+                dict(stored_components)
+                if fingerprint_components is None
+                else fingerprint_components
             ),
             last_committed_cursor=recovery.manifest.cursor,
+            recovery_store=recovery_store,
+            compatibility_level=compatibility_level,
+            resume_provenance=provenance,
         )
 
     def is_due(self, completed_simulated_hours: int) -> bool:
@@ -140,12 +205,13 @@ class IncrementalCheckpointController:
         cursor: CheckpointCursor,
         participants: Iterable[IncrementalCheckpointParticipant],
         require_cadence: bool = True,
+        allow_disabled: bool = False,
     ) -> CheckpointManifest:
         """Prepare all owners and atomically publish one recovery point."""
 
         if require_cadence and not self.is_due(cursor.completed_simulated_hours):
             raise ValueError("checkpoint cursor is not scheduled by the configured cadence")
-        if self.cadence.hours == 0:
+        if self.cadence.hours == 0 and not allow_disabled:
             raise ValueError("checkpoint publication is disabled")
         ordered = self._participants(participants)
         sequence = self.next_sequence
@@ -164,6 +230,13 @@ class IncrementalCheckpointController:
                         "foreign segment"
                     )
                 prepared.append((participant, seal))
+            metadata: dict[str, object] = {
+                "participant_owners": [participant.checkpoint_owner for participant, _ in prepared],
+                "run_options": self.run_options,
+                "fingerprint_components": self.fingerprint_components,
+            }
+            if self.resume_provenance:
+                metadata["resume_provenance"] = self.resume_provenance
             manifest = self.store.commit(
                 sequence=sequence,
                 run_id=self.run_id,
@@ -175,13 +248,7 @@ class IncrementalCheckpointController:
                 inherited_catalogs=self.inherited_catalogs,
                 new_segments=tuple(segment for _, seal in prepared for segment in seal.segments),
                 heads=tuple(seal.head for _, seal in prepared),
-                metadata={
-                    "participant_owners": [
-                        participant.checkpoint_owner for participant, _ in prepared
-                    ],
-                    "run_options": self.run_options,
-                    "fingerprint_components": self.fingerprint_components,
-                },
+                metadata=metadata,
             )
             self.last_committed_cursor = manifest.cursor
         except BaseException:
@@ -240,6 +307,27 @@ class IncrementalCheckpointController:
 
         mark_suspended(self.store, request=new_suspension_request(), cursor=cursor)
 
+    def commit_migration(
+        self,
+        *,
+        participants: Iterable[IncrementalCheckpointParticipant],
+    ) -> CheckpointManifest | None:
+        """Restamp a successfully hydrated build-only recovery before generation."""
+
+        if not self.migration_required:
+            return None
+        cursor = self.last_committed_cursor
+        if cursor is None:
+            raise CheckpointError("compatible checkpoint migration has no committed cursor")
+        manifest = self.commit(
+            cursor=cursor,
+            participants=participants,
+            require_cadence=False,
+            allow_disabled=True,
+        )
+        self.migration_required = False
+        return manifest
+
     def restore_participants(
         self,
         *,
@@ -256,7 +344,19 @@ class IncrementalCheckpointController:
                 "checkpoint participant set is incompatible: "
                 f"stored={sorted(expected)}, runtime={sorted(actual)}"
             )
+        heads = {head.owner: head for head in recovery.manifest.participant_heads}
         for participant in ordered:
+            head = heads.get(participant.checkpoint_owner)
+            if head is None:
+                raise CheckpointError(
+                    f"checkpoint has no head for participant {participant.checkpoint_owner!r}"
+                )
+            if head.schema_version != participant.checkpoint_schema_version:
+                raise CheckpointError(
+                    f"checkpoint participant {participant.checkpoint_owner!r} schema is "
+                    f"{head.schema_version!r}; runtime requires "
+                    f"{participant.checkpoint_schema_version!r}"
+                )
             references = sorted(
                 (
                     reference
@@ -265,7 +365,30 @@ class IncrementalCheckpointController:
                 ),
                 key=lambda reference: reference.owner_ordinal,
             )
-            participant.restore_checkpoint(
-                self.store.read_head(recovery, participant.checkpoint_owner),
-                tuple(self.store.read_segment(reference) for reference in references),
+            incompatible_segments = sorted(
+                {
+                    reference.schema_version
+                    for reference in references
+                    if reference.schema_version != participant.checkpoint_schema_version
+                }
             )
+            if incompatible_segments:
+                raise CheckpointError(
+                    f"checkpoint participant {participant.checkpoint_owner!r} segment schemas "
+                    f"are incompatible: {incompatible_segments}"
+                )
+            participant.restore_checkpoint(
+                self.recovery_store.read_head(recovery, participant.checkpoint_owner),
+                tuple(self.recovery_store.read_segment(reference) for reference in references),
+            )
+            diagnostics = getattr(participant, "last_restore_diagnostics", None)
+            if diagnostics is not None:
+                self.restore_diagnostics[participant.checkpoint_owner] = diagnostics
+                dangling = getattr(diagnostics, "dangling_process_parents", ())
+                dangling_count = getattr(diagnostics, "dangling_process_parent_count", 0)
+                if dangling_count:
+                    logger.warning(
+                        "Restored %s retained processes whose parents aged out; examples=%s",
+                        dangling_count,
+                        list(dangling[:8]),
+                    )

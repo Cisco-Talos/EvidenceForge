@@ -108,7 +108,7 @@ class CheckpointManifest(BaseModel):
     sequence: int = Field(ge=0)
     run_id: str = Field(min_length=1)
     run_fingerprint: str = Field(pattern=SHA256_PATTERN)
-    checkpoint_hours: int = Field(gt=0)
+    checkpoint_hours: int = Field(ge=0)
     cursor: CheckpointCursor
     resolved_scenario_sha256: str = Field(pattern=SHA256_PATTERN)
     resolved_scenario_relative_path: str = Field(min_length=1)

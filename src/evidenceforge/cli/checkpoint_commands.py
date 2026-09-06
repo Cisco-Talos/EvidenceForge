@@ -17,6 +17,7 @@ from evidenceforge.generation.checkpoints.status import (
     inspect_checkpoint,
 )
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+from evidenceforge.generation.checkpoints.verify import verify_checkpoint_recovery
 
 checkpoint_app = typer.Typer(
     help="Inspect and control checkpoint-enabled generation.",
@@ -84,8 +85,16 @@ def _render_status(report: CheckpointStatusReport, *, verbose: bool) -> None:
     else:
         console.print(
             f"[bold]Validation:[/bold] integrity {report.integrity}; "
-            f"runtime compatibility {report.compatibility}"
+            f"runtime compatibility {report.compatibility_level}; "
+            f"output equivalence {report.output_equivalence}"
         )
+        hydration = "verified" if report.restore_verified else "not run (use checkpoint verify)"
+        console.print(f"[bold]Full participant hydration:[/bold] {hydration}")
+        differences = report.diagnostics.get("component_mismatches", {})
+        if isinstance(differences, dict) and differences:
+            console.print(
+                "[bold]Compatibility differences:[/bold] " + ", ".join(sorted(differences))
+            )
     if report.suspended:
         console.print("[bold yellow]Generation is intentionally suspended.[/bold yellow]")
     elif report.suspension_requested:
@@ -182,6 +191,53 @@ def checkpoint_status(
         raise typer.Exit(1)
 
 
+@checkpoint_app.command("verify")
+def checkpoint_verify(
+    directory: Path = typer.Argument(..., help="Generation output root to verify."),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the complete stable verification report as JSON.",
+    ),
+) -> None:
+    """Hydrate every participant in scratch storage without changing the bundle."""
+
+    try:
+        if json_output:
+            report = verify_checkpoint_recovery(directory)
+        else:
+            with console.status("Verifying checkpoint integrity and participant hydration..."):
+                report = verify_checkpoint_recovery(directory)
+    except CheckpointError as error:
+        if json_output:
+            typer.echo(json.dumps({"error": str(error), "restore_verified": False}, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {error}")
+        raise typer.Exit(1) from None
+    if json_output:
+        typer.echo(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return
+    console.print(
+        f"[green]✓[/green] Recovery {report.selected_sequence} fully hydrated at simulated hour "
+        f"{report.simulated_hour} ({report.phase})."
+    )
+    console.print(
+        f"[bold]Compatibility:[/bold] {report.compatibility_level}; "
+        f"output equivalence {report.output_equivalence}"
+    )
+    console.print(
+        f"[bold]Participants:[/bold] {report.participant_count}; "
+        f"aged-out process parents {report.dangling_process_parent_count}"
+    )
+    if report.component_mismatches:
+        console.print(
+            "[bold]Compatibility differences:[/bold] "
+            + ", ".join(sorted(report.component_mismatches))
+        )
+    for warning in report.warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
+
+
 @checkpoint_app.command("suspend")
 def checkpoint_suspend(
     directory: Path = typer.Argument(..., help="Output root owned by the active generation."),
@@ -211,4 +267,9 @@ def checkpoint_suspend(
     )
 
 
-__all__ = ["checkpoint_app", "checkpoint_status", "checkpoint_suspend"]
+__all__ = [
+    "checkpoint_app",
+    "checkpoint_status",
+    "checkpoint_suspend",
+    "checkpoint_verify",
+]

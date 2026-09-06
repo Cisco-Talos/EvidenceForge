@@ -420,6 +420,67 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         finally:
             self._generate_owner.release()
 
+    def verify_checkpoint_recovery(self) -> dict[str, object]:
+        """Hydrate every checkpoint participant without generating another hour."""
+
+        from evidenceforge.config.provider import effective_config_scope
+        from evidenceforge.generation.checkpoints.lifecycle_head import (
+            LifecycleRegistryParticipant,
+        )
+
+        recovery = self._checkpoint_recovery
+        controller = self._checkpoint_controller
+        if recovery is None or controller is None:
+            raise ValueError("checkpoint verification requires a recovery and controller")
+        if not self._generate_owner.acquire(blocking=False):
+            raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
+        initialized = False
+        try:
+            with effective_config_scope(self.compiled_scenario.effective_config):
+                with generation_seed_scope(self.generation_seed):
+                    reset_thread_rng()
+                    self._initialize()
+                    initialized = True
+                    controller.restore_participants(
+                        recovery=recovery,
+                        participants=self._checkpoint_participants,
+                    )
+                    lifecycle = next(
+                        (
+                            participant
+                            for participant in self._checkpoint_participants
+                            if isinstance(participant, LifecycleRegistryParticipant)
+                        ),
+                        None,
+                    )
+                    diagnostics = None if lifecycle is None else lifecycle.last_restore_diagnostics
+                    dangling_parents = (
+                        () if diagnostics is None else diagnostics.dangling_process_parents
+                    )
+                    return {
+                        "participant_count": len(self._checkpoint_participants),
+                        "dangling_process_parent_count": (
+                            0 if diagnostics is None else diagnostics.dangling_process_parent_count
+                        ),
+                        "dangling_process_parents": [
+                            {
+                                "object_id": object_id,
+                                "parent_object_id": parent_object_id,
+                                "image": image,
+                                "role": role,
+                            }
+                            for object_id, parent_object_id, image, role in dangling_parents
+                        ],
+                    }
+        except BaseException as primary:
+            if initialized:
+                self._abort_failed_generation(primary)
+            raise
+        finally:
+            if initialized and not self._finalization_aborted:
+                self._abort_failed_generation(RuntimeError("checkpoint verification cleanup"))
+            self._generate_owner.release()
+
     def _generate_scoped(self) -> None:
         """Main generation flow.
 
@@ -461,6 +522,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     recovery=recovery,
                     participants=self._checkpoint_participants,
                 )
+                if controller.migration_required:
+                    self._barrier_flush_all_emitters()
+                    controller.commit_migration(participants=self._checkpoint_participants)
             self._initialization_complete = True
             self._report_progress("phase_end", {"phase": "initialize"})
         except BaseException as primary:
@@ -647,6 +711,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 if isinstance(log, dict) and "format" in log
             ],
             oob_hosts=self.oob_hosts,
+            resume_provenance=(
+                None
+                if self._checkpoint_controller is None
+                else self._checkpoint_controller.resume_provenance
+            ),
         )
         self._report_progress("phase_end", {"phase": "ground_truth"})
 

@@ -26,7 +26,12 @@ from evidenceforge.utils.time import parse_duration, resolve_time_window
 
 from .control import read_controller_record, read_suspension_record, read_suspension_request
 from .errors import CheckpointError
-from .fingerprint import run_fingerprint, run_fingerprint_components
+from .fingerprint import (
+    ResumeCompatibility,
+    classify_resume_compatibility,
+    run_fingerprint,
+    run_fingerprint_components,
+)
 from .models import CheckpointRecovery
 from .store import IncrementalCheckpointStore
 
@@ -86,6 +91,13 @@ class CheckpointStatusReport(BaseModel):
     state: Literal["active", "resumable", "completed", "absent", "invalid"]
     integrity: Literal["passed", "failed", "not-applicable", "pending"]
     compatibility: Literal["passed", "failed", "not-checked", "not-applicable"]
+    compatibility_level: Literal[
+        "exact", "load-compatible", "incompatible", "not-checked", "not-applicable"
+    ] = "not-checked"
+    output_equivalence: Literal[
+        "exact", "not-guaranteed", "incompatible", "not-checked", "not-applicable"
+    ] = "not-checked"
+    restore_verified: bool = False
     simulated_hour: int | None = Field(default=None, ge=1)
     phase: str | None = None
     phase_completed_hours: int | None = Field(default=None, ge=0)
@@ -242,7 +254,7 @@ def _storage_usage(store: IncrementalCheckpointStore) -> tuple[StorageUsage, tup
 def _compatibility(
     store: IncrementalCheckpointStore,
     recovery: CheckpointRecovery,
-) -> tuple[bool, dict[str, Any], str | None]:
+) -> tuple[ResumeCompatibility | None, dict[str, Any], str | None]:
     try:
         compiled = compile_scenario(store.resolved_scenario_path(recovery))
         options = recovery.manifest.metadata.get("run_options", {})
@@ -274,7 +286,7 @@ def _compatibility(
             oob_hosts=tuple(oob),
         )
     except (CheckpointError, EvidenceForgeError, OSError, ValueError) as error:
-        return False, {}, f"runtime compatibility could not be evaluated: {error}"
+        return None, {}, f"runtime compatibility could not be evaluated: {error}"
     stored_components = recovery.manifest.metadata.get("fingerprint_components", {})
     diagnostics = {
         "stored_fingerprint": recovery.manifest.run_fingerprint,
@@ -286,12 +298,14 @@ def _compatibility(
     if phase_progress is not None:
         diagnostics["phase_completed_hours"] = phase_progress[0]
         diagnostics["phase_total_hours"] = phase_progress[1]
-    if type(stored_components) is dict:
-        diagnostics["component_mismatches"] = {
-            key: {"stored": stored_components.get(key), "current": current_components.get(key)}
-            for key in sorted(set(stored_components) | set(current_components))
-            if stored_components.get(key) != current_components.get(key)
-        }
+    compatibility = classify_resume_compatibility(
+        stored_fingerprint=recovery.manifest.run_fingerprint,
+        current_fingerprint=actual,
+        stored_components=stored_components,
+        current_components=current_components,
+    )
+    diagnostics["component_mismatches"] = compatibility.component_mismatches
+    diagnostics["hard_component_mismatches"] = list(compatibility.hard_mismatches)
     try:
         with effective_config_scope(compiled.effective_config):
             forecast = build_resource_forecast(
@@ -308,7 +322,7 @@ def _compatibility(
         )
     except (EvidenceForgeError, OSError, ValueError) as error:
         diagnostics["checkpoint_workspace_forecast_error"] = str(error)
-    return actual == recovery.manifest.run_fingerprint, diagnostics, None
+    return compatibility, diagnostics, None
 
 
 def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
@@ -340,6 +354,8 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
                 state=state,
                 integrity=integrity,
                 compatibility="not-applicable",
+                compatibility_level="not-applicable",
+                output_equivalence="not-applicable",
                 errors=tuple(errors),
                 warnings=tuple(warnings),
                 storage=storage,
@@ -357,6 +373,8 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             state="absent",
             integrity="not-applicable",
             compatibility="not-applicable",
+            compatibility_level="not-applicable",
+            output_equivalence="not-applicable",
             warnings=tuple(warnings),
             storage=StorageUsage(
                 generated_bytes=0,
@@ -451,6 +469,8 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             state=state_value,
             integrity=integrity_value,
             compatibility="not-checked",
+            compatibility_level="not-checked",
+            output_equivalence="not-checked",
             checkpoint_hours=None if controller is None else controller.checkpoint_hours,
             suspension_requested=requested is not None,
             warnings=tuple(warnings),
@@ -460,7 +480,9 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
             diagnostics=diagnostics,
         )
 
-    compatible, compatibility_diagnostics, compatibility_error = _compatibility(store, selected)
+    compatibility_result, compatibility_diagnostics, compatibility_error = _compatibility(
+        store, selected
+    )
     diagnostics.update(compatibility_diagnostics)
     forecast = diagnostics.get("checkpoint_workspace_forecast")
     if isinstance(forecast, dict) and type(forecast.get("expected_bytes")) is int:
@@ -476,8 +498,18 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
         errors.append(compatibility_error)
     if selected.used_fallback:
         warnings.append("newest recovery is invalid; the previous recovery will be used")
+    compatible = compatibility_result is not None and compatibility_result.can_resume
+    if compatibility_result is not None and compatibility_result.level == "load-compatible":
+        warnings.append(
+            "checkpoint was created by a different EvidenceForge build; serialized state is "
+            "load-compatible, but remaining output equivalence is not guaranteed"
+        )
     if not compatible:
-        errors.append("checkpoint fingerprint does not match this EvidenceForge runtime")
+        detail = None if compatibility_result is None else compatibility_result.reason
+        errors.append(
+            "checkpoint is incompatible with this EvidenceForge runtime"
+            + ("" if detail is None else f": {detail}")
+        )
     if (
         storage.available_bytes is not None
         and storage.available_bytes < storage.recovery_overhead_bytes
@@ -509,6 +541,14 @@ def inspect_checkpoint(output_root: Path) -> CheckpointStatusReport:
         state=state,
         integrity="passed",
         compatibility="passed" if compatible else "failed",
+        compatibility_level=(
+            "incompatible" if compatibility_result is None else compatibility_result.level
+        ),
+        output_equivalence=(
+            "incompatible"
+            if compatibility_result is None
+            else compatibility_result.output_equivalence
+        ),
         simulated_hour=cursor.completed_simulated_hours,
         phase=cursor.phase,
         phase_completed_hours=(

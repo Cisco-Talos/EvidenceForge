@@ -162,6 +162,7 @@ def write_generation_manifest(
     oob_hosts: tuple[str, ...] = (),
     overrides: dict[str, Any] | None = None,
     effect_reconciliation: dict[str, int | str | bool] | None = None,
+    resume_provenance: dict[str, Any] | None = None,
 ) -> Path:
     """Write the run identity last, after hashing every other bundle file."""
 
@@ -197,6 +198,8 @@ def write_generation_manifest(
     }
     if effect_reconciliation is not None:
         payload["effect_reconciliation"] = effect_reconciliation
+    if resume_provenance:
+        payload["resume_provenance"] = resume_provenance
     content = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
     temporary.write_text(content, encoding="utf-8", newline="\n")

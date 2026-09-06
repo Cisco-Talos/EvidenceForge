@@ -91,6 +91,7 @@ from evidenceforge.generation.checkpoints.errors import (
     CheckpointError,
     CheckpointLockError,
 )
+from evidenceforge.generation.checkpoints.fingerprint import classify_resume_compatibility
 from evidenceforge.generation.checkpoints.http_channel_head import (
     HttpApplicationChannelParticipant,
 )
@@ -100,7 +101,11 @@ from evidenceforge.generation.checkpoints.intent_ledger_head import (
 from evidenceforge.generation.checkpoints.lifecycle_authority_head import (
     GeneratorLifecycleAuthorityParticipant,
 )
-from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
+from evidenceforge.generation.checkpoints.lifecycle_head import (
+    LifecycleRegistryParticipant,
+    _close_parent_ordered,
+    _register_parent_ordered,
+)
 from evidenceforge.generation.checkpoints.models import (
     CheckpointCursor,
     CheckpointManifest,
@@ -2025,6 +2030,163 @@ def test_lifecycle_head_round_trips_active_and_closed_entity_authority() -> None
     assert restored_registry.get_session("session-1") == expected_session
 
 
+def test_lifecycle_head_restores_process_after_bootstrap_parent_aged_out() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(closed_retention=timedelta(hours=1), shard_count=1)
+    session = SessionLifecycleIdentity(
+        hostname="host-1",
+        object_id="session-1",
+        logon_id="0x10001",
+        principal="alice",
+        session_kind="interactive",
+        started_at=started,
+    )
+    parent = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="bootstrap-1",
+        pid=4000,
+        started_at=started,
+        image=r"C:\Windows\System32\userinit.exe",
+        role="bootstrap_handoff",
+    )
+    child = ProcessLifecycleIdentity(
+        hostname="host-1",
+        object_id="explorer-1",
+        pid=4001,
+        started_at=started + timedelta(seconds=1),
+        image=r"C:\Windows\explorer.exe",
+        parent_object_id=parent.object_id,
+    )
+    membership = LifecycleMembership("session", session.object_id, session.object_id)
+    registry.register_session(session, action_id="session", transition_id="session:start")
+    registry.register_process(
+        parent,
+        token=ProcessTokenIdentity(principal="alice", logon_id=session.logon_id),
+        membership=membership,
+        action_id="parent",
+        transition_id="parent:start",
+    )
+    registry.register_process(
+        child,
+        token=ProcessTokenIdentity(principal="alice", logon_id=session.logon_id),
+        membership=membership,
+        action_id="child",
+        transition_id="child:start",
+    )
+    for identity, minute in ((parent, 1), (child, 10)):
+        ticket = registry.request_close(
+            LifecycleCloseBarrier(
+                barrier_id=f"{identity.object_id}:barrier",
+                subject=identity.ref,
+                requested_at=started + timedelta(minutes=minute),
+                authority="generated",
+                action_id=f"{identity.object_id}:close",
+            ),
+            ticket_id=f"{identity.object_id}:ticket",
+        )
+        registry.close(ticket.ticket_id)
+    session_ticket = registry.request_close(
+        LifecycleCloseBarrier(
+            barrier_id="session:barrier",
+            subject=session.ref,
+            requested_at=started + timedelta(minutes=11),
+            authority="generated",
+            action_id="session:close",
+        ),
+        ticket_id="session:ticket",
+    )
+    registry.close(session_ticket.ticket_id)
+    registry.advance_watermark(started + timedelta(hours=1, minutes=5))
+    assert registry.get_process(parent.object_id) is None
+    expected_child = registry.get_process(child.object_id)
+
+    seal = LifecycleRegistryParticipant(registry).prepare_checkpoint(0)
+    restored_registry = LifecycleRegistry(shard_count=1)
+    participant = LifecycleRegistryParticipant(restored_registry)
+    participant.restore_checkpoint(seal.head.payload, ())
+
+    assert restored_registry.get_process(child.object_id) == expected_child
+    assert participant.last_restore_diagnostics.dangling_process_parent_count == 1
+    assert participant.last_restore_diagnostics.dangling_process_parents == (
+        (child.object_id, parent.object_id, child.image, child.role),
+    )
+
+
+def test_lifecycle_head_rejects_retained_process_parent_cycle() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    registry = LifecycleRegistry(shard_count=1)
+    for ordinal in range(2):
+        identity = ProcessLifecycleIdentity(
+            hostname="host-1",
+            object_id=f"process-{ordinal}",
+            pid=4100 + ordinal,
+            started_at=started,
+            image=r"C:\Windows\System32\cmd.exe",
+        )
+        registry.register_process(
+            identity,
+            token=ProcessTokenIdentity(principal="alice"),
+            membership=LifecycleMembership("detached", "host-1"),
+            action_id=f"process-{ordinal}",
+            transition_id=f"process-{ordinal}:start",
+        )
+    document = loads(LifecycleRegistryParticipant(registry).prepare_checkpoint(0).head.payload)
+    process_rows = document["partitions"][0][0]
+    process_rows[0][0][5] = "process-1"
+    process_rows[1][0][5] = "process-0"
+
+    with pytest.raises(CheckpointCorruptionError, match="parent cycle"):
+        LifecycleRegistryParticipant(LifecycleRegistry(shard_count=1)).restore_checkpoint(
+            dumps(document),
+            (),
+        )
+
+
+def test_parent_ordered_restore_scales_without_pending_list_removals() -> None:
+    snapshots = [
+        SimpleNamespace(
+            identity=SimpleNamespace(object_id=f"process-{ordinal:05d}"),
+            parent=("" if ordinal == 0 else f"process-{ordinal - 1:05d}"),
+        )
+        for ordinal in range(5_000)
+    ]
+    registered: list[str] = []
+
+    missing = _register_parent_ordered(
+        snapshots,
+        parent_id=lambda item: item.parent,
+        register=lambda item: registered.append(item.identity.object_id),
+    )
+
+    assert not missing
+    assert registered == [item.identity.object_id for item in snapshots]
+
+
+def test_closure_restore_scales_in_one_topological_pass() -> None:
+    snapshots = [
+        SimpleNamespace(
+            identity=SimpleNamespace(
+                object_id=f"process-{ordinal:05d}",
+                ref=SimpleNamespace(kind="process"),
+            ),
+            closure_ticket=SimpleNamespace(ticket_id=f"ticket-{ordinal:05d}"),
+            closed_at=ordinal,
+            parent=("" if ordinal == 0 else f"process-{ordinal - 1:05d}"),
+        )
+        for ordinal in range(5_000)
+    ]
+    closed: list[str] = []
+    registry = SimpleNamespace(close=closed.append)
+
+    _close_parent_ordered(
+        registry,
+        snapshots,
+        dependency_refs=lambda item: () if not item.parent else (("process", item.parent),),
+    )
+
+    assert closed == [f"ticket-{ordinal:05d}" for ordinal in reversed(range(5_000))]
+
+
 def test_lifecycle_head_round_trips_compacted_detail_as_bounded_authority() -> None:
     started = datetime(2026, 1, 1, tzinfo=UTC)
     registry = LifecycleRegistry(shard_count=1, snapshot_history_limit=1)
@@ -3751,6 +3913,154 @@ def test_controller_commits_only_due_transactional_participants(tmp_path: Path) 
         checkpoint_hours=0,
     )
     assert not disabled.cadence.enabled
+
+
+def test_resume_compatibility_allows_only_build_identity_differences() -> None:
+    current = {
+        "checkpoint_schema": "2.0",
+        "evidenceforge_build_sha256": "b" * 64,
+        "evidenceforge_version": "2.0.0rc2",
+        "python": "3.12.9",
+        "resolved_sha256": "c" * 64,
+    }
+    stored = dict(current)
+    stored["evidenceforge_build_sha256"] = "a" * 64
+    stored["evidenceforge_version"] = "2.0.0rc1"
+
+    compatible = classify_resume_compatibility(
+        stored_fingerprint="1" * 64,
+        current_fingerprint="2" * 64,
+        stored_components=stored,
+        current_components=current,
+    )
+    hard_changed = dict(stored)
+    hard_changed["python"] = "3.12.8"
+    incompatible = classify_resume_compatibility(
+        stored_fingerprint="1" * 64,
+        current_fingerprint="2" * 64,
+        stored_components=hard_changed,
+        current_components=current,
+    )
+
+    assert compatible.level == "load-compatible"
+    assert compatible.output_equivalence == "not-guaranteed"
+    assert not compatible.hard_mismatches
+    assert incompatible.level == "incompatible"
+    assert incompatible.hard_mismatches == ("python",)
+
+
+@pytest.mark.parametrize(
+    "hard_field",
+    (
+        "checkpoint_schema",
+        "dependencies",
+        "formats",
+        "interpreter_cache_tag",
+        "machine",
+        "oob_hosts",
+        "output_target",
+        "platform",
+        "python",
+        "python_compiler",
+        "python_implementation",
+        "resolved_sha256",
+        "sys_byteorder",
+    ),
+)
+def test_resume_compatibility_rejects_every_hard_component(hard_field: str) -> None:
+    current: dict[str, object] = {
+        "checkpoint_schema": "2.0",
+        "dependencies": {"pydantic": "2.13.5"},
+        "evidenceforge_build_sha256": "b" * 64,
+        "evidenceforge_version": "2.0.0rc2",
+        "formats": ["json"],
+        "interpreter_cache_tag": "cpython-312",
+        "machine": "arm64",
+        "oob_hosts": [],
+        "output_target": "default",
+        "platform": "darwin",
+        "python": "3.12.9",
+        "python_compiler": "Clang 16.0.0",
+        "python_implementation": "CPython",
+        "resolved_sha256": "c" * 64,
+        "sys_byteorder": "little",
+    }
+    stored = dict(current)
+    stored[hard_field] = "changed"
+
+    compatibility = classify_resume_compatibility(
+        stored_fingerprint="1" * 64,
+        current_fingerprint="2" * 64,
+        stored_components=stored,
+        current_components=current,
+    )
+
+    assert compatibility.level == "incompatible"
+    assert compatibility.hard_mismatches == (hard_field,)
+
+
+@pytest.mark.parametrize("resumed_cadence", (6, 0))
+def test_load_compatible_controller_publishes_same_cursor_migration(
+    tmp_path: Path,
+    resumed_cadence: int,
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    original = IncrementalCheckpointController(
+        store=store,
+        fingerprint="1" * 64,
+        checkpoint_hours=6,
+        resolved_scenario=b"schema_version: '2.0'\n",
+        fingerprint_components={"evidenceforge_build_sha256": "a" * 64},
+    )
+    original_participant = _FakeParticipant()
+    first = original.commit(cursor=_cursor(6), participants=(original_participant,))
+    recovery = store.recover()
+    restored = _FakeParticipant()
+    resumed = IncrementalCheckpointController.for_recovery(
+        store=store,
+        recovery=recovery,
+        fingerprint="2" * 64,
+        resolved_scenario=store.read_resolved_scenario(recovery),
+        fingerprint_components={"evidenceforge_build_sha256": "b" * 64},
+        compatibility_level="load-compatible",
+        checkpoint_hours=resumed_cadence,
+    )
+    resumed.restore_participants(recovery=recovery, participants=(restored,))
+
+    migrated = resumed.commit_migration(participants=(restored,))
+
+    assert migrated is not None
+    assert migrated.sequence == first.sequence + 1
+    assert migrated.cursor == first.cursor
+    assert migrated.run_fingerprint == "2" * 64
+    assert migrated.checkpoint_hours == resumed_cadence
+    assert migrated.metadata["fingerprint_components"] == {"evidenceforge_build_sha256": "b" * 64}
+    assert migrated.metadata["resume_provenance"] == resumed.resume_provenance
+    assert resumed.resume_provenance["origin_fingerprint"] == "1" * 64
+    assert resumed.resume_provenance["migration_count"] == 1
+    assert resumed.resume_provenance["origin_build"] == {"evidenceforge_build_sha256": "a" * 64}
+    assert resumed.resume_provenance["current_build"] == {"evidenceforge_build_sha256": "b" * 64}
+    assert resumed.resume_provenance["transitions"][-1]["classification"] == "load-compatible"
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [1, 0]
+
+
+def test_controller_rejects_participant_schema_mismatch_before_hydration(tmp_path: Path) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    controller = IncrementalCheckpointController(
+        store=store,
+        fingerprint=_FINGERPRINT,
+        checkpoint_hours=6,
+        resolved_scenario=b"schema_version: '2.0'\n",
+    )
+    participant = _FakeParticipant()
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    recovery = store.recover()
+    changed = _FakeParticipant()
+    changed.checkpoint_schema_version = "2"
+
+    with pytest.raises(CheckpointError, match="runtime requires '2'"):
+        controller.restore_participants(recovery=recovery, participants=(changed,))
+    assert changed.restored is None
 
 
 def test_controller_restores_participants_in_dependency_order(tmp_path: Path) -> None:

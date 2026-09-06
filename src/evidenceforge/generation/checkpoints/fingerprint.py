@@ -7,8 +7,9 @@ import importlib.metadata
 import json
 import platform
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from evidenceforge import __version__
 from evidenceforge.composition.artifacts import build_resolved_document
@@ -25,6 +26,96 @@ _RUNTIME_DISTRIBUTIONS = (
     "typer",
 )
 _OUTPUT_RESOURCE_SUFFIXES = {".json", ".j2", ".jinja", ".py", ".yaml", ".yml"}
+_LOAD_COMPATIBLE_BUILD_FIELDS = frozenset(
+    {
+        "evidenceforge_build_sha256",
+        "evidenceforge_version",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ResumeCompatibility:
+    """Classified relationship between one checkpoint and the current runtime."""
+
+    level: Literal["exact", "load-compatible", "incompatible"]
+    output_equivalence: Literal["exact", "not-guaranteed", "incompatible"]
+    component_mismatches: dict[str, dict[str, object]]
+    hard_mismatches: tuple[str, ...] = ()
+    reason: str | None = None
+
+    @property
+    def can_resume(self) -> bool:
+        """Return whether the current runtime may hydrate this checkpoint."""
+
+        return self.level != "incompatible"
+
+
+def classify_resume_compatibility(
+    *,
+    stored_fingerprint: str,
+    current_fingerprint: str,
+    stored_components: object,
+    current_components: dict[str, object],
+) -> ResumeCompatibility:
+    """Classify exact, build-only, and hard checkpoint incompatibilities."""
+
+    if type(stored_components) is not dict:
+        if stored_fingerprint == current_fingerprint:
+            return ResumeCompatibility(
+                level="exact",
+                output_equivalence="exact",
+                component_mismatches={},
+            )
+        return ResumeCompatibility(
+            level="incompatible",
+            output_equivalence="incompatible",
+            component_mismatches={},
+            reason="checkpoint lacks fingerprint components required for compatibility checking",
+        )
+    mismatches = {
+        key: {
+            "stored": stored_components.get(key),
+            "current": current_components.get(key),
+        }
+        for key in sorted(set(stored_components) | set(current_components))
+        if stored_components.get(key) != current_components.get(key)
+    }
+    hard = tuple(sorted(set(mismatches) - _LOAD_COMPATIBLE_BUILD_FIELDS))
+    if stored_fingerprint == current_fingerprint:
+        if mismatches:
+            return ResumeCompatibility(
+                level="incompatible",
+                output_equivalence="incompatible",
+                component_mismatches=mismatches,
+                hard_mismatches=tuple(sorted(mismatches)),
+                reason="checkpoint fingerprint and component metadata disagree",
+            )
+        return ResumeCompatibility(
+            level="exact",
+            output_equivalence="exact",
+            component_mismatches={},
+        )
+    if hard:
+        return ResumeCompatibility(
+            level="incompatible",
+            output_equivalence="incompatible",
+            component_mismatches=mismatches,
+            hard_mismatches=hard,
+            reason="checkpoint runtime or resolved inputs differ in hard compatibility fields",
+        )
+    if not mismatches:
+        return ResumeCompatibility(
+            level="incompatible",
+            output_equivalence="incompatible",
+            component_mismatches={},
+            reason="checkpoint fingerprint changed without a diagnosable component difference",
+        )
+    return ResumeCompatibility(
+        level="load-compatible",
+        output_equivalence="not-guaranteed",
+        component_mismatches=mismatches,
+    )
 
 
 def installed_build_digest() -> str:

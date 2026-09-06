@@ -885,6 +885,35 @@ def test_generation_manifest_validates_bounded_effect_reconciliation(tmp_path: P
         verify_generation_bundle(tmp_path)
 
 
+def test_generation_manifest_retains_bounded_resume_provenance(tmp_path: Path) -> None:
+    compiled = compile_scenario(_MINIMAL)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "events.json").write_text("{}\n", encoding="utf-8")
+    write_resolved_scenario(compiled, tmp_path)
+    provenance = {
+        "origin_build": {"evidenceforge_build_sha256": "a" * 64},
+        "current_build": {"evidenceforge_build_sha256": "b" * 64},
+        "migration_count": 1,
+        "transitions": [
+            {
+                "classification": "load-compatible",
+                "cursor": {"completed_simulated_hours": 557, "phase": "collection"},
+            }
+        ],
+    }
+
+    write_generation_manifest(
+        compiled,
+        tmp_path,
+        output_target="default",
+        formats=["zeek_conn"],
+        resume_provenance=provenance,
+    )
+
+    assert verify_generation_bundle(tmp_path)["resume_provenance"] == provenance
+
+
 def test_generation_manifest_and_ground_truth_reject_removed_effect_reconciliation(
     tmp_path: Path,
 ) -> None:

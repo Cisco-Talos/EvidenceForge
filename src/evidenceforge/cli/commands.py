@@ -78,6 +78,8 @@ from evidenceforge.generation import GenerationEngine
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.fingerprint import (
+    ResumeCompatibility,
+    classify_resume_compatibility,
     run_fingerprint,
     run_fingerprint_components,
 )
@@ -1183,6 +1185,11 @@ def generate(
         "--resume",
         help="Resume the latest compatible generation checkpoint",
     ),
+    resume_policy: str = typer.Option(
+        "compatible",
+        "--resume-policy",
+        help="Resume policy: compatible permits build-only differences; exact requires a match",
+    ),
     checkpoint_hours: int | None = typer.Option(
         None,
         "--checkpoint-hours",
@@ -1243,6 +1250,12 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
+    if resume_policy not in {"compatible", "exact"}:
+        console.print(
+            "[bold red]Error:[/bold red] --resume-policy must be compatible or exact",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
     if resume and (overwrite or force):
         console.print(
             "[bold red]Error:[/bold red] --resume conflicts with --overwrite/--force",
@@ -1600,6 +1613,48 @@ def generate(
         formats=checkpoint_formats,
         oob_hosts=oob_hosts,
     )
+    fingerprint_components = run_fingerprint_components(
+        compiled,
+        output_target=output_target.value,
+        formats=checkpoint_formats,
+        oob_hosts=oob_hosts,
+    )
+    resume_compatibility: ResumeCompatibility | None = None
+    if resume and preliminary_recovery is not None:
+        resume_compatibility = classify_resume_compatibility(
+            stored_fingerprint=preliminary_recovery.manifest.run_fingerprint,
+            current_fingerprint=fingerprint,
+            stored_components=preliminary_recovery.manifest.metadata.get(
+                "fingerprint_components", {}
+            ),
+            current_components=fingerprint_components,
+        )
+        if not resume_compatibility.can_resume:
+            detail = resume_compatibility.reason or "hard compatibility fields differ"
+            console.print(
+                f"[bold red]Error:[/bold red] Cannot resume generation: {detail}",
+                style="red",
+            )
+            if resume_compatibility.hard_mismatches:
+                console.print(
+                    "[red]Incompatible fields: "
+                    f"{', '.join(resume_compatibility.hard_mismatches)}[/red]"
+                )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if resume_policy == "exact" and resume_compatibility.level != "exact":
+            console.print(
+                "[bold red]Error:[/bold red] --resume-policy exact requires the checkpoint's "
+                "original EvidenceForge build",
+                style="red",
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if resume_compatibility.level == "load-compatible":
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] This checkpoint was created by a different "
+                "EvidenceForge build. Its runtime and serialized-state contracts match, but "
+                "remaining output equivalence is not guaranteed. Recovery provenance will be "
+                "recorded."
+            )
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
     checkpoint_store = IncrementalCheckpointStore(
         ground_truth_dir,
@@ -1632,7 +1687,9 @@ def generate(
         lock_owned = True
 
         if resume:
-            checkpoint_recovery = checkpoint_store.recover(expected_fingerprint=fingerprint)
+            checkpoint_recovery = checkpoint_store.recover()
+            if resume_compatibility is None:  # pragma: no cover - preliminary resume invariant
+                raise CheckpointError("checkpoint compatibility was not evaluated")
             resolved_scenario = checkpoint_store.read_resolved_scenario(checkpoint_recovery)
             checkpoint_controller = IncrementalCheckpointController.for_recovery(
                 store=checkpoint_store,
@@ -1640,6 +1697,8 @@ def generate(
                 fingerprint=fingerprint,
                 resolved_scenario=resolved_scenario,
                 checkpoint_hours=checkpoint_hours,
+                fingerprint_components=fingerprint_components,
+                compatibility_level=resume_compatibility.level,
             )
             cursor = checkpoint_recovery.manifest.cursor
             cadence_message = (
@@ -1662,12 +1721,7 @@ def generate(
                     "oob_hosts": list(oob_hosts),
                     "output_target": output_target.value,
                 },
-                fingerprint_components=run_fingerprint_components(
-                    compiled,
-                    output_target=output_target.value,
-                    formats=checkpoint_formats,
-                    oob_hosts=oob_hosts,
-                ),
+                fingerprint_components=fingerprint_components,
             )
 
         if persistent_staging:
@@ -1728,6 +1782,11 @@ def generate(
                     "formats": formats,
                     "generation_seed": seed,
                 },
+                resume_provenance=(
+                    None
+                    if checkpoint_controller is None
+                    else checkpoint_controller.resume_provenance
+                ),
             )
             SIDECAR_REGISTRY.validate_generated(gen_gt_dir)
 

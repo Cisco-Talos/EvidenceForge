@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
+from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
+from evidenceforge.cli import checkpoint_commands
 from evidenceforge.cli.commands import app
 from evidenceforge.composition import compile_scenario
 from evidenceforge.composition.artifacts import build_resolved_document, serialize_resolved_document
@@ -16,6 +19,7 @@ from evidenceforge.generation.checkpoints.control import (
     read_suspension_request,
     request_suspension,
 )
+from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.fingerprint import (
     run_fingerprint,
     run_fingerprint_components,
@@ -30,6 +34,7 @@ from evidenceforge.generation.checkpoints.store import (
     IncrementalCheckpointStore,
     SegmentDraft,
 )
+from evidenceforge.generation.checkpoints.verify import CheckpointVerifyReport
 
 runner = CliRunner()
 
@@ -189,6 +194,131 @@ def test_status_json_validates_recovery_and_reports_nonoverlapping_storage(
         payload["storage"]["generated_bytes"] + payload["storage"]["recovery_overhead_bytes"]
     )
     assert payload["diagnostics"]["participant_heads"] == 1
+
+
+def test_status_classifies_build_only_difference_as_load_compatible(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    _store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+
+    report = inspect_checkpoint(output)
+
+    assert report.state == "resumable"
+    assert report.compatibility == "passed"
+    assert report.compatibility_level == "load-compatible"
+    assert report.output_equivalence == "not-guaranteed"
+    assert report.restore_verified is False
+    assert "evidenceforge_build_sha256" in report.diagnostics["component_mismatches"]
+
+
+def test_checkpoint_verify_cli_reports_full_hydration(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    report = CheckpointVerifyReport(
+        output_root=str(output),
+        selected_sequence=23,
+        simulated_hour=557,
+        phase="collection",
+        compatibility_level="load-compatible",
+        output_equivalence="not-guaranteed",
+        participant_count=19,
+        dangling_process_parent_count=47,
+        dangling_process_parents=[
+            {
+                "object_id": "process-child",
+                "parent_object_id": "process-parent",
+                "image": "explorer.exe",
+                "role": "interactive_shell",
+            }
+        ],
+    )
+    monkeypatch.setattr(checkpoint_commands, "verify_checkpoint_recovery", lambda _path: report)
+
+    result = runner.invoke(app, ["checkpoint", "verify", str(output), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["restore_verified"] is True
+    assert payload["selected_sequence"] == 23
+    assert payload["dangling_process_parent_count"] == 47
+
+
+def test_generate_exact_policy_rejects_build_only_checkpoint_difference(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    _store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--output",
+            str(output),
+            "--resume",
+            "--resume-policy",
+            "exact",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--resume-policy exact requires" in result.stdout
+    assert [
+        sequence
+        for sequence, _digest in IncrementalCheckpointStore(output).recovery_index_entries()
+    ] == [0]
+
+
+def test_generate_default_policy_warns_before_load_compatible_hydration(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    output = tmp_path / "bundle"
+    _store, controller, participant = _controller(
+        output,
+        Path("tests/fixtures/scenarios/minimal.yaml"),
+    )
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    monkeypatch.setattr(
+        "evidenceforge.generation.checkpoints.fingerprint.installed_build_digest",
+        lambda: "f" * 64,
+    )
+
+    with patch(
+        "evidenceforge.cli.commands.GenerationEngine",
+        side_effect=CheckpointError("injected stop after compatibility warning"),
+    ):
+        result = runner.invoke(
+            app,
+            ["generate", "--output", str(output), "--resume"],
+        )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code != 0
+    assert "different EvidenceForge build" in normalized
+    assert "output equivalence is not guaranteed" in normalized
+    assert "injected stop" in normalized
 
 
 def test_status_human_output_keeps_developer_details_verbose(tmp_path: Path) -> None:

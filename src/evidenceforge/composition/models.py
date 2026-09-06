@@ -1370,6 +1370,7 @@ class GenerationManifestDocument(BaseModel):
     resolved_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     files: dict[str, str]
     effect_reconciliation: dict[str, int | str | bool] | None = None
+    resume_provenance: dict[str, Any] | None = None
 
     @field_validator("effect_reconciliation")
     @classmethod

@@ -7,6 +7,7 @@ hydration path.
 
 from __future__ import annotations
 
+import heapq
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -62,6 +63,14 @@ from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
 _SCHEMA_VERSION = "4"
+
+
+@dataclass(frozen=True)
+class LifecycleRestoreDiagnostics:
+    """Bounded operator diagnostics from the most recent lifecycle hydration."""
+
+    dangling_process_parent_count: int = 0
+    dangling_process_parents: tuple[tuple[str, str, str, str], ...] = ()
 
 
 def _time(value: datetime | None) -> str | None:
@@ -1208,17 +1217,166 @@ def _register_parent_ordered(
     *,
     parent_id: Callable[[object], str],
     register: Callable[[object], object],
+    register_missing_parent: Callable[[object], object] | None = None,
+) -> tuple[object, ...]:
+    """Register one retained parent graph in deterministic near-linear order."""
+
+    by_id: dict[str, object] = {}
+    for snapshot in snapshots:
+        object_id = snapshot.identity.object_id
+        if object_id in by_id:
+            raise CheckpointCorruptionError(
+                f"lifecycle checkpoint contains duplicate entity {object_id!r}"
+            )
+        by_id[object_id] = snapshot
+
+    children: dict[str, list[str]] = {}
+    indegree: dict[str, int] = {}
+    missing_parent: list[object] = []
+    for object_id, snapshot in by_id.items():
+        parent = parent_id(snapshot)
+        if parent and parent in by_id:
+            indegree[object_id] = 1
+            children.setdefault(parent, []).append(object_id)
+        else:
+            indegree[object_id] = 0
+            if parent:
+                missing_parent.append(snapshot)
+
+    ready = [object_id for object_id, degree in indegree.items() if degree == 0]
+    heapq.heapify(ready)
+    registered = 0
+    while ready:
+        object_id = heapq.heappop(ready)
+        snapshot = by_id[object_id]
+        parent = parent_id(snapshot)
+        if parent and parent not in by_id:
+            if register_missing_parent is None:
+                raise CheckpointCorruptionError(
+                    f"lifecycle checkpoint entity {object_id!r} references missing parent "
+                    f"{parent!r}"
+                )
+            register_missing_parent(snapshot)
+        else:
+            register(snapshot)
+        registered += 1
+        for child_id in sorted(children.get(object_id, ())):
+            indegree[child_id] -= 1
+            if indegree[child_id] == 0:
+                heapq.heappush(ready, child_id)
+
+    if registered != len(by_id):
+        cycle = sorted(object_id for object_id, degree in indegree.items() if degree)
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint contains a parent cycle involving " + ", ".join(cycle[:8])
+        )
+    return tuple(sorted(missing_parent, key=lambda item: item.identity.object_id))
+
+
+def _register_process_without_retained_parent(
+    registry: LifecycleRegistry,
+    snapshot: ProcessLifecycleSnapshot,
+    state: _DecodedState,
 ) -> None:
-    pending = list(snapshots)
-    registered: set[str] = set()
-    while pending:
-        ready = [item for item in pending if not parent_id(item) or parent_id(item) in registered]
-        if not ready:
-            raise CheckpointCorruptionError("lifecycle checkpoint contains a parent cycle")
-        for item in sorted(ready, key=lambda value: value.identity.object_id):
-            register(item)
-            registered.add(item.identity.object_id)
-            pending.remove(item)
+    """Restore a retained child without fabricating its already-evicted parent."""
+
+    identity = snapshot.identity
+    detached_identity = replace(identity, parent_object_id="")
+    start = _start(snapshot, state)
+    registry.register_process(
+        detached_identity,
+        token=snapshot.token,
+        membership=snapshot.membership,
+        action_id=start.action_id,
+        transition_id=start.transition_id,
+        transition_ordinal=start.transition_ordinal,
+    )
+    partition = registry._partitions[registry._partition_id(identity.hostname)]
+    entry = partition._processes.get(identity.object_id)
+    if entry is None:
+        raise CheckpointCorruptionError("lifecycle checkpoint process route was not rebuilt")
+    partition._processes._store[identity.object_id] = _ProcessEntry(
+        identity=identity,
+        token=entry.token,
+        membership=entry.membership,
+        state=entry.state,
+    )
+
+
+def _close_parent_ordered(
+    registry: LifecycleRegistry,
+    closing: list[object],
+    *,
+    dependency_refs: Callable[[object], tuple[tuple[str, str], ...]] | None = None,
+) -> None:
+    """Close retained entities once each in dependent-before-owner order."""
+
+    by_ref = {
+        (snapshot.identity.ref.kind, snapshot.identity.object_id): snapshot for snapshot in closing
+    }
+    indegree = {key: 0 for key in by_ref}
+    owners: dict[tuple[str, str], list[tuple[str, str]]] = {}
+
+    def add_dependency(dependent: tuple[str, str], owner: tuple[str, str]) -> None:
+        if owner not in by_ref:
+            return
+        owners.setdefault(dependent, []).append(owner)
+        indegree[owner] += 1
+
+    def default_dependencies(snapshot: object) -> tuple[tuple[str, str], ...]:
+        dependencies: list[tuple[str, str]] = []
+        if isinstance(snapshot, ProcessLifecycleSnapshot):
+            parent_id = snapshot.identity.parent_object_id
+            if parent_id:
+                dependencies.append(("process", parent_id))
+            session_id = snapshot.membership.session_object_id
+            if session_id:
+                dependencies.append(("session", session_id))
+        elif isinstance(snapshot, ServiceInstanceLifecycleSnapshot):
+            parent_id = snapshot.identity.parent_service_object_id
+            if parent_id:
+                dependencies.append(("service", parent_id))
+        return tuple(dependencies)
+
+    dependencies_for = default_dependencies if dependency_refs is None else dependency_refs
+    for key, snapshot in by_ref.items():
+        for owner in dependencies_for(snapshot):
+            add_dependency(key, owner)
+
+    ready = [
+        (snapshot.closed_at, key[0], key[1])
+        for key, snapshot in by_ref.items()
+        if indegree[key] == 0
+    ]
+    heapq.heapify(ready)
+    closed = 0
+    while ready:
+        _closed_at, kind, object_id = heapq.heappop(ready)
+        key = (kind, object_id)
+        snapshot = by_ref[key]
+        assert snapshot.closure_ticket is not None
+        try:
+            registry.close(snapshot.closure_ticket.ticket_id)
+        except StateError as error:
+            raise CheckpointCorruptionError(
+                f"lifecycle checkpoint cannot close {kind} {object_id!r}: {error}"
+            ) from error
+        closed += 1
+        for owner in owners.get(key, ()):
+            indegree[owner] -= 1
+            if indegree[owner] == 0:
+                owner_snapshot = by_ref[owner]
+                heapq.heappush(
+                    ready,
+                    (owner_snapshot.closed_at, owner[0], owner[1]),
+                )
+    if closed != len(by_ref):
+        cycle = sorted(
+            f"{kind}:{object_id}" for (kind, object_id), value in indegree.items() if value
+        )
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint closure graph contains a cycle involving " + ", ".join(cycle[:8])
+        )
 
 
 def _install_authority_states(
@@ -1339,7 +1497,7 @@ def _install_resource_lease_entry(
     store[lease.lease_id] = entry
 
 
-def _restore(registry: LifecycleRegistry, head: bytes) -> None:
+def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagnostics:
     document = loads(head)
     if type(document) is not dict or document.get("schema_version") != _SCHEMA_VERSION:
         raise CheckpointCorruptionError("lifecycle checkpoint head schema is invalid")
@@ -1402,7 +1560,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             transition_id=start.transition_id,
             transition_ordinal=start.transition_ordinal,
         )
-    _register_parent_ordered(
+    dangling_processes = _register_parent_ordered(
         processes,
         parent_id=lambda item: item.identity.parent_object_id,
         register=lambda item: fresh.register_process(
@@ -1412,6 +1570,11 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
             action_id=_start(item, states[item.identity.object_id]).action_id,
             transition_id=_start(item, states[item.identity.object_id]).transition_id,
             transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
+        ),
+        register_missing_parent=lambda item: _register_process_without_retained_parent(
+            fresh,
+            item,
+            states[item.identity.object_id],
         ),
     )
     service_ids = {snapshot.identity.object_id for snapshot in services}
@@ -1508,28 +1671,28 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> None:
         )
         if ticket != snapshot.closure_ticket:
             raise CheckpointCorruptionError("lifecycle checkpoint closure ticket changed")
-    pending_close = [item for item in closing if item.closed_at is not None]
-    while pending_close:
-        progressed = False
-        for snapshot in sorted(
-            pending_close,
-            key=lambda item: (item.closed_at, item.identity.object_id),
-        ):
-            assert snapshot.closure_ticket is not None
-            try:
-                fresh.close(snapshot.closure_ticket.ticket_id)
-            except StateError:
-                continue
-            pending_close.remove(snapshot)
-            progressed = True
-        if not progressed:
-            raise CheckpointCorruptionError("lifecycle checkpoint closure graph cannot hydrate")
+    _close_parent_ordered(
+        fresh,
+        [item for item in closing if item.closed_at is not None],
+    )
     _install_authority_states(fresh, snapshots, states)
     watermark = _decode_time(document.get("watermark"), optional=True)
     if watermark is not None:
         fresh.advance_watermark(watermark)
     registry.__dict__.clear()
     registry.__dict__.update(fresh.__dict__)
+    return LifecycleRestoreDiagnostics(
+        dangling_process_parent_count=len(dangling_processes),
+        dangling_process_parents=tuple(
+            (
+                snapshot.identity.object_id,
+                snapshot.identity.parent_object_id,
+                snapshot.identity.image,
+                snapshot.identity.role,
+            )
+            for snapshot in dangling_processes[:64]
+        ),
+    )
 
 
 class LifecycleRegistryParticipant:
@@ -1549,6 +1712,7 @@ class LifecycleRegistryParticipant:
         self.registry = registry
         self._prepared_sequence: int | None = None
         self._prepared_seal: ParticipantSeal | None = None
+        self.last_restore_diagnostics = LifecycleRestoreDiagnostics()
 
     def prepare_checkpoint(self, sequence: int) -> ParticipantSeal:
         """Capture one stable partition/handle ordered bounded live head."""
@@ -1589,6 +1753,6 @@ class LifecycleRegistryParticipant:
 
         if segments:
             raise CheckpointCorruptionError("lifecycle bounded head cannot own history segments")
-        _restore(self.registry, head)
+        self.last_restore_diagnostics = _restore(self.registry, head)
         self._prepared_sequence = None
         self._prepared_seal = None

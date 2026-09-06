@@ -628,8 +628,8 @@ class IncrementalCheckpointStore:
     ) -> CheckpointManifest:
         """Atomically publish one recovery manifest over shared immutable objects."""
 
-        if checkpoint_hours <= 0:
-            raise ValueError("checkpoint publication requires a positive cadence")
+        if checkpoint_hours < 0:
+            raise ValueError("checkpoint publication cadence cannot be negative")
         self.initialize()
         next_owner_ordinal: dict[str, int] = {}
         for catalog in inherited_catalogs:
