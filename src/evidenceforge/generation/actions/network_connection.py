@@ -234,7 +234,12 @@ class PersistentSmbRootIntent:
                 raise StateError("Persistent SMB client process changed its owning session")
             live_session = state_manager.get_session(process.logon_id)
             if live_session is None or live_session.logon_type != process.logon_type:
-                raise StateError("Persistent SMB client process changed its session type")
+                actual_type = live_session.logon_type if live_session is not None else None
+                raise StateError(
+                    "Persistent SMB client process changed its session type: "
+                    f"{process.hostname} {process.logon_id} expected {process.logon_type}, "
+                    f"found {actual_type}"
+                )
             parent_identity = (
                 state_manager.get_process_identity(process.hostname, process.parent_pid)
                 if process.parent_pid > 0

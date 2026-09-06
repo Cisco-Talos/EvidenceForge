@@ -7589,6 +7589,25 @@ class TestActivityGenerator:
         assert plan.transport_pid == -1
         assert plan.transport_image == ""
 
+    def test_smb_actor_session_excludes_terminalized_historical_session(
+        self, activity_gen, test_user, test_system, state_manager
+    ) -> None:
+        """SMB state attachment requires a currently mutable local session."""
+
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.10.1.50",
+            start_time=timestamp - timedelta(minutes=10),
+            session_kind="remote_interactive",
+        )
+        state_manager.end_session(logon_id, timestamp + timedelta(minutes=10))
+
+        assert state_manager.get_session_at(logon_id, timestamp) is not None
+        assert activity_gen._smb_actor_session(test_system, test_user, timestamp) is None
+
     @pytest.mark.parametrize(
         ("operation", "transfer_direction", "source_path", "destination_path", "image"),
         [

@@ -10522,7 +10522,10 @@ class ActivityGenerator:
 
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user_at(actor.username, time)
+            for session in self.state_manager.get_active_sessions_for_user_at(
+                actor.username,
+                time,
+            )
             if session.system == system.hostname
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
