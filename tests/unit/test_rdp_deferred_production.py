@@ -301,6 +301,7 @@ def _open_rdp_terminal_harness(
     include_sysmon: bool = False,
     include_sysmon_during_open: bool = False,
     modeled_target_pid4: bool = False,
+    modeled_target_smss: bool = False,
     modeled_source_pid4: bool = False,
     modeled_source: bool = True,
     session_end_plan: SessionEndPlan | None = None,
@@ -401,6 +402,21 @@ def _open_rdp_terminal_harness(
         )
         system_process, _receipt = generator._lifecycle_authority.materialize_process(system_plan)
         target_system_process_object_id = system_process.ecar_object_id
+    if modeled_target_smss:
+        if not modeled_target_pid4:
+            raise ValueError("modeled target smss requires modeled target PID 4")
+        smss_plan = state.plan_process_materialization(
+            system=target.hostname,
+            fixed_pid=420,
+            parent_pid=4,
+            image=r"C:\Windows\System32\smss.exe",
+            command_line=r"C:\Windows\System32\smss.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+            start_time=open_time - timedelta(minutes=4),
+        )
+        generator._lifecycle_authority.materialize_process(smss_plan)
     if modeled_source_pid4:
         source_system_plan = state.plan_process_materialization(
             system=source.hostname,
@@ -2740,6 +2756,8 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert _field(process_rows["winlogon.exe"], "SubjectUserSid") == "S-1-5-18"
     assert _field(process_rows["winlogon.exe"], "SubjectUserName") == "SYSTEM"
     assert _field(process_rows["winlogon.exe"], "SubjectLogonId") == "0x3e7"
+    assert _field(type_ten, "ProcessId") == _field(process_rows["winlogon.exe"], "NewProcessId")
+    assert _event_time(process_rows["winlogon.exe"]) < _event_time(type_ten)
     assert _field(process_rows["winlogon.exe"], "ParentProcessName") == "System"
     assert (
         _field(process_rows["userinit.exe"], "ParentProcessName")
@@ -2768,6 +2786,32 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
             identity.pid,
             rendered_times[image],
         )
+
+
+def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:
+    """A modeled Windows session manager owns the per-session winlogon process."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        output_start_time=_START - timedelta(minutes=1),
+        include_sysmon=True,
+        include_sysmon_during_open=True,
+        modeled_target_pid4=True,
+        modeled_target_smss=True,
+        modeled_source_pid4=True,
+        production_timing_runtime=True,
+    )
+    winlogon = next(
+        identity
+        for identity in harness.terminal_process_identities
+        if identity.hostname == harness.target_hostname
+        and identity.image.casefold().endswith("winlogon.exe")
+    )
+    smss = harness.state.get_process_identity(harness.target_hostname, 420)
+    assert smss is not None
+    assert winlogon.parent_pid == smss.pid
+
+    _close_rdp_terminal_harness(harness)
 
 
 def test_rdp_exact_sysmon_admission_requires_bound_concrete_sink(tmp_path: Path) -> None:

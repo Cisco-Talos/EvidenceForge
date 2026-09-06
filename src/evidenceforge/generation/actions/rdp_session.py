@@ -1405,7 +1405,9 @@ class RdpSessionActionBundle:
         state = self._executor.state_manager
         logical_terminal_deadline = self._exact_rdp_deadline(transport_close)
         session_start = ensure_utc(logon_time)
-        auth_time = session_start + timedelta(milliseconds=100)
+        # Keep enough canonical headroom for independently delayed Security and
+        # Sysmon process-start observations to remain visible before 4624.
+        auth_time = session_start + timedelta(milliseconds=1_250)
         user_manager_time = auth_time + timedelta(milliseconds=100)
         explorer_time = user_manager_time + timedelta(milliseconds=150)
         if explorer_time >= transport_close:
@@ -1428,9 +1430,19 @@ class RdpSessionActionBundle:
             closure_owned_by_bundle=True,
             end_plan=effective_end_plan,
         )
+        smss = next(
+            (
+                process
+                for process in state.get_processes_on_system(self._request.target_system.hostname)
+                if process.image.replace("/", "\\").rsplit("\\", 1)[-1].casefold() == "smss.exe"
+                and process.username.casefold() == "system"
+                and ensure_utc(process.start_time) <= session_start
+            ),
+            None,
+        )
         winlogon = batch_builder.plan_process(
             system=self._request.target_system.hostname,
-            parent_pid=4,
+            parent_pid=smss.pid if smss is not None else 4,
             image=r"C:\Windows\System32\winlogon.exe",
             command_line="winlogon.exe",
             username="SYSTEM",

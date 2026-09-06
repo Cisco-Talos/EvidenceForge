@@ -1039,6 +1039,22 @@ class NetworkTransactionPlanner:
                     raise StateError("Deferred session login projection requires its target host")
                 is_rdp = authority.kind is DeferredSessionKind.RDP
                 is_reconnect = type(member) is ConnectionExistingSessionPatch
+                rdp_winlogon = (
+                    next(
+                        (
+                            process.identity
+                            for process in batch.processes
+                            if process.auth_session_id == identity.session_id
+                            and process.identity.image.replace("/", "\\")
+                            .rsplit("\\", 1)[-1]
+                            .casefold()
+                            == "winlogon.exe"
+                        ),
+                        None,
+                    )
+                    if is_rdp and not is_reconnect
+                    else None
+                )
                 if is_reconnect and (not is_rdp or spec.event_type is not EventKind.RDP_RECONNECT):
                     raise StateError("Deferred live-session dependent is not an RDP reconnect")
                 builder = OccurrenceBuilder(
@@ -1069,6 +1085,8 @@ class NetworkTransactionPlanner:
                         privilege_list="",
                         session_kind=authority.kind.value,
                         auth_protocol="rdp" if is_rdp else "ssh",
+                        process_pid=rdp_winlogon.pid if rdp_winlogon is not None else 0,
+                        process_name=rdp_winlogon.image if rdp_winlogon is not None else "",
                     ),
                     occurrence_key=occurrence_key,
                     identity_plan=EventIdentityPlan(subject=identity, session=identity),
