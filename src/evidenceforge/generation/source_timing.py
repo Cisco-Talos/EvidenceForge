@@ -5339,6 +5339,25 @@ class SourceTimingPlanner:
                 cached,
             )
             return cached
+        identity = self._subject_process_identity(event)
+        parent = (
+            event.identity_plan.actor
+            if event.identity_plan is not None
+            and event.event_type in _PROCESS_START_EVENT_TYPES
+            and isinstance(event.identity_plan.actor, ProcessIdentity)
+            else None
+        )
+        parent_time = None
+        if identity is not None and identity.object_id == object_id and parent is not None:
+            parent_time = self._runtime_windows_process_create_time(
+                event,
+                source_instance=source_instance,
+                hostname=hostname,
+                object_id=parent.object_id,
+                lifecycle_id=parent.lifecycle_group_id,
+                pid=parent.pid,
+                canonical_start=parent.started_at,
+            )
         _sysmon_native, sysmon_render = self._runtime_shared_sysmon_process_create_time(
             event,
             hostname=hostname,
@@ -5364,6 +5383,19 @@ class SourceTimingPlanner:
             ),
             sample_key="after_sysmon",
         )
+        if parent_time is not None and timestamp <= parent_time:
+            self.timing_runtime.audit.record_repair("windows_security.process.parent_before_child")
+            timestamp = self._sample_after_floor(
+                parent_time,
+                relationship_key="windows_security.process.parent_before_child",
+                scope=TimingScope(
+                    stable_id=object_id,
+                    host=hostname,
+                    source=source_instance,
+                    lifecycle_id=lifecycle_id,
+                ),
+                maximum_us=2_500,
+            )
         self._runtime_process_create_times[cache_key] = timestamp
         self._record_process_create_dependency(
             event,

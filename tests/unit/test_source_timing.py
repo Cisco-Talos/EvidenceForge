@@ -799,6 +799,81 @@ def test_endpoint_sources_share_host_clock_offset() -> None:
     assert deltas[0] != timedelta(0)
 
 
+def test_windows_security_process_create_preserves_parent_before_child() -> None:
+    """Finalized Security source timing cannot invert a visible process ancestry pair."""
+
+    planner = SourceTimingPlanner(clock_profile_name="enterprise_standard")
+    host = replace(_host_context(), hostname="FILE-SRV-01")
+    base_time = _base_time()
+    for ordinal in range(200):
+        parent_start = base_time + timedelta(seconds=ordinal * 2)
+        child_start = parent_start + timedelta(milliseconds=200)
+        parent = _process_identity(
+            hostname=host.hostname,
+            pid=60_000 + ordinal * 2,
+            parent_pid=4,
+            started_at=parent_start,
+            image=r"C:\Windows\System32\winlogon.exe",
+        )
+        child = _process_identity(
+            hostname=host.hostname,
+            pid=60_001 + ordinal * 2,
+            parent_pid=parent.pid,
+            started_at=child_start,
+            image=r"C:\Windows\System32\userinit.exe",
+        )
+        child_event = OccurrenceBuilder(
+            timestamp=child_start,
+            event_type="process_create",
+            src_host=host,
+            process=replace(
+                _process_context(child_start),
+                pid=child.pid,
+                parent_pid=parent.pid,
+                image=child.image,
+                command_line="userinit.exe",
+            ),
+            identity_plan=EventIdentityPlan(subject=child, actor=parent),
+            lifecycle=ActionLifecycleContext(
+                group_id=child.lifecycle_group_id,
+                canonical_start=child_start,
+                phase="start",
+                parent_group_id=parent.lifecycle_group_id,
+            ),
+        )
+
+        child_observed = planner.source_time(
+            child_event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, child.pid, child_start),
+        )
+        parent_event = OccurrenceBuilder(
+            timestamp=parent_start,
+            event_type="process_create",
+            src_host=host,
+            process=replace(
+                _process_context(parent_start),
+                pid=parent.pid,
+                parent_pid=4,
+                image=parent.image,
+                command_line="winlogon.exe",
+            ),
+            identity_plan=EventIdentityPlan(subject=parent),
+            lifecycle=ActionLifecycleContext(
+                group_id=parent.lifecycle_group_id,
+                canonical_start=parent_start,
+                phase="start",
+            ),
+        )
+        parent_observed = planner.source_time(
+            parent_event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, parent.pid, parent_start),
+        )
+
+        assert parent_observed < child_observed
+
+
 def test_linux_ecar_uses_linux_host_clock_profile() -> None:
     """Linux eCAR receives host-clock adjustment from the Linux endpoint profile."""
     seed = ("LINUX-TEST-01", 4242, _base_time())
