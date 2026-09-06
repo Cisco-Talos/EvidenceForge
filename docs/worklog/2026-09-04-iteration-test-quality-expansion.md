@@ -963,3 +963,47 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve successful downloads, partial captures, FUID locality, hash agreement,
   MIME normalization, redirects/HEAD/304 bodylessness, proxy error templates, and deterministic
   multi-sensor identity.
+
+### Result
+
+- Commits `536ee7ad9` and `928f24929` bind proxied HTTP artifacts to the terminal outcome and
+  sanitize download-scale MIME on error responses at canonical HTTP normalization.
+- Focused HTTP/proxy tests passed, followed by 8,225 routine tests with 5 skipped and 2,003
+  deselected; repository-wide Ruff lint and format checks passed.
+- Supported generation produced 114,284 records. Both Zeek sensors render the denied Citrix
+  response as a 1,474-byte `text/html` file, and neither emits a PE companion for its response
+  FUID. Automated evaluation remained 96.1232 with every hard gate passing.
+- Initial blind verdicts were one Real and three Synthetic. Required deliberation ended unanimously
+  Synthetic with an average 94.25 verdict confidence and mean realism score of 62.
+- The panel ranked SCP-to-SMB physical availability, byte causality, and file provenance as the
+  strongest remaining defect; this becomes loop 55.
+
+## Assessment loop 55 — chained file-transfer lifecycle ownership
+
+### Finding classification
+
+- A complete 794,475-byte archive is relayed over SMB before its upstream SCP flow could have
+  delivered it, while that flow carries only 30,675 originator payload bytes: `new_family`, a hard
+  physical-causality failure.
+- The APP receive object changes identity before its local read, loses actor/PID ownership, and the
+  replacement identity is reused on the destination: `same_family_sibling` provenance failures.
+
+### Family contract
+
+- **Owning abstraction:** canonical file-transfer action lifecycle and its immutable artifact
+  lineage, composed across SCP reception and dependent SMB transfer.
+- **Invariant:** a dependent transfer may consume an artifact only after the upstream transfer has
+  made the required bytes available. Transport payload must cover the transferred object plus
+  modeled protocol overhead; each host-local file version keeps stable identity and process
+  ownership, with explicit lineage linking copies across hosts.
+- **Entry paths:** SCP and SFTP receive/send; SMB client/server copy; chained transfers; full and
+  partial files; compressed content; success, failure, interruption, and retry; direct and mounted
+  clients; observation delay/drop; multi-sensor visibility; and collection boundaries.
+- **Consumers:** source/destination eCAR FILE and FLOW, SSH/PAM/syslog, Zeek conn/files/SMB,
+  Samba audit, hashes/FUIDs, transfer reconciliation, evaluation, and blind incident/hunt review.
+- **Layer rationale:** only the transfer lifecycle owns object availability, byte completion, and
+  derivation before network and endpoint projections split. Timing or identity must not be patched
+  independently in an emitter or downstream storyline event.
+- **Sibling risks:** preserve streamable transfers, encryption overhead, independent sensor timing,
+  local versus remote object authority, source process lifetime, content hashes, file sizes,
+  destination service identity, retry neutrality, and bounded retained state.
