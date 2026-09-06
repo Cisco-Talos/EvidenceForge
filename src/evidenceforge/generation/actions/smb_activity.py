@@ -477,6 +477,15 @@ class SmbActivityActionBundle:
             self._client_source_by_destination_path = dict(
                 zip((file.path.casefold() for file in selected), source_files, strict=True)
             )
+        elif (
+            creates_remote_copy
+            and isinstance(spec.source, SmbClientLocation)
+            and spec.source.path is not None
+            and (source_file := self._runtime_client_path_file(spec.source)) is not None
+        ):
+            selected = (self._client_upload_destination_file(source_file, spec.destination),)
+            self._client_source_by_destination = {selected[0].file_id: source_file}
+            self._client_source_by_destination_path = {selected[0].path.casefold(): source_file}
         else:
             selected = self._select(primary_location)
         if (
@@ -4234,6 +4243,38 @@ class SmbActivityActionBundle:
             file for file in candidates if self.executor.state_manager.smb_file_is_available(file)
         )
         return self._apply_batch(candidates)
+
+    def _runtime_client_path_file(
+        self,
+        location: SmbClientLocation,
+    ) -> CompiledStorageFile | None:
+        """Resolve one exact local runtime artifact used as an SMB upload source."""
+
+        if location.path is None:
+            return None
+        manager = getattr(self.executor, "_runtime_content_manager", None)
+        if manager is None:
+            return None
+        platform = self._server_platform(self.request.parent_system)
+        record = manager.resolve_record(
+            self.request.parent_system.hostname,
+            self.request.actor.username,
+            location.path,
+            platform,
+        )
+        if record is None:
+            return None
+        content = record.content
+        return CompiledStorageFile(
+            file_id=content.file_object_id,
+            version=content.version,
+            share=f"client:{self.request.parent_system.hostname}",
+            path=location.path,
+            size_bytes=content.size_bytes,
+            mime_type=content.mime_type,
+            tags=("runtime", "client-upload"),
+            seed_ref=content.seed_ref,
+        )
 
     def _apply_batch(
         self,

@@ -45,6 +45,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import SignaturePredicate
 from evidenceforge.generation.actions import (
@@ -2333,7 +2334,7 @@ class StorylineMixin:
         )
         if available_at is None or requested_at > available_at:
             return requested_at
-        return available_at + timedelta(milliseconds=rng.randint(120, 700))
+        return available_at + timedelta(milliseconds=rng.randint(1_200, 2_000))
 
     def _storyline_local_process_actor_for_logon(
         self,
@@ -4898,7 +4899,27 @@ class StorylineMixin:
                         if modeled_linux_receiver
                         else rng.uniform(2.0, 30.0)
                     )
-                    orig_bytes = rng.randint(20_000, 250_000)
+                    source_path = self._extract_scp_source_path(command_line, os_category) or ""
+                    source_content = None
+                    runtime_manager = getattr(
+                        self.activity_generator,
+                        "_runtime_content_manager",
+                        None,
+                    )
+                    if runtime_manager is not None and source_path:
+                        source_record = runtime_manager.resolve_record(
+                            system.hostname,
+                            process_actor.username,
+                            source_path,
+                            "linux",
+                        )
+                        if source_record is not None:
+                            source_content = source_record.content
+                    orig_bytes = (
+                        source_content.size_bytes + rng.randint(8_192, 32_768)
+                        if source_content is not None
+                        else rng.randint(20_000, 250_000)
+                    )
                     resp_bytes = rng.randint(4_000, 40_000)
                     if (
                         modeled_linux_receiver
@@ -4909,7 +4930,7 @@ class StorylineMixin:
                             extracted_username=scp_destination[2],
                             fallback_username=process_actor.username,
                         )
-                        self.activity_generator.generate_ssh_session(
+                        transport_uid = self.activity_generator.generate_ssh_session(
                             user=self.activity_generator._user_model_for_username(target_user),
                             target_system=target_system,
                             time=transfer_time,
@@ -4926,6 +4947,21 @@ class StorylineMixin:
                             defer_session_close=True,
                             source="storyline_scp",
                         )
+                        network_plan_getter = getattr(
+                            self.dispatcher,
+                            "network_plan_for",
+                            None,
+                        )
+                        transport_plan = (
+                            network_plan_getter(transport_uid)
+                            if callable(network_plan_getter)
+                            else None
+                        )
+                        transfer_completed_at = (
+                            transport_plan.closed_at
+                            if transport_plan is not None
+                            else transfer_time + timedelta(seconds=transfer_duration)
+                        )
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
@@ -4933,15 +4969,13 @@ class StorylineMixin:
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            source_path=self._extract_scp_source_path(
-                                command_line,
-                                os_category,
-                            )
-                            or "",
+                            source_path=source_path,
                             target_user=target_user,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
                             source_port=source_port,
+                            transfer_completed_at=transfer_completed_at,
+                            source_content=source_content,
                             rng=rng,
                         )
                     else:
@@ -8409,6 +8443,8 @@ class StorylineMixin:
         target_path: str,
         transfer_time: datetime,
         source_port: int,
+        transfer_completed_at: datetime | None = None,
+        source_content: FileContentIdentity | None = None,
         rng: random.Random,
     ) -> datetime | None:
         """Emit target-side file evidence after the SSH bundle models the transfer session."""
@@ -8426,6 +8462,8 @@ class StorylineMixin:
                 target_path=target_path,
                 transfer_time=transfer_time,
                 source_port=source_port,
+                transfer_completed_at=transfer_completed_at,
+                source_content=source_content,
             ),
             rng,
         )

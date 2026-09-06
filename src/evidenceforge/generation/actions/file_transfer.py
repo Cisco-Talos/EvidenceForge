@@ -2015,6 +2015,8 @@ class ScpReceiverFileRequest:
     target_path: str
     transfer_time: datetime
     source_port: int
+    transfer_completed_at: datetime | None = None
+    source_content: FileContentIdentity | None = None
     source: str = "storyline_scp_receiver"
 
     @property
@@ -2026,7 +2028,9 @@ class ScpReceiverFileRequest:
             f"{self.actor.username}:{self.source_system.hostname}:{self.target_system.hostname}:"
             f"{self.source_pid}:{self.source_process}:{self.source_command}:"
             f"{self.source_path}:{self.target_user}:{self.target_path}:{self.transfer_time.isoformat()}:"
-            f"{self.source_port}:{self.source}"
+            f"{self.source_port}:{self.transfer_completed_at}:"
+            f"{self.source_content.content_id if self.source_content is not None else ''}:"
+            f"{self.source}"
         )
         return f"scp-receiver-file-{seed:016x}"
 
@@ -2075,9 +2079,13 @@ class ScpReceiverFileActionBundle:
         if plan is None:
             return False
         manager = getattr(self._executor.activity_generator, "_runtime_content_manager", None)
-        source_content: FileContentIdentity | None = None
+        source_content = self._request.source_content
         source_platform = _system_platform(plan.source_read.system)
-        if isinstance(manager, RuntimeContentIdentityManager) and source_platform is not None:
+        if (
+            source_content is None
+            and isinstance(manager, RuntimeContentIdentityManager)
+            and source_platform is not None
+        ):
             source_record = manager.resolve_record(
                 plan.source_read.system.hostname,
                 plan.source_read.process_username,
@@ -2163,18 +2171,24 @@ class ScpReceiverFileActionBundle:
         if source_read_time <= ready_time:
             source_read_time = ready_time + timedelta(milliseconds=1)
 
+        transfer_completed_at = max(
+            transfer_time,
+            ensure_utc(self._request.transfer_completed_at)
+            if self._request.transfer_completed_at is not None
+            else transfer_time,
+        )
         receiver_create_delay = _sample_transfer_value(
             self._timing_runtime,
-            relationship_key="file_transfer.scp.receiver_create_delay",
+            relationship_key="file_transfer.scp.receiver_create_after_completion",
             stable_id=self._request.stable_id,
             host=self._request.target_system.hostname,
             lifecycle_id=self.anchor.action_id,
             sample_key="receiver_create_delay",
-            minimum=1.2,
-            mode=1.7,
-            maximum=3.0,
+            minimum=0.12,
+            mode=0.31,
+            maximum=0.9,
         )
-        receiver_create_time = transfer_time + timedelta(seconds=receiver_create_delay)
+        receiver_create_time = transfer_completed_at + timedelta(seconds=receiver_create_delay)
         if source_process_time is not None and receiver_create_time <= source_process_time:
             receiver_create_time = source_process_time + _sample_transfer_gap(
                 self._timing_runtime,

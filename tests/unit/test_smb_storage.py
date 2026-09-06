@@ -4,17 +4,31 @@
 """Canonical SMB storage topology and authoring tests."""
 
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 import evidenceforge.generation.storage_world as storage_world_module
 from evidenceforge.cli.commands import _exception_issue_payloads
+from evidenceforge.events.content_identity import FileContentIdentity
+from evidenceforge.generation.actions.smb_activity import (
+    SmbActivityActionBundle,
+    SmbActivityRequest,
+)
 from evidenceforge.generation.activity.smb_profiles import reset_smb_profiles_cache
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.storage_world import CompiledStorageMapping, StorageWorldModel
-from evidenceforge.models.scenario import Scenario, SmbActivityEventSpec, StorageMappingConfig
+from evidenceforge.models.scenario import (
+    Scenario,
+    SmbActivityEventSpec,
+    SmbClientLocation,
+    StorageMappingConfig,
+    System,
+    User,
+)
 from evidenceforge.utils import load_yaml
 from evidenceforge.validation import ScenarioValidator
 
@@ -145,6 +159,52 @@ def _fixed_cross_server_mapping_data(scenarios_dir: Path) -> dict:
     ]
     data["storyline"][0]["events"][0]["mapping"] = "SOURCE-FIXED"
     return data
+
+
+def test_client_path_upload_reuses_runtime_artifact_identity_and_size() -> None:
+    """A local-path SMB upload consumes the exact retained local artifact."""
+
+    system = System(
+        hostname="APP-INT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 24.04",
+        type="server",
+    )
+    actor = User(username="root", full_name="Root", email="root@example.com")
+    content = FileContentIdentity(
+        file_object_id="received-scp-object",
+        version=3,
+        size_bytes=794_475,
+        mime_type="application/gzip",
+        seed_ref="database-archive",
+    )
+    executor = SimpleNamespace(
+        _runtime_content_manager=SimpleNamespace(
+            resolve_record=lambda *_args: SimpleNamespace(content=content)
+        )
+    )
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.executor = executor
+    bundle.request = SmbActivityRequest(
+        spec=SmbActivityEventSpec(
+            operation="copy",
+            source={"type": "client", "path": "/tmp/.cache/rpt_0318.sql.gz"},
+            destination={"type": "share", "share": "FILE-LNX-01.research"},
+        ),
+        actor=actor,
+        parent_system=system,
+        time=datetime(2024, 3, 18, 17, 35, tzinfo=UTC),
+    )
+
+    resolved = bundle._runtime_client_path_file(
+        SmbClientLocation(path="/tmp/.cache/rpt_0318.sql.gz")
+    )
+
+    assert resolved is not None
+    assert resolved.file_id == content.file_object_id
+    assert resolved.version == content.version
+    assert resolved.size_bytes == content.size_bytes
+    assert resolved.mime_type == content.mime_type
 
 
 def test_omitted_storage_compiles_duration_independent_diverse_defaults(

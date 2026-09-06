@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import ProcessIdentity
@@ -1800,6 +1801,7 @@ class TestFileTransferActionBundles:
                 target_path="/tmp/rpt.sql.gz",
                 transfer_time=timestamp + timedelta(seconds=1),
                 source_port=49152,
+                transfer_completed_at=timestamp + timedelta(seconds=31),
             ),
             random.Random(11),
         ).execute()
@@ -1816,6 +1818,7 @@ class TestFileTransferActionBundles:
         assert receiver_create.file.path == "/tmp/rpt.sql.gz"
         assert receiver_create.file.action == "create"
         assert source_read.timestamp < receiver_create.timestamp
+        assert receiver_create.timestamp > timestamp + timedelta(seconds=31)
 
 
 class TestStorylineScpCorrelation:
@@ -1895,11 +1898,21 @@ class TestStorylineScpCorrelation:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
+        source_content = FileContentIdentity(
+            file_object_id="file-source-archive",
+            version=1,
+            size_bytes=794_475,
+            mime_type="application/gzip",
+            seed_ref="archive-seed",
+        )
+        engine.activity_generator._runtime_content_manager = SimpleNamespace(
+            resolve_record=lambda *_args: SimpleNamespace(content=source_content)
+        )
         engine.dispatcher = SimpleNamespace(visibility_engine=None)
-        receiver_ports: list[int] = []
+        receiver_requests: list[dict[str, Any]] = []
 
         def capture_receiver_artifacts(**kwargs) -> None:
-            receiver_ports.append(kwargs["source_port"])
+            receiver_requests.append(kwargs)
 
         engine._emit_scp_receiver_artifacts = capture_receiver_artifacts
         spec = SimpleNamespace(
@@ -1923,7 +1936,13 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.ssh_sessions[0]["source_port"] == 45678
         assert engine.activity_generator.ssh_sessions[0]["source"] == "storyline_scp"
         assert engine.activity_generator.ssh_sessions[0]["defer_session_close"] is True
-        assert receiver_ports == [45678]
+        assert engine.activity_generator.ssh_sessions[0]["orig_bytes"] > source_content.size_bytes
+        assert receiver_requests[0]["source_port"] == 45678
+        assert receiver_requests[0]["source_content"] == source_content
+        assert receiver_requests[0]["transfer_completed_at"] == (
+            engine.activity_generator.ssh_sessions[0]["time"]
+            + timedelta(seconds=engine.activity_generator.ssh_sessions[0]["duration"])
+        )
 
     def test_unmodeled_scp_target_preserves_compatibility_port_reservation(self):
         """Only modeled Linux SSH delegation uses allocation-free tuple preview."""
