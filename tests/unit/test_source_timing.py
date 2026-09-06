@@ -1817,6 +1817,68 @@ def test_ecar_process_terminate_follows_delayed_module_observation(tmp_path: Pat
     assert terminate_time > module_time
 
 
+def test_ecar_short_process_termination_follows_complete_startup_module_sequence(
+    tmp_path: Path,
+) -> None:
+    """A short canonical lifetime cannot overtake delayed startup modules in eCAR."""
+
+    base = _base_time()
+    host = _host_context()
+    identity = _process_identity(
+        hostname=host.hostname,
+        pid=4242,
+        parent_pid=888,
+        started_at=base,
+        image=r"C:\Users\alice\AppData\Local\Microsoft\Teams\current\Teams.exe",
+    )
+    proc = _context_from_identity(identity)
+    create_event = OccurrenceBuilder(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
+    )
+    module_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=1),
+        event_type="image_load",
+        src_host=host,
+        process=proc,
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Windows\System32\rpcrt4.dll",
+            load_phase="startup",
+            load_order=7,
+        ),
+        identity_plan=EventIdentityPlan(actor=identity),
+    )
+    terminate_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=2),
+        event_type="process_terminate",
+        src_host=host,
+        process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
+    )
+    planner = SourceTimingPlanner()
+    for event in (create_event, module_event, terminate_event):
+        planner.plan_event(event, format_name="ecar")
+
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    for event in (create_event, module_event, terminate_event):
+        emitter.emit(event)
+    emitter.close()
+    rows = [
+        json.loads(line) for line in (tmp_path / host.fqdn / "ecar.json").read_text().splitlines()
+    ]
+    module_time = next(row["timestamp_ms"] for row in rows if row["object"] == "MODULE")
+    terminate_time = next(
+        row["timestamp_ms"]
+        for row in rows
+        if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+    )
+
+    assert terminate_time > module_time
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

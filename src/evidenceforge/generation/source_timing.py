@@ -3860,11 +3860,6 @@ class SourceTimingPlanner:
             pid=process.pid,
             started_at=start_time,
         )
-        object_id = self._sysmon_process_object_id(
-            hostname,
-            process.pid,
-            start_time,
-        )
         instance = source_instance or f"ecar:{hostname.casefold()}"
         if event.event_type in _PROCESS_START_EVENT_TYPES:
             timestamp = self._runtime_process_create_time(
