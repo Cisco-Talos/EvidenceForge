@@ -1,0 +1,36 @@
+{
+  "loop": 52,
+  "family": "explicit proxy upload payload conservation",
+  "status": "passed",
+  "authored_decoded_body_bytes": 18782613,
+  "proxy_access": {
+    "request": "POST https://api.westbridge-services.net/upload/telemetry/7f3a2b19",
+    "cs_bytes": 18783009,
+    "body_overhead_bytes": 396,
+    "tunnel_id": "PT-00000000a93f2b92"
+  },
+  "client_to_proxy": {
+    "zeek_uid": "CaVejAvxWVJ0Edov4O",
+    "orig_bytes": 18783476,
+    "missed_bytes": 0,
+    "src_port": 50989,
+    "asa_teardown_bytes_both_directions": 19737165
+  },
+  "proxy_to_origin": {
+    "zeek_uid": "C0zQKB0rheGUB1ITcJ",
+    "orig_bytes": 18813517,
+    "missed_bytes": 0,
+    "src_port": 54839,
+    "asa_teardown_bytes_both_directions": 19621436
+  },
+  "checks": {
+    "proxy_request_contains_authored_body": true,
+    "client_transport_contains_authored_body": true,
+    "origin_transport_contains_authored_body": true,
+    "client_body_divergence_removed": true,
+    "leg_delta_bytes": 30041,
+    "leg_delta_is_bounded_framing": true,
+    "zero_capture_loss_on_both_legs": true,
+    "matching_proxy_tunnel_and_transport_tuple": true
+  }
+}

@@ -876,3 +876,52 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve directional overhead, TLS framing, packet counts, loss accounting,
   response bytes, tunnel reuse, multiple requests per connection, file hashes/FUIDs, proxy status,
   deterministic identity, and bounded runtime state.
+
+### Result
+
+- Commit `58efa45c4` replaces stale generator-owned upload estimates at the proxy transaction
+  boundary while preserving the already-planned source-side overhead around the canonical HTTP
+  entity body.
+- The focused proxy suite passed 105 tests. The routine suite passed 8,222 tests with 5 skipped
+  and 2,003 deselected; repository-wide Ruff lint and format checks passed across 753 files.
+- Supported generation produced 114,409 records. The authored 18,782,613-byte multipart body is
+  conserved on both proxy legs with zero capture loss; the prior approximately 44 MB client leg
+  no longer exists.
+- Automated evaluation scored 96.2705 with every hard gate passing.
+- Initial blind verdicts were Real, Synthetic, Synthetic, and Synthetic at 32, 78, 84, and 93.
+  Required deliberation ended unanimously Synthetic at 79, 91, 92, and 96.
+- The panel's strongest remaining hard family is IDS alert identity and encrypted-content
+  visibility; this becomes loop 53.
+
+## Assessment loop 53 — IDS observable-trigger ownership
+
+### Finding classification
+
+- Five `curl` User-Agent alerts contradict the sole Zeek HTTP transaction on their tuples, which
+  renders Go or Wget instead: `new_family`, repeated across five perimeter observations.
+- One APT User-Agent alert contradicts a Go client and two Python-urllib content alerts are
+  attached to TLS-only origin flows without visible decryption: `same_family_sibling` visibility
+  and trigger-identity failures.
+- IDS latency texture is adjacent timing work and is reserved unless the trigger owner also proves
+  responsible for it.
+
+### Family contract
+
+- **Owning abstraction:** canonical IDS assertion planning attached to the network/application
+  occurrence that owns the observable trigger and sensor visibility.
+- **Invariant:** every content-specific IDS alert is derived from the exact source-visible payload
+  field rendered for that tuple. Encrypted traffic may carry content alerts only at a modeled
+  decryption observation point; otherwise assertions must use TLS-visible facts.
+- **Entry paths:** built-in and authored alerts; direct cleartext HTTP; explicit-proxy decrypted
+  HTTP; CONNECT passthrough and inspected TLS; origin-side TLS; User-Agent, URI, referrer, DNS,
+  JA3/TLS, threshold, and generic flow rules; multi-sensor routing; observation drop/delay; and
+  exact retry.
+- **Consumers:** Snort/Suricata rendering, Zeek HTTP/SSL/conn, proxy access, IDS correlation
+  evaluation, sensor visibility, detections, and blind network/detection review.
+- **Layer rationale:** only canonical application and visibility planning knows both the exact
+  trigger value and whether a sensor can observe it. Signature names must not be selected
+  independently in an emitter or baseline pool.
+- **Sibling risks:** preserve authored positive assertions, no-alert controls, DNS/TLS signature
+  semantics, packet-direction and tuple identity, proxy ingress versus origin egress, alert
+  timestamps, sensor-local filtering, deterministic signature selection, and duplicate
+  suppression.
