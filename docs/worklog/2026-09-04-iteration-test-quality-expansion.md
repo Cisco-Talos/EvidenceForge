@@ -642,3 +642,50 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve genuine shell repair after the recorded end, source-visible parent
   ordering, retained parent snapshots for GUI children, PID-reuse identity isolation, network and
   service logons that cannot own desktops, and deterministic out-of-order planning.
+
+### Result
+
+- Native SMB reuse no longer reclassifies a resident Explorer as operation-lived, and SMB process
+  attachment now requires a currently mutable session. Exact SSH publication also accepts valid
+  partial source observation when either eCAR or Syslog is independently dropped.
+- The hard probe found 14 Explorer creates, zero `services.exe` parents, zero duplicate bare
+  Explorers per session, and zero duplicate `userinit.exe` bootstraps per session.
+- Focused SMB/session/SSH tests passed. The final routine suite passed 8,218 tests with 5 skipped
+  and 2,003 deselected; repository-wide Ruff lint and format checks passed across 753 files.
+- Automated evaluation scored 96.2468 across 114,409 records, with all hard gates passing.
+- Initial blind scores were 52, 75, 62, and 74 (average 65.75), with one Inconclusive and three
+  Synthetic verdicts. Required deliberation revised all four to Synthetic at 73, 84, 77, and 80
+  (average 78.5). No reviewer repeated the desktop-shell defect.
+- The next hard contradiction is a Security 4688 child visibly preceding its exact parent after
+  source timing; this becomes the loop-48 family.
+
+## Assessment loop 48 — Windows source-local process ancestry timing
+
+### Finding classification
+
+- FILE-SRV-01 Security 4688 `userinit.exe` preceding its exact `winlogon.exe` parent by 223 ms:
+  `new_family`, a same-channel hard contradiction independently accepted by every reviewer during
+  deliberation.
+- Remote-session parent image/command loss despite visible exact parent identity:
+  `same_family_sibling`; canonical ancestry exists, but late construction and finalized source
+  timing can prevent the source-native fields from carrying it.
+
+### Family contract
+
+- **Owning abstraction:** `SourceTimingPlanner` process-create timing for Windows Security,
+  coordinated with canonical `ProcessIdentity` ancestry.
+- **Invariant:** for every source-visible Security 4688 parent/child pair, the parent's rendered
+  create precedes the child's rendered create. Finalized source timing must enforce this directly
+  and must not rely on an emitter post-fixup that is forbidden to move finalized rows.
+- **Entry paths:** local interactive and remote-interactive shell bootstraps, ordinary user process
+  creation, service children, baseline and storyline process generation, retained parent identity,
+  and collection-delayed endpoint projection.
+- **Consumers:** Windows Security 4688 ordering and parent fields, Sysmon Event 1 ancestry, eCAR
+  process joins, process termination floors, deterministic evaluation, and blind host/detection
+  review.
+- **Layer rationale:** canonical ancestry is correct and Sysmon renders the pair in order; only the
+  Windows Security source clock independently places the two rows incorrectly. The source timing
+  owner must therefore constrain the final source-native observations before rendering.
+- **Sibling risks:** preserve Security-after-Sysmon latency, stable per-process source timestamps,
+  parent recursion without cycles, PID-reuse isolation, collection missingness, process-close
+  dependents, and deterministic timing audit behavior.
