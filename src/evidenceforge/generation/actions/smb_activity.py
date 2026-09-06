@@ -150,6 +150,7 @@ class SmbActivityRequest:
     process_image: str = ""
     activity_source: Literal["storyline", "baseline"] = "storyline"
     files_override: tuple[CompiledStorageFile, ...] = ()
+    client_source_override: CompiledStorageFile | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +482,13 @@ class SmbActivityActionBundle:
             creates_remote_copy
             and isinstance(spec.source, SmbClientLocation)
             and spec.source.path is not None
-            and (source_file := self._runtime_client_path_file(spec.source)) is not None
+            and (
+                source_file := (
+                    self.request.client_source_override
+                    or self._runtime_client_path_file(spec.source)
+                )
+            )
+            is not None
         ):
             selected = (self._client_upload_destination_file(source_file, spec.destination),)
             self._client_source_by_destination = {selected[0].file_id: source_file}

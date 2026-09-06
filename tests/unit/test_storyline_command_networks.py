@@ -33,6 +33,7 @@ from evidenceforge.generation.engine.storyline import (
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.storage_world import (
     CompiledStorageAccess,
+    CompiledStorageFile,
     CompiledStorageShare,
     CompiledStorageVolume,
     StorageWorldModel,
@@ -80,6 +81,61 @@ def _activity_generator_with_captured_builders(
 
 
 class TestStorylineCommandNetworks:
+    def test_storyline_smb_upload_consumes_remembered_local_artifact(self):
+        """A dependent SMB upload receives the exact SCP placement override."""
+
+        actor = User(username="root", full_name="Root", email="root@example.com")
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        captured: list[dict[str, Any]] = []
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(users=[actor]))
+        engine.dispatcher = SimpleNamespace(storyline_cluster_id=None)
+        engine.activity_generator = SimpleNamespace(
+            generate_smb_activity=lambda **kwargs: (
+                captured.append(kwargs)
+                or SimpleNamespace(
+                    session_id="session",
+                    tree_ids=("tree",),
+                    transport_uids=("uid",),
+                    operations=(),
+                )
+            )
+        )
+        source_file = CompiledStorageFile(
+            file_id="app-local-placement",
+            share="client:APP-INT-01",
+            path="/tmp/.cache/archive.gz",
+            size_bytes=833_491,
+            mime_type="application/gzip",
+        )
+        engine._remember_storyline_file_available(
+            system=system,
+            path=source_file.path,
+            available_at=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            source_file=source_file,
+        )
+
+        engine._execute_typed_event(
+            spec=SmbActivityEventSpec(
+                operation="copy",
+                source={"type": "client", "path": source_file.path},
+                destination={"type": "share", "share": "FILE-LNX-01.research"},
+            ),
+            actor=actor,
+            system=system,
+            time=datetime(2026, 5, 11, 12, 1, tzinfo=UTC),
+            activity="relay archive",
+            explicit_types={"smb_activity"},
+        )
+
+        assert captured[0]["client_source_override"] == source_file
+
     def test_http_upload_local_read_uses_process_local_principal(self):
         """NewCredentials must not replace the local token for an upload file read."""
         local_actor = "aisha.johnson"

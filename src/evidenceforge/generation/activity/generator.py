@@ -24431,6 +24431,7 @@ class ActivityGenerator:
         process_image: str = "",
         activity_source: Literal["storyline", "baseline"] = "storyline",
         files_override: tuple[Any, ...] = (),
+        client_source_override: Any = None,
     ) -> SmbActivityResult:
         """Generate one bounded canonical SMB2/3 disk-share activity burst."""
 
@@ -24443,6 +24444,7 @@ class ActivityGenerator:
             process_image=process_image,
             activity_source=activity_source,
             files_override=files_override,
+            client_source_override=client_source_override,
         )
         return SmbActivityActionBundle(self, request).execute()
 

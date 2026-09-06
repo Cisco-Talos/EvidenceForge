@@ -83,6 +83,7 @@ from evidenceforge.generation.activity.http_content import (
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
 from evidenceforge.generation.intent_ledger import IntentSection
+from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.generation.world_model import (
     RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
     RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
@@ -2306,6 +2307,7 @@ class StorylineMixin:
         system: System,
         path: str,
         available_at: datetime,
+        source_file: CompiledStorageFile | None = None,
     ) -> None:
         """Record when a canonical transfer first makes a local path consumable."""
 
@@ -2315,6 +2317,27 @@ class StorylineMixin:
         current = self._storyline_file_available_at.get(key)
         if current is None or available_at < current:
             self._storyline_file_available_at[key] = ensure_utc(available_at)
+        if source_file is not None:
+            if not hasattr(self, "_storyline_file_source_overrides"):
+                self._storyline_file_source_overrides: dict[
+                    tuple[str, str], CompiledStorageFile
+                ] = {}
+            self._storyline_file_source_overrides[key] = source_file
+
+    def _storyline_smb_source_override(
+        self,
+        *,
+        system: System,
+        spec: Any,
+    ) -> CompiledStorageFile | None:
+        """Return exact retained local-file truth for a dependent SMB upload."""
+
+        source = getattr(spec, "source", None)
+        if not isinstance(source, SmbClientLocation) or not source.path:
+            return None
+        return getattr(self, "_storyline_file_source_overrides", {}).get(
+            self._storyline_local_file_key(system, source.path)
+        )
 
     def _storyline_smb_file_ready_time(
         self,
@@ -5140,6 +5163,10 @@ class StorylineMixin:
                 actor=smb_actor,
                 parent_system=system,
                 time=time,
+                client_source_override=self._storyline_smb_source_override(
+                    system=system,
+                    spec=smb_spec,
+                ),
             )
             malicious_event.update(
                 {
@@ -8501,10 +8528,36 @@ class StorylineMixin:
             if transfer_completed_at is not None
             else plan.receiver_create.timestamp,
         )
+        manager = getattr(self.activity_generator, "_runtime_content_manager", None)
+        receiver_record = (
+            manager.resolve_record(
+                target_system.hostname,
+                target_user,
+                target_path,
+                "linux",
+            )
+            if manager is not None
+            else None
+        )
+        source_file = (
+            CompiledStorageFile(
+                file_id=receiver_record.artifact.artifact_id,
+                version=receiver_record.content.version,
+                share=f"client:{target_system.hostname}",
+                path=target_path,
+                size_bytes=receiver_record.content.size_bytes,
+                mime_type=receiver_record.content.mime_type,
+                tags=("runtime", "scp-receiver"),
+                seed_ref=receiver_record.content.seed_ref,
+            )
+            if receiver_record is not None
+            else None
+        )
         self._remember_storyline_file_available(
             system=target_system,
             path=target_path,
             available_at=available_at,
+            source_file=source_file,
         )
         return available_at
 
