@@ -1164,6 +1164,7 @@ class _PublicationFixture:
 def _compiled_ssh_syslog_deployment(
     *,
     missingness: float = 0.0,
+    ecar_missingness: float | None = None,
 ) -> CompiledCollectionDeployment:
     """Return visible concrete eCAR and Syslog host sources for an SSH open."""
 
@@ -1185,7 +1186,11 @@ def _compiled_ssh_syslog_deployment(
                 policy=SourceCollectionPolicy(
                     enabled=True,
                     capabilities=descriptor.capabilities,
-                    missingness=missingness,
+                    missingness=(
+                        ecar_missingness
+                        if format_name == "ecar" and ecar_missingness is not None
+                        else missingness
+                    ),
                 ),
             )
         )
@@ -3022,6 +3027,42 @@ def test_exact_deferred_ssh_open_allows_collection_policy_omission(
     publication.ecar.close()
     publication.zeek.close()
     syslog.close()
+
+
+def test_exact_deferred_ssh_open_allows_syslog_when_ecar_is_policy_dropped(
+    tmp_path: Path,
+) -> None:
+    """A visible Syslog row can publish exact SSH state when eCAR is omitted."""
+
+    syslog_root = tmp_path / "syslog"
+    syslog = SyslogEmitter(load_format("syslog"), syslog_root, threaded=False)
+    publication = _foundation_publication_fixture(
+        DeferredSessionKind.SSH,
+        tmp_path,
+        extra_emitters={"syslog": syslog},
+        include_syslog_context=True,
+        collection_deployment=_compiled_ssh_syslog_deployment(ecar_missingness=1.0),
+    )
+    committed = publication.authority.materialize_prepared_deferred_session_publication(
+        publication.composition,
+        publication.fixture.coordinator,
+        publication.fixture.owner_rng,
+        dispatcher=publication.dispatcher,
+        publication_batch=publication.batch,
+    )
+
+    assert all(outcome.status == "succeeded" for outcome in committed.publication.projections)
+    assert (
+        publication.fixture.state.get_session(publication.fixture.session_plan.identity.logon_id)
+        is not None
+    )
+    publication.ecar.close()
+    publication.zeek.close()
+    syslog.close()
+    rendered = "\n".join(
+        output.read_text(encoding="utf-8") for output in syslog_root.rglob("syslog.log")
+    )
+    assert rendered.count("Accepted password for analyst") == 1
 
 
 class _OpenSyslogSubclass(SyslogEmitter):

@@ -7901,11 +7901,17 @@ class EventDispatcher:
             if id(emitter) not in participant_ids:
                 participant_ids.add(id(emitter))
                 participants.append(emitter)
-        if target_counts["ecar"] != 1:
-            raise EventContractError("Exact SSH terminal projection requires one eCAR target")
+        if target_counts["ecar"] > 1:
+            raise EventContractError(
+                "Exact SSH terminal projection permits at most one eCAR target"
+            )
         if target_counts["syslog"] > 1:
             raise EventContractError(
                 "Exact SSH terminal projection permits at most one Syslog target"
+            )
+        if not participants:
+            raise EventContractError(
+                "Exact SSH terminal projection requires one durable source target"
             )
         return tuple(participants)
 
