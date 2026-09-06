@@ -120,3 +120,7 @@ migration provenance, installed skill references, and package contents.
 - `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock` remain unchanged. The
   `codex/checkpoint-recovery-af8c01f3` branch still resolves to `3942c478d`, and its recovery wheel
   remains untouched. No remote branch was pushed.
+
+The validated implementation commit is `d353e40b2` (`feat: allow behavior-aware checkpoint
+drift`). Local `dev` was integrated by fast-forward only; release versioning and remote publication
+remain deferred to the normal release boundary.
