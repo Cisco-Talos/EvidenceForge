@@ -8528,36 +8528,11 @@ class StorylineMixin:
             if transfer_completed_at is not None
             else plan.receiver_create.timestamp,
         )
-        manager = getattr(self.activity_generator, "_runtime_content_manager", None)
-        receiver_record = (
-            manager.resolve_record(
-                target_system.hostname,
-                target_user,
-                target_path,
-                "linux",
-            )
-            if manager is not None
-            else None
-        )
-        source_file = (
-            CompiledStorageFile(
-                file_id=receiver_record.artifact.artifact_id,
-                version=receiver_record.content.version,
-                share=f"client:{target_system.hostname}",
-                path=target_path,
-                size_bytes=receiver_record.content.size_bytes,
-                mime_type=receiver_record.content.mime_type,
-                tags=("runtime", "scp-receiver"),
-                seed_ref=receiver_record.content.seed_ref,
-            )
-            if receiver_record is not None
-            else None
-        )
         self._remember_storyline_file_available(
             system=target_system,
             path=target_path,
             available_at=available_at,
-            source_file=source_file,
+            source_file=bundle.receiver_source_file,
         )
         return available_at
 

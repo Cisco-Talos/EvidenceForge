@@ -440,6 +440,9 @@ def test_scp_reuses_source_content_identity_and_publishes_exact_receiver_artifac
     assert receiver_record is not None
     assert receiver_record.content == source_record.content
     assert receiver_record.artifact.artifact_id != source_record.artifact.artifact_id
+    assert fixture.scp.receiver_source_file is not None
+    assert fixture.scp.receiver_source_file.file_id == receiver_record.artifact.artifact_id
+    assert fixture.scp.receiver_source_file.size_bytes == receiver_record.content.size_bytes
     source_read, receiver_create = fixture.dispatcher.builders
     assert source_read.file is not None
     assert receiver_create.file is not None

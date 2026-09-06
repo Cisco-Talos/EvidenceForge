@@ -2064,6 +2064,7 @@ class ScpReceiverFileActionBundle:
         )
         self._planned = False
         self._execution_plan: ScpReceiverFileExecutionPlan | None = None
+        self._receiver_source_file: CompiledStorageFile | None = None
 
     @property
     def anchor(self) -> ActionAnchor:
@@ -2074,6 +2075,12 @@ class ScpReceiverFileActionBundle:
             stable_id=self._request.stable_id,
             source=self._request.source,
         )
+
+    @property
+    def receiver_source_file(self) -> CompiledStorageFile | None:
+        """Return the exact receiver placement published by this bundle."""
+
+        return self._receiver_source_file
 
     def plan_execution(self) -> ScpReceiverFileExecutionPlan | None:
         """Freeze exact SSH tuple authority and both endpoint file effects."""
@@ -2115,6 +2122,20 @@ class ScpReceiverFileActionBundle:
             ),
             canonical_content=source_content,
         )
+        if receiver_publication is not None:
+            from evidenceforge.generation.storage_world import CompiledStorageFile
+
+            receiver_record = receiver_publication.record
+            self._receiver_source_file = CompiledStorageFile(
+                file_id=receiver_record.artifact.artifact_id,
+                version=receiver_record.content.version,
+                share=f"client:{self._request.target_system.hostname}",
+                path=self._request.target_path,
+                size_bytes=receiver_record.content.size_bytes,
+                mime_type=receiver_record.content.mime_type,
+                tags=("runtime", "scp-receiver"),
+                seed_ref=receiver_record.content.seed_ref,
+            )
         _publish_prepared_file_occurrences(
             self._executor,
             (
