@@ -1054,3 +1054,21 @@ TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not 
 - **Sibling risks:** preserve transport-before-auth, per-session PID/GUID uniqueness, local Type-2
   behavior, reconnect reuse, explorer/session lifetime, parent visibility, observation-cohort
   integrity, exact retry neutrality, and bounded terminal state.
+
+### Result
+
+- Commit `1597c6436` gives each deferred Type-10 authentication canonical headroom after its exact
+  session winlogon, resolves 4624 caller identity from that session-specific process, and parents
+  RDP winlogon through the live target `smss.exe` when available.
+- Two slow production-path tests and 258 focused routine tests passed. The full routine suite
+  passed 8,228 tests with 5 skipped and 2,004 deselected; Ruff lint and format checks passed across
+  753 files.
+- Supported generation produced 114,255 records. The hard probe found four exact 4624-to-winlogon
+  PID matches, four process-before-logon orderings, distinct PIDs for overlapping sessions, and
+  `smss.exe` parentage on every RDP winlogon.
+- Automated evaluation passed at 96.1263, with all four pillars above 93. Initial blind scores were
+  86, 54, 74, and 74. Required calibration ended unanimously Synthetic at 88, 76, 81, and 82.
+- The repaired PID/order family held under blind review. The panel's strongest adjacent findings
+  are RDP `ParentUser`/`userinit.exe` lifecycle, DHCP timestamp and completion semantics,
+  per-sensor DNS RTT ownership, and TLS analyzer lifecycle coverage. These are retained as the
+  prioritized starting findings for a future loop rather than extending this 15-loop run.
