@@ -23,6 +23,7 @@ from evidenceforge.generation.actions.smb_activity import (
     SmbActivityActionBundle,
     SmbActivityPreparation,
 )
+from evidenceforge.generation.checkpoints import StateManagerParticipant
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.persistent_smb_continuation import (
     PersistentSmbTerminalContinuation,
@@ -1299,6 +1300,63 @@ def test_direct_smbclient_process_terminates_after_transport_completion(
     assert process_rows[0]["timestamp_ms"] < int(result.completed_at.timestamp() * 1000)
     assert int(result.completed_at.timestamp() * 1000) < process_rows[1]["timestamp_ms"]
     assert process_rows[1]["timestamp_ms"] - int(result.completed_at.timestamp() * 1000) <= 15_000
+
+
+@pytest.mark.parametrize("restore_session", [False, True], ids=["live", "checkpoint-restored"])
+def test_persistent_smb_does_not_backdate_client_before_new_session(
+    scenarios_dir: Path,
+    tmp_path: Path,
+    restore_session: bool,
+) -> None:
+    """A just-started session cannot own an SMB client process in its past."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    client = scenario.environment.systems[0]
+    actor = scenario.environment.users[0]
+    source_output = tmp_path / "source"
+    source = GenerationEngine(
+        scenario,
+        source_output,
+        resource_forecast=_forecast(source_output),
+    )
+    active = source
+    try:
+        source._initialize()
+        activity_time = source.start_time + timedelta(minutes=10)
+        logon_id = source.activity_generator.generate_logon(
+            actor,
+            client,
+            activity_time,
+            logon_type=2,
+        )
+        session = source.state_manager.get_session(logon_id)
+        assert session is not None and session.start_time == activity_time
+
+        if restore_session:
+            source_participant = StateManagerParticipant(source.state_manager)
+            seal = source_participant.prepare_checkpoint(1)
+            source_participant.checkpoint_committed(1)
+            source._close_emitters()
+
+            resumed_output = tmp_path / "resumed"
+            active = GenerationEngine(
+                scenario,
+                resumed_output,
+                resource_forecast=_forecast(resumed_output),
+            )
+            active._initialize()
+            StateManagerParticipant(active.state_manager).restore_checkpoint(
+                seal.head.payload,
+                tuple(segment.payload for segment in seal.segments),
+            )
+
+        result = _invoke_windows_read(active, scenario)
+
+        assert len(result.transport_uids) == 1
+        assert active.state_manager.get_session_at(logon_id, activity_time) is not None
+        _assert_transient_authorities_drained(active)
+    finally:
+        active._close_emitters()
 
 
 def test_windows_native_smb_does_not_retire_preferred_desktop_shell(

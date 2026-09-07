@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 2
+current_revision: 3
 history_start_revision: 1
-behavior_surface_sha256: "b70f7c13f032a45e8c1f0597d848f6caba00f07d94fb3ed15ee4657bea4e3f99"
+behavior_surface_sha256: "c182de5514c911ff196045e6b52a889207a0ab341cad831219da9aead64ad047"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -21,3 +21,14 @@ changes:
       - syslog
       - zeek_conn
     summary: Prevents a later SSH transport from reusing an sshd worker owned by an earlier session.
+  - revision: 3
+    id: smb-client-session-start-ordering
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - smb-client-attribution
+    formats:
+      - ecar
+      - windows_security
+      - windows_sysmon
+    summary: Omits SMB client process attribution when no valid post-logon, pre-transport interval exists.

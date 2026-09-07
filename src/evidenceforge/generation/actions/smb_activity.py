@@ -1651,18 +1651,24 @@ class SmbActivityActionBundle:
                 lifecycle=rendered.lifecycle,
             )
 
+        request_time = ensure_utc(self.request.time)
+        session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=500)
+        if session_floor >= request_time:
+            # Preserve session-before-process and process-before-transport ordering by
+            # omitting attribution when the newly logged-on session has no valid window.
+            return PersistentSmbClientProcessPreparation.none()
+
         seed = _stable_seed(
             "persistent-smb-client-process:"
             f"{self.anchor.stable_id}:{client_system.hostname}:{rendered.command_line}"
         )
-        session_floor = ensure_utc(session.start_time) + timedelta(milliseconds=500)
         if rendered.lifecycle == "resident":
             started_at = session_floor + timedelta(milliseconds=seed % 2500)
         else:
-            started_at = ensure_utc(self.request.time) - timedelta(milliseconds=450 + seed % 4551)
+            started_at = request_time - timedelta(milliseconds=450 + seed % 4551)
         started_at = max(session_floor, started_at)
-        if started_at >= ensure_utc(self.request.time):
-            started_at = ensure_utc(self.request.time) - timedelta(milliseconds=100)
+        if started_at >= request_time:
+            started_at = max(session_floor, request_time - timedelta(milliseconds=100))
         parent_pid = self.executor._resolve_existing_prepared_process_parent(
             system=client_system,
             user=self.request.actor,
