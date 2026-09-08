@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 6
+current_revision: 7
 history_start_revision: 1
-behavior_surface_sha256: "6d5ca14bd5ab2067994b67288ed70717e4330b6a3b30b985d0221da28d596740"
+behavior_surface_sha256: "06456f97be440230e68b273fe626303b49f8353acf0c3d143d989357cdbc64bb"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -53,3 +53,10 @@ changes:
       - canonical-timing
     formats: []
     summary: Reuses exact timing-seed encoding, digest extraction, and bounded clock knots without changing samples.
+  - revision: 7
+    id: exact-lifecycle-transport-snapshot-reuse
+    impact: none
+    domains:
+      - network-lifecycle-authority
+    formats: []
+    summary: Reuses bounded immutable terminal transport snapshots for exact lifecycle validation without changing output.

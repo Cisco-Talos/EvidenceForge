@@ -7011,8 +7011,7 @@ class _LifecycleRoutes:
     def remove_locked(self, kind: str, semantic_id: str) -> bool:
         route_hash = self._route_hash(kind, semantic_id)
         shard = self._shards[route_hash % self._shard_count]
-        if kind in {"service", "transport"}:
-            shard.snapshot_cache.pop((kind, semantic_id), None)
+        shard.snapshot_cache.pop((kind, semantic_id), None)
         if kind in _PACKED_ROUTE_KINDS:
             route_map = shard.packed_maps.get(kind)
             if route_map is None or route_map.pop_digest(route_hash) is None:
@@ -15442,9 +15441,17 @@ class LifecycleRegistry:
     def transport_for_transport_id(self, transport_id: str) -> TransportLifecycleSnapshot | None:
         """Resolve one transport through the canonical network-plan ID route."""
 
-        locator = self._routes.get("transport_id", transport_id)
+        locator, cached = self._routes.get_entity_with_cached_snapshot(
+            "transport_id",
+            transport_id,
+        )
         if not isinstance(locator, int):
             return None
+        if (
+            isinstance(cached, TransportLifecycleSnapshot)
+            and cached.identity.transport_id == transport_id
+        ):
+            return cached
         partition_id, handle = self._decode_session_locator(locator)
         snapshot = self._partitions[partition_id].get_transport_by_handle(
             handle,
@@ -15452,6 +15459,10 @@ class LifecycleRegistry:
         )
         if snapshot is None or snapshot.identity.transport_id != transport_id:
             return None
+        if snapshot.closed_at is not None:
+            with self._routes.locked((("transport_id", transport_id),)):
+                if self._routes.get_locked("transport_id", transport_id) == locator:
+                    self._routes.cache_snapshot_locked("transport_id", transport_id, snapshot)
         return snapshot
 
     def transport_for_uid(self, zeek_uid: str) -> TransportLifecycleSnapshot | None:

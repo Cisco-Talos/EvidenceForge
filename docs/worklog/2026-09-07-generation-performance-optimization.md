@@ -119,6 +119,50 @@ semantic fallback was needed, so no timestamps, generated identifiers, ordering,
 meanings, or resume policy changed. The cumulative accepted-stage median improvement from the
 pre-optimization 922.78-second SMB macro baseline to 841.89 seconds is **8.77%**.
 
+### Target 3: lifecycle authority and registry maintenance — paused during exact evaluation
+
+Three exact designs have been investigated. No lifecycle optimization has been retained or
+committed, and no semantic fallback has been attempted.
+
+1. Disarming the weak-reference collection callback after a receipt was acknowledged eliminated
+   the `lifecycle_authority.remove_collected` profile leaf (2.40% to zero), but aggregate focused
+   acknowledgement throughput was neutral. Its all-source profile improved from 858.52 to 814.55
+   seconds, while the complete macro median improved only 0.36% (803.31 to 800.41 seconds) and peak
+   RSS rose 4.47%. The historical fixture was mathematically unable to finish within its 1%
+   regression gate after two candidate runs; its best possible candidate median was 225.16 seconds
+   against 222.11 seconds (1.37% slower). The design was rejected and fully reverted.
+2. Eagerly publishing a bounded immutable terminal transport-ID snapshot at every closed physical
+   transport improved repeated focused lookup from approximately 102,578 to 647,244 operations per
+   second (**84.2%**). It reduced the residual profile from 858.52 to 829.63 seconds and peak RSS by
+   5.77%, but the all-source macro median regressed 1.31% (802.33 to 812.83 seconds). The eager
+   insertion cost applies to transports that never need this lookup, so this design was rejected.
+3. The current uncommitted candidate retains the same bounded exact snapshot but creates it lazily
+   after the first terminal transport-ID lookup. The focused repeated-lookup improvement remains
+   about 84%. Its residual profile completed in 856.19 seconds (0.27% faster than the accepted
+   timing build) with peak RSS of 1,323,548,672 bytes (8.37% lower). In that profile,
+   `events/lifecycle.py:__post_init__` inclusive share fell to 0.72% and transport-row decoding to
+   1.48%.
+
+The lazy candidate's all-source macro comparison was explicitly paused after the current B1 run:
+
+| Build | A1 | B1 | B2 | A2 | A3 | B3 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Accepted timing A (`ffc034d25`) | 896.69 | — | — | — | — | — | incomplete |
+| Lazy lifecycle candidate B | — | 870.14 | — | — | — | — | incomplete |
+
+B1 was 2.96% faster than the adjacent A1 run. Peak RSS was 1,469,890,560 bytes for A1 and
+1,432,109,056 bytes for B1 (2.57% lower). This single adjacent pair is not sufficient evidence for
+retention. Both bundles verified successfully, and direct comparison found all 278 `data/**` files
+byte-identical.
+
+Pause state (2026-09-08): the candidate implementation, focused test, and provisional
+generation-behavior revision 7 are checkpointed together for safe branch handoff. This checkpoint
+is not a retention decision. No changelog entry has been added because the macro comparison is
+incomplete. Resume the required `A-B-B-A-A-B` sequence with B2, then A2, A3, and B3. If the macro
+gate passes, run the historical-fixture, deterministic-sidecar, checkpoint/resume, behavior-surface,
+and focused lifecycle gates before deciding whether to retain the candidate. Do not treat revision
+7 as accepted until those gates pass.
+
 ## Reusable profiling capability
 
 - `eforge generate --profile` is a hidden developer option. The default path does not construct or
