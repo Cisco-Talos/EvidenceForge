@@ -2927,6 +2927,7 @@ class NetworkTransactionRuntime:
                         canonical_close,
                     ),
                     automatic=automatic,
+                    requested_source_port=None if automatic else source_port,
                 )
 
             occurrence_id = _network_transport_occurrence_stable_id(

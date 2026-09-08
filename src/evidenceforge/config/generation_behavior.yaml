@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 3
+current_revision: 4
 history_start_revision: 1
-behavior_surface_sha256: "c182de5514c911ff196045e6b52a889207a0ab341cad831219da9aead64ad047"
+behavior_surface_sha256: "755f7a332109f3691b106c2b123cfa039b6eb39df43a52cb10999875c6c34aa5"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -32,3 +32,14 @@ changes:
       - windows_security
       - windows_sysmon
     summary: Omits SMB client process attribution when no valid post-logon, pre-transport interval exists.
+  - revision: 4
+    id: machine-auth-authoritative-port-preview
+    impact: localized
+    domains:
+      - network-transport-allocation
+      - windows-machine-authentication
+    formats:
+      - ecar
+      - windows_security
+      - zeek_conn
+    summary: Prevents machine-account LDAP or SMB authentication from selecting a source port whose canonical interval is already leased.

@@ -10534,6 +10534,80 @@ class TestActivityGenerator:
 
         assert allocated == 45653
 
+    def test_ephemeral_allocator_skips_authoritative_runtime_interval(
+        self,
+        activity_gen,
+    ):
+        """Preview allocation must honor leases not exposed through compatibility state."""
+
+        event_time = datetime(2024, 3, 18, 17, 50, tzinfo=UTC)
+        opened_at = event_time - timedelta(seconds=1)
+        closed_at = event_time + timedelta(seconds=10)
+        runtime = activity_gen._network_transaction_runtime
+        preparation = runtime.begin(
+            owner_rng=random.Random(19),
+            stable_id="existing-ldap-transport",
+            linearization_time=opened_at,
+        )
+        preparation.reserve_transport_tuple(
+            intent_stable_id="existing-ldap-transport",
+            src_ip="10.10.4.10",
+            source_port=52_000,
+            dst_ip="10.10.2.10",
+            dst_port=389,
+            protocol="tcp",
+            opened_at=opened_at,
+            closed_at=closed_at,
+            source_os_category="windows",
+        )
+
+        candidates = iter([52_000, 52_001])
+        try:
+            with patch.object(
+                generator_module,
+                "_ephemeral_port",
+                side_effect=lambda rng, os_category="windows": next(candidates),
+            ):
+                allocated = activity_gen._allocate_ephemeral_port(
+                    "10.10.4.10",
+                    "10.10.2.10",
+                    389,
+                    "tcp",
+                    event_time,
+                    "windows",
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                )
+        finally:
+            preparation.cancel()
+
+        assert allocated == 52_001
+
+    def test_machine_account_port_preview_covers_remote_auth_interval(
+        self,
+        activity_gen,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Machine LDAP/SMB port previews must cover their complete transport window."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        allocator = Mock(side_effect=[51_000, 52_000])
+        monkeypatch.setattr(activity_gen, "_allocate_ephemeral_port", allocator)
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        service_call = next(call for call in allocator.call_args_list if call.args[2] in {389, 445})
+        assert service_call.kwargs["opened_at"] == timestamp - timedelta(seconds=1)
+        assert service_call.kwargs["closed_at"] > timestamp
+
     def test_recent_connection_tuple_cache_prunes_stale_entries(self, activity_gen):
         """Tuple reservations older than the reuse window should be removed by event time."""
         old_time = datetime(2024, 3, 17, 12, 0, tzinfo=UTC)

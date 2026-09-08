@@ -8689,13 +8689,28 @@ class ActivityGenerator:
         proto: str,
         time: datetime,
         os_category: str,
+        *,
+        opened_at: datetime | None = None,
+        closed_at: datetime | None = None,
     ) -> int:
-        """Allocate an ephemeral port while avoiding exact 5-tuple reuse."""
+        """Allocate an ephemeral port while avoiding exact 5-tuple reuse.
+
+        ``opened_at`` and ``closed_at`` describe the eventual canonical transport
+        interval when it is already bounded by the caller. Compatibility callers
+        that only need an event-time preview retain the one-microsecond probe.
+        """
         rng = _get_rng()
         reuse_window = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS
+        runtime = self._network_transaction_runtime
+        canonical_open = ensure_utc(opened_at or time)
+        canonical_close = ensure_utc(closed_at) if closed_at is not None else canonical_open
+        if canonical_close < canonical_open:
+            raise ValueError("Ephemeral-port availability interval cannot close before it opens")
+        if canonical_close == canonical_open:
+            canonical_close += timedelta(microseconds=1)
         for _ in range(128):
             src_port = _ephemeral_port(rng, os_category)
-            if not self._connection_tuple_recently_used(
+            if self._connection_tuple_recently_used(
                 src_ip,
                 src_port,
                 dst_ip,
@@ -8704,16 +8719,25 @@ class ActivityGenerator:
                 time,
                 reuse_window=reuse_window,
             ):
-                self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
-                return src_port
+                continue
+            if not runtime.transport_tuple_interval_available(
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol=proto,
+                opened_at=canonical_open,
+                closed_at=canonical_close,
+            ):
+                continue
+            self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
+            return src_port
         low, high = (32_768, 60_999) if os_category == "linux" else (49_152, 65_535)
         size = high - low + 1
         start = rng.randrange(size)
         stride = rng.randrange(1, size + 1)
         while math.gcd(stride, size) != 1:
             stride = 1 if stride == size else stride + 1
-        runtime = self._network_transaction_runtime
-        instantaneous_close = ensure_utc(time) + timedelta(microseconds=1)
         for offset in range(size):
             src_port = low + ((start + offset * stride) % size)
             if self._connection_tuple_recently_used(
@@ -8732,8 +8756,8 @@ class ActivityGenerator:
                 dst_ip=dst_ip,
                 dst_port=dst_port,
                 protocol=proto,
-                opened_at=ensure_utc(time),
-                closed_at=instantaneous_close,
+                opened_at=canonical_open,
+                closed_at=canonical_close,
             ):
                 continue
             self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
@@ -33763,6 +33787,14 @@ class ActivityGenerator:
             "tcp",
             time,
             self._os_for_ip(source_ip),
+            opened_at=ensure_utc(time) - timedelta(seconds=1),
+            closed_at=ensure_utc(time)
+            + timedelta(
+                seconds=remote_auth_transport_max_duration_seconds(
+                    source="machine_account_logon",
+                    outcome="success",
+                )
+            ),
         )
         remote_request = WindowsRemoteAuthenticationRequest(
             target_system=target_system,
