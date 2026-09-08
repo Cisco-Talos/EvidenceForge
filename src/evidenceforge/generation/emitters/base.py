@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Condition, Event, Lock, Thread, get_ident
+from time import thread_time_ns
 from typing import Any
 from weakref import ReferenceType, ref
 
@@ -1052,6 +1053,7 @@ class _FlushRequest:
 
     def __init__(self) -> None:
         self.completed = Event()
+        self.worker_cpu_ns: int | None = None
 
 
 class _ExactPublicationDrainRequest:
@@ -1174,6 +1176,8 @@ class LogEmitter(ABC):
         self._stop_event: Event | None = None
         self._thread: Thread | None = None
         self._thread_error: Exception | None = None
+        self._profiling_enabled = False
+        self._profiling_worker_cpu_ns: int | None = None
         # behavior-surface: checkpoint-control-start
         self._verification_discard = False
         # behavior-surface: checkpoint-control-end
@@ -1210,6 +1214,21 @@ class LogEmitter(ABC):
     def configure_output_target(self, target: str | OutputTarget | None) -> None:
         """Configure the generated-output target for this emitter."""
         self.output_target = normalize_output_target(target)
+
+    def profiling_snapshot(self) -> dict[str, int | None]:
+        """Return low-cost counters at a completed emitter barrier."""
+
+        queue_depth = self._event_queue.qsize() if self._event_queue is not None else 0
+        return {
+            "rendered_rows": int(self.event_count),
+            "queue_depth": queue_depth,
+            "worker_cpu_ns": self._profiling_worker_cpu_ns,
+        }
+
+    def enable_profiling_metrics(self) -> None:
+        """Enable opt-in worker CPU snapshots at later barriers."""
+
+        self._profiling_enabled = True
 
     @property
     def supports_exact_projection_publication(self) -> bool:
@@ -1436,6 +1455,9 @@ class LogEmitter(ABC):
             )
             self._stop_event.set()
         finally:
+            if self._profiling_enabled:
+                queue_item.worker_cpu_ns = thread_time_ns()
+                self._profiling_worker_cpu_ns = queue_item.worker_cpu_ns
             _EXACT_PREFIX_BARRIER_EMITTER.reset(barrier_token)
             queue_item.completed.set()
         return True

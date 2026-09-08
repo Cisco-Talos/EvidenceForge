@@ -37,6 +37,11 @@ from evidenceforge.composition import compile_scenario
 from evidenceforge.composition.artifacts import RESOLVED_SCENARIO_FILENAME
 from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.profiling import (
+    GENERATION_PROFILE_FILENAME,
+    GenerationProfileDocument,
+    GenerationProfiler,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
 
@@ -48,6 +53,101 @@ def _snapshot_generated_files(root: Path) -> dict[str, bytes]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name not in {"generation.log", "GENERATION_MANIFEST.json"}
     }
+
+
+def test_opt_in_profiling_preserves_deterministic_bundle_bytes(tmp_path: Path) -> None:
+    """Profiling may add one diagnostic sidecar but cannot alter generated evidence."""
+
+    scenario_data = load_yaml(
+        Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    )
+    scenario_data["time_window"]["warmup"] = "1h"
+    scenario_data["baseline_activity"]["intensity"] = "low"
+    scenario = Scenario(**scenario_data)
+    unprofiled_root = tmp_path / "unprofiled"
+    profiled_root = tmp_path / "profiled"
+
+    GenerationEngine(
+        scenario,
+        unprofiled_root / "data",
+        ground_truth_dir=unprofiled_root,
+    ).generate()
+    GenerationEngine(
+        scenario,
+        profiled_root / "data",
+        ground_truth_dir=profiled_root,
+        profiler=GenerationProfiler(
+            scenario=scenario.name,
+            generation_seed=scenario.generation_seed,
+            output_target="default",
+            selected_formats=tuple(log["format"] for log in scenario.output.logs),
+            source_root=Path.cwd(),
+        ),
+    ).generate()
+
+    assert (profiled_root / GENERATION_PROFILE_FILENAME).is_file()
+    assert not (unprofiled_root / GENERATION_PROFILE_FILENAME).exists()
+    profile_document = json.loads(
+        (profiled_root / GENERATION_PROFILE_FILENAME).read_text(encoding="utf-8")
+    )
+    assert profile_document["emitters"]["windows_event_security"]["rendered_rows"] > 0
+    assert profile_document["emitters"]["windows_event_sysmon"]["rendered_rows"] > 0
+    assert profile_document["emitters"]["zeek_conn"]["rendered_rows"] > 0
+    ignored = {"generation.log", "GENERATION_MANIFEST.json", GENERATION_PROFILE_FILENAME}
+    unprofiled = {
+        path.relative_to(unprofiled_root).as_posix(): path.read_bytes()
+        for path in unprofiled_root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }
+    profiled = {
+        path.relative_to(profiled_root).as_posix(): path.read_bytes()
+        for path in profiled_root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }
+    assert profiled == unprofiled
+
+
+def test_profile_metric_failure_degrades_report_without_failing_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional profile probes cannot compromise an otherwise valid bundle."""
+
+    scenario_data = load_yaml(
+        Path(__file__).parent.parent / "fixtures" / "scenarios" / "minimal.yaml"
+    )
+    scenario_data["time_window"]["warmup"] = "1h"
+    scenario_data["baseline_activity"]["intensity"] = "low"
+    scenario = Scenario(**scenario_data)
+    bundle_root = tmp_path / "degraded-profile"
+    profiler = GenerationProfiler(
+        scenario=scenario.name,
+        generation_seed=scenario.generation_seed,
+        output_target="default",
+        selected_formats=tuple(log["format"] for log in scenario.output.logs),
+        source_root=Path.cwd(),
+    )
+
+    def fail_final_metrics(_snapshots: object) -> None:
+        raise RuntimeError("injected metric-provider failure")
+
+    monkeypatch.setattr(profiler, "record_final_emitters", fail_final_metrics)
+
+    GenerationEngine(
+        scenario,
+        bundle_root / "data",
+        ground_truth_dir=bundle_root,
+        profiler=profiler,
+    ).generate()
+
+    profile_document = GenerationProfileDocument.model_validate_json(
+        (bundle_root / GENERATION_PROFILE_FILENAME).read_text(encoding="utf-8")
+    )
+    assert profile_document.generation_status == "completed"
+    assert profile_document.degraded
+    assert profile_document.warnings == (
+        "Unable to capture final emitter profile metrics: injected metric-provider failure",
+    )
 
 
 def _linux_smb_scenario_path() -> Path:

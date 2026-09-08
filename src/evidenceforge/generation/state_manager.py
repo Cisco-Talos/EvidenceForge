@@ -4278,6 +4278,40 @@ class StateManager:
             _SmbFileMutationJournalCapability,
         ] = {}
 
+    def profiling_metrics(self) -> dict[str, int | float | bool]:
+        """Return low-cost structural metrics for hour-level diagnostics."""
+
+        with self._lock:
+            active_sessions = self._active_sessions.metrics()
+            running_processes = self._running_processes.metrics()
+            running_threads = self._running_threads.metrics()
+            open_connections = self._open_connections.metrics()
+            connection_expirations = self._connection_expirations.metrics()
+            ended_sessions = self._ended_sessions.metrics()
+            ended_processes = self._ended_processes_by_key.metrics()
+            ended_threads = self._ended_threads.metrics()
+            return {
+                "active_sessions": active_sessions.live_entries,
+                "active_sessions_backing": active_sessions.backing_entries,
+                "running_processes": running_processes.live_entries,
+                "running_processes_backing": running_processes.backing_entries,
+                "running_threads": running_threads.live_entries,
+                "running_threads_backing": running_threads.backing_entries,
+                "open_connections": open_connections.live_entries,
+                "open_connections_backing": open_connections.backing_entries,
+                "connection_expirations": connection_expirations.live_entries,
+                "connection_expiration_stale": connection_expirations.stale_entries,
+                "ended_sessions": ended_sessions.live_entries,
+                "ended_session_stale": ended_sessions.stale_entries,
+                "ended_processes": ended_processes.live_entries,
+                "ended_process_stale": ended_processes.stale_entries,
+                "ended_threads": ended_threads.live_entries,
+                "ended_thread_stale": ended_threads.stale_entries,
+                "materialization_version": self._materialization_version,
+                "pid_allocations": self._pid_allocation_count,
+                "pid_candidate_probes": self._pid_candidate_probe_count,
+            }
+
     @property
     def materialization_version(self) -> int:
         """Return the monotonic start-publication fence for prepared dispatches."""

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 3
+current_revision: 4
 history_start_revision: 1
-behavior_surface_sha256: "c182de5514c911ff196045e6b52a889207a0ab341cad831219da9aead64ad047"
+behavior_surface_sha256: "e7c329ec9c09e314ffc33de7713c751472d12760b422d7fc4c02b16e7a10e909"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -32,3 +32,10 @@ changes:
       - windows_security
       - windows_sysmon
     summary: Omits SMB client process attribution when no valid post-logon, pre-transport interval exists.
+  - revision: 4
+    id: opt-in-generation-profiling
+    impact: none
+    domains:
+      - all-generation
+    formats: []
+    summary: Adds opt-in diagnostic instrumentation without changing deterministic rendered output.

@@ -34,6 +34,7 @@ import math
 import random
 import sqlite3
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -91,6 +92,7 @@ if TYPE_CHECKING:
         IncrementalCheckpointParticipant,
     )
     from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+    from evidenceforge.generation.profiling import GenerationProfiler
 
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
 _RUNTIME_RETIREMENT_HOURS = 6
@@ -144,6 +146,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         checkpoint_recovery: CheckpointRecovery | None = None,
         checkpoint_synchronization_hook: Callable[[CheckpointCursor], None] | None = None,
         graceful_interrupt_requested: Callable[[], bool] | None = None,
+        profiler: GenerationProfiler | None = None,
     ):
         """Initialize generation engine.
 
@@ -170,6 +173,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 wiring exposes it only through the guarded pytest environment seam.
             graceful_interrupt_requested: Process-local cancellation latch checked only at safe
                 completed-hour boundaries.
+            profiler: Optional process-local generation profiler. It does not participate in
+                deterministic state, fingerprints, or checkpoint recovery.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -235,6 +240,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._checkpoint_recovery = checkpoint_recovery
         self._checkpoint_synchronization_hook = checkpoint_synchronization_hook
         self._graceful_interrupt_requested = graceful_interrupt_requested
+        self.profiler = profiler
         self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -287,8 +293,17 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             event_type: Type of progress event (e.g., "phase_start", "hour_progress")
             data: Event-specific data payload
         """
+        if self.profiler is not None:
+            self.profiler.observe_progress(event_type, data)
         if self.progress_callback:
             self.progress_callback(event_type, data)
+
+    def _profile_span(self, name: str) -> AbstractContextManager[None]:
+        """Return one optional low-frequency profiler span."""
+
+        if self.profiler is None:
+            return nullcontext()
+        return self.profiler.span(name)
 
     def _checkpoint_after_completed_hour(
         self,
@@ -413,11 +428,27 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         if not self._generate_owner.acquire(blocking=False):
             raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
+        profiler = self.profiler
         try:
+            if profiler is not None and not profiler.started:
+                cursor = (
+                    None
+                    if self._checkpoint_recovery is None
+                    else self._checkpoint_recovery.manifest.cursor.model_dump(mode="json")
+                )
+                profiler.start(starting_cursor=cursor)
             with effective_config_scope(self.compiled_scenario.effective_config):
                 with generation_seed_scope(self.generation_seed):
                     reset_thread_rng()
                     self._generate_scoped()
+        except GenerationSuspendedError:
+            if profiler is not None:
+                profiler.finish("suspended")
+            raise
+        except BaseException:
+            if profiler is not None:
+                profiler.finish("failed")
+            raise
         finally:
             self._generate_owner.release()
 
@@ -616,7 +647,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 "phase_start",
                 {"phase": "initialize", "description": "Initializing generation engine"},
             )
-            self._initialize()
+            with self._profile_span("generation.initialize"):
+                self._initialize()
             recovery = self._checkpoint_recovery
             if recovery is not None:
                 controller = self._checkpoint_controller
@@ -640,13 +672,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._report_progress(
                 "phase_start", {"phase": "baseline", "description": "Generating baseline activity"}
             )
-            self._generate_baseline(
-                resume_cursor=(
-                    None
-                    if self._checkpoint_recovery is None
-                    else self._checkpoint_recovery.manifest.cursor
+            with self._profile_span("generation.baseline"):
+                self._generate_baseline(
+                    resume_cursor=(
+                        None
+                        if self._checkpoint_recovery is None
+                        else self._checkpoint_recovery.manifest.cursor
+                    )
                 )
-            )
             self._report_progress("phase_end", {"phase": "baseline"})
 
             # Phase 6.3: Execute remaining storyline events not covered by baseline hours
@@ -667,10 +700,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             "description": f"Executing {len(remaining)} remaining storyline events",
                         },
                     )
-                    for idx in remaining:
-                        self._execute_single_storyline_event(idx)
-                        self._storyline_executed.add(idx)
-                    self._barrier_flush_all_emitters()
+                    with self._profile_span("generation.remaining_storyline"):
+                        for idx in remaining:
+                            self._execute_single_storyline_event(idx)
+                            self._storyline_executed.add(idx)
+                        self._barrier_flush_all_emitters()
                     self._report_progress("phase_end", {"phase": "storyline"})
 
             # Execute remaining red herring events not covered by baseline hours
@@ -684,10 +718,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     logger.info(
                         f"Executing {len(remaining_rh)} remaining red herring events (outside baseline window)"
                     )
-                    for idx in remaining_rh:
-                        self._execute_single_red_herring_event(idx)
-                        self._red_herring_executed.add(idx)
-                    self._barrier_flush_all_emitters()
+                    with self._profile_span("generation.remaining_red_herrings"):
+                        for idx in remaining_rh:
+                            self._execute_single_red_herring_event(idx)
+                            self._red_herring_executed.add(idx)
+                        self._barrier_flush_all_emitters()
             self._generation_body_completed = True
         except GenerationSuspendedError:
             raise
@@ -695,7 +730,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._abort_failed_generation(primary)
             raise
         else:
-            self._finalize_successfully_with_progress(description="Finalizing generation")
+            with self._profile_span("generation.finalization"):
+                self._finalize_successfully_with_progress(description="Finalizing generation")
 
         self._complete_generation_outputs()
 
@@ -805,6 +841,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
 
         write_resolved_scenario(self.compiled_scenario, self.ground_truth_dir)
+        if self.profiler is not None:
+            try:
+                self.profiler.record_final_emitters(
+                    {
+                        str(format_name): emitter.profiling_snapshot()
+                        for format_name, emitter in self.emitters.items()
+                    }
+                )
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                self.profiler.mark_degraded(
+                    f"Unable to capture final emitter profile metrics: {exc}"
+                )
+            self.profiler.finish("completed")
+            self.profiler.write(self.ground_truth_dir)
         write_generation_manifest(
             self.compiled_scenario,
             self.ground_truth_dir,

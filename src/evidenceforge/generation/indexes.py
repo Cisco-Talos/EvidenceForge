@@ -1285,6 +1285,26 @@ class IndexedEntityStore(MutableMapping[K, V], Generic[K, V]):
         bucket = self._indexes[index_name].get(indexed_value, {})
         return tuple(key for key in bucket if key in self._items)
 
+    def metrics(self, *, estimate_bytes: bool = False) -> IndexMetrics:
+        """Return constant-time primary cardinality for diagnostics."""
+
+        live_entries = len(self._items)
+        estimated_bytes = 0
+        if estimate_bytes:
+            estimated_bytes = (
+                sys.getsizeof(self)
+                + sys.getsizeof(self._items)
+                + sys.getsizeof(self._indexes)
+                + sys.getsizeof(self._indexed_values)
+            )
+        return IndexMetrics(
+            live_entries=live_entries,
+            backing_entries=live_entries,
+            high_water_mark=live_entries,
+            estimated_bytes=estimated_bytes,
+            primary_map_entries=live_entries,
+        )
+
 
 class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
     """Key/value storage with ordered deadline eviction and stale-heap repair."""
