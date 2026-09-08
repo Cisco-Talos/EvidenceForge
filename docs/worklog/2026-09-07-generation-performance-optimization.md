@@ -8,6 +8,59 @@ hotspot was optimized and no implementation language was selected in this phase.
 
 Working branch: `codex/generation-performance-optimization`
 
+## Exact-first Python optimization campaign
+
+The follow-on campaign is in progress. Every retained change starts with exact-output designs; no
+alternate language or native dependency is in scope. The profiler foundation was committed as
+`946a15698`, followed by checkpoint-inventory correction `bff4bf7cc` after the first real
+checkpoint attempt found that the new process-local `profiler` field had not been classified as
+deterministically rebuilt. The corrected foundation now suspends normally, and a resumed
+invocation keeps only its own profiler.
+
+### Target 1: SMB connection state validation and encoding — retained, exact
+
+Three exact designs were evaluated together after isolated measurements:
+
+1. Collapse duplicate full canonical validation inside one locked transition, while preserving a
+   final public-plan validation before materialization leaves the lock.
+2. Use exact-type, callback-safe validate-only text and integer paths for hostile map/index keys,
+   avoiding temporary encoded-byte allocations. The ASCII path validates character and UTF-8 byte
+   bounds without encoding, while non-ASCII and invalid-surrogate behavior remains exact.
+3. Reuse the already-validated active authority record supplied by the commit claim after an exact
+   identity/type check, rather than resolving and validating it again during the same transition.
+
+The first duplicate-validation design improved the small lifecycle microbenchmark by 12.4%, below
+the 15% focused gate. The combined candidate improved the representative large-index SMB auth path
+from 233.76 to 297.97 operations/second (**21.55%**) and reduced full canonical validation calls per
+materialization from seven to four (**42.9%**).
+
+The interleaved `A-B-B-A-A-B` all-source macro runs completed in this order:
+
+| Build | A1 | B1 | B2 | A2 | A3 | B3 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Foundation A | 959.63 | — | — | 919.24 | 922.78 | — | 922.78 s |
+| SMB candidate B | — | 878.38 | 858.28 | — | — | 870.77 | 870.77 s |
+
+The candidate improved representative whole-run median wall time by **5.64%**. The equivalent
+historical-fixture sequence produced medians of 230.51 seconds for A and 226.79 seconds for B, a
+1.61% improvement rather than a regression. A residual all-source profile completed in 874.74
+profiled seconds with 1,464,909,824 bytes peak RSS, a 0.36% increase from the 1,459,585,024-byte
+foundation profile. Residual SMB-exclusive cost was approximately 10.2%, down about 36% from the
+15.95% foundation share.
+
+All six macro bundles had the same 278-file data inventory digest,
+`9490a9fc69ff65f05043cc4727516ae538b98b9055efcbb75eeacaf7e3fbb2e1`. Direct output-equivalence
+comparison found byte-identical `data/**` and deterministic sidecars. The candidate also resumed a
+checkpoint created by the corrected pre-SMB foundation at simulated hour one, completed the two
+collection hours, passed verification for all 287 manifest entries, and was byte-identical to an
+uninterrupted candidate bundle. The CLI conservatively classified the changed-build resume as
+compatible with output equivalence not guaranteed; empirical comparison established exact output
+for this transition.
+
+Decision: **retain as exact**. Generation behavior revision 5 records `impact: none`, domain
+`smb-connection-lifecycle`, and no affected formats. All 25 concrete log formats remain
+byte-identical. No semantic fallback was evaluated or justified.
+
 ## Reusable profiling capability
 
 - `eforge generate --profile` is a hidden developer option. The default path does not construct or

@@ -6,8 +6,17 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+**Performance**
+
+- Reduced exact SMB connection-state validation work by collapsing redundant validation within
+  locked transitions, retaining already-validated authority state, and avoiding temporary text and
+  integer encodings during callback-safe key checks. The representative all-source median improved
+  by 5.64%; all 25 concrete log formats and deterministic sidecars remain byte-identical.
+
 **Fixed**
 
+- Kept the opt-in generation profiler outside checkpoint payloads so checkpoint-enabled generation
+  can suspend and each resumed invocation retains only its own profiling state.
 - Prevented a later SSH transport that reuses a completed network tuple from inheriting the
   earlier session's `sshd` worker, including when resuming a legacy checkpoint with a retained
   window-long responder binding.

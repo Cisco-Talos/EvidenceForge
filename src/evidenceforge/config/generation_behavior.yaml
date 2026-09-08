@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 4
+current_revision: 5
 history_start_revision: 1
-behavior_surface_sha256: "e7c329ec9c09e314ffc33de7713c751472d12760b422d7fc4c02b16e7a10e909"
+behavior_surface_sha256: "4c50ec31f68b5a33c91e4df969ea979403f3144904f74c2fcef85b66991d229c"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -39,3 +39,10 @@ changes:
       - all-generation
     formats: []
     summary: Adds opt-in diagnostic instrumentation without changing deterministic rendered output.
+  - revision: 5
+    id: exact-smb-validation-fast-paths
+    impact: none
+    domains:
+      - smb-connection-lifecycle
+    formats: []
+    summary: Reuses SMB validation inside locked transitions and avoids temporary encodings without changing output.

@@ -7062,7 +7062,10 @@ class StateManager:
                     end_time=effective_end,
                 ),
             )
-            self._validate_smb_connection_finalization_binding_public(binding)
+            # The public pin, canonical owner, detached values, digest, and token were all
+            # validated or constructed above while this lock remained held. Re-running the
+            # public boundary validator here would repeat the complete canonical-index scan
+            # without creating an additional trust boundary.
             return binding
 
     def _preflight_smb_connection_finalizer_builder_entry_safe(
@@ -7193,10 +7196,6 @@ class StateManager:
                 raise StateError("Action cohort State time changed before sealing")
             if builder._boot_times:
                 raise StateError("Action cohort materialization cannot stage host boot times")
-            if builder._smb_connection_finalization is not None:
-                self._validate_smb_connection_finalization_binding_public(
-                    builder._smb_connection_finalization
-                )
             sessions = tuple(builder._action_sessions)
             processes = tuple(builder._processes)
             if not any(
@@ -12314,6 +12313,11 @@ class StateManager:
             self._prepare_smb_connection_finalization_from_binding_locked(
                 plan._smb_connection_finalization,
                 claim=smb_connection_claim,
+                validated_active=(
+                    smb_connection_claim.expected_active
+                    if smb_connection_claim is not None
+                    else None
+                ),
             )
             if plan._smb_connection_finalization is not None
             else None
@@ -16400,6 +16404,29 @@ class StateManager:
         return b"".join(len(value).to_bytes(8, "big") + value for value in values)
 
     @staticmethod
+    def _validate_smb_connection_text(
+        value: str,
+        *,
+        label: str,
+        allow_blank: bool = False,
+    ) -> None:
+        """Validate one bounded exact string without allocating bytes for ASCII values."""
+
+        if type(value) is not str:
+            raise StateError(f"SMB connection {label} must be an exact string")
+        if len(value) > _MAX_SMB_CONNECTION_PIN_TEXT_UTF8_BYTES:
+            raise StateError(f"SMB connection {label} exceeds its bounded length")
+        if not value.isascii():
+            try:
+                encoded = value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise StateError(f"SMB connection {label} is not valid UTF-8") from exc
+            if len(encoded) > _MAX_SMB_CONNECTION_PIN_TEXT_UTF8_BYTES:
+                raise StateError(f"SMB connection {label} exceeds its bounded UTF-8 length")
+        if not allow_blank and (not value or value.isspace()):
+            raise StateError(f"SMB connection {label} cannot be blank")
+
+    @staticmethod
     def _bounded_smb_connection_text(
         value: str,
         *,
@@ -16418,9 +16445,22 @@ class StateManager:
             raise StateError(f"SMB connection {label} is not valid UTF-8") from exc
         if len(encoded) > _MAX_SMB_CONNECTION_PIN_TEXT_UTF8_BYTES:
             raise StateError(f"SMB connection {label} exceeds its bounded UTF-8 length")
-        if not allow_blank and not value.strip():
+        if not allow_blank and (not value or value.isspace()):
             raise StateError(f"SMB connection {label} cannot be blank")
         return encoded
+
+    @staticmethod
+    def _validate_smb_connection_int(
+        value: int,
+        *,
+        label: str,
+        minimum: int = 0,
+        maximum: int = _MAX_SMB_CONNECTION_TRAFFIC_VALUE,
+    ) -> None:
+        """Validate one bounded exact integer without allocating its encoded form."""
+
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise StateError(f"SMB connection {label} must be between {minimum} and {maximum}")
 
     @staticmethod
     def _bounded_smb_connection_int(
@@ -17639,17 +17679,28 @@ class StateManager:
         binding: _SmbConnectionFinalizationBinding,
         *,
         claim: _SmbConnectionFinalizationClaim | None = None,
+        validated_active: _SmbConnectionPinCapability | None = None,
     ) -> _SmbConnectionFinalizationPreparation:
         """Prebuild every terminal owner before the reversible State write tail."""
 
-        active = (
-            self._validate_smb_connection_finalization_binding_public(binding)
-            if claim is None
-            else self._validate_smb_connection_finalization_claim_locked(
-                claim,
-                binding=binding,
+        if validated_active is not None:
+            if (
+                type(validated_active) is not _SmbConnectionPinCapability
+                or claim is None
+                or claim.expected_active is not validated_active
+                or claim.binding is not binding
+            ):
+                raise StateError("SMB connection validated finalization owner is malformed")
+            active = validated_active
+        else:
+            active = (
+                self._validate_smb_connection_finalization_binding_public(binding)
+                if claim is None
+                else self._validate_smb_connection_finalization_claim_locked(
+                    claim,
+                    binding=binding,
+                )
             )
-        )
         before = self._smb_connection_parent_snapshot(active.connection)
         applied_traffic = self._detach_smb_connection_traffic(binding.final_transaction.traffic)
         after = replace(
@@ -18057,11 +18108,11 @@ class StateManager:
             raise StateError(f"SMB connection {label} mapping is malformed")
         if maximum_entries is not None and len(mapping) > maximum_entries:
             raise StateError(f"SMB connection {label} mapping exceeds its bounded capacity")
-        self._bounded_smb_connection_text(key, label=f"{label} lookup key")
+        self._validate_smb_connection_text(key, label=f"{label} lookup key")
         present = False
         value: object | None = None
         for candidate, candidate_value in mapping.items():
-            self._bounded_smb_connection_text(candidate, label=f"{label} retained key")
+            self._validate_smb_connection_text(candidate, label=f"{label} retained key")
             if candidate == key:
                 present = True
                 value = candidate_value
@@ -18100,10 +18151,10 @@ class StateManager:
 
         if type(values) is not set:
             raise StateError(f"SMB connection {label} set is malformed")
-        self._bounded_smb_connection_text(key, label=f"{label} lookup key")
+        self._validate_smb_connection_text(key, label=f"{label} lookup key")
         present = False
         for candidate in values:
-            self._bounded_smb_connection_text(candidate, label=f"{label} retained key")
+            self._validate_smb_connection_text(candidate, label=f"{label} retained key")
             present = present or candidate == key
         return present
 
@@ -18139,7 +18190,7 @@ class StateManager:
             raise StateError("Pinned SMB connection secondary indexes drifted")
         forward: dict[str, object] = {}
         for name, value in indexed.items():
-            self._bounded_smb_connection_text(name, label="connection index name")
+            self._validate_smb_connection_text(name, label="connection index name")
             if name not in {"exact_tuple", "zeek_uid", "transaction_id"}:
                 raise StateError("Pinned SMB connection has an unknown secondary index")
             forward[name] = value
@@ -18155,21 +18206,21 @@ class StateManager:
         indexed_transaction = forward.get("transaction_id")
         if type(indexed_tuple) is not tuple or len(indexed_tuple) != 5:
             raise StateError("Pinned SMB connection tuple index is malformed")
-        self._bounded_smb_connection_text(indexed_tuple[0], label="indexed source IP")
-        self._bounded_smb_connection_int(
+        self._validate_smb_connection_text(indexed_tuple[0], label="indexed source IP")
+        self._validate_smb_connection_int(
             indexed_tuple[1],
             label="indexed source port",
             maximum=65_535,
         )
-        self._bounded_smb_connection_text(indexed_tuple[2], label="indexed target IP")
-        self._bounded_smb_connection_int(
+        self._validate_smb_connection_text(indexed_tuple[2], label="indexed target IP")
+        self._validate_smb_connection_int(
             indexed_tuple[3],
             label="indexed target port",
             maximum=65_535,
         )
-        self._bounded_smb_connection_text(indexed_tuple[4], label="indexed protocol")
-        self._bounded_smb_connection_text(indexed_uid, label="indexed Zeek UID")
-        self._bounded_smb_connection_text(
+        self._validate_smb_connection_text(indexed_tuple[4], label="indexed protocol")
+        self._validate_smb_connection_text(indexed_uid, label="indexed Zeek UID")
+        self._validate_smb_connection_text(
             indexed_transaction,
             label="indexed transaction ID",
         )
@@ -18184,7 +18235,7 @@ class StateManager:
             raise StateError("Pinned SMB connection reverse indexes are malformed")
         reverse_indexes: dict[str, dict[object, object]] = {}
         for name, index in self._open_connections._indexes.items():
-            self._bounded_smb_connection_text(name, label="connection reverse index name")
+            self._validate_smb_connection_text(name, label="connection reverse index name")
             if name not in {"exact_tuple", "zeek_uid", "transaction_id"} or type(index) is not dict:
                 raise StateError("Pinned SMB connection reverse index shape drifted")
             reverse_indexes[name] = index
@@ -18201,30 +18252,30 @@ class StateManager:
                 if name == "exact_tuple":
                     if type(indexed_value) is not tuple or len(indexed_value) != 5:
                         raise StateError("Pinned SMB tuple reverse key is malformed")
-                    self._bounded_smb_connection_text(
+                    self._validate_smb_connection_text(
                         indexed_value[0],
                         label="reverse source IP",
                     )
-                    self._bounded_smb_connection_int(
+                    self._validate_smb_connection_int(
                         indexed_value[1],
                         label="reverse source port",
                         maximum=65_535,
                     )
-                    self._bounded_smb_connection_text(
+                    self._validate_smb_connection_text(
                         indexed_value[2],
                         label="reverse target IP",
                     )
-                    self._bounded_smb_connection_int(
+                    self._validate_smb_connection_int(
                         indexed_value[3],
                         label="reverse target port",
                         maximum=65_535,
                     )
-                    self._bounded_smb_connection_text(
+                    self._validate_smb_connection_text(
                         indexed_value[4],
                         label="reverse protocol",
                     )
                 else:
-                    self._bounded_smb_connection_text(
+                    self._validate_smb_connection_text(
                         indexed_value,
                         label=f"{name} reverse key",
                     )
@@ -18232,7 +18283,7 @@ class StateManager:
                     raise StateError("Pinned SMB connection reverse bucket is malformed")
                 owns_connection = False
                 for owner_key, marker in bucket.items():
-                    self._bounded_smb_connection_text(
+                    self._validate_smb_connection_text(
                         owner_key,
                         label="reverse connection owner",
                     )
