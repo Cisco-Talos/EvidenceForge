@@ -368,6 +368,8 @@ class TestGenerationEngine:
         """Engine progress and DHCP RNG state should restore without runtime identities."""
 
         engine = GenerationEngine(minimal_scenario, tmp_path / "source")
+        source_profiler = Mock()
+        engine.profiler = source_profiler
         system = engine.scenario.environment.systems[0]
         moment = datetime(2024, 1, 15, 11, tzinfo=UTC)
         renewal_rng = random.Random(91)
@@ -456,6 +458,8 @@ class TestGenerationEngine:
 
         restored_scenario = Scenario.model_validate(minimal_scenario.model_dump(mode="python"))
         restored = GenerationEngine(restored_scenario, tmp_path / "restored")
+        restored_profiler = Mock()
+        restored.profiler = restored_profiler
         restored._system_pids = {"TEST-01": {"systemd": 1}}
         rebuilt_system_pids = restored._system_pids
         GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
@@ -468,6 +472,7 @@ class TestGenerationEngine:
         assert restored._snapd_active_tasks == engine._snapd_active_tasks
         assert restored._system_pids == engine._system_pids
         assert restored._system_pids is rebuilt_system_pids
+        assert restored.profiler is restored_profiler
         assert len(restored._storyline_staged_archives) == 1
         restored_archive = restored._storyline_staged_archives[0]
         assert restored_archive.actor is restored.scenario.environment.users[0]

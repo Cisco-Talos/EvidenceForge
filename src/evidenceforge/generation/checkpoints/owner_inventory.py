@@ -1059,6 +1059,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "output_dir",
         "output_target",
         "progress_callback",
+        "profiler",
         "rdp_session_manager",
         "resource_forecast",
         "scenario",
