@@ -12,6 +12,10 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
   locked transitions, retaining already-validated authority state, and avoiding temporary text and
   integer encodings during callback-safe key checks. The representative all-source median improved
   by 5.64%; all 25 concrete log formats and deterministic sidecars remain byte-identical.
+- Reused the existing timing-seed byte contract more efficiently and cached pure deterministic
+  source-clock wander knots in a bounded process-local store. The representative all-source median
+  improved by a further 6.66%; all 25 concrete log formats and deterministic sidecars remain
+  byte-identical.
 
 **Fixed**
 

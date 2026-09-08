@@ -26,6 +26,8 @@ from evidenceforge.utils.rng import (
 )
 
 _MAX_QUANTIZATION_ATTEMPTS = 64
+_TIMING_SEED_ENCODER = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"))
+_TIMING_SEED_PREFIX = b"timing:"
 
 
 class TimingDistributionError(ValueError):
@@ -383,20 +385,20 @@ class TimingSampler:
     ) -> random.Random:
         """Create a fresh RNG from an unambiguous semantic seed."""
 
-        seed_material = json.dumps(
+        seed_material = _TIMING_SEED_ENCODER.encode(
             (
                 self._namespace,
                 relationship_key,
                 sample_key,
                 *scope.seed_parts(),
             ),
-            ensure_ascii=False,
-            separators=(",", ":"),
         )
-        stable_key = f"timing:{seed_material}"
+        digest = hashlib.sha256()
         if self._generation_seed != DEFAULT_GENERATION_SEED:
-            stable_key = f"seed:{self._generation_seed}:{stable_key}"
-        seed = int(hashlib.sha256(stable_key.encode()).hexdigest(), 16) % (2**32)
+            digest.update(f"seed:{self._generation_seed}:".encode())
+        digest.update(_TIMING_SEED_PREFIX)
+        digest.update(seed_material.encode())
+        seed = int.from_bytes(digest.digest()[-4:], "big")
         return random.Random(seed)
 
     def _draw(self, distribution: DistributionSpec, rng: random.Random) -> _NumericSample:

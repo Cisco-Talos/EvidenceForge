@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 5
+current_revision: 6
 history_start_revision: 1
-behavior_surface_sha256: "4c50ec31f68b5a33c91e4df969ea979403f3144904f74c2fcef85b66991d229c"
+behavior_surface_sha256: "6d5ca14bd5ab2067994b67288ed70717e4330b6a3b30b985d0221da28d596740"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -46,3 +46,10 @@ changes:
       - smb-connection-lifecycle
     formats: []
     summary: Reuses SMB validation inside locked transitions and avoids temporary encodings without changing output.
+  - revision: 6
+    id: exact-timing-seed-fast-paths
+    impact: none
+    domains:
+      - canonical-timing
+    formats: []
+    summary: Reuses exact timing-seed encoding, digest extraction, and bounded clock knots without changing samples.

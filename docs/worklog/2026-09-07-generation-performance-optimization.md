@@ -61,6 +61,64 @@ Decision: **retain as exact**. Generation behavior revision 5 records `impact: n
 `smb-connection-lifecycle`, and no affected formats. All 25 concrete log formats remain
 byte-identical. No semantic fallback was evaluated or justified.
 
+### Target 2: timing distributions and RNG setup — retained, exact
+
+A temporary bounded diagnostic around the historical workload observed 807,771 numeric timing
+requests: 463,033 microsecond requests and 344,738 continuous-value requests. Clock-wander knots
+accounted for 283,688 calls but only 3,170 unique immutable requests, or 280,518 exact repeats.
+Route and close delay relationships contributed another 23,110 repeats. The diagnostic wrapper and
+its generated bundle were temporary and are not part of the retained implementation.
+
+Three exact designs were evaluated:
+
+1. Reuse one standard-library `JSONEncoder` with the existing options, hash the same seed byte
+   sequence incrementally, and extract the digest's low four bytes instead of converting the full
+   hexadecimal digest and applying modulo `2**32`. The RNG stream is covered against the legacy
+   algorithm for default and non-default seeds plus non-ASCII semantic keys. This alone improved
+   isolated RNG construction by about 8%, below the focused gate.
+2. Retain up to 16,384 pure deterministic source-clock wander knots in an explicit process-local
+   cache shared by canonical and prepared timing paths. Hits still record every logical timing
+   sample; misses recompute from the unchanged namespace, generation seed, clock key, wander spec,
+   and ordinal. The cache is absent from checkpoint state, and eviction or a cold cache can only
+   cause exact recomputation. Repeated clock projection improved from about 52,953 to 314,549
+   operations/second (**83.2%**).
+3. A generic `functools.lru_cache` implementation was rejected before generation by the trusted
+   derived-cache security guard and replaced with the explicit bounded store. A subsequent
+   two-lookup cache API intended to avoid a closure allocation reduced the focused rate to about
+   267,779 operations/second, so that refinement was reverted.
+
+The all-source `A-B-B-A-A-B` sequence compared accepted SMB commit `e0c74465a` with the timing
+candidate:
+
+| Build | A1 | B1 | B2 | A2 | A3 | B3 | Median |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Accepted SMB A | 902.83 | — | — | 901.94 | 887.26 | — | 901.94 s |
+| Timing candidate B | — | 841.89 | 860.70 | — | — | 837.85 | 841.89 s |
+
+The candidate improved representative whole-run median wall time by **6.66%**. The historical
+fixture sequence produced A times of 225.00, 227.69, and 224.88 seconds and B times of 222.74,
+224.10, and 223.86 seconds. Its median improved from 225.00 to 223.86 seconds (**0.51%**) rather
+than regressing.
+
+The residual all-source profile improved from 874.74 to 858.52 profiled seconds. Peak RSS fell from
+1,464,909,824 to 1,444,397,056 bytes (**1.40%**). Timing RNG inclusive share fell from 5.19% to
+0.99%, clock projection inclusive share from 6.55% to 3.05%, and JSON encoder leaf share from
+3.16% to 0.33%. The latter is timing-seed serialization removed here and is credited only to this
+target.
+
+All six all-source bundles had the same 278-file data inventory digest,
+`6f3894f085b7148cc3a763f825dc3bcfefb6c195810c292dd7540ae8eedb259f`; each candidate also matched
+the accepted build's deterministic sidecars. All six historical bundles were byte-identical by the
+same output-equivalence comparison. A candidate invocation resumed an accepted-SMB checkpoint from
+the warm-up boundary with an empty knot cache, completed safely, verified all 287 manifest entries,
+and was byte-identical to an uninterrupted candidate run.
+
+Decision: **retain as exact**. Generation behavior revision 6 records `impact: none`, domain
+`canonical-timing`, and no affected formats. All 25 concrete log formats remain byte-identical. No
+semantic fallback was needed, so no timestamps, generated identifiers, ordering, schemas, field
+meanings, or resume policy changed. The cumulative accepted-stage median improvement from the
+pre-optimization 922.78-second SMB macro baseline to 841.89 seconds is **8.77%**.
+
 ## Reusable profiling capability
 
 - `eforge generate --profile` is a hidden developer option. The default path does not construct or
