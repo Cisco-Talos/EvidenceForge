@@ -54,6 +54,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1** Add source-instance-aware evidence reachability validation so impossible persistent
+  SMB output selections fail before generation, invisible authored behavior produces actionable
+  warnings, and runtime `--formats` narrowing rechecks the same canonical contracts. See the
+  [evidence reachability worklog](docs/worklog/2026-09-09-evidence-reachability-validation.md).
+
 - [x] **P1** Complete the Pack Schema 2.0 release workflow: publisher-qualified identities,
   deterministic lock refresh, immutable `.efpack` closure import/hydration, resilient all-scope
   inventory, updated skills, and small/medium healthcare consumers. See the
@@ -158,7 +163,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
   `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
   session teardown unless an explicit hung/long-running outcome owns that lifecycle.
-- [ ] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
+- [x] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
   means "we stopped collecting data," not that systems shut down or every active connection,
   session, process, and application operation ended cleanly. Mirror warm-up behavior at the tail:
   allow lifecycles that start before the exclusive collection end to remain active afterward,
@@ -169,7 +174,20 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   its runtime ownership safely. Decide during design whether ground truth records only
   `active_at_collection_end` or also retains the exact modeled future close. This must not be used
   to conceal pathological durations such as runaway SMB file-size growth, which remains a
-  separate root-cause fix.
+  separate root-cause fix. Implemented by retaining exact modeled future deadlines internally and
+  admitting only source-native observations before the exclusive collection cutoff; see
+  `docs/worklog/2026-09-08-collection-lifecycle-boundary.md`.
+- [x] **P1** Honor authored cross-event `process_ref` / `parent_ref` lifecycles. Keep a referenced
+  parent alive through dependent child creation, prevent independent storyline jitter from
+  inverting same-time parent/child events, and preserve a live authored source for subsequent
+  process-access effects instead of silently recording `no_live_source_process`. Implemented with
+  release-aware named-process retention, exact-parent admission, and authored group ordering; see
+  `docs/worklog/2026-09-09-storyline-parent-snort-route-identity.md`.
+- [x] **P1** Canonicalize sensor identity before assigning Snort and sibling sensor output routes.
+  TEST1 had one authored `IDS-NG-EDGE` sensor whose raw and canonical hostname aliases resolved to
+  the same physical path on case-insensitive filesystems. Emitter setup now consumes the canonical
+  source hostname while exact-publication collision checks remain strict for distinct sensors; see
+  `docs/worklog/2026-09-09-storyline-parent-snort-route-identity.md`.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.

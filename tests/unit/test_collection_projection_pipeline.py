@@ -731,9 +731,14 @@ def test_exact_sensor_delays_preserve_canonical_time_and_sensor_envelopes(
     }
     for event in projected.values():
         assert len(event.network_observations) == 1
+        observation = event.network_observations[0]
+        assert event._projection_envelope.observed_time == observation.observed_start_time
         assert (
-            event._projection_envelope.observed_time
-            == event.network_observations[0].observed_start_time
+            dispatcher._zeek_conn_admission_time(
+                event,
+                observation.observed_start_time,
+            )
+            == observation.observed_close_time
         )
 
     # WFP is an endpoint companion over the same canonical plan. Its dispatch has

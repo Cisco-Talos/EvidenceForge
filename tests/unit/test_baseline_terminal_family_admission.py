@@ -24,6 +24,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -32,7 +33,11 @@ from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime
-from evidenceforge.generation.world_model import SessionPlan, WorldPlanner
+from evidenceforge.generation.world_model import (
+    SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+    SessionPlan,
+    WorldPlanner,
+)
 from evidenceforge.models import System, User
 from evidenceforge.models.scenario import NetworkConfig, NetworkSegment, NetworkSensor
 
@@ -1176,14 +1181,14 @@ def test_terminal_remote_session_plans_keep_only_candidates_that_fit(
     )
 
     remote_admin_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds(
-        min_duration_seconds=baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+        min_duration_seconds=SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
     )
     safe_remote_admin_ssh = pass_end - timedelta(seconds=remote_admin_headroom)
     assert (
         baseline._baseline_ssh_terminal_end_plan(
             _WINDOW_START,
             transport_start=safe_remote_admin_ssh,
-            post_activity_support_seconds=(baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
+            post_activity_support_seconds=SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
         )
         is not None
     )
@@ -1191,7 +1196,7 @@ def test_terminal_remote_session_plans_keep_only_candidates_that_fit(
         baseline._baseline_ssh_terminal_end_plan(
             _WINDOW_START,
             transport_start=safe_remote_admin_ssh + timedelta(microseconds=1),
-            post_activity_support_seconds=(baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
+            post_activity_support_seconds=SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
         )
         is None
     )
@@ -1215,10 +1220,10 @@ def test_terminal_remote_session_plans_keep_only_candidates_that_fit(
     )
 
 
-def test_terminal_system_traffic_skips_ssh_without_required_until_support(
+def test_terminal_system_traffic_allows_ssh_to_outlive_collection_cutoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Late optional remote-admin SSH is skipped before session bootstrap."""
+    """Late optional remote-admin SSH keeps its natural action-owned lifetime."""
 
     pass_end = _WINDOW_START + timedelta(minutes=10)
     baseline, _activity, state_manager, _target = _minimal_linux_system_traffic(pass_end)
@@ -1231,7 +1236,7 @@ def test_terminal_system_traffic_skips_ssh_without_required_until_support(
     user = User(username="admin", full_name="Admin User", email="admin@example.test")
     old_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds()
     required_headroom = baseline_module.ssh_action_deadline_transport_headroom_seconds(
-        min_duration_seconds=baseline_module.SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+        min_duration_seconds=SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
     )
     remaining_seconds = (old_headroom + required_headroom) / 2.0
     event_time = pass_end - timedelta(seconds=remaining_seconds)
@@ -1250,7 +1255,7 @@ def test_terminal_system_traffic_skips_ssh_without_required_until_support(
     baseline._pick_baseline_ssh_identity = lambda *_args, **_kwargs: (user, source)
     baseline.world_planner = Mock()
     baseline.world_planner.bootstrap_user_session.return_value = SimpleNamespace(
-        session=SimpleNamespace(network_close_time=pass_end - timedelta(seconds=1))
+        session=SimpleNamespace(network_close_time=pass_end + timedelta(minutes=45))
     )
     set_current_time = Mock(wraps=state_manager.set_current_time)
     state_manager.set_current_time = set_current_time
@@ -1266,8 +1271,11 @@ def test_terminal_system_traffic_skips_ssh_without_required_until_support(
 
     baseline._generate_system_traffic(_WINDOW_START)
 
-    baseline.world_planner.bootstrap_user_session.assert_not_called()
-    set_current_time.assert_not_called()
+    baseline.world_planner.bootstrap_user_session.assert_called_once()
+    call = baseline.world_planner.bootstrap_user_session.call_args
+    assert call.kwargs["required_until"] == _WINDOW_START + timedelta(hours=1)
+    assert "session_end_plan" not in call.kwargs
+    set_current_time.assert_called_once_with(event_time)
     assert state_manager.get_sessions_for_user(user.username) == []
 
 
@@ -1822,7 +1830,7 @@ def test_terminal_process_family_is_suppressed_before_real_generator_output(
     assert not any(path.read_text(encoding="utf-8") for path in (tmp_path / "ecar").rglob("*.json"))
 
 
-def test_terminal_generic_ssh_uses_real_owner_and_drains_by_pass_end(
+def test_terminal_generic_ssh_uses_natural_lifecycle_after_collection_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1866,6 +1874,10 @@ def test_terminal_generic_ssh_uses_real_owner_and_drains_by_pass_end(
         emitters,
         dispatcher=dispatcher,
         timing_runtime=timing_runtime,
+        application_channel_registry=ApplicationChannelRegistry(
+            window_start=_WINDOW_START,
+            window_end=pass_end + timedelta(days=1),
+        ),
         generation_window_start=_WINDOW_START,
         generation_window_end=pass_end,
     )
@@ -1929,11 +1941,12 @@ def test_terminal_generic_ssh_uses_real_owner_and_drains_by_pass_end(
         assert len(sessions) == 1
         session = sessions[0]
         assert session.session_kind == "ssh"
-        assert session.end_plan == SessionEndPlan(pass_end, "action_bundle")
+        assert session.end_plan is None
         assert session.network_close_time is not None
-        assert session.network_close_time < pass_end
+        assert session.network_close_time > pass_end
 
-        activity.finalize_ssh_session_lifecycles(pass_end)
+        lifecycle_frontier = activity.terminal_lifecycle_frontier(pass_end)
+        activity.finalize_ssh_session_lifecycles(lifecycle_frontier)
 
         assert state_manager.get_sessions_for_user(user.username) == []
         assert activity._pending_ssh_session_closures == []

@@ -417,6 +417,15 @@ class PreparedProcessEndpointEffectPlan:
                 )
             suppressed.append(spec.instance_key)
 
+        # Canonicalize every field that participates in ``stable_id`` before the
+        # action anchor is derived.  Otherwise an unsorted input tuple builds its
+        # execution plan under a transient action ID and then exposes a different
+        # stable ID after ``effects`` is normalized below.
+        object.__setattr__(self, "effects", effects)
+        object.__setattr__(self, "window_end", window_end)
+        object.__setattr__(self, "retention_horizon_end", horizon_end)
+        object.__setattr__(self, "suppressed_instance_keys", tuple(sorted(suppressed)))
+
         expected_plan = _build_endpoint_effect_graph(self.anchor, specs)
         candidate = self.execution_plan
         if candidate is not None and candidate != expected_plan:
@@ -424,11 +433,7 @@ class PreparedProcessEndpointEffectPlan:
                 ExecutionEffectPlanErrorCode.INVALID_PLAN,
                 "prepared process endpoint effect graph drifted from its exact intent",
             )
-        object.__setattr__(self, "effects", effects)
-        object.__setattr__(self, "window_end", window_end)
-        object.__setattr__(self, "retention_horizon_end", horizon_end)
         object.__setattr__(self, "execution_plan", expected_plan)
-        object.__setattr__(self, "suppressed_instance_keys", tuple(sorted(suppressed)))
 
     @property
     def stable_id(self) -> str:

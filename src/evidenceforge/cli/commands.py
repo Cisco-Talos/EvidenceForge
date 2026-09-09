@@ -63,7 +63,12 @@ from evidenceforge import __version__
 from evidenceforge.cli.checkpoint_commands import checkpoint_app
 from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.pack_commands import pack_app
-from evidenceforge.composition import CompiledScenario, compile_scenario, with_runtime_scenario
+from evidenceforge.composition import (
+    CompiledScenario,
+    compile_scenario,
+    semantic_resolved_difference_sections,
+    with_runtime_scenario,
+)
 from evidenceforge.composition.artifacts import (
     GENERATION_MANIFEST_FILENAME,
     RESOLVED_SCENARIO_FILENAME,
@@ -1327,6 +1332,7 @@ def generate(
                     raise typer.Exit(EXIT_ABORTED)
 
     scenario_was_explicit = scenario_file is not None
+    checkpoint_scenario_file: Path | None = None
     preliminary_store: IncrementalCheckpointStore | None = None
     preliminary_recovery = None
     stored_run_options: dict[str, object] = {}
@@ -1341,8 +1347,11 @@ def generate(
             stored_run_options = raw_options
             if preliminary_recovery.warning:
                 console.print(f"[yellow]Warning: {preliminary_recovery.warning}[/yellow]")
+            checkpoint_scenario_file = preliminary_store.resolved_scenario_path(
+                preliminary_recovery
+            )
             if scenario_file is None:
-                scenario_file = preliminary_store.resolved_scenario_path(preliminary_recovery)
+                scenario_file = checkpoint_scenario_file
         except CheckpointError as error:
             console.print(f"[bold red]Error:[/bold red] Cannot resume generation: {error}")
             raise typer.Exit(EXIT_INPUT_ERROR) from error
@@ -1401,13 +1410,36 @@ def generate(
         )
 
     # Load and validate scenario
+    checkpoint_compiled: CompiledScenario | None = None
     try:
         console.print("\n[bold]Loading scenario...[/bold]")
-        compiled = compile_scenario(
-            scenario_file,
-            project_root=project_root,
-            generation_seed=seed,
-        )
+        if resume:
+            if checkpoint_scenario_file is None:  # pragma: no cover - recovery invariant
+                raise CheckpointError("checkpoint resolved scenario was not recovered")
+            checkpoint_compiled = compile_scenario(checkpoint_scenario_file)
+            retained_seed = checkpoint_compiled.scenario.generation_seed
+            if seed is not None and seed != retained_seed:
+                console.print(
+                    "[bold red]Error:[/bold red] Cannot resume generation: generation seed "
+                    f"differs from the checkpoint ({seed} != {retained_seed})",
+                    style="red",
+                )
+                console.print("[red]Incompatible fields: generation_seed[/red]")
+                raise typer.Exit(EXIT_INPUT_ERROR)
+        if scenario_was_explicit:
+            compiled = compile_scenario(
+                scenario_file,
+                project_root=project_root,
+                generation_seed=seed,
+            )
+        elif checkpoint_compiled is not None:
+            compiled = checkpoint_compiled
+        else:
+            compiled = compile_scenario(
+                scenario_file,
+                project_root=project_root,
+                generation_seed=seed,
+            )
         scenario = compiled.scenario
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
         console.print(f"  Description: {scenario.description}")
@@ -1521,6 +1553,7 @@ def generate(
         raise typer.Exit(EXIT_INPUT_ERROR)
     artifacts_dir = ground_truth_dir / "artifacts"
 
+    from evidenceforge.config.provider import effective_config_scope
     from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
     from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
     from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
@@ -1556,6 +1589,62 @@ def generate(
         compiled = with_runtime_scenario(compiled, scenario)
         console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
 
+        # Runtime filtering can remove the last source capable of expressing a configured
+        # behavior after ordinary scenario validation has passed. Re-run only the shared
+        # reachability analysis before output setup or warm-up.
+        from evidenceforge.validation import ScenarioValidator
+
+        with effective_config_scope(compiled.effective_config):
+            filtered_validator = ScenarioValidator(
+                scenario,
+                oob_hosts=oob_hosts,
+                scenario_root=scenario_file.parent,
+            )
+            filtered_reachability = filtered_validator.evidence_reachability_issues()
+        prior_issue_keys = {(issue.severity, issue.field_path, issue.message) for issue in issues}
+        new_reachability = [
+            issue
+            for issue in filtered_reachability
+            if (issue.severity, issue.field_path, issue.message) not in prior_issue_keys
+        ]
+        if new_reachability:
+            console.print("\n[yellow]Format filter changed evidence reachability:[/yellow]")
+            for issue in new_reachability:
+                color, icon = ("red", "✗") if issue.severity == "error" else ("yellow", "!")
+                console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
+                console.print(Text(f"    {issue.message}", style=color))
+                if issue.suggestion:
+                    console.print(Text(f"    💡 {issue.suggestion}", style="dim"))
+            if any(issue.severity == "error" for issue in new_reachability):
+                console.print(
+                    "\n[bold red]The format filter makes configured behavior impossible to "
+                    "project. Cannot proceed with generation.[/bold red]"
+                )
+                raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+
+    if resume and scenario_was_explicit:
+        if checkpoint_compiled is None or checkpoint_scenario_file is None:  # pragma: no cover
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        changed_sections = semantic_resolved_difference_sections(checkpoint_compiled, compiled)
+        if changed_sections:
+            console.print(
+                "[bold red]Error:[/bold red] Cannot resume generation: the supplied scenario "
+                "does not match the checkpoint's authoritative resolved identity",
+                style="red",
+            )
+            console.print(f"[red]Changed resolved sections: {', '.join(changed_sections)}[/red]")
+            console.print(
+                "[dim]Resume without a scenario path to continue the retained run, or use a "
+                "new output directory for the changed scenario.[/dim]"
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        # The authored input is an identity assertion only. Recovery must execute
+        # against the exact configuration and assets retained with checkpoint state.
+        compiled = checkpoint_compiled
+        scenario = compiled.scenario
+        scenario_file = checkpoint_scenario_file
+        scenario_dir = scenario_file.parent
+
     selected_checkpoint_hours = checkpoint_hours
     if selected_checkpoint_hours is None:
         selected_checkpoint_hours = (
@@ -1564,8 +1653,6 @@ def generate(
             else _DEFAULT_CHECKPOINT_HOURS
         )
     fresh_checkpoint_enabled = not resume and selected_checkpoint_hours > 0
-
-    from evidenceforge.config.provider import effective_config_scope
 
     with effective_config_scope(compiled.effective_config):
         resource_forecast = _forecast_for_cli(
@@ -1647,7 +1734,7 @@ def generate(
                 "fingerprint_components", {}
             ),
             current_components=fingerprint_components,
-            authoritative_resolved_scenario=not scenario_was_explicit,
+            authoritative_resolved_scenario=True,
         )
         if not resume_compatibility.can_resume:
             detail = resume_compatibility.reason or "hard compatibility fields differ"

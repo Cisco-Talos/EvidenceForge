@@ -17,6 +17,46 @@ checkpoint attempt found that the new process-local `profiler` field had not bee
 deterministically rebuilt. The corrected foundation now suspends normally, and a resumed
 invocation keeps only its own profiler.
 
+### Dev integration epoch — 2026-09-09
+
+Current `dev` at `f879c6a02` was merged after six generation, lifecycle, validation, and checkpoint
+commits diverged from the optimization branch's base at `4587acfe7`. The merge preserves the
+original optimization commits and their evidence. Two textual conflicts required manual
+resolution:
+
+- Generation behavior keeps the current `dev` history through revision 9, followed by the exact
+  profiler, SMB, and timing entries at revisions 10 through 12. The provisional lifecycle entry
+  was removed when its candidate failed the integrated correctness gate described below.
+- Remaining red-herring work keeps its profiler span, while `dev`'s deferred storyline-process
+  termination flush remains unconditional and receives its own named span.
+
+The pre-integration measurements below remain valid historical evidence for their original code
+epoch, but they are not acceptance evidence for the integrated runtime. Current `dev` intentionally
+changes machine-auth transport allocation, collection-cutoff lifecycle settlement, authored
+process retention, sensor identity, ancestry retention, reachability admission, and checkpoint
+identity. A fresh post-integration baseline, exact-output comparison, checkpoint, profile, and
+macro sequence are therefore required before reaffirming performance or retaining the lifecycle
+candidate. Non-timing-sensitive merge and correctness validation may proceed while the machine is
+busy; performance measurements remain deferred until a quiet-machine window.
+
+Non-timing-sensitive integration validation completed on 2026-09-09:
+
+- The focused profiler, CLI, engine, checkpoint, semantic-identity, reachability, SMB/state,
+  timing, lifecycle, baseline, and deterministic integration selection passed with 1,016 tests and
+  one skip.
+- The first routine-suite run exposed three failure-neutrality regressions in the provisional lazy
+  lifecycle snapshot cache. That candidate and its provisional behavior revision were fully
+  reverted. The corrected routine suite then passed with 8,347 tests, five skips, and 2,008
+  slow/soak tests deselected.
+- The all-source workload was rebuilt from the tracked fixture and validated successfully against
+  the merged compiler and current project overlay. It retained all 25 concrete formats and emitted
+  only the four expected informational pivot-continuity hints.
+- Ruff lint, Ruff formatting, generation-behavior revision 12 and digest validation, conflict-marker
+  checks, and whitespace checks passed.
+- No generation, profiler, benchmark, or elapsed-time acceptance run was performed during this
+  busy-machine phase. Those measurements, the real checkpoint/output comparison, and the extended
+  resource-intensive slow/soak gates remain deferred to a quiet-machine window.
+
 ### Target 1: SMB connection state validation and encoding — retained, exact
 
 Three exact designs were evaluated together after isolated measurements:
@@ -119,7 +159,7 @@ semantic fallback was needed, so no timestamps, generated identifiers, ordering,
 meanings, or resume policy changed. The cumulative accepted-stage median improvement from the
 pre-optimization 922.78-second SMB macro baseline to 841.89 seconds is **8.77%**.
 
-### Target 3: lifecycle authority and registry maintenance — paused during exact evaluation
+### Target 3: lifecycle authority and registry maintenance — exact designs rejected
 
 Three exact designs have been investigated. No lifecycle optimization has been retained or
 committed, and no semantic fallback has been attempted.
@@ -136,12 +176,15 @@ committed, and no semantic fallback has been attempted.
    second (**84.2%**). It reduced the residual profile from 858.52 to 829.63 seconds and peak RSS by
    5.77%, but the all-source macro median regressed 1.31% (802.33 to 812.83 seconds). The eager
    insertion cost applies to transports that never need this lookup, so this design was rejected.
-3. The current uncommitted candidate retains the same bounded exact snapshot but creates it lazily
-   after the first terminal transport-ID lookup. The focused repeated-lookup improvement remains
-   about 84%. Its residual profile completed in 856.19 seconds (0.27% faster than the accepted
-   timing build) with peak RSS of 1,323,548,672 bytes (8.37% lower). In that profile,
+3. A lazy variant retained the same bounded exact snapshot but created it after the first terminal
+   transport-ID lookup. The focused repeated-lookup improvement remained about 84%. Its residual
+   profile completed in 856.19 seconds (0.27% faster than the accepted timing build) with peak RSS
+   of 1,323,548,672 bytes (8.37% lower). In that profile,
    `events/lifecycle.py:__post_init__` inclusive share fell to 0.72% and transport-row decoding to
-   1.48%.
+   1.48%. After integrating current `dev`, the routine suite proved that the lookup mutated retained
+   cache state before a later application-child fingerprint rejection. Three exact tamper cases
+   therefore violated the required failure-neutral registry census. The candidate was rejected and
+   fully reverted; the tests were not weakened.
 
 The lazy candidate's all-source macro comparison was explicitly paused after the current B1 run:
 
@@ -155,13 +198,12 @@ B1 was 2.96% faster than the adjacent A1 run. Peak RSS was 1,469,890,560 bytes f
 retention. Both bundles verified successfully, and direct comparison found all 278 `data/**` files
 byte-identical.
 
-Pause state (2026-09-08): the candidate implementation, focused test, and provisional
-generation-behavior revision 7 are checkpointed together for safe branch handoff. This checkpoint
-is not a retention decision. No changelog entry has been added because the macro comparison is
-incomplete. Resume the required `A-B-B-A-A-B` sequence with B2, then A2, A3, and B3. If the macro
-gate passes, run the historical-fixture, deterministic-sidecar, checkpoint/resume, behavior-surface,
-and focused lifecycle gates before deciding whether to retain the candidate. Do not treat revision
-7 as accepted until those gates pass.
+Decision after `dev` integration (2026-09-09): **retain no lifecycle change**. All three exact
+designs failed an acceptance gate, and no semantic fallback was justified. The incomplete A1/B1
+pair remains historical diagnostic evidence only; do not resume that sequence. Re-profile the
+post-integration accepted runtime before deciding whether another materially different exact
+lifecycle design is warranted. Generation behavior therefore ends at optimization revision 12
+(exact timing), and no lifecycle changelog entry or affected format exists.
 
 ## Reusable profiling capability
 

@@ -226,10 +226,6 @@ class LinuxShellCommandExecutor(Protocol):
         """Create prerequisite session state needed for correlated process telemetry."""
         ...
 
-    def _is_within_scenario_window(self, time: datetime) -> bool:
-        """Return true when the timestamp is within the generation window."""
-        ...
-
     def _emit_bash_command_event(
         self,
         user: User,
@@ -296,8 +292,6 @@ class LinuxShellCommandActionBundle:
             command,
         )
         if scheduled_time is None:
-            return None
-        if not self._executor._is_within_scenario_window(scheduled_time):
             return None
         if self._request.emit_process_telemetry:
             self._executor._prepare_bash_process_session(

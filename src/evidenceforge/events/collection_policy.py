@@ -28,6 +28,12 @@ def _required_text(value: str, field_name: str) -> str:
     return normalized
 
 
+def canonical_source_hostname(value: str) -> str:
+    """Return the canonical hostname spelling used by deployed source identities."""
+
+    return _required_text(value, "hostname")
+
+
 def _required_exact_text(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -106,7 +112,7 @@ class SourceInstanceIdentity:
             "source_instance",
             _required_text(self.source_instance, "source_instance"),
         )
-        object.__setattr__(self, "hostname", _required_text(self.hostname, "hostname"))
+        object.__setattr__(self, "hostname", canonical_source_hostname(self.hostname))
         object.__setattr__(self, "family", _required_text(self.family, "family"))
 
     @property

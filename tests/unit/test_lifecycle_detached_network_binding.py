@@ -724,27 +724,6 @@ def test_acknowledged_receipt_facts_reclaim_without_census_change() -> None:
     assert authority.census() == census
 
 
-def test_terminal_transport_id_lookup_reuses_exact_bounded_snapshot() -> None:
-    """Repeated transport-ID validation reuses the immutable committed snapshot."""
-
-    authority, _runtime, _planner, root, timing, owner_rng, lifecycle_token = _prepared_fixture(
-        stable_id="terminal-transport-id-snapshot-cache"
-    )
-    result = authority.materialize_prepared_network_transaction(
-        root,
-        owner_rng,
-        source_timing_preparation=timing,
-        lifecycle_token=lifecycle_token,
-    )
-    transport = result.receipt.connection_receipt._lifecycle_receipt.transport
-
-    first = authority._registry.transport_for_transport_id(transport.identity.transport_id)
-    second = authority._registry.transport_for_transport_id(transport.identity.transport_id)
-
-    assert first == transport
-    assert second is first
-
-
 def test_issuance_authority_capacity_gc_and_reuse_matrix() -> None:
     (
         authority,

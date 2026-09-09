@@ -34,6 +34,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+import yaml
 from rich.console import Console
 from rich.progress import BarColumn, Progress
 from typer.testing import CliRunner
@@ -386,6 +387,33 @@ class TestVersionCommand:
 
 class TestValidateCommand:
     """Tests for 'eforge validate' command."""
+
+    def test_validate_rejects_behavior_with_no_possible_evidence_projection(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Validation should reject guaranteed generation-time projection failures."""
+
+        scenario_data = yaml.safe_load(
+            (scenarios_dir / "windows-smb-evidence-reachability.yaml").read_text(encoding="utf-8")
+        )
+        scenario_data["output"]["logs"] = [{"format": "windows_event_sysmon"}]
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        payload = json.loads(result.stdout)
+        issue = next(
+            issue
+            for issue in payload["issues"]
+            if "persistent Windows SMB activity" in issue["message"]
+        )
+        assert issue["severity"] == "error"
+        assert issue["field_path"] == "output.logs"
+        assert "no possible evidence projection" in issue["message"]
 
     def test_validate_accepts_included_environment(self, tmp_path):
         """eforge validate should expand scenario includes before schema validation."""
@@ -2702,3 +2730,36 @@ output:
 
         assert result.exit_code == EXIT_INPUT_ERROR
         assert "No formats match" in result.stdout
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_formats_filter_rechecks_blocking_evidence_reachability(
+        self,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        """A runtime format intersection cannot remove a required projection route."""
+
+        scenario_data = yaml.safe_load(
+            (scenarios_dir / "windows-smb-evidence-reachability.yaml").read_text(encoding="utf-8")
+        )
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenario_file),
+                "--output",
+                str(tmp_path / "bundle"),
+                "--formats",
+                "windows_event_sysmon",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        assert "Format filter changed evidence reachability" in result.stdout
+        assert "persistent Windows SMB activity" in result.stdout
+        assert "Cannot proceed with generation" in " ".join(result.stdout.split())
+        mock_engine_class.assert_not_called()

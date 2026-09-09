@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 7
+current_revision: 12
 history_start_revision: 1
-behavior_surface_sha256: "06456f97be440230e68b273fe626303b49f8353acf0c3d143d989357cdbc64bb"
+behavior_surface_sha256: "e37e2cb077700b8c614de2e1034747be8386be8bfdc0f0f92d28fd443aebb9f7"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -33,30 +33,98 @@ changes:
       - windows_sysmon
     summary: Omits SMB client process attribution when no valid post-logon, pre-transport interval exists.
   - revision: 4
+    id: machine-auth-authoritative-port-preview
+    impact: localized
+    domains:
+      - network-transport-allocation
+      - windows-machine-authentication
+    formats:
+      - ecar
+      - windows_security
+      - zeek_conn
+    summary: Prevents machine-account LDAP or SMB authentication from selecting a source port whose canonical interval is already leased.
+  - revision: 5
+    id: separate-collection-cutoff-from-modeled-lifecycles
+    impact: localized
+    domains:
+      - collection-window-admission
+      - session-lifecycle
+      - process-lifecycle
+      - network-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Lets SSH and RDP activity retain natural action-owned lifetimes beyond collection while suppressing post-cutoff terminal rows and unfinished Zeek conn records.
+  - revision: 6
+    id: authored-process-and-sensor-route-identity
+    impact: localized
+    domains:
+      - process-lifecycle
+      - storyline-ordering
+      - sensor-route-identity
+    formats:
+      - cisco_asa
+      - ecar
+      - snort_alert
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek
+    summary: Retains named storyline processes through dependent effects and canonicalizes sensor hostnames before emitter route construction.
+  - revision: 7
+    id: behavior-evidence-reachability-validation
+    impact: none
+    domains:
+      - generation-admission
+      - source-deployment-validation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+      - zeek_smb_mapping
+    summary: Rejects impossible persistent SMB source selections before generation and warns when authored behavior has no observable projection.
+  - revision: 8
+    id: retained-bootstrap-parent-lifecycle-proof
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-timing-preparation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserves validated process ancestry after a bootstrap parent ages out and releases source-timing ownership when process action-cohort preflight fails.
+  - revision: 9
+    id: semantic-resolved-checkpoint-identity
+    impact: none
+    domains:
+      - checkpoint-resume
+      - composition-identity
+    formats: []
+    summary: Separates checkpoint-control metadata from semantic resolved identity and verifies explicit resume inputs against the retained snapshot.
+  - revision: 10
     id: opt-in-generation-profiling
     impact: none
     domains:
       - all-generation
     formats: []
     summary: Adds opt-in diagnostic instrumentation without changing deterministic rendered output.
-  - revision: 5
+  - revision: 11
     id: exact-smb-validation-fast-paths
     impact: none
     domains:
       - smb-connection-lifecycle
     formats: []
     summary: Reuses SMB validation inside locked transitions and avoids temporary encodings without changing output.
-  - revision: 6
+  - revision: 12
     id: exact-timing-seed-fast-paths
     impact: none
     domains:
       - canonical-timing
     formats: []
     summary: Reuses exact timing-seed encoding, digest extraction, and bounded clock knots without changing samples.
-  - revision: 7
-    id: exact-lifecycle-transport-snapshot-reuse
-    impact: none
-    domains:
-      - network-lifecycle-authority
-    formats: []
-    summary: Reuses bounded immutable terminal transport snapshots for exact lifecycle validation without changing output.

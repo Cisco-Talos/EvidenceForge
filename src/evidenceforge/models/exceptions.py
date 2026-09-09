@@ -131,6 +131,7 @@ class TransportPortExhaustionError(StateError):
         port_range: tuple[int, int],
         active_count: int,
         automatic: bool,
+        requested_source_port: int | None = None,
     ) -> None:
         self.endpoint_key = endpoint_key
         self.opened_at = opened_at
@@ -138,11 +139,18 @@ class TransportPortExhaustionError(StateError):
         self.port_range = port_range
         self.active_count = active_count
         self.automatic = automatic
+        self.requested_source_port = requested_source_port
         mode = "automatic" if automatic else "exact"
+        requested = (
+            ""
+            if requested_source_port is None
+            else f", requested_source_port={requested_source_port}"
+        )
         super().__init__(
             "Canonical transport source-port exhaustion: "
             f"endpoint={endpoint_key!r}, interval=[{opened_at}, {closed_at}), "
-            f"range={port_range[0]}-{port_range[1]}, active={active_count}, mode={mode}"
+            f"range={port_range[0]}-{port_range[1]}, active={active_count}, "
+            f"mode={mode}{requested}"
         )
 
 

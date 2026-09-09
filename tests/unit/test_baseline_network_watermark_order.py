@@ -133,11 +133,11 @@ def test_terminal_output_pass_owns_known_lifecycle_end(
 
 
 @pytest.mark.parametrize("window_duration", [timedelta(minutes=10), timedelta(hours=1)])
-def test_terminal_output_pass_keeps_safe_ssh_noise_with_action_deadline(
+def test_terminal_output_pass_keeps_ssh_noise_with_natural_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     window_duration: timedelta,
 ) -> None:
-    """A final output pass retains SSH that fits the owner's bounded close."""
+    """A final output pass retains SSH with its natural lifecycle past collection."""
 
     user = User(
         username="admin",
@@ -191,6 +191,6 @@ def test_terminal_output_pass_keeps_safe_ssh_noise_with_action_deadline(
     assert world_planner.ensure_user_session.call_count == 1
     call = world_planner.ensure_user_session.call_args
     assert call.kwargs["session_kind"] == "ssh"
-    assert call.kwargs["allow_existing"] is False
-    assert call.kwargs["session_end_plan"].authority == "action_bundle"
-    assert call.kwargs["session_end_plan"].canonical_end == baseline.end_time
+    assert call.kwargs["allow_existing"] is True
+    assert call.kwargs["required_until"] == _WINDOW_START + timedelta(hours=1)
+    assert "session_end_plan" not in call.kwargs

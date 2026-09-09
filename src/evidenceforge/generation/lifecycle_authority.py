@@ -3574,11 +3574,27 @@ class GeneratorLifecycleAuthority:
                 identity.parent_pid,
                 identity.started_at,
             )
-            if parent is None and (identity.parent_pid != 4 or snapshot.identity.parent_object_id):
-                raise StateError(
-                    "Action cohort registered process has no exact lifecycle parent: "
-                    f"{identity.object_id}"
-                )
+            recorded_parent_object_id = snapshot.identity.parent_object_id
+            if parent is None:
+                if identity.parent_pid == 4 and not recorded_parent_object_id:
+                    # Narrow compatibility fixtures may model Windows PID 4 as a
+                    # virtual kernel parent with no lifecycle row.
+                    pass
+                elif (
+                    recorded_parent_object_id
+                    and self._registry.get_process(recorded_parent_object_id) is None
+                ):
+                    # A bootstrap-handoff parent (for example userinit.exe) does not
+                    # own the lifetime of the shell it launches.  Once that parent
+                    # ages out of bounded retention, the child's immutable,
+                    # registration-validated parent edge is the surviving exact
+                    # lifecycle proof.
+                    parent_object_id = recorded_parent_object_id
+                else:
+                    raise StateError(
+                        "Action cohort registered process has no exact lifecycle parent: "
+                        f"{identity.object_id}"
+                    )
             # Narrow compatibility fixtures may model Windows PID 4 as a virtual
             # kernel parent with no lifecycle row. Production boot fleets materialize
             # it, in which case the exact at-start parent must agree below.

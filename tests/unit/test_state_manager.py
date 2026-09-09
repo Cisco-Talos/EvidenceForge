@@ -495,27 +495,6 @@ def test_boot_epoch_and_explicit_thread_allocation_fence_prepared_process_plan()
 
         assert later_id > 180
 
-    def test_sessions_for_user_at_stops_at_transport_close(self):
-        """Transport-backed sessions should not own activity after their close time."""
-        sm = StateManager()
-        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        close = start + timedelta(minutes=8)
-        logon_id = sm.create_session(
-            username="alice",
-            system="linux01",
-            logon_type=10,
-            source_ip="10.0.1.50",
-            start_time=start,
-            session_kind="ssh",
-        )
-        sm.update_session_metadata(logon_id, network_close_time=close)
-
-        assert [
-            s.logon_id for s in sm.get_sessions_for_user_at("alice", close - timedelta(seconds=1))
-        ] == [logon_id]
-        assert sm.get_sessions_for_user_at("alice", close) == []
-        assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
-
     def test_active_and_historical_session_queries_have_explicit_boundaries(self):
         """Active-only lookup must exclude ended state that historical lookup can render."""
         sm = StateManager()
@@ -2288,6 +2267,33 @@ class TestSessionManagement:
 
         assert sm.get_session_id(ssh) == 0
 
+    @pytest.mark.parametrize("session_kind", ["ssh", "rdp"])
+    def test_transport_backed_sessions_stop_owning_activity_at_close(
+        self,
+        session_kind: str,
+    ) -> None:
+        """A closed transport cannot keep its former session alive through dependents."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        close = start + timedelta(minutes=8)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind=session_kind,
+        )
+        sm.update_session_metadata(logon_id, network_close_time=close)
+
+        assert [
+            session.logon_id
+            for session in sm.get_sessions_for_user_at("alice", close - timedelta(seconds=1))
+        ] == [logon_id]
+        assert sm.get_sessions_for_user_at("alice", close) == []
+        assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
+        assert not sm.update_session_activity_time(logon_id, close)
+
     def test_create_session_uses_host_local_monotonic_luids(self):
         """New LogonIDs on one host should follow source-native LUID ordering."""
         sm = StateManager()
@@ -2930,6 +2936,18 @@ class TestProcessManagement:
 
         pid = sm.create_process("WS-01", 0, "System", "System", "SYSTEM", "System")
         assert pid > 0  # PID allocated successfully
+
+    def test_process_termination_rejects_time_before_process_start(self) -> None:
+        """Canonical process state must never admit an inverted lifecycle."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        pid = sm.create_process("linux01", 0, "/usr/bin/ip", "ip addr show", "root", "Medium")
+
+        with pytest.raises(StateError, match="cannot precede process start"):
+            sm.end_process("linux01", pid, start - timedelta(microseconds=1))
+
+        assert sm.get_process("linux01", pid) is not None
 
     def test_create_process_with_valid_parent(self):
         """Test creating child process with valid parent."""

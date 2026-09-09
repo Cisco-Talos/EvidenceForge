@@ -38,6 +38,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from evidenceforge.events.collection_policy import canonical_source_hostname
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -352,7 +353,7 @@ class EmitterSetupMixin:
         _sensor_hostnames_by_format: dict[str, list[str]] = {}
         if self.scenario.environment.network and self.scenario.environment.network.sensors:
             for s in self.scenario.environment.network.sensors:
-                hostname = s.hostname or s.name
+                hostname = canonical_source_hostname(s.hostname or s.name)
                 for fmt in expand_formats(s.log_formats):
                     _sensor_hostnames_by_format.setdefault(fmt, []).append(hostname)
 
@@ -398,7 +399,7 @@ class EmitterSetupMixin:
                 ]
                 for sensor in self.scenario.environment.network.sensors:
                     if sensor.interfaces:
-                        hostname = sensor.hostname or sensor.name
+                        hostname = canonical_source_hostname(sensor.hostname or sensor.name)
                         asa_emitter._sensor_interfaces[hostname] = sensor.interfaces
                         asa_emitter._sensor_security_levels[hostname] = (
                             sensor.interface_security_levels

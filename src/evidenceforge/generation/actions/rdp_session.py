@@ -99,6 +99,9 @@ from evidenceforge.utils.time import ensure_utc
 RDP_TRANSPORT_DURATION_MAX_SECONDS = 3600.0
 RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS = 1500
 _RDP_EXPLICIT_END_CLOSE_GAP_MIN_MILLISECONDS = 100
+_RDP_NATURAL_RECONNECT_TIMEOUT_MIN_SECONDS = 5 * 60
+_RDP_NATURAL_RECONNECT_TIMEOUT_MODE_SECONDS = 12 * 60
+_RDP_NATURAL_RECONNECT_TIMEOUT_MAX_SECONDS = 30 * 60
 _RDP_TERMINAL_PROCESS_RELATIONSHIPS = {
     "ecar": (("source.ecar_process_create", 950), ("source.ecar_process_terminate", 220)),
     "windows_security": (
@@ -311,10 +314,14 @@ class _RdpTerminalProjectionTimingProof:
                 raise StateError("Exact RDP terminal timing proof repeats a source")
             seen.add(source_key)
             normalized.append((format_name, source_ordinal, ensure_utc(timestamp)))
-        if self.disposition is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED:
+        if self.disposition in {
+            ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED,
+            ActionCohortProjectionDisposition.EXACT_COLLECTION_SUPPRESSED,
+            ActionCohortProjectionDisposition.EXACT_OBSERVATION_SUPPRESSED,
+        }:
             if normalized:
                 raise StateError(
-                    "Exact warm-up-suppressed RDP terminal proof cannot carry source frontiers"
+                    "Exact suppressed RDP terminal proof cannot carry source frontiers"
                 )
         elif not normalized:
             raise StateError("Exact visible RDP terminal timing proof requires source frontiers")
@@ -1304,8 +1311,27 @@ class RdpSessionActionBundle:
     def _effective_rdp_end_plan(self, transport_close: datetime) -> SessionEndPlan:
         """Return one immutable end plan shared by State and the RDP manager."""
 
-        deadline = self._exact_rdp_deadline(transport_close)
         requested = self._request.session_end_plan
+        registry_end = ensure_utc(
+            self._executor._rdp_session_manager.application_registry.window_end
+        )
+        generation_end = ensure_utc(getattr(self._executor, "_scenario_end_time", registry_end))
+        if requested is None and registry_end > generation_end:
+            reconnect_timeout_seconds = self._timing_planner().triangular_seconds(
+                relationship_key="rdp.natural_reconnect_timeout",
+                stable_id=self._request.stable_id,
+                minimum=_RDP_NATURAL_RECONNECT_TIMEOUT_MIN_SECONDS,
+                mode=_RDP_NATURAL_RECONNECT_TIMEOUT_MODE_SECONDS,
+                maximum=_RDP_NATURAL_RECONNECT_TIMEOUT_MAX_SECONDS,
+                host=self._request.target_system.hostname,
+                lifecycle_id=self._request.stable_id,
+                sample_key="natural_reconnect_timeout",
+            )
+            deadline = ensure_utc(transport_close) + timedelta(seconds=reconnect_timeout_seconds)
+            if deadline >= registry_end:
+                raise StateError("Natural RDP lifecycle exceeds the internal settlement window")
+        else:
+            deadline = self._exact_rdp_deadline(transport_close)
         if requested is not None and ensure_utc(requested.canonical_end) == deadline:
             return requested
         return SessionEndPlan(
@@ -1403,7 +1429,9 @@ class RdpSessionActionBundle:
         """Prepare the exact initial RDP owner graph without State mutation."""
 
         state = self._executor.state_manager
-        logical_terminal_deadline = self._exact_rdp_deadline(transport_close)
+        logical_terminal_deadline = ensure_utc(effective_end_plan.canonical_end)
+        if logical_terminal_deadline <= ensure_utc(transport_close):
+            raise StateError("Exact RDP transport must close before its logical deadline")
         session_start = ensure_utc(logon_time)
         # Keep enough canonical headroom for independently delayed Security and
         # Sysmon process-start observations to remain visible before 4624.

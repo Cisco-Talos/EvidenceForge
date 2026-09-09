@@ -2051,8 +2051,16 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     """Estimate foreground Linux command lifetime for shell-history ordering."""
     exe_name = process_name.rsplit("/", 1)[-1].lower()
     command = command_line.lower()
-    follows_output = any(pattern in command for pattern in ("tail -f", "watch ", "--follow"))
-    if follows_output or (exe_name != "test" and " -f " in command):
+    follows_output = (
+        any(pattern in command for pattern in ("tail -f", "watch ", "--follow"))
+        or (exe_name == "journalctl" and " -f " in f" {command} ")
+        or (
+            exe_name in {"docker", "kubectl"}
+            and " logs " in f" {command} "
+            and " -f " in f" {command} "
+        )
+    )
+    if follows_output:
         return None
     if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
         "/usr/lib/apt/methods/"
@@ -5494,13 +5502,13 @@ class ActivityGenerator:
                 window_start=proxy_window_start,
                 window_end=proxy_window_end,
             )
-        elif (
-            application_channel_registry.window_start != proxy_window_start
-            or application_channel_registry.window_end != proxy_window_end
-        ):
+        elif application_channel_registry.window_start != proxy_window_start:
             raise ValueError(
-                "ActivityGenerator window must exactly match the shared application registry"
+                "ActivityGenerator start must exactly match the shared application registry"
             )
+        elif application_channel_registry.window_end < proxy_window_end:
+            raise ValueError("Application lifecycle window cannot end before generation")
+        application_window_end = application_channel_registry.window_end
         if dispatcher is None and emitters:
             # Auto-create dispatcher for backward compat with tests
             dispatcher = EventDispatcher(
@@ -5583,19 +5591,19 @@ class ActivityGenerator:
         self._application_channel_registry = application_channel_registry
         self._proxy_channel_manager = ExplicitProxyChannelManager(
             window_start=proxy_window_start,
-            window_end=proxy_window_end,
+            window_end=application_window_end,
             registry=application_channel_registry,
             shard_count=application_channel_registry.shard_count,
         )
         self._http_channel_manager = HttpApplicationChannelManager(
             window_start=proxy_window_start,
-            window_end=proxy_window_end,
+            window_end=application_window_end,
             registry=application_channel_registry,
         )
         self._ssh_channel_manager = SshApplicationChannelManager(
             application_registry=application_channel_registry,
             window_start=proxy_window_start,
-            window_end=proxy_window_end,
+            window_end=application_window_end,
         )
         rdp_manager_requires_eager_binding = (
             rdp_session_manager is not None or not lifecycle_compatibility_fixture_mode
@@ -5604,7 +5612,7 @@ class ActivityGenerator:
             rdp_session_manager = RdpReconnectStateManager(
                 application_registry=application_channel_registry,
                 window_start=proxy_window_start,
-                window_end=proxy_window_end,
+                window_end=application_window_end,
             )
         elif (
             type(rdp_session_manager) is not RdpReconnectStateManager
@@ -5617,7 +5625,7 @@ class ActivityGenerator:
         self._smb_channel_manager = SmbApplicationChannelManager(
             application_registry=application_channel_registry,
             window_start=proxy_window_start,
-            window_end=proxy_window_end,
+            window_end=application_window_end,
         )
         self._persistent_smb_traffic_authority = PersistentSmbTrafficRebindAuthority()
         self._persistent_smb_terminal_continuations = PersistentSmbTerminalContinuationAuthority(
@@ -5668,9 +5676,9 @@ class ActivityGenerator:
         self._dns_cache_last_prune = 0.0
         self._cryptographic_material_registry = CryptographicMaterialRegistry()
         network_window_end = (
-            proxy_window_end
-            if proxy_window_end == datetime.max.replace(tzinfo=UTC)
-            else proxy_window_end + timedelta(microseconds=1)
+            application_window_end
+            if application_window_end == datetime.max.replace(tzinfo=UTC)
+            else application_window_end + timedelta(microseconds=1)
         )
         self._network_transaction_runtime = NetworkTransactionRuntime(
             state_manager=state_manager,
@@ -6135,6 +6143,71 @@ class ActivityGenerator:
             or timing.watermark < canonical_cutoff
         ):
             raise StateError("Terminal lifecycle/runtime/timing cleanup missed its frontier")
+
+    def terminal_lifecycle_frontier(self, collection_end: datetime) -> datetime:
+        """Return the latest exact lifecycle deadline planned before collection ended.
+
+        Collection is an observation fence, not a lifecycle deadline. The engine uses this
+        canonical frontier only during terminal settlement; the dispatcher still excludes every
+        source-native observation at or beyond the public collection cutoff.
+        """
+
+        candidates = [ensure_utc(collection_end)]
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        with self._ssh_close_journal_lock:
+            for item in self._pending_ssh_session_closures:
+                if type(item) is _SshCloseContinuation:
+                    plan = item.plan
+                    candidates.extend(
+                        timestamp
+                        for timestamp in (
+                            plan.close_time,
+                            plan.source_terminate_time,
+                            plan.receiver_terminate_time,
+                            plan.session_close_time,
+                            plan.logind_remove_time,
+                        )
+                        if timestamp is not None
+                    )
+                else:
+                    candidates.append(ensure_utc(item[0]))
+
+        with self._rdp_lifecycle_journal_lock:
+            candidates.extend(
+                entry.continuation.prepared.hard_deadline
+                for entry in self._pending_rdp_lifecycle_continuations.values()
+            )
+
+        candidates.extend(
+            finalizer[4] for finalizer in self._foreground_process_finalizers.values()
+        )
+        candidates.extend(
+            connection.close_time
+            for connection in self.state_manager.state.open_connections.values()
+            if connection.close_time is not None
+        )
+        with self._linux_sudo_tty_lock:
+            candidates.extend(
+                continuation.base_logoff_time
+                for continuation in self._pending_linux_sudo_logoffs.values()
+            )
+
+        frontier = max(ensure_utc(timestamp) for timestamp in candidates)
+        if frontier > self._application_channel_registry.window_end:
+            raise StateError("Planned lifecycle exceeds the internal settlement window")
+        return frontier
+
+    def terminal_runtime_frontier(self, lifecycle_frontier: datetime) -> datetime:
+        """Return the latest concrete source time created by lifecycle settlement."""
+
+        candidates = [ensure_utc(lifecycle_frontier)]
+        candidates.extend(self._process_source_create_times.values())
+        candidates.extend(self._process_source_terminate_times.values())
+        candidates.extend(value[1] for value in self._process_source_create_latest.values())
+        candidates.extend(value[1] for value in self._process_source_terminate_latest.values())
+        candidates.extend(self._session_process_source_terminate_times.values())
+        return max(ensure_utc(timestamp) for timestamp in candidates)
 
     def _remember_process_connection_hold(
         self,
@@ -6802,7 +6875,11 @@ class ActivityGenerator:
         frontiers = entry.source_projection_frontiers
         if source_identity is None:
             return disposition is None and frontiers == ()
-        if disposition is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED:
+        if disposition in {
+            ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED,
+            ActionCohortProjectionDisposition.EXACT_COLLECTION_SUPPRESSED,
+            ActionCohortProjectionDisposition.EXACT_OBSERVATION_SUPPRESSED,
+        }:
             return frontiers == ()
         return bool(
             disposition is ActionCohortProjectionDisposition.SOURCE_FRONTIERS_REQUIRED and frontiers
@@ -7676,6 +7753,16 @@ class ActivityGenerator:
                 requested_time,
             ),
         )
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and session.session_kind.casefold() == "ssh":
+            shell_ready = self._linux_ssh_process_shell_ready_time(
+                system=system,
+                session=session,
+                username=username,
+                parent_pid=parent_pid,
+                activity_time=reserved_time,
+            )
+            reserved_time = max(reserved_time, shell_ready + timedelta(milliseconds=50))
         return self._reserve_foreground_shell_time(
             system=system,
             username=username,
@@ -7684,6 +7771,46 @@ class ActivityGenerator:
             requested_time=reserved_time,
             seed_text=command_line,
         )
+
+    def _linux_ssh_process_shell_ready_time(
+        self,
+        *,
+        system: System,
+        session: ActiveSession,
+        username: str,
+        parent_pid: int,
+        activity_time: datetime,
+    ) -> datetime:
+        """Return the actual or deterministically planned SSH shell readiness."""
+
+        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        if (
+            explicit_parent is not None
+            and explicit_parent.logon_id == session.logon_id
+            and explicit_parent.image.rsplit("/", 1)[-1].casefold() in {"bash", "sh", "zsh"}
+        ):
+            return ensure_utc(explicit_parent.start_time)
+
+        session_shell = (
+            self.state_manager.get_process(system.hostname, session.session_shell_pid)
+            if session.session_shell_pid is not None
+            else None
+        )
+        if (
+            session_shell is not None
+            and session_shell.logon_id == session.logon_id
+            and session_shell.image.rsplit("/", 1)[-1].casefold() in {"bash", "sh", "zsh"}
+        ):
+            return ensure_utc(session_shell.start_time)
+
+        _, shell_ready = self._linux_ssh_session_shell_times(
+            user=self._user_model_for_username(username),
+            target_system=system,
+            session=session,
+            logon_time=session.start_time,
+            activity_time=activity_time,
+        )
+        return shell_ready
 
     def _reusable_linux_sudo_shell_pid(
         self,
@@ -8689,13 +8816,28 @@ class ActivityGenerator:
         proto: str,
         time: datetime,
         os_category: str,
+        *,
+        opened_at: datetime | None = None,
+        closed_at: datetime | None = None,
     ) -> int:
-        """Allocate an ephemeral port while avoiding exact 5-tuple reuse."""
+        """Allocate an ephemeral port while avoiding exact 5-tuple reuse.
+
+        ``opened_at`` and ``closed_at`` describe the eventual canonical transport
+        interval when it is already bounded by the caller. Compatibility callers
+        that only need an event-time preview retain the one-microsecond probe.
+        """
         rng = _get_rng()
         reuse_window = _RECENT_CONNECTION_REUSE_WINDOW_SECONDS
+        runtime = self._network_transaction_runtime
+        canonical_open = ensure_utc(opened_at or time)
+        canonical_close = ensure_utc(closed_at) if closed_at is not None else canonical_open
+        if canonical_close < canonical_open:
+            raise ValueError("Ephemeral-port availability interval cannot close before it opens")
+        if canonical_close == canonical_open:
+            canonical_close += timedelta(microseconds=1)
         for _ in range(128):
             src_port = _ephemeral_port(rng, os_category)
-            if not self._connection_tuple_recently_used(
+            if self._connection_tuple_recently_used(
                 src_ip,
                 src_port,
                 dst_ip,
@@ -8704,16 +8846,25 @@ class ActivityGenerator:
                 time,
                 reuse_window=reuse_window,
             ):
-                self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
-                return src_port
+                continue
+            if not runtime.transport_tuple_interval_available(
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                protocol=proto,
+                opened_at=canonical_open,
+                closed_at=canonical_close,
+            ):
+                continue
+            self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
+            return src_port
         low, high = (32_768, 60_999) if os_category == "linux" else (49_152, 65_535)
         size = high - low + 1
         start = rng.randrange(size)
         stride = rng.randrange(1, size + 1)
         while math.gcd(stride, size) != 1:
             stride = 1 if stride == size else stride + 1
-        runtime = self._network_transaction_runtime
-        instantaneous_close = ensure_utc(time) + timedelta(microseconds=1)
         for offset in range(size):
             src_port = low + ((start + offset * stride) % size)
             if self._connection_tuple_recently_used(
@@ -8732,8 +8883,8 @@ class ActivityGenerator:
                 dst_ip=dst_ip,
                 dst_port=dst_port,
                 protocol=proto,
-                opened_at=ensure_utc(time),
-                closed_at=instantaneous_close,
+                opened_at=canonical_open,
+                closed_at=canonical_close,
             ):
                 continue
             self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
@@ -10666,11 +10817,9 @@ class ActivityGenerator:
                 provisional_end,
             )
 
-        process_rng = random.Random(
-            _stable_seed(
-                "high_confidence_user_connection_owner:"
-                f"{source_system.hostname}:{user.username}:{image}:{time.isoformat()}"
-            )
+        timing_stable_id = (
+            "high-confidence-user-connection-owner:"
+            f"{source_system.hostname}:{user.username}:{image}:{time.isoformat()}"
         )
         if resident_resource_owner:
             process_time = ensure_utc(session.start_time) + timedelta(
@@ -10688,9 +10837,28 @@ class ActivityGenerator:
                 else _linux_foreground_lifetime(image, command_line)
             )
             if process_lifetime is None:
-                lead_seconds = process_rng.uniform(3.0, 30.0)
+                lead_seconds = self._activity_timing_planner.triangular_seconds(
+                    relationship_key="activity.connection_owner.process_lead",
+                    stable_id=timing_stable_id,
+                    minimum=3.0,
+                    mode=8.0,
+                    maximum=30.0,
+                    host=source_system.hostname,
+                    lifecycle_id=session.logon_id,
+                    sample_key="unbounded_process_lead",
+                )
             else:
-                lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
+                maximum_lead = min(8.0, process_lifetime[1])
+                lead_seconds = self._activity_timing_planner.triangular_seconds(
+                    relationship_key="activity.connection_owner.process_lead",
+                    stable_id=timing_stable_id,
+                    minimum=0.4,
+                    mode=min(1.5, maximum_lead),
+                    maximum=maximum_lead,
+                    host=source_system.hostname,
+                    lifecycle_id=session.logon_id,
+                    sample_key="bounded_process_lead",
+                )
             process_time = time - timedelta(seconds=lead_seconds)
         min_process_time = ensure_utc(session.start_time) + timedelta(milliseconds=500)
         if process_time < min_process_time:
@@ -10773,6 +10941,8 @@ class ActivityGenerator:
         running = self.state_manager.get_process(source_system.hostname, pid)
         if running is not None:
             if process_lifetime is not None:
+                minimum_lifetime, maximum_lifetime = process_lifetime
+                median_lifetime = minimum_lifetime + (maximum_lifetime - minimum_lifetime) * 0.34
                 self._remember_foreground_process_finalizer(
                     system=source_system,
                     user=user,
@@ -10780,7 +10950,19 @@ class ActivityGenerator:
                     process_name=running.image,
                     logon_id=running.logon_id,
                     termination_time=time
-                    + timedelta(seconds=process_rng.uniform(*process_lifetime)),
+                    + timedelta(
+                        seconds=self._activity_timing_planner.right_skew_seconds(
+                            relationship_key="activity.connection_owner.process_lifetime",
+                            stable_id=timing_stable_id,
+                            minimum=minimum_lifetime,
+                            median=median_lifetime,
+                            maximum=maximum_lifetime,
+                            sigma=0.78,
+                            host=source_system.hostname,
+                            lifecycle_id=running.lifecycle_group_id,
+                            sample_key="process_lifetime",
+                        )
+                    ),
                 )
             return pid, running.image
         return pid, image
@@ -18804,6 +18986,7 @@ class ActivityGenerator:
         concurrency_group_id: str = "",
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
+        require_exact_parent: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -18823,6 +19006,8 @@ class ActivityGenerator:
             process_name: Full path to executable
             command_line: Command line string
             parent_pid: Parent process PID (default 4 = System)
+            require_exact_parent: Reject the execution if ``parent_pid`` is not the exact
+                live parent instead of applying generic parent-repair heuristics.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -18844,6 +19029,7 @@ class ActivityGenerator:
             process_name=process_name,
             command_line=command_line,
             parent_pid=parent_pid,
+            require_exact_parent=require_exact_parent,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -18880,14 +19066,16 @@ class ActivityGenerator:
         ):
             # Profiled service workers own their manager/worker composite admission.
             return request
-        parent_pid = self._resolve_existing_prepared_process_parent(
-            system=request.system,
-            user=request.user,
-            time=actor.started_at,
-            logon_id=actor.logon_id,
-            parent_pid=request.parent_pid,
-            process_username=actor.username,
-        )
+        parent_pid = request.parent_pid
+        if not request.require_exact_parent:
+            parent_pid = self._resolve_existing_prepared_process_parent(
+                system=request.system,
+                user=request.user,
+                time=actor.started_at,
+                logon_id=actor.logon_id,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
         if parent_pid != request.parent_pid:
             request = replace(request, parent_pid=parent_pid)
             actor = self._prepare_process_effect_actor(request)
@@ -19905,6 +20093,26 @@ class ActivityGenerator:
                 % 1400
             )
             started_at = ensure_utc(session.start_time) + timedelta(milliseconds=offset_ms)
+        is_linux_login_shell = (
+            _get_os_category(system.os) == "linux"
+            and exe_lower in {"bash", "sh", "zsh"}
+            and command_line.strip() == f"-{exe_lower}"
+        )
+        if (
+            _get_os_category(system.os) == "linux"
+            and session is not None
+            and session.session_kind.casefold() == "ssh"
+            and not is_linux_login_shell
+        ):
+            shell_ready = self._linux_ssh_process_shell_ready_time(
+                system=system,
+                session=session,
+                username=process_username,
+                parent_pid=request.parent_pid,
+                activity_time=started_at,
+            )
+            if started_at <= shell_ready:
+                started_at = shell_ready + timedelta(milliseconds=50)
         parent = self.state_manager.get_process(system.hostname, request.parent_pid)
         if parent is not None and started_at <= ensure_utc(parent.start_time):
             offset_ms = 50 + (
@@ -20277,7 +20485,7 @@ class ActivityGenerator:
             command_line=command_line,
             username=user.username,
         )
-        if profiled_worker is not None:
+        if profiled_worker is not None and not request.require_exact_parent:
             family_name, worker_name, _family = profiled_worker
             return self._ensure_profiled_service_worker(
                 system=system,
@@ -20530,7 +20738,7 @@ class ActivityGenerator:
 
         singleton_pid = (
             self._existing_windows_singleton_pid(system, process_name, time)
-            if not prepared_requires_new_root
+            if not prepared_requires_new_root and not request.require_exact_parent
             else None
         )
         if singleton_pid is not None:
@@ -20625,7 +20833,23 @@ class ActivityGenerator:
                 self._record_reused_process_optional_effects(prepared_effects)
                 return browser_pid
 
-        if prepared_requires_new_root:
+        if request.require_exact_parent:
+            if not self._is_valid_process_parent_at(
+                system=system,
+                parent_pid=parent_pid,
+                time=time,
+            ) or not self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=parent_pid,
+                logon_id=process_logon_id,
+                os_category=_get_os_category(system.os),
+            ):
+                raise StateError(
+                    "Exact authored process parent is not live in the child session: "
+                    f"host={system.hostname} parent_pid={parent_pid} "
+                    f"child={process_name!r}"
+                )
+        elif prepared_requires_new_root:
             parent_pid = self._resolve_existing_prepared_process_parent(
                 system=system,
                 user=user,
@@ -21055,19 +21279,28 @@ class ActivityGenerator:
                 )
                 if builder.effect_provenance is not None
             )
-            action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                prepared_endpoint.root_anchor.action_id,
-                action_cohort_state_plan,
-                (root_dispatch, *dependent_dispatches),
-                (
-                    ExecutionEffectAuditCohortEntry(
-                        endpoint_effect_plan,
-                        endpoint_reconciliation,
+            try:
+                action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
+                    prepared_endpoint.root_anchor.action_id,
+                    action_cohort_state_plan,
+                    (root_dispatch, *dependent_dispatches),
+                    (
+                        ExecutionEffectAuditCohortEntry(
+                            endpoint_effect_plan,
+                            endpoint_reconciliation,
+                        ),
                     ),
-                ),
-                effect_member_bindings,
-                (),
-            )
+                    effect_member_bindings,
+                    (),
+                )
+            except BaseException as primary:
+                if not timing_preparation.committed:
+                    self._reconcile_generator_cleanup(
+                        primary,
+                        "process action-cohort source timing",
+                        timing_preparation.cancel,
+                    )
+                raise
             self.dispatcher.publish_prepared_action_cohort_batch(action_cohort_batch)
             running_proc = self.state_manager.get_process(system.hostname, pid)
             if running_proc is None:  # pragma: no cover - authenticated State result invariant
@@ -29435,29 +29668,13 @@ class ActivityGenerator:
         ):
             return None
 
-        shell_seed = _stable_seed(
-            "linux_ssh_session_shell:"
-            f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
+        sshd_time, bash_time = self._linux_ssh_session_shell_times(
+            user=user,
+            target_system=target_system,
+            session=session,
+            logon_time=logon_time,
+            activity_time=activity_time,
         )
-        source_ready_time = _session_source_ready_time(session)
-        source_floor = logon_time + timedelta(milliseconds=150)
-        if source_ready_time is not None:
-            source_floor = max(source_floor, source_ready_time + timedelta(milliseconds=50))
-        sshd_delay_ms = 900 + (shell_seed % 1400)
-        sshd_time = max(logon_time + timedelta(milliseconds=sshd_delay_ms), source_floor)
-        if (
-            scenario_start is not None
-            and activity_time >= scenario_start
-            and sshd_time < scenario_start
-        ):
-            pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
-            scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
-            sshd_time = max(scenario_floor, activity_time - pre_command_gap)
-        effective_activity_time = max(activity_time, sshd_time + timedelta(milliseconds=700))
-        latest_parent_time = effective_activity_time - timedelta(milliseconds=500)
-        if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
-            sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
-
         session_sshd_pid = self._ssh_session_transport_process_parent(
             session,
             target_system,
@@ -29478,13 +29695,6 @@ class ActivityGenerator:
                 ),
             )
         )
-        bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
-        effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
-        latest_bash_time = effective_activity_time - timedelta(milliseconds=120)
-        if bash_time > latest_bash_time and latest_bash_time >= sshd_time + timedelta(
-            milliseconds=20
-        ):
-            bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
         if source_visible_by is not None:
             if session_sshd_source is None:
                 return None
@@ -29526,6 +29736,55 @@ class ActivityGenerator:
         session.session_shell_pid = bash_pid
         session.process_tree_root = session_sshd_pid
         return bash_pid
+
+    def _linux_ssh_session_shell_times(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        session: ActiveSession,
+        logon_time: datetime,
+        activity_time: datetime,
+    ) -> tuple[datetime, datetime]:
+        """Preview the deterministic receiver and login-shell canonical times."""
+
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        shell_seed = _stable_seed(
+            "linux_ssh_session_shell:"
+            f"{target_system.hostname}:{user.username}:{session.logon_id}:"
+            f"{logon_time.isoformat()}"
+        )
+        source_ready_time = _session_source_ready_time(session)
+        source_floor = logon_time + timedelta(milliseconds=150)
+        if source_ready_time is not None:
+            source_floor = max(source_floor, source_ready_time + timedelta(milliseconds=50))
+        sshd_delay_ms = 900 + (shell_seed % 1400)
+        sshd_time = max(logon_time + timedelta(milliseconds=sshd_delay_ms), source_floor)
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and sshd_time < scenario_start
+        ):
+            pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
+            scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
+            sshd_time = max(scenario_floor, activity_time - pre_command_gap)
+        effective_activity_time = max(activity_time, sshd_time + timedelta(milliseconds=700))
+        latest_parent_time = effective_activity_time - timedelta(milliseconds=500)
+        if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
+            sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
+
+        bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
+        effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
+        latest_bash_time = effective_activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time and latest_bash_time >= sshd_time + timedelta(
+            milliseconds=20
+        ):
+            bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
+        return sshd_time, bash_time
 
     def _ssh_session_transport_process_parent(
         self,
@@ -30490,11 +30749,19 @@ class ActivityGenerator:
                 ),
                 timing_runtime=self.timing_runtime,
             )
+            session_deadline = _session_activity_end_time(session)
+            if session_deadline is not None and any(
+                stage_time >= session_deadline for stage_time in stage_times
+            ):
+                # Foreground serialization may move a command after the time at
+                # which its owning shell session was selected.  Treat the
+                # process projection as unavailable instead of attaching a
+                # child to an already-closed SSH session (or publishing only a
+                # prefix of one pipeline).
+                continue
             for (image, process_command_line), process_time in zip(
                 process_group, stage_times, strict=True
             ):
-                if not self._is_within_scenario_window(process_time):
-                    continue
                 network_close_time = getattr(session, "network_close_time", None)
                 if network_close_time is not None:
                     if network_close_time.tzinfo is None:
@@ -30566,6 +30833,14 @@ class ActivityGenerator:
             return
 
         requested_time = ensure_utc(requested_time)
+        collection_end = getattr(self.dispatcher, "output_end_time", None)
+        if collection_end is None:
+            collection_end = getattr(self, "_scenario_end_time", None)
+        if collection_end is not None and requested_time >= ensure_utc(collection_end):
+            # A command displaced beyond the collection boundary may still run
+            # in an already-modeled shell, but it must not fabricate a visible
+            # pre-boundary login solely to make that unobserved process possible.
+            return
         sessions = [
             session
             for session in self.state_manager.get_sessions_for_user(user.username)
@@ -33763,6 +34038,14 @@ class ActivityGenerator:
             "tcp",
             time,
             self._os_for_ip(source_ip),
+            opened_at=ensure_utc(time) - timedelta(seconds=1),
+            closed_at=ensure_utc(time)
+            + timedelta(
+                seconds=remote_auth_transport_max_duration_seconds(
+                    source="machine_account_logon",
+                    outcome="success",
+                )
+            ),
         )
         remote_request = WindowsRemoteAuthenticationRequest(
             target_system=target_system,

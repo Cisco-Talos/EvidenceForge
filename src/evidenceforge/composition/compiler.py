@@ -23,6 +23,7 @@ from evidenceforge.utils.paths import read_text_file_beneath
 from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
+from .identity import is_semantic_packaged_default
 from .models import (
     CompiledScenario,
     CompositionSpec,
@@ -304,6 +305,7 @@ def _load_packaged_defaults() -> dict[str, Any]:
         path
         for path in sorted(config_root.rglob("*.yaml"))
         if path.relative_to(config_root).parts[0] != "packs"
+        and is_semantic_packaged_default(path.relative_to(config_root).as_posix())
     ]
     signature = tuple(
         (

@@ -279,13 +279,17 @@ def test_batched_client_file_set_upload_preserves_identity_paths_and_direction(
             size_bytes=file.size_bytes,
             mime_type=file.mime_type,
             seed_ref=file.seed_ref or file.file_id,
-        ).digests.sha256
+        ).digests.sha256.lower()
         for file in source_files
     }
     assert {record["sha256"] for record in zeek_files} == expected_content
     assert all(record["md5"] and record["sha1"] for record in zeek_files)
+    expected_principal_by_host = {
+        hostname: username for username, hostname, _ip, _file_set in clients
+    }
     assert all(
-        "robocopy.exe" in record.get("properties", {}).get("image_path", "").lower()
+        record.get("principal") == expected_principal_by_host[record["hostname"]]
+        and record.get("properties", {}).get("image_path")
         for record in client_reads
     ), [record.get("properties", {}) for record in client_reads]
     assert manifest["schema_version"] == 3

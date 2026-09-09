@@ -23,6 +23,7 @@
 """Tests for LogonID system scoping — processes use the correct host's session."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -32,7 +33,11 @@ from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.scenario import LogonEventSpec, ProcessEventSpec
+from evidenceforge.models.scenario import (
+    LogonEventSpec,
+    ProcessAccessEventSpec,
+    ProcessEventSpec,
+)
 
 
 @pytest.fixture
@@ -583,6 +588,105 @@ class TestLogonIdSystemScoping:
         assert kwargs["time"] == start + timedelta(seconds=5)
         assert kwargs["from_storyline"] is True
 
+    def test_named_process_is_retained_through_implicit_process_access(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """A named process remains the live source through its last implicit effect."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        start = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start)
+        pid = state_manager.create_process(
+            system_a.hostname,
+            4,
+            r"C:\Windows\Temp\stager.exe",
+            "stager.exe",
+            attacker.username,
+            "High",
+            logon_id="0x12345",
+        )
+        engine.scenario.storyline = [
+            SimpleNamespace(
+                actor=attacker.username,
+                system=system_a.hostname,
+                events=[
+                    ProcessEventSpec(
+                        process_name=r"C:\Windows\Temp\stager.exe",
+                        process_ref="stager",
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                actor=attacker.username,
+                system=system_a.hostname,
+                events=[ProcessAccessEventSpec()],
+            ),
+        ]
+        engine._record_storyline_process_ref(
+            actor=attacker,
+            system=system_a,
+            process_ref="stager",
+            pid=pid,
+            image=r"C:\Windows\Temp\stager.exe",
+        )
+        engine._record_last_storyline_process(system_a, 9999, r"C:\Windows\Temp\ended.exe")
+        engine.activity_generator.generate_process_termination = Mock()
+
+        release_index = engine._storyline_process_ref_release_index(
+            actor=attacker,
+            system=system_a,
+            process_ref="stager",
+        )
+        engine._queue_story_process_termination(
+            actor=attacker,
+            system=system_a,
+            time=start + timedelta(seconds=5),
+            pid=pid,
+            process_name=r"C:\Windows\Temp\stager.exe",
+            logon_id="0x12345",
+            release_storyline_index=release_index,
+        )
+
+        engine._flush_story_process_terminations(
+            completed_storyline_index=0,
+            release_time=start + timedelta(seconds=20),
+        )
+        assert engine.activity_generator.generate_process_termination.call_count == 0
+        assert engine._last_storyline_process_for_system(system_a) == (
+            pid,
+            r"C:\Windows\Temp\stager.exe",
+        )
+
+        access_time = start + timedelta(minutes=15)
+        engine._flush_story_process_terminations(
+            completed_storyline_index=1,
+            release_time=access_time,
+        )
+        kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
+        assert kwargs["pid"] == pid
+        assert kwargs["time"] == access_time + timedelta(milliseconds=1)
+
+    def test_stale_explicit_parent_ref_fails_resolution(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """An ended named parent cannot silently resolve to a replacement process."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        engine._record_storyline_process_ref(
+            actor=attacker,
+            system=system_a,
+            process_ref="loader",
+            pid=4242,
+            image=r"C:\Windows\Temp\loader.exe",
+        )
+
+        assert (
+            engine._storyline_process_ref_for_parent(
+                actor=attacker,
+                system=system_a,
+                parent_ref="loader",
+            )
+            is None
+        )
+
 
 class _FixedRng:
     def uniform(self, a: float, b: float) -> float:
@@ -663,7 +767,10 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
         activity: str,
         explicit_types: set[str],
         future_specs=(),
+        authored_time_shift: timedelta = timedelta(0),
+        session_required_until: datetime | None = None,
     ):
+        del authored_time_shift, session_required_until
         observed_times.append(time)
         return None
 

@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.lifecycle import (
+    LifecycleCloseBarrier,
     LifecycleTransition,
     SessionEndPlan,
 )
@@ -329,6 +330,94 @@ def test_action_cohort_staged_start_requires_exact_live_parent_and_session_owner
     missing_owner_authority, _missing_registry = _authority(state)
     with pytest.raises(StateError, match="registered|registry|lifecycle"):
         missing_owner_authority.action_cohort_request(plan)
+
+
+def test_action_cohort_accepts_registered_parent_after_bootstrap_handoff_ages_out() -> None:
+    """A live shell's validated parent edge survives bounded handoff-parent retention."""
+
+    state = StateManager()
+    state.set_current_time(_START)
+    logon_id = state.create_session(
+        "operator",
+        "WIN-01",
+        2,
+        "-",
+        start_time=_START,
+        session_kind="interactive",
+    )
+    state.set_current_time(_START + timedelta(seconds=1))
+    handoff_pid = state.create_process(
+        "WIN-01",
+        0,
+        r"C:\Windows\System32\userinit.exe",
+        r"C:\Windows\System32\userinit.exe",
+        "operator",
+        "Medium",
+        logon_id=logon_id,
+    )
+    state.set_current_time(_START + timedelta(seconds=2))
+    shell_pid = state.create_process(
+        "WIN-01",
+        handoff_pid,
+        r"C:\Windows\explorer.exe",
+        r"C:\Windows\explorer.exe",
+        "operator",
+        "Medium",
+        logon_id=logon_id,
+    )
+    handoff = state.get_process_identity("WIN-01", handoff_pid)
+    shell = state.get_process_identity("WIN-01", shell_pid)
+    assert handoff is not None and shell is not None
+
+    registry = LifecycleRegistry(closed_retention=timedelta(hours=48), shard_count=4)
+    authority, _registry = _authority(state, registry)
+    authority.bootstrap_active_state()
+    handoff_snapshot = registry.get_process(handoff.object_id)
+    shell_snapshot = registry.get_process(shell.object_id)
+    assert handoff_snapshot is not None and handoff_snapshot.identity.role == "bootstrap_handoff"
+    assert shell_snapshot is not None
+    assert shell_snapshot.identity.parent_object_id == handoff.object_id
+
+    handoff_close = _START + timedelta(minutes=1)
+    barrier = LifecycleCloseBarrier(
+        barrier_id="bootstrap-handoff:barrier",
+        subject=handoff_snapshot.identity.ref,
+        requested_at=handoff_close,
+        authority="generated",
+        action_id="bootstrap-handoff:close",
+    )
+    ticket = registry.request_close(barrier, ticket_id="bootstrap-handoff:ticket")
+    registry.close(ticket.ticket_id)
+    state.set_current_time(handoff_close)
+    assert state.end_process("WIN-01", handoff_pid, handoff_close)
+
+    aged_frontier = handoff_close + timedelta(hours=49)
+    state.set_current_time(aged_frontier)
+    registry.advance_watermark(aged_frontier)
+    assert registry.get_process(handoff.object_id) is None
+    assert state.get_process_identity_by_object_id(handoff.object_id) is None
+    assert registry.get_process(shell.object_id) is not None
+
+    builder = state.begin_action_cohort_materialization()
+    child = builder.plan_process(
+        system="WIN-01",
+        parent_pid=shell_pid,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username="operator",
+        integrity_level="Medium",
+        os_category="windows",
+        logon_id=logon_id,
+        start_time=aged_frontier + timedelta(seconds=1),
+        parent_activity_time=aged_frontier + timedelta(seconds=1),
+    )
+    plan = builder.seal()
+
+    request = authority.action_cohort_request(plan)
+    start = request.operations[0]
+    assert isinstance(start, LifecycleProcessStartRequest)
+    assert start.identity.object_id == child.identity.object_id
+    assert start.identity.parent_object_id == shell.object_id
 
 
 def test_action_cohort_projection_enforces_256_operation_cap_without_mutation() -> None:

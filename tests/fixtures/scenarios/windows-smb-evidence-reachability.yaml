@@ -1,0 +1,56 @@
+version: "1.0"
+name: windows-smb-evidence-reachability
+description: "Windows SMB reachability validation fixture"
+
+environment:
+  description: "One Windows client and one persistent SMB file server"
+  users:
+    - username: analyst
+      full_name: "Test Analyst"
+      email: "analyst@example.com"
+      primary_system: WS-01
+      enabled: true
+  systems:
+    - hostname: WS-01
+      ip: 10.0.10.10
+      os: "Windows 11"
+      type: workstation
+      assigned_user: analyst
+    - hostname: FS-01
+      ip: 10.0.20.10
+      os: "Windows Server 2022"
+      type: server
+      roles: [file_server]
+      services: [smb]
+  network:
+    segments:
+      - name: internal
+        cidr: 10.0.0.0/16
+        exposure: internal
+        systems: [WS-01, FS-01]
+  storage:
+    population: small
+    activity: normal
+    servers:
+      - system: FS-01
+        presets: [collaboration]
+        default_volume: data
+        volumes:
+          - id: data
+            mount: "D:\\"
+            filesystem: ntfs
+
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "1h"
+
+baseline_activity:
+  description: "Normal Windows workstation and SMB activity"
+  intensity: low
+  variation: low
+
+output:
+  logs:
+    - format: windows
+  destination: "./output"
+  compression: false

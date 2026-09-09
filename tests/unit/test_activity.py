@@ -178,6 +178,30 @@ def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     assert lifetime is None
 
 
+def test_linux_output_file_flag_does_not_imply_follow_mode():
+    """A command-specific output flag must not occupy the shell until session close."""
+    lifetime = _linux_foreground_lifetime(
+        "/usr/bin/pg_dump",
+        "pg_dump -h localhost -U app_svc -Fc appdb -f /tmp/appdb.bin",
+    )
+
+    assert lifetime is not None
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        ("/usr/bin/tail", "tail -f /var/log/syslog"),
+        ("/usr/bin/journalctl", "journalctl -u ssh -f"),
+        ("/usr/bin/docker", "docker logs -f api-server"),
+        ("/usr/bin/kubectl", "kubectl logs -f deploy/api-server"),
+    ],
+)
+def test_linux_follow_commands_remain_unbounded(image: str, command_line: str) -> None:
+    """Known follow-mode commands retain the shell until explicitly stopped."""
+    assert _linux_foreground_lifetime(image, command_line) is None
+
+
 @pytest.mark.parametrize(
     ("image", "command_line"),
     [
@@ -10534,6 +10558,80 @@ class TestActivityGenerator:
 
         assert allocated == 45653
 
+    def test_ephemeral_allocator_skips_authoritative_runtime_interval(
+        self,
+        activity_gen,
+    ):
+        """Preview allocation must honor leases not exposed through compatibility state."""
+
+        event_time = datetime(2024, 3, 18, 17, 50, tzinfo=UTC)
+        opened_at = event_time - timedelta(seconds=1)
+        closed_at = event_time + timedelta(seconds=10)
+        runtime = activity_gen._network_transaction_runtime
+        preparation = runtime.begin(
+            owner_rng=random.Random(19),
+            stable_id="existing-ldap-transport",
+            linearization_time=opened_at,
+        )
+        preparation.reserve_transport_tuple(
+            intent_stable_id="existing-ldap-transport",
+            src_ip="10.10.4.10",
+            source_port=52_000,
+            dst_ip="10.10.2.10",
+            dst_port=389,
+            protocol="tcp",
+            opened_at=opened_at,
+            closed_at=closed_at,
+            source_os_category="windows",
+        )
+
+        candidates = iter([52_000, 52_001])
+        try:
+            with patch.object(
+                generator_module,
+                "_ephemeral_port",
+                side_effect=lambda rng, os_category="windows": next(candidates),
+            ):
+                allocated = activity_gen._allocate_ephemeral_port(
+                    "10.10.4.10",
+                    "10.10.2.10",
+                    389,
+                    "tcp",
+                    event_time,
+                    "windows",
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                )
+        finally:
+            preparation.cancel()
+
+        assert allocated == 52_001
+
+    def test_machine_account_port_preview_covers_remote_auth_interval(
+        self,
+        activity_gen,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Machine LDAP/SMB port previews must cover their complete transport window."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        allocator = Mock(side_effect=[51_000, 52_000])
+        monkeypatch.setattr(activity_gen, "_allocate_ephemeral_port", allocator)
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        service_call = next(call for call in allocator.call_args_list if call.args[2] in {389, 445})
+        assert service_call.kwargs["opened_at"] == timestamp - timedelta(seconds=1)
+        assert service_call.kwargs["closed_at"] > timestamp
+
     def test_recent_connection_tuple_cache_prunes_stale_entries(self, activity_gen):
         """Tuple reservations older than the reuse window should be removed by event time."""
         old_time = datetime(2024, 3, 17, 12, 0, tzinfo=UTC)
@@ -11720,6 +11818,60 @@ class TestActivityGenerator:
         ]
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
+
+    def test_generate_process_preserves_required_exact_storyline_parent(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Authored lineage bypasses heuristics that reject unrelated one-shot parents."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x33333"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=20))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        authored_parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=explorer_pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line='powershell.exe -NoProfile -Command "Get-LocalUser"',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Windows\System32\schtasks.exe",
+            'schtasks /create /tn "BillingSyncService" /sc onlogon',
+            parent_pid=authored_parent_pid,
+            require_exact_parent=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == authored_parent_pid
 
     def test_generate_process_spaces_bare_shell_child_commands(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -13870,6 +14022,81 @@ class TestActivityGenerator:
         assert session.last_activity_time is not None
         assert session.last_activity_time < planned_logoff
 
+    def test_serialized_bash_process_is_omitted_after_ssh_transport_close(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A queued command cannot attach process telemetry to a closed SSH session."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        close_time = command_time + timedelta(seconds=2)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = "0xabc126a"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="ssh",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = close_time + timedelta(seconds=1)
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen._maybe_emit_bash_process_telemetry(
+            test_user,
+            linux,
+            command_time,
+            "scp /tmp/report.csv backup@archive:/srv/report.csv",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert not any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/scp"
+            for event in events
+        )
+
     def test_generate_bash_command_collision_rejection_is_retry_neutral(self, test_user):
         """A collision shifted past a session fence cannot consume later cadence state."""
         command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
@@ -14020,10 +14247,10 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
 
-    def test_dropped_workstation_bash_command_does_not_bootstrap_local_session(
+    def test_post_collection_workstation_bash_command_does_not_bootstrap_local_session(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
-        """Rejected Linux workstation shell commands should not leave orphan logon evidence."""
+        """Post-collection commands should not leave orphan pre-cutoff logon evidence."""
         scenario_end = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         linux = System(
             hostname="WS-LNGUYEN-01",
@@ -14034,6 +14261,7 @@ class TestActivityGenerator:
         )
         activity_gen._scenario_start_time = scenario_end - timedelta(minutes=30)
         activity_gen._scenario_end_time = scenario_end
+        activity_gen.dispatcher.output_end_time = scenario_end
         state_manager.set_current_time(scenario_end - timedelta(minutes=30))
         systemd_pid = state_manager.create_process(
             linux.hostname,
@@ -14047,7 +14275,7 @@ class TestActivityGenerator:
 
         scheduled = activity_gen.generate_bash_command(test_user, linux, scenario_end, "git status")
 
-        assert scheduled is None
+        assert scheduled == scenario_end
         assert [
             session
             for session in state_manager.get_sessions_for_user(test_user.username)
@@ -14260,6 +14488,43 @@ class TestActivityGenerator:
 
         assert reserved > gzip_done
         assert scheduled_history > gzip_done
+
+    def test_linux_foreground_reservation_waits_for_unmaterialized_ssh_shell(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+    ) -> None:
+        """Authored commands reserve after SSH shell readiness before process creation."""
+        requested = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ready = requested + timedelta(seconds=1)
+        linux = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.1.34",
+            start_time=requested - timedelta(milliseconds=200),
+            session_kind="ssh",
+        )
+        state_manager.update_session_metadata(logon_id, source_ready_time=source_ready)
+
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=0,
+            requested_time=requested,
+            process_name="/usr/sbin/ip",
+            command_line="ip addr show",
+        )
+
+        assert reserved > source_ready
 
     def test_linux_process_activity_reserves_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters

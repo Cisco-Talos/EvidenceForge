@@ -126,37 +126,44 @@ def test_v2_monolithic_matches_v1_runtime_model(tmp_path: Path) -> None:
     assert compiled_v2.selected_packs == ()
 
 
-def test_iteration_pack_migration_preserves_assessment_semantics() -> None:
-    """The pack-backed assessment differs only in its intentional wrapper identity."""
+def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> None:
+    """The current assessment retains its archive while adding explicit coverage."""
 
     archived = compile_scenario(_ITERATION_ARCHIVE, project_root=_PROJECT_ROOT)
     packed = compile_scenario(_ITERATION_PACKED, project_root=_PROJECT_ROOT)
 
-    assert packed.scenario.environment == archived.scenario.environment
+    assert packed.scenario.environment.users == archived.scenario.environment.users
     assert packed.scenario.baseline_activity == archived.scenario.baseline_activity
-    assert packed.scenario.storyline == archived.scenario.storyline
-    assert packed.scenario.red_herrings == archived.scenario.red_herrings
     assert packed.scenario.time_window == archived.scenario.time_window
     assert packed.scenario.generation_seed == archived.scenario.generation_seed
     assert packed.scenario.observation_profile == archived.scenario.observation_profile
     assert packed.scenario.output.logs == archived.scenario.output.logs
     assert packed.scenario.output.compression == archived.scenario.output.compression
 
-    archived_payload = archived.scenario.model_dump(mode="json")
-    packed_payload = packed.scenario.model_dump(mode="json")
-    for payload in (archived_payload, packed_payload):
-        payload.pop("version")
-        payload.pop("name")
-        payload["output"].pop("destination")
-        assigned_personas = {
-            user["persona"] for user in payload["environment"]["users"] if user["persona"]
-        }
-        payload["personas"] = sorted(
-            (persona for persona in payload["personas"] if persona["name"] in assigned_personas),
-            key=lambda persona: persona["name"],
-        )
+    archived_hosts = {system.hostname for system in archived.scenario.environment.systems}
+    packed_hosts = {system.hostname for system in packed.scenario.environment.systems}
+    assert archived_hosts <= packed_hosts
+    assert packed_hosts - archived_hosts == {"DC-02", "FILE-LNX-01", "LOG-MON-01"}
 
-    assert packed_payload == archived_payload
+    archived_storyline_ids = {event.id for event in archived.scenario.storyline}
+    packed_storyline_ids = {event.id for event in packed.scenario.storyline}
+    assert archived_storyline_ids <= packed_storyline_ids
+    assert packed_storyline_ids - archived_storyline_ids == {"evt-017b", "evt-023b", "evt-032b"}
+
+    archived_red_herring_ids = {event.id for event in archived.scenario.red_herrings}
+    packed_red_herring_ids = {event.id for event in packed.scenario.red_herrings}
+    assert archived_red_herring_ids <= packed_red_herring_ids
+    assert packed_red_herring_ids - archived_red_herring_ids == {
+        "rh-007",
+        "rh-008",
+        "rh-009",
+        "rh-010",
+    }
+    assert len(archived.scenario.environment.storage.mappings) == 1
+    assert len(packed.scenario.environment.storage.mappings) == 3
+    assert len(archived.scenario.environment.storage.servers) == 1
+    assert len(packed.scenario.environment.storage.servers) == 2
+
     assert {
         (pack.source, pack.type, pack.name, pack.version) for pack in packed.selected_packs
     } == {
@@ -165,12 +172,12 @@ def test_iteration_pack_migration_preserves_assessment_semantics() -> None:
             "project",
             "organization",
             "meridian-healthcare-solutions",
-            "1.0.0",
+            "1.1.0",
         ),
     }
     assert {pack.location for pack in packed.selected_packs} == {
         "package:evidenceforge:industry:technology@1.0.0",
-        "project:evidenceforge:organization:meridian-healthcare-solutions@1.0.0",
+        "project:davidjbianco:organization:meridian-healthcare-solutions@1.1.0",
     }
     assert packed.provenance["organization_model_origins"]["environment.domain"] == (
         "model/environment.yaml"

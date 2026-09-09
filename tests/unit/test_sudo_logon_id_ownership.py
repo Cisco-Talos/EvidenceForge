@@ -1054,7 +1054,7 @@ def test_strict_sudo_tty_incompatible_hard_plan_rejects_before_journal_or_state(
     assert _sudo_tty_state(generator) == route_before
 
 
-def test_strict_sudo_tty_hard_bound_after_session_activity_rejects_before_journal(
+def test_strict_sudo_tty_rejects_invalid_activity_and_manual_drift_before_journal(
     tmp_path: Path,
 ) -> None:
     engine, generator, state, system = _strict_sudo_generator(tmp_path)
@@ -1077,10 +1077,13 @@ def test_strict_sudo_tty_hard_bound_after_session_activity_rejects_before_journa
         lifecycle_group_id="sudo:hard-bound-session-activity",
         end_plan=plan,
     )
-    assert state.update_session_activity_time(
+    assert not state.update_session_activity_time(
         session.logon_id,
         plan.canonical_end + timedelta(seconds=1),
     )
+    # Preserve the terminal defense test by simulating malformed legacy state
+    # that predates the StateManager admission guard above.
+    session.last_activity_time = plan.canonical_end + timedelta(seconds=1)
     route_before = _sudo_tty_state(generator)
 
     with pytest.raises(StateError, match="cannot fit its exact session terminalization"):

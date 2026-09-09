@@ -36,7 +36,7 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -96,6 +96,7 @@ if TYPE_CHECKING:
 
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
 _RUNTIME_RETIREMENT_HOURS = 6
+_UNBOUNDED_LIFECYCLE_WINDOW_END = datetime.max.replace(tzinfo=UTC) - timedelta(days=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -723,6 +724,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             self._execute_single_red_herring_event(idx)
                             self._red_herring_executed.add(idx)
                         self._barrier_flush_all_emitters()
+            with self._profile_span("generation.story_process_terminations"):
+                self._flush_story_process_terminations()
             self._generation_body_completed = True
         except GenerationSuspendedError:
             raise
@@ -999,12 +1002,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.application_channel_registry = ApplicationChannelRegistry(
             window_start=self.warmup_start_time,
-            window_end=self.end_time,
+            window_end=_UNBOUNDED_LIFECYCLE_WINDOW_END,
         )
         self.rdp_session_manager = RdpReconnectStateManager(
             application_registry=self.application_channel_registry,
             window_start=self.warmup_start_time,
-            window_end=self.end_time,
+            window_end=_UNBOUNDED_LIFECYCLE_WINDOW_END,
         )
 
         # Initialize event dispatcher and activity generator
@@ -1496,8 +1499,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         primary: BaseException | None = None
         for attempt in range(2):
             try:
-                if self.end_time is not None:
-                    finalizer(self.end_time)
+                lifecycle_frontier = getattr(
+                    self,
+                    "_terminal_lifecycle_frontier",
+                    getattr(self, "end_time", None),
+                )
+                if lifecycle_frontier is not None:
+                    finalizer(lifecycle_frontier)
                 self._assert_rdp_session_lifecycles_drained_before_close()
             except BaseException as error:
                 if primary is None:
@@ -1544,8 +1552,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         primary: BaseException | None = None
         for attempt in range(2):
             try:
-                if self.end_time is not None:
-                    finalizer(self.end_time)
+                lifecycle_frontier = getattr(
+                    self,
+                    "_terminal_lifecycle_frontier",
+                    getattr(self, "end_time", None),
+                )
+                if lifecycle_frontier is not None:
+                    finalizer(lifecycle_frontier)
                 self._assert_ssh_session_lifecycles_drained_before_close()
             except BaseException as error:
                 if primary is None:
@@ -1616,7 +1629,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     "Activity generator has no shared terminal application-channel watermark"
                 ),
             )
-            end_time = getattr(self, "end_time", None)
+            end_time = getattr(
+                self,
+                "_terminal_lifecycle_frontier",
+                getattr(self, "end_time", None),
+            )
             if capability is not None:
                 if end_time is None:
                     raise RuntimeError(
@@ -1639,7 +1656,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 owner_attributes=("_foreground_process_finalizers",),
                 missing_message=("Activity generator has no foreground-process terminal finalizer"),
             )
-            end_time = getattr(self, "end_time", None)
+            end_time = getattr(
+                self,
+                "_terminal_lifecycle_frontier",
+                getattr(self, "end_time", None),
+            )
             if capability is not None:
                 if end_time is None:
                     raise RuntimeError("Generation engine lost its foreground-process frontier")
@@ -1664,7 +1685,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 ),
                 missing_message="Activity generator has no terminal runtime cleanup",
             )
-            end_time = getattr(self, "end_time", None)
+            end_time = getattr(
+                self,
+                "_terminal_runtime_frontier",
+                getattr(self, "end_time", None),
+            )
             if capability is not None:
                 if end_time is None:
                     raise RuntimeError("Generation engine lost its terminal runtime frontier")
@@ -1722,6 +1747,17 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
     def _drain_terminal_stages_before_close(self, *, include_foreground: bool) -> None:
         """Run every shared terminal stage in its single public shutdown order."""
 
+        activity_generator = getattr(self, "activity_generator", None)
+        collection_end = getattr(self, "end_time", None)
+        lifecycle_frontier = getattr(
+            activity_generator,
+            "terminal_lifecycle_frontier",
+            None,
+        )
+        if collection_end is not None and callable(lifecycle_frontier):
+            self._terminal_lifecycle_frontier = lifecycle_frontier(collection_end)
+        else:
+            self._terminal_lifecycle_frontier = collection_end
         self._finalize_ssh_session_lifecycles_before_close()
         self._finalize_rdp_session_lifecycles_before_close()
         self._finalize_linux_sudo_logoffs_before_close()
@@ -1729,6 +1765,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._finalize_application_channels_before_close()
         if include_foreground:
             self._finalize_foreground_lifecycles_before_close()
+        runtime_frontier = getattr(activity_generator, "terminal_runtime_frontier", None)
+        if callable(runtime_frontier) and self._terminal_lifecycle_frontier is not None:
+            self._terminal_runtime_frontier = runtime_frontier(self._terminal_lifecycle_frontier)
+        else:
+            self._terminal_runtime_frontier = self._terminal_lifecycle_frontier
         self._finalize_terminal_runtime_cleanup_before_close()
         self._finalize_exact_projection_recoveries_before_close()
         self._assert_terminal_transient_state_before_close()

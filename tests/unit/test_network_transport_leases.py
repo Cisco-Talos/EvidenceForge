@@ -158,6 +158,8 @@ def test_exact_port_claim_is_atomic_and_overlap_failure_is_neutral() -> None:
 
     assert not raised.value.automatic
     assert raised.value.active_count == 1
+    assert raised.value.requested_source_port == 50_000
+    assert "requested_source_port=50000" in str(raised.value)
     assert runtime.state_digest() == digest
     second.cancel()
     assert second_rng.getstate() == rng_state

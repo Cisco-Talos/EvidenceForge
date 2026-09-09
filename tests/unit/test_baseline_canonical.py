@@ -1243,6 +1243,14 @@ class TestForegroundProcessTermination:
         user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.com")
         system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
         start_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+        canonical_start = start_time + timedelta(seconds=1)
+        engine.state_manager = Mock()
+        engine.state_manager.get_process.return_value = SimpleNamespace(
+            image=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery user -limit 0",
+            start_time=canonical_start,
+            logon_id="0x1234",
+        )
 
         engine._schedule_foreground_process_termination(
             user=user,
@@ -1257,7 +1265,7 @@ class TestForegroundProcessTermination:
 
         engine.activity_generator.generate_process_termination.assert_called_once()
         kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
-        assert kwargs["time"] == start_time + timedelta(seconds=3.5)
+        assert kwargs["time"] == canonical_start + timedelta(seconds=3.5)
         assert kwargs["pid"] == 4242
 
 

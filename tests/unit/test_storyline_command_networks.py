@@ -322,6 +322,41 @@ class TestStorylineCommandNetworks:
 
         assert commands == ["echo /tmp/appdb.sql", "test -s /tmp/appdb.sql"]
 
+    def test_storyline_shell_friction_stays_before_authored_process_anchor(self):
+        """Optional prep history must not reschedule its owning typed process."""
+
+        emitted: list[tuple[datetime, str]] = []
+        engine = object.__new__(StorylineMixin)
+        engine.activity_generator = SimpleNamespace(
+            _prepare_bash_history_command=lambda _system, command: command,
+            _emit_bash_command_event=lambda _actor, _system, time, command: emitted.append(
+                (time, command)
+            ),
+        )
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.test")
+        system = System(
+            hostname="DB01",
+            ip="10.0.0.25",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        process_time = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
+
+        latest = engine._emit_linux_storyline_shell_friction(
+            actor=actor,
+            system=system,
+            time=process_time,
+            process_name="/usr/bin/scp",
+            command_line="scp /tmp/archive.bin archive@10.0.0.10:/srv/archive.bin",
+            output_file=None,
+            rng=random.Random(7),
+        )
+
+        assert len(emitted) == 2
+        assert [time for time, _command in emitted] == sorted(time for time, _command in emitted)
+        assert all(time < process_time for time, _command in emitted)
+        assert latest == emitted[-1][0]
+
     def test_explicit_storyline_process_ref_sets_child_parent_pid(self):
         """Explicit process_ref/parent_ref lineage should reach canonical process context."""
         captured: list[Any] = []
@@ -1238,6 +1273,24 @@ class _FakeActivityGenerator:
         dwell = timedelta(seconds=6 if command in {"pwd", "id", "hostname -f"} else 12)
         self._bash_next_time[(system.hostname, actor.username)] = scheduled_time + dwell
         return scheduled_time
+
+    def _prepare_bash_history_command(self, _system: System, command: str) -> str:
+        return command
+
+    def _emit_bash_command_event(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> None:
+        self.bash_commands.append(
+            {
+                "args": (actor, system, time, command),
+                "kwargs": {},
+                "scheduled_time": time,
+            }
+        )
 
     def reserve_linux_foreground_process_start(self, **kwargs: Any) -> datetime:
         system = kwargs["system"]
@@ -2867,7 +2920,7 @@ class TestStorylineCommandSideEffects:
         assert file_events
         assert file_events[0].timestamp > ready_time
 
-    def test_linux_process_uses_scheduled_bash_history_time(self):
+    def test_linux_storyline_process_uses_authored_anchor_for_bash_history(self):
         source = System(
             hostname="SRC",
             ip="10.10.0.10",
@@ -2885,7 +2938,6 @@ class TestStorylineCommandSideEffects:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
-        engine.activity_generator.bash_schedule_offset = timedelta(seconds=45)
         engine.dispatcher = SimpleNamespace(visibility_engine=None)
         requested_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
         spec = SimpleNamespace(
@@ -2903,11 +2955,10 @@ class TestStorylineCommandSideEffects:
             explicit_types={"process"},
         )
 
-        scheduled_time = requested_time + timedelta(seconds=45)
-        assert engine.activity_generator.bash_commands[0]["scheduled_time"] == scheduled_time
-        assert engine.activity_generator.processes[0]["time"] == scheduled_time
+        assert engine.activity_generator.bash_commands[0]["scheduled_time"] == requested_time
+        assert engine.activity_generator.processes[0]["time"] == requested_time
 
-    def test_linux_storyline_foreground_chain_waits_for_prior_termination(self):
+    def test_linux_storyline_foreground_chain_ignores_source_observation_delay(self):
         source = System(
             hostname="DB-PROD-01",
             ip="10.10.2.40",
@@ -2931,7 +2982,7 @@ class TestStorylineCommandSideEffects:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
-        engine.activity_generator.process_source_termination_offset = timedelta(seconds=20)
+        engine.activity_generator.process_source_termination_offset = timedelta(hours=1)
         engine.dispatcher = SimpleNamespace(
             visibility_engine=None,
             dispatch_builder=lambda event: None,
@@ -2998,7 +3049,8 @@ class TestStorylineCommandSideEffects:
         source_termination_times = engine.activity_generator.process_source_termination_times
         assert termination_times[0] < process_times[1]
         assert termination_times[1] < process_times[2]
-        assert source_termination_times[(source.hostname, 4243)] < process_times[2]
+        assert process_times[1] < source_termination_times[(source.hostname, 4243)]
+        assert process_times[2] < source_termination_times[(source.hostname, 4244)]
         assert engine.activity_generator.ssh_sessions
         assert engine.activity_generator.ssh_sessions[0]["time"] > process_times[2]
 
