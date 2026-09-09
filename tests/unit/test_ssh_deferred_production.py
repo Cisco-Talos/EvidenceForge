@@ -260,6 +260,7 @@ def _fixture(
     extra_emitters: dict[str, object] | None = None,
     member_capacity: int = 65_536,
     output_start_time: datetime | None = None,
+    output_end_time: datetime | None = None,
     clock_profile_name: str = "complete",
     production_timing_runtime: bool = False,
 ) -> _RealSshFixture:
@@ -288,6 +289,7 @@ def _fixture(
         state,
         emitters,  # type: ignore[arg-type]
         output_start_time=output_start_time,
+        output_end_time=output_end_time,
         action_cohort_member_capacity=member_capacity,
         source_timing_planner=source_timing_planner,
     )
@@ -2490,17 +2492,21 @@ def test_world_planner_real_ssh_bootstrap_uses_exact_bridge_and_defers_close(
     assert len(zeek_rows) == 1
 
 
-def test_world_planner_storyline_ssh_stays_inside_scenario_window(
+def test_world_planner_storyline_ssh_does_not_invent_collection_end_logoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unpaired late storyline SSH session gets one action-owned window fence."""
+    """An unpaired late storyline SSH session keeps its natural lifecycle."""
 
-    fixture = _fixture(tmp_path, production_timing_runtime=True)
-    scenario_end = fixture.generator._ssh_channel_manager.application_registry.window_end
-    activity_time = scenario_end - timedelta(minutes=45)
-    fixture.generator._scenario_start_time = scenario_end - timedelta(days=1)
-    fixture.generator._scenario_end_time = scenario_end
+    collection_end = _START + timedelta(minutes=20)
+    fixture = _fixture(
+        tmp_path,
+        production_timing_runtime=True,
+        output_end_time=collection_end,
+    )
+    activity_time = collection_end - timedelta(minutes=10)
+    fixture.generator._scenario_start_time = _START - timedelta(days=1)
+    fixture.generator._scenario_end_time = collection_end
     fixture.generator._users_by_username = {fixture.user.username: fixture.user}
     fixture.state.create_session(
         username=fixture.user.username,
@@ -2548,30 +2554,32 @@ def test_world_planner_storyline_ssh_stays_inside_scenario_window(
         allow_existing=False,
         source_ip_override=fixture.source.ip,
         storyline_protected=True,
+        required_until=activity_time + timedelta(minutes=45),
     )
 
     assert exact_path_decisions == [False]
     session = fixture.state.get_session(result.session.logon_id)
     assert session is not None
-    assert session.end_plan == SessionEndPlan(scenario_end, "action_bundle")
+    assert session.end_plan is None
     assert session.network_close_time is not None
-    assert activity_time < session.network_close_time < scenario_end
+    assert session.network_close_time > collection_end
     connection = fixture.state.get_connection_by_zeek_uid(result.network_uid)
     assert connection is not None
     assert connection.close_time is not None
     assert connection.close_time <= fixture.generator._network_transaction_runtime.window_end
-    fixture.generator.finalize_ssh_session_lifecycles(scenario_end)
+    lifecycle_frontier = fixture.generator.terminal_lifecycle_frontier(collection_end)
+    fixture.generator.finalize_ssh_session_lifecycles(lifecycle_frontier)
     assert fixture.state.get_session(session.logon_id) is None
     assert fixture.generator.ssh_close_journal_census().total_pending == 0
     assert fixture.generator._ssh_channel_manager.census().open_sessions == 0
     _assert_no_dispatcher_residue(fixture.generator.dispatcher)
     ecar_rows, zeek_rows = fixture.close_and_read()
     assert all(
-        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < scenario_end
+        datetime.fromtimestamp(row["timestamp_ms"] / 1_000, tz=UTC) < collection_end
         for row in ecar_rows
     )
     assert all(
-        datetime.fromtimestamp(row["ts"] + row["duration"], tz=UTC) < scenario_end
+        datetime.fromtimestamp(row["ts"] + row["duration"], tz=UTC) < collection_end
         for row in zeek_rows
     )
 

@@ -21,6 +21,8 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.actions.linux_shell_command import (
+    LinuxShellCommandActionBundle,
+    LinuxShellCommandRequest,
     plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.activity.generator import ActivityGenerator
@@ -32,6 +34,48 @@ from evidenceforge.models.exceptions import StateError
 _START = datetime(2024, 3, 15, 12, tzinfo=UTC)
 _RELATIONSHIP = "linux.pipeline_stage_start"
 _PROJECT_ROOT = Path(__file__).parents[2]
+
+
+def test_shell_action_executes_canonical_lifecycle_after_collection_cutoff() -> None:
+    """Collection admission does not stop a modeled shell command from executing."""
+
+    user = User(username="alice", full_name="Alice Example", email="alice@example.test")
+    system = System(
+        hostname="LNX-CUTOFF-01",
+        ip="10.0.0.25",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    scheduled_time = _START + timedelta(minutes=45)
+    executor = Mock()
+    executor._resolve_bash_command.return_value = "scp source target"
+    executor._should_skip_bash_history.return_value = False
+    executor._prepare_bash_history_command.return_value = "scp source target"
+    executor._schedule_bash_history_time.return_value = scheduled_time
+
+    result = LinuxShellCommandActionBundle(
+        executor,
+        LinuxShellCommandRequest(
+            user=user,
+            system=system,
+            time=_START,
+            activity_type_or_command="scp source target",
+        ),
+    ).execute()
+
+    assert result == scheduled_time
+    executor._emit_bash_command_event.assert_called_once_with(
+        user,
+        system,
+        scheduled_time,
+        "scp source target",
+    )
+    executor._maybe_emit_bash_process_telemetry.assert_called_once_with(
+        user,
+        system,
+        scheduled_time,
+        "scp source target",
+    )
 
 
 def _plan(

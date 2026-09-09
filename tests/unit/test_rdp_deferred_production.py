@@ -1560,13 +1560,68 @@ def test_visible_rdp_disconnect_rejects_a_zero_row_renderer(
     assert rendered_windows.count("<EventID>4779</EventID>") == 1
 
 
-@pytest.mark.parametrize("zero_source_shape", ("post-window", "mixed", "dropped", "filtered"))
+def test_post_collection_rdp_terminal_state_settles_without_source_rows(
+    tmp_path: Path,
+) -> None:
+    """RDP state may reach its natural end after collection without fabricated rows."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    harness.dispatcher.output_end_time = harness.disconnect_at
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+
+def test_pre_collection_rdp_terminal_with_post_collection_source_delay_settles_without_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical RDP closure may precede the cutoff while every source row follows it."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+    harness.dispatcher.output_end_time = harness.disconnect_at + timedelta(seconds=1)
+
+    def delayed_decision(_format_name: str, _event: object) -> ObservationDecision:
+        return ObservationDecision(status="visible", delay=timedelta(seconds=2))
+
+    with monkeypatch.context() as fault:
+        fault.setattr(harness.dispatcher.observation_policy, "decide", delayed_decision)
+        harness.generator.finalize_rdp_session_lifecycles(_END)
+
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+
+def test_coherently_dropped_rdp_terminal_state_settles_without_source_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An authenticated all-source observation gap does not block canonical terminal state."""
+
+    harness = _open_rdp_terminal_harness(tmp_path)
+
+    def dropped_decision(_format_name: str, _event: object) -> ObservationDecision:
+        return ObservationDecision(status="dropped")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(harness.dispatcher.observation_policy, "decide", dropped_decision)
+        harness.generator.finalize_rdp_session_lifecycles(_END)
+
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    assert harness.state.get_session(harness.logon_id) is None
+    _close_rdp_terminal_harness(harness)
+
+
+@pytest.mark.parametrize("zero_source_shape", ("mixed", "filtered"))
 def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
     zero_source_shape: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Window, drop, and filter gaps cannot impersonate exact warm-up suppression."""
+    """Mixed, drop, and filter gaps cannot impersonate collection suppression."""
 
     harness = _open_rdp_terminal_harness(tmp_path)
     if zero_source_shape in {"post-window", "mixed"}:
@@ -1581,12 +1636,6 @@ def test_nonsuppressed_rdp_terminal_zero_source_shape_fails_closed(
                 return ObservationDecision(status="dropped" if format_name == "ecar" else "visible")
 
             fault.setattr(harness.dispatcher.observation_policy, "decide", mixed_decision)
-        elif zero_source_shape == "dropped":
-
-            def dropped_decision(_format_name: str, _event: object) -> ObservationDecision:
-                return ObservationDecision(status="dropped")
-
-            fault.setattr(harness.dispatcher.observation_policy, "decide", dropped_decision)
         with pytest.raises(
             StateError,
             match="visible RDP terminal timing proof requires source frontiers",

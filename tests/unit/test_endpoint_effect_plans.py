@@ -36,6 +36,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedFileEffectPayload,
     PreparedProcessEffectActor,
     PreparedProcessEndpointEffectPlan,
+    PreparedRegistryEffectPayload,
     ProcessOwnedEndpointEffectActionBundle,
     ProcessOwnedEndpointEffectRequest,
     bind_prepared_process_endpoint_effect_plan,
@@ -428,6 +429,83 @@ def test_prepared_optional_near_window_has_explicit_suppressed_outcome() -> None
     )
     reconciliation.require_complete()
     assert reconciliation.summary.suppressed_count == 1
+
+
+def test_prepared_effects_normalize_before_deriving_action_identity() -> None:
+    prepared_actor = PreparedProcessEffectActor(
+        hostname="WS-001",
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c setup.cmd",
+        username="alice",
+        logon_id="0x12001",
+        lifecycle_id="process-life-4242",
+        started_at=_START,
+        session_deadline=_START + timedelta(minutes=10),
+    )
+    file_spec = EndpointEffectSpec(
+        intent=FileEffectIntent(FileEffectAction.READ, r"C:\Temp\payload.bin"),
+        occurrence_times=(_START + timedelta(seconds=4),),
+        instance_key="z-file",
+    )
+    registry_spec = EndpointEffectSpec(
+        intent=RegistryEffectIntent(
+            RegistryEffectAction.DELETE,
+            r"HKCU\Software\Example",
+            "Installed",
+        ),
+        occurrence_times=(_START + timedelta(seconds=5),),
+        instance_key="a-registry",
+    )
+    prepared = PreparedProcessEndpointEffectPlan(
+        root_anchor=ActionAnchor(
+            family="process_execution",
+            stable_id="root-process-intent",
+            source="test",
+        ),
+        actor=prepared_actor,
+        window_end=_START + timedelta(minutes=10),
+        retention_horizon_end=_START + timedelta(minutes=10),
+        effects=(
+            PreparedEndpointEffect(
+                spec=file_spec,
+                event_type="file_create",
+                payload=PreparedFileEffectPayload(
+                    path=r"C:\Temp\payload.bin",
+                    action=FileEffectAction.READ,
+                ),
+            ),
+            PreparedEndpointEffect(
+                spec=registry_spec,
+                event_type="registry_set",
+                payload=PreparedRegistryEffectPayload(
+                    key=r"HKCU\Software\Example",
+                    value_name="Installed",
+                    value="1",
+                    value_type="REG_SZ",
+                    action=RegistryEffectAction.DELETE,
+                ),
+            ),
+        ),
+    )
+    plan = prepared.execution_plan
+    assert plan is not None
+    assert plan.action_id == prepared.anchor.action_id
+
+    exact_actor = ExactProcessEffectActor(
+        hostname=prepared_actor.hostname,
+        pid=4242,
+        process_object_id="process-object-4242",
+        lifecycle_id=prepared_actor.lifecycle_id,
+        image=prepared_actor.image,
+        command_line=prepared_actor.command_line,
+        username=prepared_actor.username,
+        logon_id=prepared_actor.logon_id,
+        started_at=prepared_actor.started_at,
+        closes_at=prepared_actor.session_deadline,
+    )
+    bound = bind_prepared_process_endpoint_effect_plan(prepared, exact_actor)
+    assert bound.execution_plan is not None
+    assert bound.execution_plan.effects == plan
 
 
 def test_plan_is_identical_across_one_four_and_eight_workers() -> None:

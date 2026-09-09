@@ -897,6 +897,31 @@ def _storyline_event_offsets(
     return offsets
 
 
+def _storyline_session_required_until(
+    event_time: datetime,
+    cadence_offsets: Sequence[float],
+    event_index: int,
+    future_specs: Sequence[Any] = (),
+) -> datetime | None:
+    """Return the derived lifecycle horizon for an authored remote session."""
+
+    if not cadence_offsets or event_index >= len(cadence_offsets) - 1:
+        return None
+    remaining_seconds = max(0.0, cadence_offsets[-1] - cadence_offsets[event_index])
+    process_tail_seconds = 0.0
+    for future_spec in future_specs:
+        if getattr(future_spec, "type", "") != "process":
+            continue
+        process_name = str(getattr(future_spec, "process_name", "") or "")
+        command_line = str(getattr(future_spec, "command_line", "") or process_name)
+        lifetime = _estimate_process_lifetime(process_name, command_line)
+        if lifetime is not None:
+            # Same-shell child execution is serialized. Its maximum modeled
+            # lifetime contributes to when later authored children may start.
+            process_tail_seconds += lifetime[1] + 2.0
+    return event_time + timedelta(seconds=remaining_seconds + process_tail_seconds)
+
+
 def _choose_dns_tunnel_campaign_ttl(
     ttl_choices: list[tuple[int, float]],
     rng: random.Random,
@@ -3452,7 +3477,7 @@ class StorylineMixin:
         output_file: str | None,
         rng: random.Random,
     ) -> datetime | None:
-        """Emit bash-history and process texture around high-risk Linux commands."""
+        """Emit bounded bash-history texture before an authored Linux process."""
         commands = _linux_storyline_shell_friction_commands(
             username=actor.username,
             process_name=process_name,
@@ -3463,23 +3488,26 @@ class StorylineMixin:
         if not commands:
             return None
 
-        requested_time = time - timedelta(
-            seconds=max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(5.0, 35.0)
+        lead_seconds = max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(
+            5.0,
+            35.0,
         )
+        first_anchor = time - timedelta(seconds=lead_seconds)
+        spacing_seconds = lead_seconds / (len(commands) + 1)
         latest_scheduled: datetime | None = None
-        for command in commands:
-            scheduled = self.activity_generator.generate_bash_command(
+        for command_index, command in enumerate(commands):
+            scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))
+            prepared_command = self.activity_generator._prepare_bash_history_command(
+                system,
+                command,
+            )
+            self.activity_generator._emit_bash_command_event(
                 actor,
                 system,
-                requested_time,
-                command,
-                emit_process_telemetry=True,
+                scheduled,
+                prepared_command,
             )
-            if isinstance(scheduled, datetime):
-                latest_scheduled = scheduled
-                requested_time = scheduled + timedelta(seconds=rng.uniform(2.0, 14.0))
-            else:
-                requested_time += timedelta(seconds=rng.uniform(4.0, 18.0))
+            latest_scheduled = scheduled
         return latest_scheduled
 
     def _recent_storyline_process_logon_id(
@@ -3959,22 +3987,31 @@ class StorylineMixin:
                             )
                         )
                         self.state_manager.set_current_time(event_t)
-                        typed_event_kwargs = {
-                            "spec": spec,
-                            "actor": actor,
-                            "system": system,
-                            "time": event_t,
-                            "activity": storyline_event.activity,
-                            "explicit_types": explicit_types,
-                            "future_specs": itertools.islice(
+                        session_required_until = (
+                            _storyline_session_required_until(
+                                event_t,
+                                cadence_offsets,
+                                i,
+                                storyline_event.events[i + 1 :],
+                            )
+                            if spec.type == "ssh_session"
+                            else None
+                        )
+                        malicious_event = self._execute_typed_event(
+                            spec=spec,
+                            actor=actor,
+                            system=system,
+                            time=event_t,
+                            activity=storyline_event.activity,
+                            explicit_types=explicit_types,
+                            future_specs=itertools.islice(
                                 storyline_event.events,
                                 i + 1,
                                 None,
                             ),
-                        }
-                        if cumulative_rdp_shift:
-                            typed_event_kwargs["authored_time_shift"] = cumulative_rdp_shift
-                        malicious_event = self._execute_typed_event(**typed_event_kwargs)
+                            authored_time_shift=cumulative_rdp_shift,
+                            session_required_until=session_required_until,
+                        )
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
@@ -4060,6 +4097,16 @@ class StorylineMixin:
                         cumulative_shift=cumulative_rdp_shift,
                     )
                     self.state_manager.set_current_time(event_t)
+                    session_required_until = (
+                        _storyline_session_required_until(
+                            event_t,
+                            cadence_offsets,
+                            i,
+                            storyline_event.events[i + 1 :],
+                        )
+                        if spec.type == "ssh_session"
+                        else None
+                    )
                     malicious_event = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -4067,8 +4114,13 @@ class StorylineMixin:
                         time=event_t,
                         activity=storyline_event.activity,
                         explicit_types=explicit_types,
-                        future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                        future_specs=itertools.islice(
+                            storyline_event.events,
+                            i + 1,
+                            None,
+                        ),
                         authored_time_shift=cumulative_rdp_shift,
+                        session_required_until=session_required_until,
                     )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
@@ -4147,6 +4199,16 @@ class StorylineMixin:
                         cumulative_shift=cumulative_rdp_shift,
                     )
                     self.state_manager.set_current_time(event_t)
+                    session_required_until = (
+                        _storyline_session_required_until(
+                            event_t,
+                            cadence_offsets,
+                            i,
+                            rh_event.events[i + 1 :],
+                        )
+                        if spec.type == "ssh_session"
+                        else None
+                    )
                     result = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -4156,6 +4218,7 @@ class StorylineMixin:
                         explicit_types=explicit_types,
                         future_specs=itertools.islice(rh_event.events, i + 1, None),
                         authored_time_shift=cumulative_rdp_shift,
+                        session_required_until=session_required_until,
                     )
                     if result:
                         # Track as red herring, not malicious
@@ -4178,6 +4241,7 @@ class StorylineMixin:
         explicit_types: set[str],
         future_specs: Sequence[Any] = (),
         authored_time_shift: timedelta = timedelta(0),
+        session_required_until: datetime | None = None,
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
@@ -4559,15 +4623,17 @@ class StorylineMixin:
                 )
                 if isinstance(reserved_start_time, datetime):
                     time = reserved_start_time
-                scheduled_bash_time = self.activity_generator.generate_bash_command(
+                prepared_shell_command = self.activity_generator._prepare_bash_history_command(
+                    system,
+                    command_line,
+                )
+                self.activity_generator._emit_bash_command_event(
                     process_actor,
                     system,
                     time,
-                    command_line,
-                    emit_process_telemetry=False,
+                    prepared_shell_command,
                 )
-                if isinstance(scheduled_bash_time, datetime):
-                    time = scheduled_bash_time
+                malicious_event["time"] = time
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             service_backed_process = service_process_identity is not None or (
                 "service_installed" in explicit_types
@@ -4635,6 +4701,10 @@ class StorylineMixin:
                 suppress_command_file_effect=output_file is not None,
                 lifecycle_group_id=service_lifecycle_group_id,
             )
+            running_process = self.state_manager.get_process(system.hostname, pid)
+            if running_process is not None:
+                time = max(ensure_utc(time), ensure_utc(running_process.start_time))
+                malicious_event["time"] = time
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name, process_command_line)
             process_ref = getattr(spec, "process_ref", None)
@@ -5112,15 +5182,6 @@ class StorylineMixin:
                         logon_id=process_logon_id,
                         from_storyline=True,
                     )
-                    source_term_getter = getattr(
-                        self.activity_generator,
-                        "process_source_terminate_time",
-                        None,
-                    )
-                    if callable(source_term_getter):
-                        source_term_time = source_term_getter(system.hostname, pid)
-                        if isinstance(source_term_time, datetime):
-                            shell_release_time = max(shell_release_time, source_term_time)
                 else:
                     self._queue_story_process_termination(
                         actor=process_actor,
@@ -5687,6 +5748,7 @@ class StorylineMixin:
                 rng=rng,
                 source="storyline_ssh_session",
             )
+            session_end_plan = self._session_end_plan_for_current_start()
             if hasattr(self, "world_planner"):
                 source_system = (
                     self.world_model.system_for_ip(spec.source_ip)
@@ -5703,7 +5765,8 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
-                    session_end_plan=self._session_end_plan_for_current_start(),
+                    required_until=session_required_until,
+                    session_end_plan=session_end_plan,
                     ids_alerts=authored_ids_alerts,
                 )
             else:
@@ -5713,7 +5776,16 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    min_duration=(
+                        max(
+                            30.0,
+                            (session_required_until - time).total_seconds() + 30.0,
+                        )
+                        if session_required_until is not None
+                        else None
+                    ),
                     emit_session_close=True,
+                    session_end_plan=session_end_plan,
                     ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)

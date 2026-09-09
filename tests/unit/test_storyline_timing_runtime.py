@@ -11,14 +11,40 @@ import statistics
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
+from evidenceforge.generation.engine.storyline import _storyline_session_required_until
 from evidenceforge.generation.storyline_timing import StorylineTimingPlanner
 from evidenceforge.generation.timing import TimingRuntime
 
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+
+def test_storyline_session_lifetime_covers_remaining_child_cadence() -> None:
+    """An authored session remains available through its final planned child."""
+
+    session_time = T0 + timedelta(seconds=30)
+    assert _storyline_session_required_until(session_time, (0.0, 30.0, 90.0), 1) == (
+        session_time + timedelta(seconds=60)
+    )
+    assert _storyline_session_required_until(session_time, (0.0, 30.0, 90.0), 2) is None
+    process_horizon = _storyline_session_required_until(
+        session_time,
+        (0.0, 30.0, 90.0),
+        1,
+        (
+            SimpleNamespace(
+                type="process",
+                process_name="/usr/bin/scp",
+                command_line="scp /tmp/report.csv archive:/srv/report.csv",
+            ),
+        ),
+    )
+    assert process_horizon is not None
+    assert process_horizon > session_time + timedelta(seconds=60)
 
 
 def _timing_population(

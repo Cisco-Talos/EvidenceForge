@@ -139,7 +139,6 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     remote_auth_transport_max_duration_seconds,
 )
 from evidenceforge.generation.world_model import (
-    SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
     HostCapability,
     WorldModel,
     _PreparedRdpSessionBootstrap,
@@ -3057,7 +3056,7 @@ class BaselineMixin:
                     suppress_command_file_effect=True,
                     source_visible_by=timestamp,
                 )
-                if pid <= 0:
+                if type(pid) is not int or pid <= 0:
                     return None
                 self._schedule_foreground_process_termination(
                     user=user,
@@ -3162,19 +3161,25 @@ class BaselineMixin:
         rng: random.Random,
     ) -> None:
         """Terminate bounded foreground commands near their observed runtime."""
+        if type(pid) is not int or pid <= 0:
+            return
+        running = self.state_manager.get_process(system.hostname, pid)
+        if running is None:
+            return
         if _get_os_category(system.os) == "windows":
-            lifetime = _windows_foreground_lifetime(process_name, command_line)
+            lifetime = _windows_foreground_lifetime(running.image, running.command_line)
         else:
-            lifetime = _linux_foreground_lifetime(process_name, command_line)
+            lifetime = _linux_foreground_lifetime(running.image, running.command_line)
         if lifetime is None:
             return
+        canonical_start = max(ensure_utc(start_time), ensure_utc(running.start_time))
         self.activity_generator.generate_process_termination(
             user=user,
             system=system,
-            time=start_time + timedelta(seconds=rng.uniform(*lifetime)),
+            time=canonical_start + timedelta(seconds=rng.uniform(*lifetime)),
             pid=pid,
-            process_name=process_name,
-            logon_id=logon_id,
+            process_name=running.image,
+            logon_id=running.logon_id or logon_id,
         )
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
@@ -6346,14 +6351,9 @@ class BaselineMixin:
                 None,
             )
             if active_session is None:
-                if self._baseline_pass_is_terminal(current_hour):
-                    session_end_plan = self._baseline_ssh_terminal_end_plan(
-                        current_hour,
-                        transport_start=time,
-                    )
-                    if session_end_plan is None:
-                        return None
-                elif not self._baseline_pass_admits(
+                if not self._baseline_pass_is_terminal(
+                    current_hour
+                ) and not self._baseline_pass_admits(
                     current_hour,
                     start=time,
                     end=time + timedelta(hours=1),
@@ -6369,6 +6369,11 @@ class BaselineMixin:
                     rng,
                     session_kind=session_kind,
                     allow_existing=(session_kind != "ssh" or active_session is not None),
+                    required_until=(
+                        current_hour + timedelta(hours=1)
+                        if session_kind == "ssh" and current_hour is not None
+                        else None
+                    ),
                 )
             else:
                 session = self.world_planner.ensure_user_session(
@@ -6476,32 +6481,15 @@ class BaselineMixin:
                         and (target_system.type or "workstation").lower()
                         in {"server", "domain_controller"}
                     ):
-                        session_end_plan = None
-                        if terminal_pass:
-                            session_end_plan = self._baseline_ssh_terminal_end_plan(
-                                current_hour,
-                                transport_start=event_time,
-                            )
-                            if session_end_plan is None:
-                                continue
-                        if session_end_plan is None:
-                            self.world_planner.ensure_user_session(
-                                result["user"],
-                                target_system,
-                                event_time,
-                                rng,
-                                session_kind="ssh",
-                            )
-                        else:
-                            self.world_planner.ensure_user_session(
-                                result["user"],
-                                target_system,
-                                event_time,
-                                rng,
-                                session_kind="ssh",
-                                session_end_plan=session_end_plan,
-                                allow_existing=False,
-                            )
+                        self.world_planner.ensure_user_session(
+                            result["user"],
+                            target_system,
+                            event_time,
+                            rng,
+                            session_kind="ssh",
+                            allow_existing=True,
+                            required_until=current_hour + timedelta(hours=1),
+                        )
                     else:
                         self.activity_generator.generate_logon(
                             user=result["user"],
@@ -8198,23 +8186,14 @@ class BaselineMixin:
         if not has_session_on_system and activities:
             session_kind = self._baseline_generic_session_kind(system)
             session_end_plan = None
-            if terminal_pass:
+            if terminal_pass and session_kind != "ssh":
                 assert current_hour is not None
-                if session_kind == "ssh":
-                    session_end_plan = self._baseline_ssh_terminal_end_plan(
-                        current_hour,
-                        transport_start=event_time,
-                    )
-                    if session_end_plan is None:
-                        activities = []
-                        terminal_activity_plans = []
-                else:
-                    # Local interactive sessions have no action-owned terminal
-                    # logoff path. An end-plan marker alone would leave an
-                    # unpaired session, so terminal activity may only reuse an
-                    # already-active local session.
-                    activities = []
-                    terminal_activity_plans = []
+                # Local interactive sessions have no action-owned terminal
+                # logoff path. An end-plan marker alone would leave an
+                # unpaired session, so terminal activity may only reuse an
+                # already-active local session.
+                activities = []
+                terminal_activity_plans = []
             if activities and hasattr(self, "world_planner"):
                 if session_end_plan is None:
                     self.world_planner.ensure_user_session(
@@ -8223,6 +8202,11 @@ class BaselineMixin:
                         event_time,
                         rng,
                         session_kind=session_kind,
+                        required_until=(
+                            current_hour + timedelta(hours=1)
+                            if session_kind == "ssh" and current_hour is not None
+                            else None
+                        ),
                     )
                 else:
                     self.world_planner.ensure_user_session(
@@ -9087,7 +9071,10 @@ class BaselineMixin:
                 actor = None
                 process_pid = -1
                 if target_system is not None:
-                    for session in self.state_manager.get_sessions_on_system(system.hostname):
+                    for session in self.state_manager.get_active_sessions_on_system_at(
+                        system.hostname,
+                        timestamp,
+                    ):
                         if session.logon_type not in (2, 10, 11):
                             continue
                         actor = next(
@@ -11781,39 +11768,17 @@ class BaselineMixin:
                         if ssh_identity is None:
                             continue
                         ssh_user, source_system = ssh_identity
-                        session_end_plan = None
-                        if terminal_pass:
-                            session_end_plan = self._baseline_ssh_terminal_end_plan(
-                                current_hour,
-                                transport_start=ts,
-                                post_activity_support_seconds=(SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS),
-                            )
-                            if session_end_plan is None:
-                                continue
                         self.state_manager.set_current_time(ts)
-                        if session_end_plan is None:
-                            bootstrap = self.world_planner.bootstrap_user_session(
-                                user=ssh_user,
-                                target_system=system,
-                                time=ts,
-                                rng=rng,
-                                session_kind="ssh",
-                                source_system=source_system,
-                                allow_existing=True,
-                                required_until=current_hour + timedelta(hours=1),
-                            )
-                        else:
-                            bootstrap = self.world_planner.bootstrap_user_session(
-                                user=ssh_user,
-                                target_system=system,
-                                time=ts,
-                                rng=rng,
-                                session_kind="ssh",
-                                source_system=source_system,
-                                allow_existing=False,
-                                required_until=ts,
-                                session_end_plan=session_end_plan,
-                            )
+                        bootstrap = self.world_planner.bootstrap_user_session(
+                            user=ssh_user,
+                            target_system=system,
+                            time=ts,
+                            rng=rng,
+                            session_kind="ssh",
+                            source_system=source_system,
+                            allow_existing=True,
+                            required_until=current_hour + timedelta(hours=1),
+                        )
                         terminal_transport_close = (
                             getattr(bootstrap.session, "network_close_time", None)
                             if terminal_pass
@@ -12014,14 +11979,6 @@ class BaselineMixin:
                     authored_lower_bound=authored_rdp_lower_bound,
                 ):
                     continue
-                session_end_plan = None
-                if terminal_pass:
-                    session_end_plan = self._baseline_rdp_terminal_end_plan(
-                        current_hour,
-                        transport_start=prepared_bootstrap.transport_time,
-                    )
-                    if session_end_plan is None:
-                        continue
                 rdp_requests.append(
                     _BaselineRdpIntent(
                         time=ts,
@@ -12029,7 +11986,7 @@ class BaselineMixin:
                         user=rdp_user,
                         source_system=source_system,
                         prepared_bootstrap=prepared_bootstrap,
-                        session_end_plan=session_end_plan,
+                        session_end_plan=None,
                     )
                 )
 

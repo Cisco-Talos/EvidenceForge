@@ -195,6 +195,9 @@ _PERSISTENT_SMB_PROJECTION_TARGET_ORDER = (
 )
 
 
+_RECENT_NETWORK_IDENTIFIER_CAPACITY = 16
+
+
 @dataclass(frozen=True, slots=True)
 class _ProjectionTarget:
     """One exact immutable source target as it advances through dispatch stages."""
@@ -433,6 +436,8 @@ class ActionCohortProjectionDisposition(StrEnum):
 
     SOURCE_FRONTIERS_REQUIRED = "source_frontiers_required"
     EXACT_WARMUP_SUPPRESSED = "exact_warmup_suppressed"
+    EXACT_COLLECTION_SUPPRESSED = "exact_collection_suppressed"
+    EXACT_OBSERVATION_SUPPRESSED = "exact_observation_suppressed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1400,6 +1405,9 @@ class EventDispatcher:
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
+        self._recent_network_identifiers: deque[tuple[str, dict[str, str]]] = deque(
+            maxlen=_RECENT_NETWORK_IDENTIFIER_CAPACITY
+        )
         self._latest_network_observations_uid = ""
         self._latest_network_observations: tuple[NetworkSensorObservation, ...] = ()
         self._latest_network_plan: NetworkTransactionPlan | None = None
@@ -3485,12 +3493,20 @@ class EventDispatcher:
         canonical_uid: str,
         format_name: str,
     ) -> str | None:
-        """Return the latest sensor-local UID, blank if suppressed, or None if unavailable."""
+        """Return a recent sensor-local UID, blank if suppressed, or None if unavailable.
+
+        Composite actions can publish another transport before returning the canonical UID of
+        their first leg. Keep a small bounded history so the caller can still resolve that exact
+        leg without retaining connection-scale state.
+        """
 
         with self._publication_ledger_lock:
-            if canonical_uid != self._latest_network_uid:
-                return None
-            return self._latest_network_identifiers_by_format.get(format_name)
+            if canonical_uid == self._latest_network_uid:
+                return self._latest_network_identifiers_by_format.get(format_name)
+            for uid, identifiers_by_format in reversed(self._recent_network_identifiers):
+                if uid == canonical_uid:
+                    return identifiers_by_format.get(format_name)
+            return None
 
     def publish_network_identifiers(
         self,
@@ -3501,7 +3517,8 @@ class EventDispatcher:
 
         with self._publication_ledger_lock:
             self._latest_network_uid = canonical_uid
-            self._latest_network_identifiers_by_format = identifiers_by_format
+            self._latest_network_identifiers_by_format = dict(identifiers_by_format)
+            self._recent_network_identifiers.append((canonical_uid, dict(identifiers_by_format)))
 
     def network_observations_for(
         self,
@@ -3780,6 +3797,10 @@ class EventDispatcher:
             disposition=(
                 ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED
                 if self._projection_is_exact_warmup_suppressed(projection)
+                else ActionCohortProjectionDisposition.EXACT_COLLECTION_SUPPRESSED
+                if self._projection_is_exact_collection_suppressed(projection)
+                else ActionCohortProjectionDisposition.EXACT_OBSERVATION_SUPPRESSED
+                if self._projection_is_exact_observation_suppressed(projection)
                 else ActionCohortProjectionDisposition.SOURCE_FRONTIERS_REQUIRED
             ),
         )
@@ -7965,16 +7986,48 @@ class EventDispatcher:
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
-        """Require an exact RDP sink, except for one authenticated warm-up zero-row shape."""
+        """Require an exact RDP sink, except for an authenticated zero-row shape."""
 
-        if self._projection_is_exact_warmup_suppressed(projection):
+        if self._rdp_terminal_projection_is_exact_omission(projection):
             return ()
         participants = self._exact_projection_participants(projection)
         if not participants:
+            if projection.mode == "legacy":
+                target_statuses = tuple(
+                    (target.format_name, target.status) for target in projection.legacy_targets
+                )
+            elif projection.mode == "compiled":
+                target_statuses = tuple(
+                    (
+                        target.format_name,
+                        self._action_cohort_compiled_projection_status(
+                            projection.occurrence,
+                            target,
+                        ),
+                    )
+                    for target in projection.compiled_targets
+                )
+            else:
+                target_statuses = ()
             raise EventContractError(
-                "Exact visible RDP terminal projection requires a durable source target"
+                "Exact visible RDP terminal projection requires a durable source target: "
+                f"mode={projection.mode}, canonical={projection.occurrence.timestamp.isoformat()}, "
+                f"output_end={self.output_end_time}, initial={projection.initial_statuses}, "
+                f"targets={target_statuses}"
             )
         return participants
+
+    def _rdp_terminal_projection_is_exact_omission(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Authenticate an RDP terminal omitted by warm-up or collection policy."""
+
+        return (
+            self._projection_is_exact_warmup_suppressed(projection)
+            or self._projection_is_exact_collection_suppressed(projection)
+            or self._projection_is_exact_observation_suppressed(projection)
+        )
 
     def _linux_sudo_terminal_exact_projection_participants(
         self,
@@ -8066,7 +8119,7 @@ class EventDispatcher:
                 if exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
-                else self._projection_is_exact_warmup_suppressed(projection)
+                else self._rdp_terminal_projection_is_exact_omission(projection)
             )
         )
         if (
@@ -8115,7 +8168,7 @@ class EventDispatcher:
                 if exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
-                else self._projection_is_exact_warmup_suppressed(projection)
+                else self._rdp_terminal_projection_is_exact_omission(projection)
             )
         )
         if exact_all_suppressed is not record.exact_all_suppressed:
@@ -8422,10 +8475,14 @@ class EventDispatcher:
             exact_all_suppressed = bool(
                 exact_kind == "rdp_disconnect"
                 and record.facts.disposition
-                is ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED
+                in {
+                    ActionCohortProjectionDisposition.EXACT_WARMUP_SUPPRESSED,
+                    ActionCohortProjectionDisposition.EXACT_COLLECTION_SUPPRESSED,
+                    ActionCohortProjectionDisposition.EXACT_OBSERVATION_SUPPRESSED,
+                }
             )
             if exact_kind == "rdp_disconnect" and exact_all_suppressed != (
-                self._projection_is_exact_warmup_suppressed(record.projection)
+                self._rdp_terminal_projection_is_exact_omission(record.projection)
             ):
                 raise EventContractError(
                     "State-neutral RDP disconnect disposition changed before rendering"
@@ -11828,6 +11885,59 @@ class EventDispatcher:
             and projection.legacy_targets == ()
             and projection.compiled_targets == ()
         )
+
+    def _projection_is_exact_collection_suppressed(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Return whether every exact source row falls outside its collection window.
+
+        Source-native delay can move every row beyond the cutoff even when the canonical
+        occurrence itself precedes it.  Authenticate the already-frozen target dispositions
+        instead of incorrectly using canonical time as a proxy for source observation time.
+        """
+
+        if projection.mode == "legacy":
+            return (
+                self.output_end_time is not None
+                and bool(projection.legacy_targets)
+                and all(
+                    target.status == "out_of_window" and target.occurrence is None
+                    for target in projection.legacy_targets
+                )
+            )
+        if projection.mode == "compiled":
+            return bool(projection.compiled_targets) and all(
+                self._action_cohort_compiled_projection_status(
+                    projection.occurrence,
+                    target,
+                )
+                == "out_of_window"
+                for target in projection.compiled_targets
+            )
+        return False
+
+    def _projection_is_exact_observation_suppressed(
+        self,
+        projection: _PreparedProjection,
+    ) -> bool:
+        """Return whether coherent source missingness intentionally omitted every exact row."""
+
+        if projection.mode == "legacy":
+            return bool(projection.legacy_targets) and all(
+                target.status == "dropped" and target.occurrence is None
+                for target in projection.legacy_targets
+            )
+        if projection.mode == "compiled":
+            return bool(projection.compiled_targets) and all(
+                self._action_cohort_compiled_projection_status(
+                    projection.occurrence,
+                    target,
+                )
+                == "dropped"
+                for target in projection.compiled_targets
+            )
+        return False
 
     def _validate_deferred_session_all_suppressed_projection(
         self,
@@ -15633,6 +15743,25 @@ class EventDispatcher:
                         return observed_time
         return self.source_timing_planner.admission_time(event, target.format_name)
 
+    @staticmethod
+    def _zeek_conn_admission_time(
+        event: CanonicalOccurrence,
+        fallback: datetime,
+    ) -> datetime:
+        """Return when Zeek can publish its close-time connection record."""
+
+        observed_closes = tuple(
+            observation.observed_close_time
+            for observation in event.network_observations
+            if "zeek_conn" in observation.visible_formats
+            and observation.observed_close_time is not None
+        )
+        if observed_closes:
+            return max(observed_closes)
+        if event.network is not None and event.network.closed_at is not None:
+            return event.network.closed_at
+        return fallback
+
     def _projection_output_end(self, envelope: ProjectionEnvelope) -> datetime | None:
         """Return the strictest exclusive end for one compiled source projection."""
 
@@ -15682,8 +15811,13 @@ class EventDispatcher:
             self.output_start_time,
         ):
             return False
+        end_admission_time = (
+            self._zeek_conn_admission_time(event, visible_time)
+            if target.format_name == "zeek_conn"
+            else visible_time
+        )
         return output_end is None or self._is_before(
-            visible_time,
+            end_admission_time,
             output_end,
         )
 
@@ -15863,10 +15997,15 @@ class EventDispatcher:
         ):
             return False
         visible_time = self.source_timing_planner.admission_time(event, format_name)
+        end_admission_time = (
+            self._zeek_conn_admission_time(event, visible_time)
+            if format_name == "zeek_conn"
+            else visible_time
+        )
         lifecycle = event.lifecycle
         if lifecycle is None:
             return self.output_end_time is None or self._is_before(
-                visible_time,
+                end_admission_time,
                 self.output_end_time,
             )
 
@@ -15885,7 +16024,7 @@ class EventDispatcher:
         ):
             return False
         return self.output_end_time is None or self._is_before(
-            visible_time,
+            end_admission_time,
             self.output_end_time,
         )
 

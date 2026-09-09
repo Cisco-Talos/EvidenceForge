@@ -178,6 +178,30 @@ def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     assert lifetime is None
 
 
+def test_linux_output_file_flag_does_not_imply_follow_mode():
+    """A command-specific output flag must not occupy the shell until session close."""
+    lifetime = _linux_foreground_lifetime(
+        "/usr/bin/pg_dump",
+        "pg_dump -h localhost -U app_svc -Fc appdb -f /tmp/appdb.bin",
+    )
+
+    assert lifetime is not None
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        ("/usr/bin/tail", "tail -f /var/log/syslog"),
+        ("/usr/bin/journalctl", "journalctl -u ssh -f"),
+        ("/usr/bin/docker", "docker logs -f api-server"),
+        ("/usr/bin/kubectl", "kubectl logs -f deploy/api-server"),
+    ],
+)
+def test_linux_follow_commands_remain_unbounded(image: str, command_line: str) -> None:
+    """Known follow-mode commands retain the shell until explicitly stopped."""
+    assert _linux_foreground_lifetime(image, command_line) is None
+
+
 @pytest.mark.parametrize(
     ("image", "command_line"),
     [
@@ -13944,6 +13968,81 @@ class TestActivityGenerator:
         assert session.last_activity_time is not None
         assert session.last_activity_time < planned_logoff
 
+    def test_serialized_bash_process_is_omitted_after_ssh_transport_close(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A queued command cannot attach process telemetry to a closed SSH session."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        close_time = command_time + timedelta(seconds=2)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = "0xabc126a"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="ssh",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = close_time + timedelta(seconds=1)
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen._maybe_emit_bash_process_telemetry(
+            test_user,
+            linux,
+            command_time,
+            "scp /tmp/report.csv backup@archive:/srv/report.csv",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert not any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/scp"
+            for event in events
+        )
+
     def test_generate_bash_command_collision_rejection_is_retry_neutral(self, test_user):
         """A collision shifted past a session fence cannot consume later cadence state."""
         command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
@@ -14094,10 +14193,10 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
 
-    def test_dropped_workstation_bash_command_does_not_bootstrap_local_session(
+    def test_post_collection_workstation_bash_command_does_not_bootstrap_local_session(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
-        """Rejected Linux workstation shell commands should not leave orphan logon evidence."""
+        """Post-collection commands should not leave orphan pre-cutoff logon evidence."""
         scenario_end = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         linux = System(
             hostname="WS-LNGUYEN-01",
@@ -14108,6 +14207,7 @@ class TestActivityGenerator:
         )
         activity_gen._scenario_start_time = scenario_end - timedelta(minutes=30)
         activity_gen._scenario_end_time = scenario_end
+        activity_gen.dispatcher.output_end_time = scenario_end
         state_manager.set_current_time(scenario_end - timedelta(minutes=30))
         systemd_pid = state_manager.create_process(
             linux.hostname,
@@ -14121,7 +14221,7 @@ class TestActivityGenerator:
 
         scheduled = activity_gen.generate_bash_command(test_user, linux, scenario_end, "git status")
 
-        assert scheduled is None
+        assert scheduled == scenario_end
         assert [
             session
             for session in state_manager.get_sessions_for_user(test_user.username)
@@ -14334,6 +14434,43 @@ class TestActivityGenerator:
 
         assert reserved > gzip_done
         assert scheduled_history > gzip_done
+
+    def test_linux_foreground_reservation_waits_for_unmaterialized_ssh_shell(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+    ) -> None:
+        """Authored commands reserve after SSH shell readiness before process creation."""
+        requested = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ready = requested + timedelta(seconds=1)
+        linux = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.1.34",
+            start_time=requested - timedelta(milliseconds=200),
+            session_kind="ssh",
+        )
+        state_manager.update_session_metadata(logon_id, source_ready_time=source_ready)
+
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=0,
+            requested_time=requested,
+            process_name="/usr/sbin/ip",
+            command_line="ip addr show",
+        )
+
+        assert reserved > source_ready
 
     def test_linux_process_activity_reserves_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters

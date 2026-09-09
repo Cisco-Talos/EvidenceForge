@@ -3797,7 +3797,7 @@ def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
         return cutoff < ensure_utc(end_plan.canonical_end)
     network_close_time = session.network_close_time
     if (
-        session.session_kind == "ssh"
+        session.session_kind in {"ssh", "rdp"}
         and network_close_time is not None
         and cutoff >= ensure_utc(network_close_time)
     ):
@@ -9469,6 +9469,12 @@ class StateManager:
                 )
             identity = self._process_identity(process)
             effective_end = ensure_utc(end_time or self.state.current_time or process.start_time)
+            if effective_end < identity.started_at:
+                raise StateError(
+                    "Process termination cannot precede process start: "
+                    f"{identity.hostname} PID={identity.pid} "
+                    f"start={identity.started_at.isoformat()} end={effective_end.isoformat()}"
+                )
             normalized_parent_activity = (
                 ensure_utc(parent_activity_time) if parent_activity_time is not None else None
             )
@@ -14347,6 +14353,8 @@ class StateManager:
             if session is None:
                 return False
             activity_time = ensure_utc(activity_time)
+            if not _session_valid_at(session, activity_time):
+                return False
             if session.last_activity_time is None or activity_time > session.last_activity_time:
                 session.last_activity_time = activity_time
             return True

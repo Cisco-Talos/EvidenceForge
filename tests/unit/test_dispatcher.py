@@ -313,8 +313,8 @@ class TestDispatchRouting:
         _assert_published_once(sm.apply, event)
         emitter.emit.assert_not_called()
 
-    def test_network_identifier_publication_retains_only_latest_connection(self):
-        """High-volume connection correlation must use constant-size retained state."""
+    def test_network_identifier_publication_retains_bounded_recent_connections(self):
+        """Composite correlation retains recent legs without connection-scale state."""
         dispatcher = EventDispatcher(
             state_manager=MagicMock(spec=StateManager),
             emitters={},
@@ -332,8 +332,12 @@ class TestDispatchRouting:
         assert dispatcher.network_identifier_for_format("uid-99999", "zeek_conn") == (
             "sensor-uid-99999"
         )
-        assert dispatcher.network_identifier_for_format("uid-99998", "zeek_conn") is None
+        assert dispatcher.network_identifier_for_format("uid-99998", "zeek_conn") == (
+            "sensor-uid-99998"
+        )
+        assert dispatcher.network_identifier_for_format("uid-99983", "zeek_conn") is None
         assert len(dispatcher._latest_network_identifiers_by_format) == 2
+        assert len(dispatcher._recent_network_identifiers) == 16
 
     def test_dispatch_preserves_action_relative_semantic_occurrence_ids(self):
         """Peer ordinals remain stable without depending on unrelated dispatch order."""

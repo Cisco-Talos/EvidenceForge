@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 4
+current_revision: 5
 history_start_revision: 1
-behavior_surface_sha256: "755f7a332109f3691b106c2b123cfa039b6eb39df43a52cb10999875c6c34aa5"
+behavior_surface_sha256: "aa3ce4dbf247eab967c5f16afccc6ff68ddba41c1d245d6afb6ced558e486fa6"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -43,3 +43,18 @@ changes:
       - windows_security
       - zeek_conn
     summary: Prevents machine-account LDAP or SMB authentication from selecting a source port whose canonical interval is already leased.
+  - revision: 5
+    id: separate-collection-cutoff-from-modeled-lifecycles
+    impact: localized
+    domains:
+      - collection-window-admission
+      - session-lifecycle
+      - process-lifecycle
+      - network-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Lets SSH and RDP activity retain natural action-owned lifetimes beyond collection while suppressing post-cutoff terminal rows and unfinished Zeek conn records.

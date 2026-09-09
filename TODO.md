@@ -158,7 +158,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
   `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
   session teardown unless an explicit hung/long-running outcome owns that lifecycle.
-- [ ] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
+- [x] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
   means "we stopped collecting data," not that systems shut down or every active connection,
   session, process, and application operation ended cleanly. Mirror warm-up behavior at the tail:
   allow lifecycles that start before the exclusive collection end to remain active afterward,
@@ -169,7 +169,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   its runtime ownership safely. Decide during design whether ground truth records only
   `active_at_collection_end` or also retains the exact modeled future close. This must not be used
   to conceal pathological durations such as runaway SMB file-size growth, which remains a
-  separate root-cause fix.
+  separate root-cause fix. Implemented by retaining exact modeled future deadlines internally and
+  admitting only source-native observations before the exclusive collection cutoff; see
+  `docs/worklog/2026-09-08-collection-lifecycle-boundary.md`.
+- [ ] **P1** Honor authored cross-event `process_ref` / `parent_ref` lifecycles. Keep a referenced
+  parent alive through dependent child creation, prevent independent storyline jitter from
+  inverting same-time parent/child events, and preserve a live authored source for subsequent
+  process-access effects instead of silently recording `no_live_source_process`.
+- [ ] **P1** Allow multiple logical IDS sensors that share the default Snort output route, either by
+  assigning sensor-native output paths or by safely multiplexing one physical sink. The TEST1 rc2
+  scenario currently fails on `dev` with `Snort sensors resolved to one physical output`; the same
+  failure reproduces at `0b42e52e1`, before the collection/lifecycle fix.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
