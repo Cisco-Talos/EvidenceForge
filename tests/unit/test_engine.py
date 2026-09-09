@@ -47,6 +47,7 @@ from evidenceforge.models import (
     BaselineActivity,
     Environment,
     NetworkConfig,
+    NetworkSensor,
     OutputSpec,
     Scenario,
     SourceObservationOverride,
@@ -448,6 +449,17 @@ class TestGenerationEngine:
         ]
         engine._windows_scheduled_task_counts = {"TEST-01": 4}
         engine._windows_scheduled_task_last_seen = {"TEST-01": moment}
+        engine._pending_story_process_terminations = [
+            {
+                "actor": "testuser",
+                "system": "TEST-01",
+                "time": moment + timedelta(minutes=15),
+                "pid": 4242,
+                "process_name": r"C:\Windows\Temp\stager.exe",
+                "logon_id": "0x12345",
+                "release_storyline_index": 3,
+            }
+        ]
         engine.malicious_events = [{"event": "process", "time": moment}]
         engine.red_herring_events = [{"event": "dns", "time": moment}]
 
@@ -473,6 +485,10 @@ class TestGenerationEngine:
         assert restored_archive.actor is restored.scenario.environment.users[0]
         assert restored_archive.archive_path == r"C:\Temp\evidence.zip"
         assert restored._pending_unlocks == engine._pending_unlocks
+        assert (
+            restored._pending_story_process_terminations
+            == engine._pending_story_process_terminations
+        )
         assert restored._storyline_executed == engine._storyline_executed
         assert restored._storyline_file_available_at == engine._storyline_file_available_at
         assert restored._storyline_file_source_overrides == engine._storyline_file_source_overrides
@@ -618,6 +634,46 @@ class TestGenerationEngine:
         finally:
             if prior is not None:
                 REVERSE_DNS[scenario_ip] = prior
+
+    def test_sensor_emitter_routes_use_canonical_source_hostname(
+        self,
+        minimal_scenario,
+        tmp_path,
+        mock_new_emitters,
+    ):
+        """Emitter routes must use the same case-normalized identity as source deployment."""
+        minimal_scenario.environment.network = NetworkConfig.model_validate(
+            {
+                "segments": [
+                    {
+                        "name": "workstations",
+                        "cidr": "10.0.0.0/24",
+                        "exposure": "internal",
+                        "systems": ["TEST-01"],
+                    }
+                ],
+                "sensors": [
+                    NetworkSensor(
+                        type="ids",
+                        name="ng-edge-ids",
+                        hostname="IDS-NG-EDGE",
+                        monitoring_segments=["workstations"],
+                        log_formats=["snort_alert"],
+                    ).model_dump(mode="python")
+                ],
+            }
+        )
+        minimal_scenario.output = OutputSpec(
+            logs=[{"format": "snort_alert"}],
+            destination="./output",
+            compression=False,
+        )
+        engine = GenerationEngine(minimal_scenario, tmp_path)
+
+        engine._init_emitters()
+
+        snort_class = mock_new_emitters[3]
+        assert snort_class.call_args.kwargs["sensor_hostnames"] == ["ids-ng-edge"]
 
     @pytest.fixture
     def scenario_with_storyline(self):

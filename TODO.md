@@ -172,14 +172,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   separate root-cause fix. Implemented by retaining exact modeled future deadlines internally and
   admitting only source-native observations before the exclusive collection cutoff; see
   `docs/worklog/2026-09-08-collection-lifecycle-boundary.md`.
-- [ ] **P1** Honor authored cross-event `process_ref` / `parent_ref` lifecycles. Keep a referenced
+- [x] **P1** Honor authored cross-event `process_ref` / `parent_ref` lifecycles. Keep a referenced
   parent alive through dependent child creation, prevent independent storyline jitter from
   inverting same-time parent/child events, and preserve a live authored source for subsequent
-  process-access effects instead of silently recording `no_live_source_process`.
-- [ ] **P1** Allow multiple logical IDS sensors that share the default Snort output route, either by
-  assigning sensor-native output paths or by safely multiplexing one physical sink. The TEST1 rc2
-  scenario currently fails on `dev` with `Snort sensors resolved to one physical output`; the same
-  failure reproduces at `0b42e52e1`, before the collection/lifecycle fix.
+  process-access effects instead of silently recording `no_live_source_process`. Implemented with
+  release-aware named-process retention, exact-parent admission, and authored group ordering; see
+  `docs/worklog/2026-09-09-storyline-parent-snort-route-identity.md`.
+- [x] **P1** Canonicalize sensor identity before assigning Snort and sibling sensor output routes.
+  TEST1 had one authored `IDS-NG-EDGE` sensor whose raw and canonical hostname aliases resolved to
+  the same physical path on case-insensitive filesystems. Emitter setup now consumes the canonical
+  source hostname while exact-publication collision checks remain strict for distinct sensors; see
+  `docs/worklog/2026-09-09-storyline-parent-snort-route-identity.md`.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.

@@ -18986,6 +18986,7 @@ class ActivityGenerator:
         concurrency_group_id: str = "",
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
+        require_exact_parent: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -19005,6 +19006,8 @@ class ActivityGenerator:
             process_name: Full path to executable
             command_line: Command line string
             parent_pid: Parent process PID (default 4 = System)
+            require_exact_parent: Reject the execution if ``parent_pid`` is not the exact
+                live parent instead of applying generic parent-repair heuristics.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -19026,6 +19029,7 @@ class ActivityGenerator:
             process_name=process_name,
             command_line=command_line,
             parent_pid=parent_pid,
+            require_exact_parent=require_exact_parent,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -19062,14 +19066,16 @@ class ActivityGenerator:
         ):
             # Profiled service workers own their manager/worker composite admission.
             return request
-        parent_pid = self._resolve_existing_prepared_process_parent(
-            system=request.system,
-            user=request.user,
-            time=actor.started_at,
-            logon_id=actor.logon_id,
-            parent_pid=request.parent_pid,
-            process_username=actor.username,
-        )
+        parent_pid = request.parent_pid
+        if not request.require_exact_parent:
+            parent_pid = self._resolve_existing_prepared_process_parent(
+                system=request.system,
+                user=request.user,
+                time=actor.started_at,
+                logon_id=actor.logon_id,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
         if parent_pid != request.parent_pid:
             request = replace(request, parent_pid=parent_pid)
             actor = self._prepare_process_effect_actor(request)
@@ -20479,7 +20485,7 @@ class ActivityGenerator:
             command_line=command_line,
             username=user.username,
         )
-        if profiled_worker is not None:
+        if profiled_worker is not None and not request.require_exact_parent:
             family_name, worker_name, _family = profiled_worker
             return self._ensure_profiled_service_worker(
                 system=system,
@@ -20732,7 +20738,7 @@ class ActivityGenerator:
 
         singleton_pid = (
             self._existing_windows_singleton_pid(system, process_name, time)
-            if not prepared_requires_new_root
+            if not prepared_requires_new_root and not request.require_exact_parent
             else None
         )
         if singleton_pid is not None:
@@ -20827,7 +20833,23 @@ class ActivityGenerator:
                 self._record_reused_process_optional_effects(prepared_effects)
                 return browser_pid
 
-        if prepared_requires_new_root:
+        if request.require_exact_parent:
+            if not self._is_valid_process_parent_at(
+                system=system,
+                parent_pid=parent_pid,
+                time=time,
+            ) or not self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=parent_pid,
+                logon_id=process_logon_id,
+                os_category=_get_os_category(system.os),
+            ):
+                raise StateError(
+                    "Exact authored process parent is not live in the child session: "
+                    f"host={system.hostname} parent_pid={parent_pid} "
+                    f"child={process_name!r}"
+                )
+        elif prepared_requires_new_root:
             parent_pid = self._resolve_existing_prepared_process_parent(
                 system=system,
                 user=user,

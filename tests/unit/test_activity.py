@@ -11819,6 +11819,60 @@ class TestActivityGenerator:
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
 
+    def test_generate_process_preserves_required_exact_storyline_parent(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Authored lineage bypasses heuristics that reject unrelated one-shot parents."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x33333"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=20))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        authored_parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=explorer_pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line='powershell.exe -NoProfile -Command "Get-LocalUser"',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Windows\System32\schtasks.exe",
+            'schtasks /create /tn "BillingSyncService" /sc onlogon',
+            parent_pid=authored_parent_pid,
+            require_exact_parent=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == authored_parent_pid
+
     def test_generate_process_spaces_bare_shell_child_commands(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

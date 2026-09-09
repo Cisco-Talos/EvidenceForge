@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 5
+current_revision: 6
 history_start_revision: 1
-behavior_surface_sha256: "aa3ce4dbf247eab967c5f16afccc6ff68ddba41c1d245d6afb6ced558e486fa6"
+behavior_surface_sha256: "3afa9eb858b48576f263f55c1ceada082faa686d41fb6ef27495b0f40798996f"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -58,3 +58,18 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Lets SSH and RDP activity retain natural action-owned lifetimes beyond collection while suppressing post-cutoff terminal rows and unfinished Zeek conn records.
+  - revision: 6
+    id: authored-process-and-sensor-route-identity
+    impact: localized
+    domains:
+      - process-lifecycle
+      - storyline-ordering
+      - sensor-route-identity
+    formats:
+      - cisco_asa
+      - ecar
+      - snort_alert
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek
+    summary: Retains named storyline processes through dependent effects and canonicalizes sensor hostnames before emitter route construction.

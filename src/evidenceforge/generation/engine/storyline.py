@@ -1622,7 +1622,63 @@ class StorylineMixin:
         if parent_ref is None:
             return None
         refs = getattr(self, "_storyline_process_refs", {})
-        return refs.get((system.hostname, actor.username, parent_ref))
+        key = (system.hostname, actor.username, parent_ref)
+        resolved = refs.get(key)
+        if resolved is None:
+            return None
+        pid, image = resolved
+        state_manager = getattr(self, "state_manager", None)
+        if state_manager is None:
+            activity_generator = getattr(self, "activity_generator", None)
+            state_manager = getattr(activity_generator, "state_manager", None)
+        if state_manager is None:
+            return resolved
+        process = state_manager.get_process(system.hostname, pid)
+        if process is None or process.image != image:
+            refs.pop(key, None)
+            return None
+        return resolved
+
+    def _storyline_process_ref_release_index(
+        self,
+        *,
+        actor: User,
+        system: System,
+        process_ref: str,
+    ) -> int:
+        """Return the last storyline group that requires one named process to be live."""
+
+        target_key = (system.hostname.casefold(), actor.username.casefold(), process_ref)
+        active_ref_by_actor_system: dict[tuple[str, str], str] = {}
+        release_indices: dict[tuple[str, str, str], int] = {}
+        for event_index, storyline_event in enumerate(self.scenario.storyline):
+            actor_system = (
+                storyline_event.system.casefold(),
+                storyline_event.actor.casefold(),
+            )
+            for candidate in storyline_event.events:
+                candidate_type = getattr(candidate, "type", "")
+                if candidate_type == "process":
+                    parent_ref = getattr(candidate, "parent_ref", None)
+                    if parent_ref is not None:
+                        parent_key = (*actor_system, parent_ref)
+                        release_indices[parent_key] = max(
+                            event_index,
+                            release_indices.get(parent_key, event_index),
+                        )
+                    candidate_ref = getattr(candidate, "process_ref", None)
+                    if candidate_ref is not None:
+                        active_ref_by_actor_system[actor_system] = candidate_ref
+                        release_indices.setdefault((*actor_system, candidate_ref), event_index)
+                elif candidate_type in {"create_remote_thread", "process_access"}:
+                    active_ref = active_ref_by_actor_system.get(actor_system)
+                    if active_ref is not None:
+                        active_key = (*actor_system, active_ref)
+                        release_indices[active_key] = max(
+                            event_index,
+                            release_indices.get(active_key, event_index),
+                        )
+        return release_indices.get(target_key, 0)
 
     def _record_storyline_service_install(
         self,
@@ -3406,28 +3462,56 @@ class StorylineMixin:
         self._record_last_storyline_process(system, pid, process_name, command_line)
         return pid, process_name, command_line
 
-    def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
+    def _last_storyline_process_for_system(
+        self,
+        system: System | None,
+        actor: User | None = None,
+    ) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
         if system is None:
             return -1, None
         processes = getattr(self, "_last_storyline_process_by_system", {})
         pid, image = processes.get(system.hostname, (-1, ""))
         if pid <= 0 or not image:
-            return -1, None
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
 
         os_category = _get_os_category(system.os)
         if os_category == "windows" and image.startswith("/"):
             return -1, None
         if os_category == "linux" and re.match(r"^[A-Za-z]:\\", image):
             return -1, None
-        if self.state_manager.get_process(system.hostname, pid) is None:
+        process = self.state_manager.get_process(system.hostname, pid)
+        if process is None:
             processes.pop(system.hostname, None)
             if getattr(self, "_last_storyline_system", None) == system.hostname:
                 self._last_storyline_pid = -1
                 self._last_storyline_image = ""
                 self._last_storyline_system = ""
-            return -1, None
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
+        if actor is not None and process.username.casefold() != actor.username.casefold():
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
         return pid, image
+
+    def _latest_live_storyline_process_ref_for_system(
+        self,
+        system: System,
+        *,
+        actor: User | None = None,
+    ) -> tuple[int, str | None]:
+        """Return the newest live named process when an unreferenced process has ended."""
+
+        refs = getattr(self, "_storyline_process_refs", {})
+        for key, (pid, image) in reversed(tuple(refs.items())):
+            hostname, _username, _process_ref = key
+            if hostname != system.hostname or (
+                actor is not None and _username.casefold() != actor.username.casefold()
+            ):
+                continue
+            process = self.state_manager.get_process(system.hostname, pid)
+            if process is not None and process.image == image:
+                return pid, image
+            refs.pop(key, None)
+        return -1, None
 
     def _clamp_after_storyline_process_source_create(
         self,
@@ -3551,40 +3635,105 @@ class StorylineMixin:
         pid: int,
         process_name: str,
         logon_id: str,
+        release_storyline_index: int | None = None,
     ) -> None:
-        """Defer storyline process termination until all same-step dependents run."""
+        """Defer termination until same-step and cross-step authored dependents run."""
         if not hasattr(self, "_pending_story_process_terminations"):
             self._pending_story_process_terminations = []
         self._pending_story_process_terminations.append(
             {
-                "actor": actor,
-                "system": system,
+                "actor": actor.username,
+                "system": system.hostname,
                 "time": time,
                 "pid": pid,
                 "process_name": process_name,
                 "logon_id": logon_id,
+                "release_storyline_index": release_storyline_index,
             }
         )
 
-    def _flush_story_process_terminations(self) -> None:
-        """Emit deferred storyline terminations after process activity is complete."""
+    def _flush_story_process_terminations(
+        self,
+        *,
+        completed_storyline_index: int | None = None,
+        release_time: datetime | None = None,
+    ) -> None:
+        """Emit due terminations while retaining processes needed by later authored work."""
         pending = getattr(self, "_pending_story_process_terminations", [])
         if not pending:
             return
-        self._pending_story_process_terminations = []
+        retained: list[dict[str, Any]] = []
         for item in pending:
-            proc = self.state_manager.get_process(item["system"].hostname, item["pid"])
+            required_index = item.get("release_storyline_index")
+            if (
+                required_index is not None
+                and completed_storyline_index is not None
+                and completed_storyline_index < required_index
+            ):
+                retained.append(item)
+                continue
+            find_system = getattr(self, "_find_system", None)
+            system = find_system(item["system"]) if callable(find_system) else None
+            if system is None:
+                system = next(
+                    (
+                        candidate
+                        for candidate in self.scenario.environment.systems
+                        if candidate.hostname == item["system"]
+                    ),
+                    None,
+                )
+            find_actor = getattr(self, "_find_actor", None)
+            actor = find_actor(item["actor"]) if callable(find_actor) else None
+            if actor is None:
+                actor = next(
+                    (
+                        candidate
+                        for candidate in self.scenario.environment.users
+                        if candidate.username == item["actor"]
+                    ),
+                    None,
+                )
+            if actor is None:
+                user_model = getattr(self.activity_generator, "_user_model_for_username", None)
+                actor = user_model(item["actor"]) if callable(user_model) else None
+            if system is None or actor is None:
+                raise StateError(
+                    "Deferred storyline process termination lost its actor or system identity"
+                )
+            proc = self.state_manager.get_process(system.hostname, item["pid"])
             if proc is None:
                 continue
+            termination_time = item["time"]
+            if release_time is not None:
+                termination_time = max(
+                    termination_time,
+                    ensure_utc(release_time) + timedelta(milliseconds=1),
+                )
             self.activity_generator.generate_process_termination(
-                user=item["actor"],
-                system=item["system"],
-                time=item["time"],
+                user=actor,
+                system=system,
+                time=termination_time,
                 pid=item["pid"],
                 process_name=item["process_name"],
                 logon_id=item["logon_id"],
                 from_storyline=True,
             )
+        self._pending_story_process_terminations = retained
+
+    def _record_storyline_group_completion(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> None:
+        """Preserve authored group order after independent deterministic jitter."""
+
+        key = self._storyline_host_actor_key(system, actor)
+        available = getattr(self, "_storyline_host_available_at", {})
+        available[key] = max(time, available.get(key, time))
+        self._storyline_host_available_at = available
 
     def _apply_storyline_shell_availability(
         self,
@@ -3953,6 +4102,7 @@ class StorylineMixin:
             previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
             self.dispatcher.storyline_cluster_id = storyline_event.id
             cumulative_rdp_shift = timedelta(0)
+            group_completion_time = event_time
             try:
                 for i, spec in enumerate(storyline_event.events):
                     intent = self.authored_intent_ledger.intent_at(
@@ -4015,19 +4165,26 @@ class StorylineMixin:
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
+                            materialized_time = malicious_event.get("time")
+                            if isinstance(materialized_time, datetime):
+                                event_t = max(event_t, materialized_time)
+                        group_completion_time = max(group_completion_time, event_t)
                     finally:
                         self._current_storyline_spec_id = previous_spec_id
                         self.dispatcher.authored_intent_id = previous_intent_id
-                self._flush_story_process_terminations()
+                self._record_storyline_group_completion(
+                    actor=actor,
+                    system=system,
+                    time=group_completion_time,
+                )
+                self._flush_story_process_terminations(
+                    completed_storyline_index=event_num - 1,
+                    release_time=group_completion_time,
+                )
             finally:
                 self.dispatcher.storyline_cluster_id = previous_cluster
 
-            if cadence_offsets:
-                _prev_event_time = (
-                    event_time + timedelta(seconds=cadence_offsets[-1]) + cumulative_rdp_shift
-                )
-            else:
-                _prev_event_time = event_time
+            _prev_event_time = group_completion_time
 
             self._barrier_flush_all_emitters()
 
@@ -4067,6 +4224,7 @@ class StorylineMixin:
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = storyline_event.id
         cumulative_rdp_shift = timedelta(0)
+        group_completion_time = event_time
         try:
             for i, spec in enumerate(storyline_event.events):
                 intent = self.authored_intent_ledger.intent_at(
@@ -4125,10 +4283,22 @@ class StorylineMixin:
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
                         self.malicious_events.append(malicious_event)
+                        materialized_time = malicious_event.get("time")
+                        if isinstance(materialized_time, datetime):
+                            event_t = max(event_t, materialized_time)
+                    group_completion_time = max(group_completion_time, event_t)
                 finally:
                     self._current_storyline_spec_id = previous_spec_id
                     self.dispatcher.authored_intent_id = previous_intent_id
-            self._flush_story_process_terminations()
+            self._record_storyline_group_completion(
+                actor=actor,
+                system=system,
+                time=group_completion_time,
+            )
+            self._flush_story_process_terminations(
+                completed_storyline_index=event_idx,
+                release_time=group_completion_time,
+            )
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
 
@@ -4227,7 +4397,10 @@ class StorylineMixin:
                         self.red_herring_events.append(result)
                 finally:
                     self.dispatcher.authored_intent_id = previous_intent_id
-            self._flush_story_process_terminations()
+            self._flush_story_process_terminations(
+                completed_storyline_index=-1,
+                release_time=event_t if cadence_offsets else event_time,
+            )
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
 
@@ -4558,12 +4731,22 @@ class StorylineMixin:
                 process_name=process_name,
                 future_specs=future_specs,
             )
+            parent_ref = getattr(spec, "parent_ref", None)
+            if not isinstance(parent_ref, str) or not parent_ref:
+                parent_ref = None
             explicit_parent = self._storyline_process_ref_for_parent(
                 actor=process_actor,
                 system=system,
-                parent_ref=getattr(spec, "parent_ref", None),
+                parent_ref=parent_ref,
             )
-            if service_process_identity is not None:
+            if parent_ref is not None and explicit_parent is None:
+                malicious_event["process_name"] = process_name
+                malicious_event["command_line"] = command_line
+                malicious_event["skipped_reason"] = "no_live_parent_ref"
+                return malicious_event
+            if explicit_parent is not None:
+                parent_pid, _parent_image = explicit_parent
+            elif service_process_identity is not None:
                 process_actor, _service_name, service_lifecycle_group_id = service_process_identity
                 process_logon_id = {
                     "SYSTEM": "0x3e7",
@@ -4575,8 +4758,6 @@ class StorylineMixin:
                     "services",
                     0x1F4,
                 )
-            elif explicit_parent is not None:
-                parent_pid, _parent_image = explicit_parent
             else:
                 service_context = self._storyline_service_context_for_process(
                     actor=process_actor,
@@ -4696,6 +4877,7 @@ class StorylineMixin:
                 process_name=process_name,
                 command_line=process_command_line,
                 parent_pid=parent_pid,
+                require_exact_parent=explicit_parent is not None,
                 ensure_file_event=not service_backed_process,
                 from_storyline=True,
                 suppress_command_file_effect=output_file is not None,
@@ -4708,6 +4890,8 @@ class StorylineMixin:
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name, process_command_line)
             process_ref = getattr(spec, "process_ref", None)
+            if not isinstance(process_ref, str) or not process_ref:
+                process_ref = None
             if process_ref is not None:
                 self._record_storyline_process_ref(
                     actor=process_actor,
@@ -5167,6 +5351,8 @@ class StorylineMixin:
                     terminate_immediately = (
                         _linux_foreground_lifetime(process_name, process_command_line) is not None
                     )
+                    if process_ref is not None:
+                        terminate_immediately = False
                     if terminate_immediately and self._process_has_following_same_host_connection(
                         system,
                         future_specs,
@@ -5183,6 +5369,15 @@ class StorylineMixin:
                         from_storyline=True,
                     )
                 else:
+                    release_storyline_index = (
+                        self._storyline_process_ref_release_index(
+                            actor=process_actor,
+                            system=system,
+                            process_ref=process_ref,
+                        )
+                        if process_ref is not None
+                        else None
+                    )
                     self._queue_story_process_termination(
                         actor=process_actor,
                         system=system,
@@ -5190,6 +5385,7 @@ class StorylineMixin:
                         pid=pid,
                         process_name=process_name,
                         logon_id=process_logon_id,
+                        release_storyline_index=release_storyline_index,
                     )
                 if os_category == "linux":
                     self.activity_generator.remember_linux_foreground_process_completion(
@@ -6103,7 +6299,10 @@ class StorylineMixin:
             )
 
         elif spec.type == "create_remote_thread":
-            source_pid, source_image = self._last_storyline_process_for_system(system)
+            source_pid, source_image = self._last_storyline_process_for_system(
+                system,
+                actor=actor,
+            )
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
             target_image = _normalize_storyline_process_image(
@@ -6144,7 +6343,10 @@ class StorylineMixin:
                     malicious_event["skipped_reason"] = "no_live_target_process"
 
         elif spec.type == "process_access":
-            source_pid, source_image = self._last_storyline_process_for_system(system)
+            source_pid, source_image = self._last_storyline_process_for_system(
+                system,
+                actor=actor,
+            )
             os_category = _get_os_category(system.os)
             target_image = _normalize_storyline_process_image(
                 spec.target_process,

@@ -689,6 +689,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         self._execute_single_red_herring_event(idx)
                         self._red_herring_executed.add(idx)
                     self._barrier_flush_all_emitters()
+            self._flush_story_process_terminations()
             self._generation_body_completed = True
         except GenerationSuspendedError:
             raise
