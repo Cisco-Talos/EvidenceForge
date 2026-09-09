@@ -4,6 +4,11 @@
 """Scenario composition, pack resolution, and authoritative artifact APIs."""
 
 from .compiler import compile_scenario, resolve_project_root, with_runtime_scenario
+from .identity import (
+    semantic_resolved_difference_sections,
+    semantic_resolved_payload,
+    semantic_resolved_sha256,
+)
 from .models import (
     CompiledScenario,
     CompositionSpec,
@@ -26,5 +31,8 @@ __all__ = [
     "ScenarioV2Document",
     "compile_scenario",
     "resolve_project_root",
+    "semantic_resolved_difference_sections",
+    "semantic_resolved_payload",
+    "semantic_resolved_sha256",
     "with_runtime_scenario",
 ]

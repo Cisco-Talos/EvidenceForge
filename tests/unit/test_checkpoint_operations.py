@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from evidenceforge.cli import checkpoint_commands
 from evidenceforge.cli.commands import app
-from evidenceforge.composition import compile_scenario
+from evidenceforge.composition import CompiledScenario, EffectiveConfig, compile_scenario
 from evidenceforge.composition.artifacts import build_resolved_document, serialize_resolved_document
 from evidenceforge.generation.checkpoints.control import (
     read_suspension_record,
@@ -85,8 +85,9 @@ def _controller(
     scenario_path: Path,
     *,
     checkpoint_hours: int = 6,
+    compiled: CompiledScenario | None = None,
 ) -> tuple[IncrementalCheckpointStore, IncrementalCheckpointController, _Participant]:
-    compiled = compile_scenario(scenario_path)
+    compiled = compile_scenario(scenario_path) if compiled is None else compiled
     formats = [str(item["format"]) for item in compiled.scenario.output.logs]
     fingerprint = run_fingerprint(
         compiled,
@@ -109,6 +110,19 @@ def _controller(
         ),
     )
     return store, controller, _Participant()
+
+
+def _with_legacy_behavior_metadata(compiled: CompiledScenario) -> CompiledScenario:
+    """Recreate the effective-config shape retained by pre-fix checkpoints."""
+
+    effective_payload = compiled.effective_config.model_dump(mode="json")
+    effective_payload["packaged_defaults"]["generation_behavior.yaml"] = {
+        "schema_version": "1.0",
+        "current_revision": 6,
+    }
+    return compiled.model_copy(
+        update={"effective_config": EffectiveConfig.model_validate(effective_payload)}
+    )
 
 
 def _cursor(hour: int) -> CheckpointCursor:
@@ -376,6 +390,124 @@ def test_generate_default_policy_warns_before_load_compatible_hydration(
     assert "different EvidenceForge build" in normalized
     assert "output equivalence is not guaranteed" in normalized
     assert "injected stop" in normalized
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_explicit_unchanged_scenario_accepts_legacy_control_metadata(
+    tmp_path: Path,
+) -> None:
+    """An authored identity assertion may match a pre-fix retained resolved snapshot."""
+
+    scenario_path = Path("tests/fixtures/scenarios/minimal.yaml")
+    current = compile_scenario(scenario_path)
+    legacy = _with_legacy_behavior_metadata(current)
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        scenario_path,
+        compiled=legacy,
+    )
+    controller.fingerprint = "f" * 64
+    controller.fingerprint_components["resolved_sha256"] = "e" * 64
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    captured: dict[str, object] = {}
+
+    def stop_after_compatibility(**kwargs: object) -> None:
+        captured.update(kwargs)
+        raise CheckpointError("injected stop after retained scenario selection")
+
+    with patch(
+        "evidenceforge.cli.commands.GenerationEngine",
+        side_effect=stop_after_compatibility,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenario_path),
+                "--output",
+                str(output),
+                "--resume",
+                "--seed",
+                str(current.scenario.generation_seed),
+            ],
+        )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 21
+    assert "immutable run identity" not in normalized
+    assert "injected stop after retained scenario selection" in normalized
+    selected = captured["compiled_scenario"]
+    assert isinstance(selected, CompiledScenario)
+    assert "generation_behavior.yaml" in selected.effective_config.packaged_defaults
+    assert captured["scenario"] is selected.scenario
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_explicit_changed_scenario_reports_resolved_sections(
+    tmp_path: Path,
+) -> None:
+    """An authored assertion cannot replace a checkpoint's resolved run identity."""
+
+    scenario_path = Path("tests/fixtures/scenarios/minimal.yaml")
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(output, scenario_path)
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    changed = tmp_path / "changed.yaml"
+    changed.write_text(
+        scenario_path.read_text(encoding="utf-8").replace(
+            "name: minimal-test",
+            "name: changed-test",
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("evidenceforge.cli.commands.GenerationEngine") as engine:
+        result = runner.invoke(
+            app,
+            ["generate", str(changed), "--output", str(output), "--resume"],
+        )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 1
+    assert "does not match the checkpoint's authoritative resolved identity" in normalized
+    assert "Changed resolved sections: scenario, assets" in normalized
+    engine.assert_not_called()
+    assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
+
+
+def test_generate_resume_rejects_changed_seed_before_hydration(tmp_path: Path) -> None:
+    """A resume seed override must repeat the checkpoint's effective seed exactly."""
+
+    scenario_path = Path("tests/fixtures/scenarios/minimal.yaml")
+    compiled = compile_scenario(scenario_path)
+    output = tmp_path / "bundle"
+    store, controller, participant = _controller(
+        output,
+        scenario_path,
+        compiled=compiled,
+    )
+    controller.commit(cursor=_cursor(6), participants=(participant,))
+    changed_seed = (compiled.scenario.generation_seed + 1) % (2**64)
+
+    with patch("evidenceforge.cli.commands.GenerationEngine") as engine:
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--output",
+                str(output),
+                "--resume",
+                "--seed",
+                str(changed_seed),
+            ],
+        )
+
+    normalized = " ".join(result.stdout.split())
+    assert result.exit_code == 1
+    assert "generation seed differs from the checkpoint" in normalized
+    assert "Incompatible fields: generation_seed" in normalized
+    engine.assert_not_called()
     assert [sequence for sequence, _digest in store.recovery_index_entries()] == [0]
 
 

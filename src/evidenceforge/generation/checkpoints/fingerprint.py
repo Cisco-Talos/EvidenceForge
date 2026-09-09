@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from evidenceforge import __version__
-from evidenceforge.composition.artifacts import build_resolved_document
+from evidenceforge.composition.identity import semantic_resolved_payload
 from evidenceforge.composition.models import CompiledScenario
 
 from .behavior import (
@@ -246,18 +246,6 @@ def _dependency_versions() -> dict[str, str]:
     return versions
 
 
-def _resolved_payload(compiled: CompiledScenario) -> dict[str, Any]:
-    document = build_resolved_document(compiled)
-    return {
-        "assets": {
-            name: hashlib.sha256(content.encode("utf-8")).hexdigest()
-            for name, content in sorted(document.assets.items())
-        },
-        "effective_config": document.effective_config,
-        "scenario": document.scenario,
-    }
-
-
 def run_fingerprint(
     compiled: CompiledScenario,
     *,
@@ -306,7 +294,7 @@ def run_fingerprint_payload(
         "python": platform.python_version(),
         "python_compiler": platform.python_compiler(),
         "python_implementation": platform.python_implementation(),
-        "resolved": _resolved_payload(compiled),
+        "resolved": semantic_resolved_payload(compiled),
         "sys_byteorder": sys.byteorder,
     }
 

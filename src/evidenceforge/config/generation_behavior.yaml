@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 8
+current_revision: 9
 history_start_revision: 1
-behavior_surface_sha256: "300e2f18ff4d07a5c48126b8c61d96cb7e39ca4a041b52f7477369fbb18f63aa"
+behavior_surface_sha256: "752a28a829809adef1050a9fa04033944b442a5a1ca5c27ee391ad2203ba71f3"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -99,3 +99,11 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Preserves validated process ancestry after a bootstrap parent ages out and releases source-timing ownership when process action-cohort preflight fails.
+  - revision: 9
+    id: semantic-resolved-checkpoint-identity
+    impact: none
+    domains:
+      - checkpoint-resume
+      - composition-identity
+    formats: []
+    summary: Separates checkpoint-control metadata from semantic resolved identity and verifies explicit resume inputs against the retained snapshot.
