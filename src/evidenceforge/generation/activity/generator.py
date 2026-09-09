@@ -21279,19 +21279,28 @@ class ActivityGenerator:
                 )
                 if builder.effect_provenance is not None
             )
-            action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                prepared_endpoint.root_anchor.action_id,
-                action_cohort_state_plan,
-                (root_dispatch, *dependent_dispatches),
-                (
-                    ExecutionEffectAuditCohortEntry(
-                        endpoint_effect_plan,
-                        endpoint_reconciliation,
+            try:
+                action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
+                    prepared_endpoint.root_anchor.action_id,
+                    action_cohort_state_plan,
+                    (root_dispatch, *dependent_dispatches),
+                    (
+                        ExecutionEffectAuditCohortEntry(
+                            endpoint_effect_plan,
+                            endpoint_reconciliation,
+                        ),
                     ),
-                ),
-                effect_member_bindings,
-                (),
-            )
+                    effect_member_bindings,
+                    (),
+                )
+            except BaseException as primary:
+                if not timing_preparation.committed:
+                    self._reconcile_generator_cleanup(
+                        primary,
+                        "process action-cohort source timing",
+                        timing_preparation.cancel,
+                    )
+                raise
             self.dispatcher.publish_prepared_action_cohort_batch(action_cohort_batch)
             running_proc = self.state_manager.get_process(system.hostname, pid)
             if running_proc is None:  # pragma: no cover - authenticated State result invariant

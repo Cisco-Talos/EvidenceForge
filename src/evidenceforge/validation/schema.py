@@ -242,6 +242,7 @@ class ScenarioValidator:
         self._validate_network_sensors()
         self._validate_output_formats()
         self._validate_sensor_backed_outputs()
+        self._validate_evidence_reachability()
         self._validate_proxy_output_topology()
         # Eval-informed checks
         self._validate_format_os_compatibility()
@@ -271,6 +272,28 @@ class ScenarioValidator:
         self._validate_legacy_smb_connections()
         self._sort_issues()
         return self.issues
+
+    def evidence_reachability_issues(self) -> list[ValidationIssue]:
+        """Return only source-instance-aware behavior reachability findings."""
+
+        from evidenceforge.validation.evidence_reachability import (
+            analyze_evidence_reachability,
+        )
+
+        return [
+            ValidationIssue(
+                severity=finding.severity,
+                field_path=finding.field_path,
+                message=finding.message,
+                suggestion=finding.suggestion,
+            )
+            for finding in analyze_evidence_reachability(self.scenario)
+        ]
+
+    def _validate_evidence_reachability(self) -> None:
+        """Report configured behaviors that no effective source can express."""
+
+        self.issues.extend(self.evidence_reachability_issues())
 
     def _validate_storage(self) -> None:
         """Validate compiled storage references, audiences, and SMB selections."""

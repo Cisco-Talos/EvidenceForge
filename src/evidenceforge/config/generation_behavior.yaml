@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 6
+current_revision: 8
 history_start_revision: 1
-behavior_surface_sha256: "3afa9eb858b48576f263f55c1ceada082faa686d41fb6ef27495b0f40798996f"
+behavior_surface_sha256: "300e2f18ff4d07a5c48126b8c61d96cb7e39ca4a041b52f7477369fbb18f63aa"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -73,3 +73,29 @@ changes:
       - windows_event_sysmon
       - zeek
     summary: Retains named storyline processes through dependent effects and canonicalizes sensor hostnames before emitter route construction.
+  - revision: 7
+    id: behavior-evidence-reachability-validation
+    impact: none
+    domains:
+      - generation-admission
+      - source-deployment-validation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+      - zeek_smb_mapping
+    summary: Rejects impossible persistent SMB source selections before generation and warns when authored behavior has no observable projection.
+  - revision: 8
+    id: retained-bootstrap-parent-lifecycle-proof
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-timing-preparation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserves validated process ancestry after a bootstrap parent ages out and releases source-timing ownership when process action-cohort preflight fails.

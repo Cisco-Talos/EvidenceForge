@@ -54,6 +54,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1** Add source-instance-aware evidence reachability validation so impossible persistent
+  SMB output selections fail before generation, invisible authored behavior produces actionable
+  warnings, and runtime `--formats` narrowing rechecks the same canonical contracts. See the
+  [evidence reachability worklog](docs/worklog/2026-09-09-evidence-reachability-validation.md).
+
 - [x] **P1** Complete the Pack Schema 2.0 release workflow: publisher-qualified identities,
   deterministic lock refresh, immutable `.efpack` closure import/hydration, resilient all-scope
   inventory, updated skills, and small/medium healthcare consumers. See the

@@ -790,6 +790,62 @@ def test_required_artifact_failure_rolls_back_production_action_cohort(
     emitter.emit.assert_not_called()
 
 
+def test_process_action_cohort_preflight_failure_releases_source_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lifecycle preflight rejection cannot strand the source-timing owner lane."""
+
+    (
+        generator,
+        state,
+        emitter,
+        user,
+        system,
+        timestamp,
+        artifact_registry,
+    ) = _artifact_fixture()
+    timing_planner = generator.dispatcher.source_timing_planner
+    before_state = state.materialization_digest()
+    before_artifacts = artifact_registry.census()
+    before_timing = timing_planner.state_digest()
+
+    def reject_lifecycle_request(_plan: object) -> object:
+        raise StateError("injected lifecycle action-cohort preflight failure")
+
+    monkeypatch.setattr(
+        generator._lifecycle_authority,
+        "action_cohort_request",
+        reject_lifecycle_request,
+    )
+
+    with (
+        patch.object(
+            generator,
+            "_process_endpoint_effect_rng",
+            return_value=_NoAmbientEffectsRandom(),
+        ),
+        pytest.raises(
+            StateError,
+            match="injected lifecycle action-cohort preflight failure",
+        ),
+    ):
+        generator.generate_process(
+            user,
+            system,
+            timestamp,
+            "0x12345",
+            r"C:\Users\Public\preflight-failure.exe",
+            r"C:\Users\Public\preflight-failure.exe",
+            ensure_file_event=True,
+        )
+
+    assert state.materialization_digest() == before_state
+    assert artifact_registry.census() == before_artifacts
+    assert timing_planner.state_digest() == before_timing
+    timing_planner.advance_watermark(timestamp)
+    emitter.emit.assert_not_called()
+
+
 def test_filtered_multi_occurrence_effect_cohort_commits_rows_and_latest_frontiers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

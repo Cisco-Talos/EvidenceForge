@@ -1514,6 +1514,7 @@ def generate(
         raise typer.Exit(EXIT_INPUT_ERROR)
     artifacts_dir = ground_truth_dir / "artifacts"
 
+    from evidenceforge.config.provider import effective_config_scope
     from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
     from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
     from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
@@ -1549,6 +1550,39 @@ def generate(
         compiled = with_runtime_scenario(compiled, scenario)
         console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
 
+        # Runtime filtering can remove the last source capable of expressing a configured
+        # behavior after ordinary scenario validation has passed. Re-run only the shared
+        # reachability analysis before output setup or warm-up.
+        from evidenceforge.validation import ScenarioValidator
+
+        with effective_config_scope(compiled.effective_config):
+            filtered_validator = ScenarioValidator(
+                scenario,
+                oob_hosts=oob_hosts,
+                scenario_root=scenario_file.parent,
+            )
+            filtered_reachability = filtered_validator.evidence_reachability_issues()
+        prior_issue_keys = {(issue.severity, issue.field_path, issue.message) for issue in issues}
+        new_reachability = [
+            issue
+            for issue in filtered_reachability
+            if (issue.severity, issue.field_path, issue.message) not in prior_issue_keys
+        ]
+        if new_reachability:
+            console.print("\n[yellow]Format filter changed evidence reachability:[/yellow]")
+            for issue in new_reachability:
+                color, icon = ("red", "✗") if issue.severity == "error" else ("yellow", "!")
+                console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
+                console.print(Text(f"    {issue.message}", style=color))
+                if issue.suggestion:
+                    console.print(Text(f"    💡 {issue.suggestion}", style="dim"))
+            if any(issue.severity == "error" for issue in new_reachability):
+                console.print(
+                    "\n[bold red]The format filter makes configured behavior impossible to "
+                    "project. Cannot proceed with generation.[/bold red]"
+                )
+                raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+
     selected_checkpoint_hours = checkpoint_hours
     if selected_checkpoint_hours is None:
         selected_checkpoint_hours = (
@@ -1557,8 +1591,6 @@ def generate(
             else _DEFAULT_CHECKPOINT_HOURS
         )
     fresh_checkpoint_enabled = not resume and selected_checkpoint_hours > 0
-
-    from evidenceforge.config.provider import effective_config_scope
 
     with effective_config_scope(compiled.effective_config):
         resource_forecast = _forecast_for_cli(

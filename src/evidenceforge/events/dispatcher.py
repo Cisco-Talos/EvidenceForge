@@ -74,6 +74,9 @@ from evidenceforge.events.contracts import (
     SemanticOccurrenceKey,
     shadow_seal,
 )
+from evidenceforge.events.evidence_requirements import (
+    PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
+)
 from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -185,16 +188,6 @@ _MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 1_024
 _MAX_DEFERRED_SESSION_PUBLICATION_MEMBERS = 256
 _MAX_DEFERRED_SESSION_RECEIPT_STRING_CHARS = 4_096
 _TRUSTED_ENGINE_DIGEST = hashlib.sha256(b"evidenceforge-trusted-engine").hexdigest()
-_PERSISTENT_SMB_PROJECTION_TARGET_ORDER = (
-    "zeek_conn",
-    "zeek_smb_mapping",
-    "zeek_smb_files",
-    "zeek_files",
-    "ecar",
-    "windows_event_security",
-)
-
-
 _RECENT_NETWORK_IDENTIFIER_CAPACITY = 16
 
 
