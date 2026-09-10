@@ -63,6 +63,7 @@ from evidenceforge.events.rdp import (
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity import ActivityGenerator, bash_commands
+from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityBinding
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
 from evidenceforge.generation.checkpoints.application_channel_head import (
@@ -2565,8 +2566,28 @@ def test_state_value_codec_round_trips_only_explicit_runtime_records() -> None:
             resp=DirectionalTrafficLedger(payload_bytes=20, packets=1, ip_bytes=60),
         ),
     )
+    public_identity = PublicIdentityBinding(
+        semantic_key="web-client:human:1",
+        ip="198.51.100.25",
+        role="human",
+        provider="example-provider",
+        forward_names=("visitor.example.test",),
+        ptr="visitor.example.test",
+        tls_profile="public-web",
+        traits=(("persona", "human_browser"),),
+        authored=False,
+        provenance=("packaged-default",),
+        fingerprint="0" * 64,
+    )
 
-    for value in (session, thread_identity, process_identity, session_identity, transaction):
+    for value in (
+        session,
+        thread_identity,
+        process_identity,
+        session_identity,
+        transaction,
+        public_identity,
+    ):
         assert decode_state_value(encode_state_value(value)) == value
     with pytest.raises(TypeError, match="unsupported"):
         encode_state_value(StateManager())

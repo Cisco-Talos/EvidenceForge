@@ -32,6 +32,7 @@ from evidenceforge.events.rdp import (
     RdpSessionState,
     RdpTransportGeneration,
 )
+from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityBinding
 from evidenceforge.generation.process_runtime_cache import RuntimeProcessBinding
 from evidenceforge.models.state import (
     ActiveSession,
@@ -248,6 +249,19 @@ _RDP_SESSION_SNAPSHOT_FIELDS = (
     "active_leases",
 )
 _RUNTIME_PROCESS_BINDING_FIELDS = ("pid", "process_key")
+_PUBLIC_IDENTITY_BINDING_FIELDS = (
+    "semantic_key",
+    "ip",
+    "role",
+    "provider",
+    "forward_names",
+    "ptr",
+    "tls_profile",
+    "traits",
+    "authored",
+    "provenance",
+    "fingerprint",
+)
 _THREAD_IDENTITY_FIELDS = (
     "hostname",
     "process_object_id",
@@ -332,6 +346,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-transaction-plan": (NetworkTransactionPlan, _NETWORK_TRANSACTION_PLAN_FIELDS),
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
+    "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
     "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (

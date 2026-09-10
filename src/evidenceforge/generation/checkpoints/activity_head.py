@@ -130,6 +130,7 @@ _REBUILT_FIELDS = (
     "_production_process_runtime_caches",
     "_proxy_routes",
     "_proxy_service_accounts",
+    "public_identity_registry",
     "_system_pids",
     "_systems_by_hostname",
     "_users_by_username",
