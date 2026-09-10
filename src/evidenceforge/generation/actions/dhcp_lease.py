@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from evidenceforge.events.contexts import IdsAlertPlan
@@ -202,6 +202,89 @@ class DhcpLeaseRequest:
             f"{self.ids_alerts}:{self.source}"
         )
         return f"dhcp-lease-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class DhcpSourceTimeline:
+    """Canonical transport interval and source-local endpoint phase times."""
+
+    transport_start: datetime
+    transport_close: datetime
+    endpoint_phase_times: tuple[datetime, ...]
+
+
+def plan_dhcp_source_timeline(
+    request: DhcpLeaseRequest,
+    *,
+    transaction_duration: float,
+    message_count: int,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+) -> DhcpSourceTimeline:
+    """Plan one causally ordered DHCP transaction across wire and endpoint sources."""
+
+    if not math.isfinite(transaction_duration) or transaction_duration <= 0:
+        raise StateError("DHCP source timing requires a finite positive transaction duration")
+    if message_count not in {3, 5}:
+        raise StateError("DHCP source timing requires a renewal or acquisition phase count")
+
+    runtime = _planning_timing_runtime(timing_runtime)
+    transport_start = request.time
+    transport_close = transport_start + timedelta(seconds=transaction_duration)
+    fractions = (0.0, 1.0, 1.0) if message_count == 3 else (0.0, 0.28, 0.58, 1.0, 1.0)
+    scope = TimingScope(
+        stable_id=request.stable_id,
+        host=request.system.hostname,
+        source="dhclient",
+        lifecycle_id="lease_transaction",
+    )
+    observation_delay = TriangularDistribution(
+        minimum=2_000.0,
+        mode=18_000.0,
+        maximum=95_000.0,
+    )
+    ordering_gap = TriangularDistribution(
+        minimum=2_000.0,
+        mode=15_000.0,
+        maximum=70_000.0,
+    )
+
+    endpoint_times: list[datetime] = []
+    for ordinal, fraction in enumerate(fractions):
+        canonical_phase = transport_start + timedelta(seconds=transaction_duration * fraction)
+        if ordinal == message_count - 1:
+            canonical_phase = transport_close + timedelta(milliseconds=5)
+        candidate = canonical_phase + runtime.sampler.sample_timedelta(
+            observation_delay,
+            relationship_key="dhcp.lease.endpoint_observation_delay",
+            scope=TimingScope(
+                stable_id=scope.stable_id,
+                host=scope.host,
+                source=scope.source,
+                lifecycle_id=scope.lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key="phase_delay",
+        )
+        if endpoint_times and candidate <= endpoint_times[-1]:
+            candidate = endpoint_times[-1] + runtime.sampler.sample_timedelta(
+                ordering_gap,
+                relationship_key="dhcp.lease.endpoint_phase_gap",
+                scope=TimingScope(
+                    stable_id=scope.stable_id,
+                    host=scope.host,
+                    source=scope.source,
+                    lifecycle_id=scope.lifecycle_id,
+                    ordinal=ordinal,
+                ),
+                sample_key="phase_gap",
+            )
+        endpoint_times.append(candidate)
+
+    return DhcpSourceTimeline(
+        transport_start=transport_start,
+        transport_close=transport_close,
+        endpoint_phase_times=tuple(endpoint_times),
+    )
 
 
 class DhcpLeaseExecutor(Protocol):

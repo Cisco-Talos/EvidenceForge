@@ -253,6 +253,7 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockRequest,
     file_transfer_hashes,
     http_response_parent_duration_floor,
+    plan_dhcp_source_timeline,
     plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
@@ -37708,16 +37709,23 @@ class ActivityGenerator:
             time=time,
             msg_types=msg_types,
         )
+        message_count = 5 if is_initial_acquisition else 3
+        timeline = plan_dhcp_source_timeline(
+            request,
+            transaction_duration=dhcp_duration,
+            message_count=message_count,
+            timing_runtime=self.timing_runtime,
+        )
         transaction = NetworkTransactionPlan(
             stable_id=request.stable_id,
             hostname=system.hostname,
             outcome="success",
             phase_times=(
-                ("transport_start", time),
-                ("transport_close", time + timedelta(seconds=dhcp_duration)),
+                ("transport_start", timeline.transport_start),
+                ("transport_close", timeline.transport_close),
             ),
-            started_at=time,
-            closed_at=time + timedelta(seconds=dhcp_duration),
+            started_at=timeline.transport_start,
+            closed_at=timeline.transport_close,
             src_ip=system.ip,
             dst_ip=server_addr,
             src_port=68,
@@ -37768,8 +37776,9 @@ class ActivityGenerator:
         if _get_os_category(system.os) == "linux":
             dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
             interface = linux_primary_interface(system)
-            bound_message_index = 4 if is_initial_acquisition else 2
-            bound_message_offset = bound_message_index * 1.5
+            bound_message_offset = (
+                timeline.endpoint_phase_times[-1] - timeline.transport_start
+            ).total_seconds()
             if renewal_interval is None:
                 displayed_renewal_interval = lease_time / 2
             else:
@@ -37789,10 +37798,14 @@ class ActivityGenerator:
                     f"DHCPACK of {system.ip} from {server_addr}",
                     f"bound to {system.ip} -- renewal in {renewal} seconds.",
                 ]
-            for idx, message in enumerate(messages):
+            for phase_time, message in zip(
+                timeline.endpoint_phase_times,
+                messages,
+                strict=True,
+            ):
                 self.generate_syslog_event(
                     system=system,
-                    time=time + timedelta(milliseconds=idx * 1500),
+                    time=phase_time,
                     app_name="dhclient",
                     message=message,
                     pid=dhclient_pid,
@@ -41507,6 +41520,14 @@ class ActivityGenerator:
             return proc.command_line
         return "-"
 
+    def _lookup_parent_username(self, hostname: str, parent_pid: int) -> str:
+        """Look up the canonical principal for a child process's parent."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        if proc is not None:
+            return proc.username
+        identity = self.state_manager.get_process_identity(hostname, parent_pid)
+        return identity.principal if identity is not None else ""
+
     def _lookup_parent_start_time(self, hostname: str, parent_pid: int) -> datetime | None:
         """Look up parent process start time at event construction time."""
         proc = self.state_manager.get_process(hostname, parent_pid)
@@ -41619,6 +41640,10 @@ class ActivityGenerator:
                 logon_id=event_logon_id,
                 parent_image=self._lookup_parent_image(system.hostname, running_proc.parent_pid),
                 parent_command_line=self._lookup_parent_command_line(
+                    system.hostname,
+                    running_proc.parent_pid,
+                ),
+                parent_username=self._lookup_parent_username(
                     system.hostname,
                     running_proc.parent_pid,
                 ),

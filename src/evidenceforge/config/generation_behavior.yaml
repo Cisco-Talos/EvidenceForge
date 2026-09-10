@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 19
+current_revision: 20
 history_start_revision: 1
-behavior_surface_sha256: "181edbc078901377fcd97cf67aa9c42d2b80c9164367df1ca9a58dcb3df5c1ef"
+behavior_surface_sha256: "b0831f8ec0f866a514ddd6973dbc646564f44305fe2e8490f0e1977df7eac95b"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -191,3 +191,15 @@ changes:
       - all-email
       - all-authentication
     summary: Binds generated Internet identities once by semantic role and provider, with deterministic canonical overlays and silent 2.x legacy translation.
+  - revision: 20
+    id: dhcp-phase-timing-and-process-parent-principal
+    impact: material
+    domains:
+      - dhcp-source-timing
+      - process-parent-identity
+      - rdp-session
+    formats:
+      - syslog
+      - zeek_dhcp
+      - windows_event_sysmon
+    summary: Plans independent DHCP endpoint phase observations around the canonical wire interval and preserves exact parent principals for process rendering.

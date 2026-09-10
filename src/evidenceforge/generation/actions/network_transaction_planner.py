@@ -1136,6 +1136,12 @@ class NetworkTransactionPlanner:
                         parent_command_line=(
                             parent_identity.command_line if parent_identity is not None else ""
                         ),
+                        parent_username=(
+                            parent_identity.principal if parent_identity is not None else ""
+                        ),
+                        parent_start_time=(
+                            parent_identity.started_at if parent_identity is not None else None
+                        ),
                     ),
                     auth=(
                         AuthContext(

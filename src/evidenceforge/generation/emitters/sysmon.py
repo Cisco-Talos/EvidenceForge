@@ -1735,6 +1735,9 @@ class SysmonEventEmitter(LogEmitter):
         child_user: str,
     ) -> str:
         """Return Sysmon Event 1 ParentUser for the modeled parent process."""
+        canonical_parent_username = str(proc.parent_username or "")
+        if canonical_parent_username:
+            return self._format_user(canonical_parent_username, host.netbios_domain)
         parent_username = str(getattr(parent_proc, "username", "") or "")
         if parent_username:
             return self._format_user(parent_username, host.netbios_domain)

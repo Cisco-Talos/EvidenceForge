@@ -2206,13 +2206,53 @@ class TestDhcpLease:
         assert syslog_messages == [
             f"DHCPREQUEST for 10.0.10.2 on {interface} to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
-            "bound to 10.0.10.2 -- renewal in 3422 seconds.",
+            "bound to 10.0.10.2 -- renewal in 3425 seconds.",
         ]
-        gaps = [
-            syslog_events[idx].timestamp - syslog_events[idx - 1].timestamp
-            for idx in range(1, len(syslog_events))
+        assert all(
+            earlier.timestamp < later.timestamp
+            for earlier, later in zip(syslog_events, syslog_events[1:], strict=False)
+        )
+        assert len({event.timestamp.microsecond % 1000 for event in syslog_events}) > 1
+        dhcp_event = next(
+            call[0][0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call[0][0].event_type == "dhcp_lease"
+        )
+        assert dhcp_event.network is not None
+        assert dhcp_event.network.closed_at <= syslog_events[1].timestamp
+        assert syslog_events[1].timestamp - dhcp_event.network.closed_at < timedelta(
+            milliseconds=200
+        )
+
+    def test_initial_dhcp_acquisition_uses_one_ordered_source_timeline(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ) -> None:
+        """Acquisition phases preserve order without fixed-offset timestamp suffixes."""
+        linux = System(hostname="LNX-02", ip="10.0.10.3", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:f0",
+            server_addr="10.0.0.1",
+            lease_time=3600.0,
+        )
+
+        events = [
+            call[0][0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call[0][0].event_type == "syslog"
+            and call[0][0].syslog is not None
+            and call[0][0].syslog.app_name == "dhclient"
         ]
-        assert min(gaps) >= timedelta(milliseconds=1500)
+        assert len(events) == 5
+        assert all(
+            earlier.timestamp < later.timestamp
+            for earlier, later in zip(events, events[1:], strict=False)
+        )
+        assert len({event.timestamp.microsecond % 1000 for event in events}) > 1
 
 
 class TestAnonymousLogon:

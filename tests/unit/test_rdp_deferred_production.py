@@ -2768,6 +2768,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         "ProcessGuid",
     )
     assert _field(target_rows["winlogon.exe"], "ParentImage") == "System"
+    assert _field(target_rows["userinit.exe"], "ParentUser") == "NT AUTHORITY\\SYSTEM"
     assert (
         _field(target_rows["userinit.exe"], "ParentImage")
         .casefold()

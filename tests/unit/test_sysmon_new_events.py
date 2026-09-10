@@ -1686,6 +1686,31 @@ class TestUserFieldFormatting:
         assert "<Version>5</Version>" in content
         assert '<Data Name="ParentUser">CORP\\admin</Data>' in content
 
+    def test_event1_prefers_canonical_parent_principal(self, emitter):
+        """A retained parent identity overrides the child's security context."""
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin", logon_id="0x46a3f"),
+            process=ProcessContext(
+                pid=4101,
+                parent_pid=4001,
+                image=r"C:\Windows\System32\userinit.exe",
+                command_line="userinit.exe",
+                username="admin",
+                parent_image=r"C:\Windows\System32\winlogon.exe",
+                parent_command_line="winlogon.exe",
+                parent_username="SYSTEM",
+            ),
+        )
+
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+
+        assert '<Data Name="ParentUser">NT AUTHORITY\\SYSTEM</Data>' in content
+
     def test_process_access_target_user_gets_domain(self, emitter):
         """Sysmon Event 10 target user should use source-native domain formatting."""
         event = OccurrenceBuilder(
