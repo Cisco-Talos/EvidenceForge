@@ -1390,13 +1390,31 @@ def _prepare_legacy_registry_values(
         raise RuntimeError("legacy DNS registry loader binding was replaced")
 
     token = _CURRENT_EFFECTIVE_CONFIG.set(effective_config)
+    reset_public_identity_profiles_cache: Callable[[], None] | None = None
     try:
         data = load_with_overlay_operation(
             registry_path,
             "activity/dns_registry.yaml",
             merge_operation,
         )
+        public_identity_module = importlib.import_module(
+            "evidenceforge.generation.activity.public_identity_profiles"
+        )
+        reset_public_identity_profiles_cache = (
+            public_identity_module.reset_public_identity_profiles_cache
+        )
+        public_identity_registry_type = public_identity_module.PublicIdentityRegistry
+        reset_public_identity_profiles_cache()
+        public_identity_registry = public_identity_registry_type()
+        cdn_ranges = [
+            (first, second)
+            for first, second, _third_min, _third_max in public_identity_registry.provider_prefixes(
+                "cdn"
+            )
+        ]
     finally:
+        if reset_public_identity_profiles_cache is not None:
+            reset_public_identity_profiles_cache()
         _CURRENT_EFFECTIVE_CONFIG.reset(token)
     if type(data) is not dict:
         raise RuntimeError("legacy DNS registry must be a mapping")
@@ -1425,7 +1443,7 @@ def _prepare_legacy_registry_values(
         reverse_dns=reverse_dns,
         forward_dns=forward_dns,
         external_ips=external_ips,
-        cdn_ranges=[tuple(value) for value in data.get("cdn_ranges", [])],
+        cdn_ranges=cdn_ranges,
         ipv6_map=dict(data.get("ipv6_map", {})),
     )
 

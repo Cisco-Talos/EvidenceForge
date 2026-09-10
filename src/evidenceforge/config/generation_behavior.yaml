@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 18
+current_revision: 19
 history_start_revision: 1
-behavior_surface_sha256: "8b3ce9ff77966b7a51577b661ca006af82b9469e8d3d00ec23749b3209dafa31"
+behavior_surface_sha256: "67616201fd0afd975ed17f9ea0504dda079c474a95057b7749cb87e8d9c41fa4"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -177,3 +177,17 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Projects successful inbound Windows transports through one responder process identity into WFP 5156 and Sysmon Event 3 with source-native direction.
+  - revision: 19
+    id: canonical-public-identity-registry
+    impact: material
+    domains:
+      - public-identity
+      - baseline-network
+      - storyline-network
+      - public-mail
+      - dns-ntp-cdn
+    formats:
+      - all-network
+      - all-email
+      - all-authentication
+    summary: Binds generated Internet identities once by semantic role and provider, with deterministic canonical overlays and silent 2.x legacy translation.

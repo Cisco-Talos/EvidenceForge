@@ -27,8 +27,12 @@ from evidenceforge.generation.activity.tls_issuers import _merge_tls_issuers, pi
 
 def test_overlay_registry_covers_every_packaged_activity_family() -> None:
     packaged = {f"activity/{path.name}" for path in get_activity_directory().glob("*.yaml")}
+    compatibility_only = {
+        "activity/external_actor_profiles.yaml",
+        "activity/mail_public_identities.yaml",
+    }
 
-    assert set(CONFIG_OVERLAY_FAMILIES) == packaged | {"personas/*.yaml"}
+    assert set(CONFIG_OVERLAY_FAMILIES) == packaged | compatibility_only | {"personas/*.yaml"}
 
 
 def test_overlay_registry_is_immutable_and_inventory_returns_copies() -> None:

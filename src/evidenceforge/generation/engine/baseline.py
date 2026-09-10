@@ -7516,7 +7516,7 @@ class BaselineMixin:
                     if not workstation_probe_sources:
                         continue
                     src_ip = rng.choice(workstation_probe_sources).ip
-                    dst_ip = self._generate_external_client_ip(rng)
+                    dst_ip = self._generate_external_client_ip(rng, role="c2")
                     dst_port = self._firewall_blocked_port_for_internal_source(src_ip, rng)
                     proto = "tcp"
                 else:
@@ -13556,14 +13556,44 @@ class BaselineMixin:
         return reserved
 
     def _generate_external_web_client_ip(self, rng: random.Random) -> str:
-        """Generate an external web-client IP that does not reuse scanner identities."""
+        """Bind a role-consistent web client without contradictory pool reuse."""
+
+        from evidenceforge.generation.activity.public_identity_profiles import (
+            PublicIdentityRegistry,
+        )
+
+        registry = getattr(self, "public_identity_registry", None)
+        if not isinstance(registry, PublicIdentityRegistry):
+            reserved = self._reserved_external_web_client_ips()
+            fallback = ""
+            for _ in range(1000):
+                fallback = self._generate_external_client_ip(rng)
+                if fallback not in reserved:
+                    return fallback
+            return fallback
+
+        role = rng.choices(
+            ["human", "crawler", "api_client", "scanner"],
+            weights=[70, 8, 7, 5],
+            k=1,
+        )[0]
         reserved = self._reserved_external_web_client_ips()
         fallback = ""
         for _ in range(1000):
-            candidate = self._generate_external_client_ip(rng)
-            fallback = candidate
-            if candidate not in reserved:
-                return candidate
+            semantic_key = f"web-client:{role}:{rng.getrandbits(128):032x}"
+            binding = registry.bind(
+                role,
+                semantic_key,
+                prefer_fixed=False,
+            )
+            fallback = binding.ip
+            if binding.ip not in reserved:
+                bindings = getattr(self, "_public_identity_bindings_by_ip", None)
+                if not isinstance(bindings, dict):
+                    bindings = {}
+                    self._public_identity_bindings_by_ip = bindings
+                bindings[binding.ip] = binding
+                return binding.ip
         return fallback
 
     def _reserved_external_outbound_destination_ips(self) -> set[str]:
@@ -13597,7 +13627,10 @@ class BaselineMixin:
         generated: list[str] = []
         seen: set[str] = set()
         for _ in range(3000):
-            candidate = self._generate_external_client_ip(pool_rng)
+            candidate = self._generate_external_client_ip(
+                pool_rng,
+                role="ordinary_responder",
+            )
             if candidate in reserved or candidate in seen:
                 continue
             seen.add(candidate)
@@ -13649,8 +13682,28 @@ class BaselineMixin:
 
         cached = cache.get(client_ip)
         if cached is None:
-            profile_rng = random.Random(_stable_seed(f"web_external_client_profile:{client_ip}"))
-            cached = pick_profile(profile_rng, is_external=True)
+            bindings = getattr(self, "_public_identity_bindings_by_ip", None)
+            binding = bindings.get(client_ip) if isinstance(bindings, dict) else None
+            role_profile_names = {
+                "human": "human_browser",
+                "crawler": "crawler",
+                "api_client": "api_client",
+                "scanner": "opportunistic_probe",
+            }
+            profile_name = role_profile_names.get(getattr(binding, "role", ""))
+            from evidenceforge.generation.activity.web_session_profiles import (
+                load_web_session_profiles,
+            )
+
+            configured = load_web_session_profiles().get("visitor_classes", {})
+            profile = configured.get(profile_name) if isinstance(configured, dict) else None
+            if isinstance(profile_name, str) and isinstance(profile, dict):
+                cached = (profile_name, profile)
+            else:
+                profile_rng = random.Random(
+                    _stable_seed(f"web_external_client_profile:{client_ip}")
+                )
+                cached = pick_profile(profile_rng, is_external=True)
             cache[client_ip] = cached
         return cached
 

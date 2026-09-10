@@ -198,6 +198,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         from evidenceforge.models.exceptions import ConfigurationError
 
         with effective_config_scope(self.compiled_scenario.effective_config):
+            from evidenceforge.generation.activity.public_identity_profiles import (
+                PublicIdentityRegistry,
+            )
+
+            self.public_identity_registry = PublicIdentityRegistry.from_scenario(self.scenario)
             retired = retired_overlay_errors()
             if retired:
                 path, message = retired[0]
@@ -1044,6 +1049,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             rdp_session_manager=self.rdp_session_manager,
             generation_window_start=self.warmup_start_time,
             generation_window_end=self.end_time,
+            public_identity_registry=self.public_identity_registry,
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment

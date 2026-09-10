@@ -275,19 +275,21 @@ def _collect_identity_pools() -> dict[str, Any]:
         load_command_parameter_pools,
     )
     from evidenceforge.generation.activity.email_background import load_email_background
-    from evidenceforge.generation.activity.external_actor_profiles import (
-        load_external_actor_profiles,
-    )
-    from evidenceforge.generation.activity.mail_public_identities import (
-        load_mail_public_identities,
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        PublicIdentityRegistry,
+        legacy_external_actor_projection,
+        legacy_mail_projection,
+        load_public_identity_profiles,
     )
     from evidenceforge.generation.activity.suspicious_benign_config import (
         load_suspicious_benign,
     )
 
     email_background = load_email_background()
-    mail_public = load_mail_public_identities()
-    external_actor = load_external_actor_profiles()
+    public_profiles = load_public_identity_profiles()
+    public_registry = PublicIdentityRegistry(public_profiles)
+    mail_public = legacy_mail_projection()
+    external_actor = legacy_external_actor_projection()
     suspicious_benign = load_suspicious_benign()
     command_pools = load_command_parameter_pools()
     command_keys = sorted(
@@ -301,11 +303,24 @@ def _collect_identity_pools() -> dict[str, Any]:
     return {
         "overlay_paths": [
             "activity/email_background.yaml",
-            "activity/mail_public_identities.yaml",
-            "activity/external_actor_profiles.yaml",
+            "activity/public_identity_profiles.yaml",
             "activity/suspicious_benign.yaml",
             "activity/command_parameter_pools.yaml",
         ],
+        "legacy_overlay_paths": [
+            "activity/external_actor_profiles.yaml",
+            "activity/mail_public_identities.yaml",
+        ],
+        "public_identity_profiles": {
+            "schema_version": public_profiles["schema_version"],
+            "roles": {
+                role: len(public_registry.fixed_bindings(role)) for role in public_registry.role_ids
+            },
+            "providers": list(public_registry.provider_ids),
+            "reserved_replacement_domains": len(
+                public_profiles.get("reserved_replacement_domains", [])
+            ),
+        },
         "email_background": {
             "external_domains": len(email_background.get("external_domains", [])),
             "inbound_local_parts": len(email_background.get("inbound_local_parts", [])),
@@ -567,7 +582,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
-    "identity_pools": "Generated identity pool counts and overlay paths",
+    "identity_pools": "Canonical public identity roles/providers, compatibility counts, and overlay paths",
     "ids_signatures": "Effective curated IDS signature catalog for ids_alerts attachments",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",

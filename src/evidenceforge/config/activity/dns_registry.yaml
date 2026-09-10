@@ -726,20 +726,6 @@ long_tail:
     - dev
     - app
 
-# CDN IP ranges for hash-based IP derivation (_domain_to_ip).
-# Each entry is [first_octet, second_octet] — third and fourth are derived from domain hash.
-cdn_ranges:
-  - [104, 16]   # Cloudflare
-  - [104, 18]   # Cloudflare
-  - [151, 101]  # Fastly
-  - [23, 45]    # Akamai
-  - [23, 72]    # Akamai
-  - [52, 84]    # AWS CloudFront
-  - [54, 230]   # AWS CloudFront
-  - [13, 107]   # Microsoft/Azure
-  - [142, 250]  # Google
-  - [172, 217]  # Google
-
 # IPv6 addresses for known IPs (used by AAAA queries).
 ipv6_map:
   "172.217.14.206": "2607:f8b0:4004:800::200e"

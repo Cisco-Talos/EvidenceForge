@@ -636,23 +636,36 @@ class TestTlsIssuers:
         assert ref_id.count(".") == 3
         assert ref_id not in {".GPS.", ".PPS.", ".GOES.", ".ACTS.", ".DCFa."}
 
-    def test_public_ntp_servers_are_loaded_from_network_params_overlay(self, tmp_path, monkeypatch):
-        """Public NTP defaults should be project-overlay configurable."""
-        from evidenceforge.generation.activity.network_params import reset_network_params_cache
+    def test_public_ntp_servers_are_loaded_from_public_identity_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """Public NTP identities should use the canonical project overlay."""
+        from evidenceforge.generation.activity.public_identity_profiles import (
+            reset_public_identity_profiles_cache,
+        )
 
         overlay_dir = tmp_path / ".eforge" / "config" / "activity"
         overlay_dir.mkdir(parents=True)
-        (overlay_dir / "network_params.yaml").write_text(
+        (overlay_dir / "public_identity_profiles.yaml").write_text(
             yaml.safe_dump(
                 {
-                    "public_ntp_servers": [
+                    "roles": [
                         {
-                            "name": "time.example.net",
-                            "ip": "198.51.100.123",
-                            "operator": "Example",
-                            "stratum": 2,
-                            "ref_id": ".GPS.",
-                            "weight": 1,
+                            "id": "ntp",
+                            "identities": [
+                                {
+                                    "ip": "45.67.89.123",
+                                    "provider": "public-ntp",
+                                    "forward_names": ["time.auditrelay.net"],
+                                    "ptr": "time.auditrelay.net",
+                                    "traits": {
+                                        "name": "time.auditrelay.net",
+                                        "operator": "Audit Relay",
+                                        "stratum": 2,
+                                        "ref_id": ".GPS.",
+                                    },
+                                }
+                            ],
                         }
                     ]
                 },
@@ -660,11 +673,11 @@ class TestTlsIssuers:
             )
         )
         monkeypatch.chdir(tmp_path)
-        reset_network_params_cache()
+        reset_public_identity_profiles_cache()
         try:
-            assert _ntp_stratum_and_ref_id("198.51.100.123") == (2, ".GPS.")
+            assert _ntp_stratum_and_ref_id("45.67.89.123") == (2, ".GPS.")
         finally:
-            reset_network_params_cache()
+            reset_public_identity_profiles_cache()
 
     def test_dns_tunnel_rtt_is_loaded_from_network_params_overlay(self, tmp_path, monkeypatch):
         """DNS tunnel timing should be project-overlay configurable."""

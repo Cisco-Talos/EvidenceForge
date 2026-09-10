@@ -274,11 +274,6 @@ from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlann
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
-from evidenceforge.generation.activity.mail_public_identities import (
-    generate_public_mail_ip,
-    public_mail_ptr_name,
-    public_safe_mail_hostname,
-)
 from evidenceforge.generation.activity.network_params import (
     linux_smb_connection_owner,
     nmap_command_probe_config,
@@ -292,6 +287,12 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
+)
+from evidenceforge.generation.activity.public_identity_profiles import (
+    PublicIdentityRegistry,
+    generate_public_mail_ip,
+    public_mail_ptr_name,
+    public_safe_mail_hostname,
 )
 from evidenceforge.generation.activity.service_process_profiles import (
     ServiceProcessFamily,
@@ -5521,6 +5522,7 @@ class ActivityGenerator:
         generation_window_end: datetime | None = None,
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
         rdp_session_manager: RdpReconnectStateManager | None = None,
+        public_identity_registry: PublicIdentityRegistry | None = None,
     ):
         """Initialize activity generator.
 
@@ -5552,8 +5554,10 @@ class ActivityGenerator:
             runtime_content_manager: Optional engine-owned local artifact/content
                 identity manager. Production shares the dispatcher's exact registry.
             rdp_session_manager: Optional engine-owned reconnectable RDP owner.
+            public_identity_registry: Scenario-scoped canonical Internet identity registry.
         """
         self.state_manager = state_manager
+        self.public_identity_registry = public_identity_registry or PublicIdentityRegistry()
         self._execution_effect_audit = ExecutionEffectAuditCounter()
         dispatcher_artifacts = (
             getattr(dispatcher, "local_artifact_registry", None) if dispatcher is not None else None
