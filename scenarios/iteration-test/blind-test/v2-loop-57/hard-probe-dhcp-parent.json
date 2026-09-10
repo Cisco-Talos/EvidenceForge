@@ -1,0 +1,19 @@
+{
+  "dhcp": {
+    "transaction_count": 18,
+    "strict_rendered_order": true,
+    "bad_sequence_count": 0,
+    "distinct_microsecond_suffixes": 54,
+    "paired_ack_count": 17,
+    "unpaired_ack_count": 1,
+    "paired_ack_after_close": true,
+    "paired_gap_ms_min": 95.23,
+    "paired_gap_ms_max": 338.488,
+    "unpaired_reason": "One endpoint ACK had no Zeek DHCP close within five seconds under the configured source-observation profile."
+  },
+  "sysmon_parent_principal": {
+    "userinit_count": 23,
+    "userinit_all_winlogon_system": true,
+    "resolved_parent_mismatch_count": 0
+  }
+}

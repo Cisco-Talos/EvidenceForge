@@ -13,7 +13,7 @@
 
 - **Classification:** `family_level`; loop-56 `sibling_defect` in the DHCP action family.
 - **Owning abstraction:** `DhcpLeaseActionBundle` owns transaction phases; the shared timing runtime owns deterministic source-observation variation.
-- **Invariant:** endpoint `DHCPREQUEST`, `DHCPACK`, and bound records are independently timed, remain causally ordered, and keep ACK observation close to the canonical network transaction close without copying one timestamp's microsecond suffix.
+- **Invariant:** endpoint `DHCPREQUEST`, `DHCPACK`, and bound records are independently timed, remain causally ordered, share one source-local observation decision, and keep ACK observation close to the canonical network transaction close without copying one timestamp's microsecond suffix.
 - **Entry paths:** baseline initial acquisition and renewal scheduling, direct activity-generator requests, and any storyline/compatibility caller using `generate_dhcp_lease`.
 - **Consumers:** Zeek DHCP, Linux syslog, network transaction state, deterministic eval, and blind timing review.
 - **Layer rationale:** phase relationships belong to the DHCP bundle; emitter-only jitter would duplicate truth and could disagree with the canonical close.
@@ -33,4 +33,23 @@
 
 | Loop | Selected family | Automated | Blind average | Outcome |
 |---:|---|---:|---:|---|
-| 57 | DHCP phase timing; canonical parent principal | pending | pending | in progress |
+| 57 | DHCP phase timing; canonical parent principal | 97.36 PASS | 69.00 initial / 82.25 deliberated | complete |
+
+## Loop 57 Verification
+
+- Commits: `759a46b33` (family fix) and `a8cbf1bf9` (rendered observation-order correction).
+- Routine gate: 8,379 passed, 5 skipped; Ruff check and format check passed.
+- Generated bundle: 122,545 records across 22 evaluated sources.
+- Deterministic evaluation: 97.3622, acceptance PASS; pillars 100.00 parseability,
+  96.86 plausibility, 97.53 causality, and 93.83 timing.
+- Rendered DHCP probe: 18/18 transactions preserve phase order with 54 distinct
+  microsecond suffixes. Seventeen visible cross-source pairs place endpoint ACK
+  95.230-338.488 ms after Zeek close; one endpoint ACK has no nearby Zeek row under
+  the configured observation profile.
+- Rendered process probe: all 23 `userinit.exe` rows identify `winlogon.exe` as an
+  `NT AUTHORITY\\SYSTEM` parent; no resolvable Sysmon parent-principal mismatch remains.
+- Blind panel: initial scores 44/65/83/84 (mean 69.00); verdict disagreement and
+  40-point spread triggered deliberation. Final scores 74/80/87/88 (mean 82.25),
+  unanimously Synthetic.
+- Next highest-impact families: packet-owned UDP DNS close timing and short-lived
+  RDP `userinit.exe` terminalization.
