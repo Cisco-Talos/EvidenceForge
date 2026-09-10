@@ -20091,23 +20091,24 @@ class ActivityGenerator:
                 )
                 if parent_exe not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
                     return None
-            minimum_seconds, maximum_seconds = lifetime
-            mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
-            return self.timing_runtime.sampler.after(
+            distribution, relationship_key, scope, sample_key = (
+                self._process_provisional_termination_timing_request(
+                    request,
+                    actor,
+                    lifetime_plan,
+                )
+            )
+            owner_sampler = self.timing_runtime.sampler
+            preview_sampler = TimingSampler(
+                namespace=owner_sampler.namespace,
+                generation_seed=owner_sampler.generation_seed,
+            )
+            return preview_sampler.after(
                 actor.started_at,
-                TriangularDistribution(
-                    minimum=minimum_seconds * 1_000_000,
-                    mode=mode_seconds * 1_000_000,
-                    maximum=maximum_seconds * 1_000_000,
-                ),
-                relationship_key="activity.process.windows_foreground_lifetime",
-                scope=TimingScope(
-                    stable_id=request.stable_id,
-                    host=request.system.hostname,
-                    source="endpoint_process",
-                    lifecycle_id=actor.lifecycle_id,
-                ),
-                sample_key=f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}",
+                distribution,
+                relationship_key=relationship_key,
+                scope=scope,
+                sample_key=sample_key,
             )
 
         if os_category != "linux" or not _linux_shell_process_reserves_foreground(
@@ -20143,24 +20144,75 @@ class ActivityGenerator:
             )
         if not parent_owns_foreground:
             return None
-        minimum_seconds, maximum_seconds = lifetime
-        median_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
-        return self.timing_runtime.sampler.after(
+        distribution, relationship_key, scope, sample_key = (
+            self._process_provisional_termination_timing_request(
+                request,
+                actor,
+                lifetime_plan,
+            )
+        )
+        owner_sampler = self.timing_runtime.sampler
+        preview_sampler = TimingSampler(
+            namespace=owner_sampler.namespace,
+            generation_seed=owner_sampler.generation_seed,
+        )
+        return preview_sampler.after(
             actor.started_at,
-            TruncatedLognormalDistribution(
-                median=median_seconds * 1_000_000,
+            distribution,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+        )
+
+    @staticmethod
+    def _process_provisional_termination_timing_request(
+        request: ProcessExecutionRequest,
+        actor: "PreparedProcessEffectActor",
+        lifetime_plan: ProcessLifetimePlan,
+    ) -> tuple[DistributionSpec, str, TimingScope, str]:
+        """Return one deterministic lifetime draw request for preview and commit."""
+
+        lifetime = lifetime_plan.bounds
+        if lifetime is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "provisional process termination timing requires bounded lifetime ownership",
+            )
+        minimum_seconds, maximum_seconds = lifetime
+        mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
+        os_category = _get_os_category(request.system.os)
+        if os_category == "windows":
+            distribution: DistributionSpec = TriangularDistribution(
+                minimum=minimum_seconds * 1_000_000,
+                mode=mode_seconds * 1_000_000,
+                maximum=maximum_seconds * 1_000_000,
+            )
+            relationship_key = "activity.process.windows_foreground_lifetime"
+            sample_key = f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}"
+        elif os_category == "linux":
+            distribution = TruncatedLognormalDistribution(
+                median=mode_seconds * 1_000_000,
                 sigma=0.78,
                 minimum=minimum_seconds * 1_000_000,
                 maximum=maximum_seconds * 1_000_000,
-            ),
-            relationship_key="activity.process.linux_foreground_lifetime",
-            scope=TimingScope(
+            )
+            relationship_key = "activity.process.linux_foreground_lifetime"
+            sample_key = "provisional_close"
+        else:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "provisional process termination timing requires Windows or Linux",
+            )
+        return (
+            distribution,
+            relationship_key,
+            TimingScope(
                 stable_id=request.stable_id,
                 host=request.system.hostname,
                 source="endpoint_process",
                 lifecycle_id=actor.lifecycle_id,
             ),
-            sample_key="provisional_close",
+            sample_key,
         )
 
     @staticmethod
@@ -21370,6 +21422,22 @@ class ActivityGenerator:
             return tuple(publications)
 
         with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+            if (
+                prepared_effects is not None
+                and prepared_effects.provisional_termination is not None
+                and prepared_effects.lifetime_plan is not None
+            ):
+                lifetime_distribution, lifetime_relationship, _scope, _sample_key = (
+                    self._process_provisional_termination_timing_request(
+                        request,
+                        prepared_effects.actor,
+                        prepared_effects.lifetime_plan,
+                    )
+                )
+                timing_preparation.planning_runtime.sampler.record_logical_sample(
+                    lifetime_distribution,
+                    relationship_key=lifetime_relationship,
+                )
             self._plan_process_source_create_times(
                 event,
                 not_after=effective_source_visible_by,
