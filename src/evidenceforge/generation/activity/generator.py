@@ -263,7 +263,11 @@ from evidenceforge.generation.actions.endpoint_effects import (
 from evidenceforge.generation.actions.network_connection import (
     DeferredSessionNetworkAuthority,
 )
-from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionReuseIntent,
+    ProcessLifetimeMode,
+    ProcessLifetimePlan,
+)
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
@@ -2189,12 +2193,49 @@ _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
 }
 
 
-def _windows_foreground_lifetime(
-    process_name: str, command_line: str
-) -> tuple[float, float] | None:
-    """Estimate Windows foreground command lifetime for baseline process state."""
+_WINDOWS_SESSION_OWNED_EXECUTABLES = {
+    "acrobat.exe",
+    "chrome.exe",
+    "code.exe",
+    "excel.exe",
+    "firefox.exe",
+    "iexplore.exe",
+    "msedge.exe",
+    "notepad++.exe",
+    "outlook.exe",
+    "powerpnt.exe",
+    "sublime_text.exe",
+    "teams.exe",
+    "winword.exe",
+}
+
+
+def _bounded_windows_lifetime(
+    minimum_seconds: float,
+    maximum_seconds: float,
+    classification: str,
+    *,
+    mode: ProcessLifetimeMode = ProcessLifetimeMode.BOUNDED,
+) -> ProcessLifetimePlan:
+    """Build one validated bounded Windows process lifetime plan."""
+
+    return ProcessLifetimePlan(
+        mode=mode,
+        minimum_seconds=minimum_seconds,
+        maximum_seconds=maximum_seconds,
+        classification=classification,
+    )
+
+
+def _windows_process_lifetime_plan(
+    process_name: str,
+    command_line: str,
+) -> ProcessLifetimePlan:
+    """Classify one Windows process lifetime before canonical publication."""
+
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     command = command_line.lower()
+    padded_command = f" {command} "
     if any(
         pattern in command
         for pattern in (
@@ -2208,19 +2249,79 @@ def _windows_foreground_lifetime(
             " -l ",
         )
     ):
-        return None
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.PERSISTENT,
+            classification="explicit-continuous-command",
+        )
+    if exe_name in _WINDOWS_SESSION_OWNED_EXECUTABLES:
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-desktop-application",
+        )
+    if exe_name in {"runas.exe", "runas"}:
+        return _bounded_windows_lifetime(0.4, 8.0, "runas-launcher")
+    if exe_name in {"git.exe", "git"}:
+        if any(
+            marker in padded_command
+            for marker in (" clone ", " fetch ", " pull ", " push ", " lfs ")
+        ):
+            return _bounded_windows_lifetime(
+                3.0,
+                180.0,
+                "git-network-operation",
+                mode=ProcessLifetimeMode.OPERATION_OWNED,
+            )
+        return _bounded_windows_lifetime(0.3, 20.0, "git-one-shot")
+    if exe_name in {"kubectl.exe", "kubectl"}:
+        continuous_markers = (
+            " port-forward ",
+            " proxy ",
+            " logs -f ",
+            " logs --follow ",
+            " --watch ",
+            " -w ",
+        )
+        if any(marker in padded_command for marker in continuous_markers):
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="kubectl-continuous-operation",
+            )
+        if " exec " in padded_command and any(
+            marker in padded_command for marker in (" -it ", " -i ", " -t ")
+        ):
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.SESSION_OWNED,
+                classification="kubectl-interactive-exec",
+            )
+        operation_mode = any(
+            marker in padded_command
+            for marker in (" apply ", " cp ", " create ", " delete ", " rollout ")
+        )
+        return _bounded_windows_lifetime(
+            0.8,
+            90.0 if operation_mode else 20.0,
+            "kubectl-operation" if operation_mode else "kubectl-one-shot",
+            mode=(
+                ProcessLifetimeMode.OPERATION_OWNED
+                if operation_mode
+                else ProcessLifetimeMode.BOUNDED
+            ),
+        )
     if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
-        return (0.8, 12.0)
+        return _bounded_windows_lifetime(0.8, 12.0, "http-client")
     if exe_name == "service-healthcheck.exe":
         if "--service" in command:
-            return None
-        return (2.0, 45.0)
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="service-health-worker",
+            )
+        return _bounded_windows_lifetime(2.0, 45.0, "service-health-check")
     if " check --once" in f" {command} ":
-        return (2.0, 45.0)
+        return _bounded_windows_lifetime(2.0, 45.0, "explicit-one-shot-check")
     if any(marker in command for marker in ("--silent", " /quiet", " /norestart")) and any(
         marker in exe_name for marker in ("setup", "installer", "update", "updater", "msi")
     ):
-        return (8.0, 360.0)
+        return _bounded_windows_lifetime(8.0, 360.0, "unattended-installer")
     if exe_name in {
         "whoami.exe",
         "hostname.exe",
@@ -2245,12 +2346,14 @@ def _windows_foreground_lifetime(
         "sc.exe",
         "wevtutil.exe",
     }:
-        return (0.4, 6.0)
-    padded_command = f" {command} "
+        return _bounded_windows_lifetime(0.4, 6.0, "administrative-utility")
     if exe_name == "cmd.exe":
         if " /c " in padded_command:
-            return (0.4, 8.0)
-        return None
+            return _bounded_windows_lifetime(0.4, 8.0, "cmd-one-shot-wrapper")
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-command-shell",
+        )
     if exe_name in {"powershell.exe", "pwsh.exe"}:
         one_shot_markers = (
             " -command ",
@@ -2262,13 +2365,32 @@ def _windows_foreground_lifetime(
             " downloadstring",
         )
         if any(marker in padded_command for marker in one_shot_markers):
-            return (2.0, 25.0)
-        return None
+            return _bounded_windows_lifetime(2.0, 25.0, "powershell-one-shot")
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-powershell",
+        )
     if exe_name in {"wmic.exe", "certutil.exe"}:
-        return (4.0, 35.0)
+        return _bounded_windows_lifetime(4.0, 35.0, "administrative-operation")
     if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
-        return (2.0, 25.0)
-    return None
+        return _bounded_windows_lifetime(2.0, 25.0, "sql-query")
+    return _bounded_windows_lifetime(
+        1.0,
+        8.0,
+        "unclassified-foreground-candidate",
+        mode=ProcessLifetimeMode.UNCLASSIFIED,
+    )
+
+
+def _windows_foreground_lifetime(
+    process_name: str, command_line: str
+) -> tuple[float, float] | None:
+    """Return bounded legacy lifetime semantics for known Windows foreground tools."""
+
+    plan = _windows_process_lifetime_plan(process_name, command_line)
+    if plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
+        return None
+    return plan.bounds
 
 
 def _is_bare_windows_explorer_launch(process_name: str, command_line: str) -> bool:
@@ -19807,9 +19929,11 @@ class ActivityGenerator:
                 if allocation_free_endpoint is not None
                 else None
             )
+            lifetime_plan = self._plan_process_lifetime(request, actor)
             provisional_termination = self._plan_process_provisional_termination(
                 request,
                 actor,
+                lifetime_plan,
             )
             endpoint_close_floor: datetime | None = None
             if (
@@ -19905,6 +20029,7 @@ class ActivityGenerator:
                 actor=actor,
                 endpoint=endpoint,
                 runtime_image_load=runtime_image_load,
+                lifetime_plan=lifetime_plan,
                 provisional_termination=provisional_termination,
                 root_binary_publication=root_binary_publication,
             )
@@ -19939,12 +20064,44 @@ class ActivityGenerator:
         self,
         request: ProcessExecutionRequest,
         actor: "PreparedProcessEffectActor",
+        lifetime_plan: ProcessLifetimePlan,
     ) -> datetime | None:
-        """Freeze a Linux foreground close time before allocating its PID or state."""
+        """Freeze a foreground close time before allocating its PID or state."""
 
-        if _get_os_category(
-            request.system.os
-        ) != "linux" or not _linux_shell_process_reserves_foreground(
+        os_category = _get_os_category(request.system.os)
+        lifetime = lifetime_plan.bounds
+        if lifetime is None:
+            return None
+
+        if os_category == "windows":
+            if lifetime_plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
+                parent = self.state_manager.get_process(
+                    request.system.hostname,
+                    request.parent_pid,
+                )
+                parent_exe = (
+                    parent.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].casefold()
+                    if parent is not None
+                    else ""
+                )
+                if parent_exe not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+                    return None
+            minimum_seconds, maximum_seconds = lifetime
+            lifetime_rng = random.Random(
+                _stable_seed(
+                    "prepared-windows-foreground-lifetime:"
+                    f"{request.stable_id}:{actor.stable_id}:{lifetime_plan.mode.value}"
+                )
+            )
+            mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
+            sampled_seconds = lifetime_rng.triangular(
+                minimum_seconds,
+                maximum_seconds,
+                mode_seconds,
+            )
+            return actor.started_at + timedelta(seconds=sampled_seconds)
+
+        if os_category != "linux" or not _linux_shell_process_reserves_foreground(
             actor.image, actor.command_line
         ):
             return None
@@ -19977,9 +20134,6 @@ class ActivityGenerator:
             )
         if not parent_owns_foreground:
             return None
-        lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
-        if lifetime is None:
-            return None
         minimum_seconds, maximum_seconds = lifetime
         median_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
         return self.timing_runtime.sampler.after(
@@ -19998,6 +20152,41 @@ class ActivityGenerator:
                 lifecycle_id=actor.lifecycle_id,
             ),
             sample_key="provisional_close",
+        )
+
+    @staticmethod
+    def _plan_process_lifetime(
+        request: ProcessExecutionRequest,
+        actor: "PreparedProcessEffectActor",
+    ) -> ProcessLifetimePlan:
+        """Return the immutable lifetime ownership for one prepared process actor."""
+
+        os_category = _get_os_category(request.system.os)
+        if os_category == "windows":
+            return _windows_process_lifetime_plan(actor.image, actor.command_line)
+        if os_category == "linux":
+            lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
+            if lifetime is not None:
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.BOUNDED,
+                    minimum_seconds=lifetime[0],
+                    maximum_seconds=lifetime[1],
+                    classification="linux-foreground-command",
+                )
+            if _linux_shell_process_reserves_foreground(actor.image, actor.command_line):
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.SESSION_OWNED,
+                    classification="linux-interactive-foreground-command",
+                )
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="linux-background-or-service-process",
+            )
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.UNCLASSIFIED,
+            minimum_seconds=1.0,
+            maximum_seconds=8.0,
+            classification="unsupported-platform-process",
         )
 
     def _prepare_process_effect_actor(

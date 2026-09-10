@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from enum import StrEnum
 from inspect import getattr_static
 from typing import Protocol
 
@@ -47,6 +48,63 @@ from evidenceforge.generation.deployment_registry import LocalArtifactPublishTok
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+
+
+class ProcessLifetimeMode(StrEnum):
+    """Canonical ownership mode for one process execution lifetime."""
+
+    BOUNDED = "bounded"
+    OPERATION_OWNED = "operation_owned"
+    SESSION_OWNED = "session_owned"
+    PERSISTENT = "persistent"
+    UNCLASSIFIED = "unclassified"
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessLifetimePlan:
+    """Immutable lifetime ownership selected before process publication."""
+
+    mode: ProcessLifetimeMode
+    minimum_seconds: float | None = None
+    maximum_seconds: float | None = None
+    classification: str = ""
+
+    def __post_init__(self) -> None:
+        bounded = self.mode in {
+            ProcessLifetimeMode.BOUNDED,
+            ProcessLifetimeMode.OPERATION_OWNED,
+            ProcessLifetimeMode.UNCLASSIFIED,
+        }
+        has_bounds = self.minimum_seconds is not None or self.maximum_seconds is not None
+        if bounded:
+            if (
+                self.minimum_seconds is None
+                or self.maximum_seconds is None
+                or self.minimum_seconds <= 0
+                or self.maximum_seconds < self.minimum_seconds
+            ):
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "bounded process lifetime plans require positive ordered bounds",
+                )
+        elif has_bounds:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "session-owned and persistent lifetime plans cannot carry bounded deadlines",
+            )
+        if not self.classification.strip():
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "process lifetime plans require a classification reason",
+            )
+
+    @property
+    def bounds(self) -> tuple[float, float] | None:
+        """Return the sampled bounds when this mode has a provisional close."""
+
+        if self.minimum_seconds is None or self.maximum_seconds is None:
+            return None
+        return (self.minimum_seconds, self.maximum_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +133,7 @@ class ProcessExecutionPreparedEffects:
     actor: PreparedProcessEffectActor
     endpoint: PreparedProcessEndpointEffectPlan | None = None
     runtime_image_load: ProcessRuntimeImageLoadPlan | None = None
+    lifetime_plan: ProcessLifetimePlan | None = None
     provisional_termination: datetime | None = None
     root_binary_publication: LocalArtifactPublishToken | None = field(
         default=None,
@@ -107,6 +166,12 @@ class ProcessExecutionPreparedEffects:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "prepared process termination must precede its session deadline",
+                )
+        if self.lifetime_plan is not None:
+            if self.provisional_termination is not None and self.lifetime_plan.bounds is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                    "unbounded process lifetime plan cannot own a provisional termination",
                 )
         publication = self.root_binary_publication
         if publication is not None:

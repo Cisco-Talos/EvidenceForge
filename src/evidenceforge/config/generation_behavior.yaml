@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 16
+current_revision: 17
 history_start_revision: 1
-behavior_surface_sha256: "0d325877743fa86cfcc9ccc98560010e0cea22fa34dbe0fee9e02cc644fabcbd"
+behavior_surface_sha256: "36da2b134f5fc2ea180fb8a2d71d786e3fd9876289450d3e130f6542a2e91971"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -157,3 +157,13 @@ changes:
       - all-generation
     formats: []
     summary: Adopts Python 3.12 type-alias and generic syntax without changing generated output.
+  - revision: 17
+    id: typed-windows-foreground-lifetimes
+    impact: localized
+    domains:
+      - process-lifecycle
+    formats:
+      - ecar
+      - sysmon
+      - windows_event
+    summary: Classifies Windows foreground tools before publication and closes bounded one-shot processes promptly.

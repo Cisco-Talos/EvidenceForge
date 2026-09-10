@@ -13,12 +13,14 @@ import pytest
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
+from evidenceforge.generation.actions.process_execution import ProcessLifetimeMode
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
     _linux_shell_process_reserves_foreground,
     _session_active_for_activity,
     _windows_foreground_lifetime,
+    _windows_process_lifetime_plan,
 )
 from evidenceforge.generation.engine.baseline import (
     _eligible_for_hourly_module_load,
@@ -584,6 +586,135 @@ def test_windows_one_shot_shell_and_http_commands_have_bounded_lifetimes(
 
     assert lifetime is not None
     assert lifetime[1] <= 25.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line", "expected_mode"),
+    [
+        (
+            r"C:\Windows\System32\runas.exe",
+            "runas.exe",
+            ProcessLifetimeMode.BOUNDED,
+        ),
+        (
+            r"C:\Program Files\Git\cmd\git.exe",
+            "git.exe --help",
+            ProcessLifetimeMode.BOUNDED,
+        ),
+        (
+            r"C:\Program Files\Git\cmd\git.exe",
+            "git.exe clone https://example.test/repository.git",
+            ProcessLifetimeMode.OPERATION_OWNED,
+        ),
+        (
+            r"C:\Program Files\Kubernetes\kubectl.exe",
+            "kubectl.exe get pods",
+            ProcessLifetimeMode.BOUNDED,
+        ),
+        (
+            r"C:\Program Files\Kubernetes\kubectl.exe",
+            "kubectl.exe port-forward service/api 8080:80",
+            ProcessLifetimeMode.PERSISTENT,
+        ),
+        (
+            r"C:\Program Files\Kubernetes\kubectl.exe",
+            "kubectl.exe exec -it api -- powershell.exe",
+            ProcessLifetimeMode.SESSION_OWNED,
+        ),
+    ],
+)
+def test_windows_foreground_tools_have_typed_lifetime_ownership(
+    image: str,
+    command_line: str,
+    expected_mode: ProcessLifetimeMode,
+) -> None:
+    """Known Windows tools distinguish one-shot, operation, and continuous modes."""
+
+    plan = _windows_process_lifetime_plan(image, command_line)
+
+    assert plan.mode == expected_mode
+    expected_has_bounds = expected_mode in {
+        ProcessLifetimeMode.BOUNDED,
+        ProcessLifetimeMode.OPERATION_OWNED,
+    }
+    assert (plan.bounds is not None) == expected_has_bounds
+
+
+def test_unknown_windows_executable_is_unclassified_not_persistent() -> None:
+    plan = _windows_process_lifetime_plan(
+        r"C:\Tools\vendorctl.exe",
+        "vendorctl.exe status",
+    )
+
+    assert plan.mode == ProcessLifetimeMode.UNCLASSIFIED
+    assert plan.bounds == (1.0, 8.0)
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        (r"C:\Windows\System32\runas.exe", "runas.exe"),
+        (r"C:\Program Files\Git\cmd\git.exe", "git.exe --help"),
+        (r"C:\Program Files\Kubernetes\kubectl.exe", "kubectl.exe get pods"),
+    ],
+)
+def test_windows_one_shot_lifetime_is_frozen_during_process_preflight(
+    image: str,
+    command_line: str,
+) -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="WS-01",
+        ip="10.10.1.44",
+        os="Windows 11",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=start - timedelta(minutes=5),
+    )
+    parent_pid = state.create_process(
+        system.hostname,
+        4,
+        r"C:\Windows\System32\cmd.exe",
+        "cmd.exe /k",
+        user.username,
+        "Medium",
+        logon_id=logon_id,
+    )
+
+    pid = generator.generate_process(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name=image,
+        command_line=command_line,
+        parent_pid=parent_pid,
+    )
+
+    termination = generator.foreground_process_termination_time(system.hostname, pid)
+    assert termination is not None
+    assert start < termination < start + timedelta(minutes=4)
+
+
+def test_windows_continuous_tool_has_no_provisional_termination() -> None:
+    plan = _windows_process_lifetime_plan(
+        r"C:\Program Files\Kubernetes\kubectl.exe",
+        "kubectl.exe logs --follow deployment/api",
+    )
+
+    assert plan.mode == ProcessLifetimeMode.PERSISTENT
+    assert plan.bounds is None
 
 
 def test_cmd_c_wrapper_terminates_after_final_foreground_child() -> None:
