@@ -37809,6 +37809,8 @@ class ActivityGenerator:
                     app_name="dhclient",
                     message=message,
                     pid=dhclient_pid,
+                    lifecycle_group_id=request.stable_id,
+                    lifecycle_canonical_start=timeline.transport_start,
                 )
 
     def generate_anonymous_logon(
@@ -37999,6 +38001,8 @@ class ActivityGenerator:
         facility: int = 3,
         severity: int = 6,
         auth: AuthContext | None = None,
+        lifecycle_group_id: str = "",
+        lifecycle_canonical_start: datetime | None = None,
     ) -> None:
         """Generate a standalone syslog event via canonical OccurrenceBuilder dispatch.
 
@@ -38027,6 +38031,15 @@ class ActivityGenerator:
                 pid=pid,
                 facility=facility,
                 severity=severity,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=lifecycle_group_id,
+                    canonical_start=lifecycle_canonical_start or time,
+                    phase="dependent",
+                )
+                if lifecycle_group_id
+                else None
             ),
         )
         self.dispatcher.dispatch_builder(event)

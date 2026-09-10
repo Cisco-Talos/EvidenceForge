@@ -37,6 +37,7 @@ import pytest
 
 from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
@@ -2220,6 +2221,15 @@ class TestDhcpLease:
             if call[0][0].event_type == "dhcp_lease"
         )
         assert dhcp_event.network is not None
+        assert all(event.lifecycle is not None for event in syslog_events)
+        assert {event.lifecycle.group_id for event in syslog_events} == {
+            dhcp_event.network.stable_id
+        }
+        observation_decisions = [
+            ObservationPolicy("enterprise_standard").decide("syslog", event)
+            for event in syslog_events
+        ]
+        assert len({(decision.status, decision.delay) for decision in observation_decisions}) == 1
         assert dhcp_event.network.closed_at <= syslog_events[1].timestamp
         assert syslog_events[1].timestamp - dhcp_event.network.closed_at < timedelta(
             milliseconds=200
