@@ -24,6 +24,7 @@ from evidenceforge.composition.artifacts import (
     write_resolved_scenario,
 )
 from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
+from evidenceforge.generation.engine.core import GenerationEngine
 from evidenceforge.generation.profiling import (
     GENERATION_PROFILE_FILENAME,
     GenerationProfileDocument,
@@ -221,6 +222,18 @@ def test_state_profile_metrics_use_constant_time_index_counters() -> None:
     assert metrics["running_processes"] == 0
     assert metrics["open_connections"] == 0
     assert metrics["pid_allocations"] == 0
+
+
+def test_partial_engine_reports_progress_without_profiler_state() -> None:
+    """Failure cleanup remains usable for test and recovery harnesses built without init."""
+
+    engine = object.__new__(GenerationEngine)
+    observed: list[tuple[str, dict[str, object]]] = []
+    engine.progress_callback = lambda event_type, data: observed.append((event_type, data))
+
+    engine._report_progress("phase_start", {"phase": "finalization"})
+
+    assert observed == [("phase_start", {"phase": "finalization"})]
 
 
 def test_profile_write_is_atomic_and_rejects_symlink(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 13
+current_revision: 14
 history_start_revision: 1
-behavior_surface_sha256: "9d7a000017264787e415a2fc91f881b2f623ea869954ae2c9a6fc448f7a182c7"
+behavior_surface_sha256: "b24d3cf2db8cc21d475e7a3a9ac917c648ceda83063400fef766228f20eeb51e"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -136,3 +136,10 @@ changes:
     formats:
       - cisco_asa
     summary: Applies a stable tie-break to equal-second ASA rows before finalizing appliance-local connection IDs.
+  - revision: 14
+    id: profiler-free-recovery-engine
+    impact: none
+    domains:
+      - generation-failure-cleanup
+    formats: []
+    summary: Keeps failure cleanup usable when a recovery or test harness omits the optional process-local profiler field.

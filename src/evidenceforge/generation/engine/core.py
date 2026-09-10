@@ -294,17 +294,19 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             event_type: Type of progress event (e.g., "phase_start", "hour_progress")
             data: Event-specific data payload
         """
-        if self.profiler is not None:
-            self.profiler.observe_progress(event_type, data)
+        profiler = getattr(self, "profiler", None)
+        if profiler is not None:
+            profiler.observe_progress(event_type, data)
         if self.progress_callback:
             self.progress_callback(event_type, data)
 
     def _profile_span(self, name: str) -> AbstractContextManager[None]:
         """Return one optional low-frequency profiler span."""
 
-        if self.profiler is None:
+        profiler = getattr(self, "profiler", None)
+        if profiler is None:
             return nullcontext()
-        return self.profiler.span(name)
+        return profiler.span(name)
 
     def _checkpoint_after_completed_hour(
         self,

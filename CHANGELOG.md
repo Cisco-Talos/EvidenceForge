@@ -34,6 +34,8 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 **Fixed**
 
+- Kept failure cleanup usable for partially constructed generation-engine recovery and test
+  harnesses that do not carry the optional process-local profiler field.
 - Kept the opt-in generation profiler outside checkpoint payloads so checkpoint-enabled generation
   can suspend and each resumed invocation retains only its own profiling state.
 - Prevented a later SSH transport that reuses a completed network tuple from inheriting the
