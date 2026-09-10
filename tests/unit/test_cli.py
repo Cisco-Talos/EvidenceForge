@@ -58,6 +58,7 @@ from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
+from evidenceforge.generation.profiling import GenerationProfiler
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
@@ -652,6 +653,14 @@ environment:
             assert result.exit_code == EXIT_SUCCESS
             assert "--allow-large-workload" not in result.stdout
 
+    def test_profile_option_is_hidden_from_public_help(self):
+        """Developer profiling remains outside the public CLI help contract."""
+
+        result = runner.invoke(app, ["generate", "--help"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "--profile" not in result.stdout
+
     def test_validate_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge validate should treat include conflicts as validation errors."""
         scenario_file = _write_conflicting_include_scenario(tmp_path)
@@ -740,6 +749,27 @@ class TestGenerateCheckpointOptions:
 
     @patch("evidenceforge.cli.commands.SIDECAR_REGISTRY.replace")
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_profile_option_constructs_process_local_profiler(
+        self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
+    ):
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--profile",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert isinstance(mock_engine_class.call_args.kwargs["profiler"], GenerationProfiler)
+
+    @patch("evidenceforge.cli.commands.SIDECAR_REGISTRY.replace")
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_fresh_generation_defaults_to_24_hour_checkpoints(
         self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
     ):
@@ -760,6 +790,7 @@ class TestGenerateCheckpointOptions:
         arguments = mock_engine_class.call_args.kwargs
         assert arguments["checkpoint_hours"] == 24
         assert arguments["checkpoint_controller"] is not None
+        assert arguments["profiler"] is None
         assert not (tmp_path / ".eforge-generation").exists()
 
     def test_generate_help_describes_checkpoint_default(self) -> None:

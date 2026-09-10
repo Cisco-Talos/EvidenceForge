@@ -93,6 +93,7 @@ from evidenceforge.generation.checkpoints.test_sync import (
     checkpoint_publication_test_synchronizer_from_environment,
     checkpoint_test_synchronizer_from_environment,
 )
+from evidenceforge.generation.profiling import GENERATION_PROFILE_FILENAME, GenerationProfiler
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
 from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.workload import estimate_workload
@@ -1248,6 +1249,12 @@ def generate(
         "--allow-large-workload",
         hidden=True,
     ),
+    profile: bool = typer.Option(
+        False,
+        "--profile",
+        help="Write an opt-in generation performance profile into the output bundle",
+        hidden=True,
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -1929,6 +1936,17 @@ def generate(
                     else None
                 ),
                 graceful_interrupt_requested=lambda: interrupt_controller.requested,
+                profiler=(
+                    GenerationProfiler(
+                        scenario=scenario.name,
+                        generation_seed=scenario.generation_seed,
+                        output_target=output_target.value,
+                        selected_formats=tuple(checkpoint_formats),
+                        source_root=Path(__file__).resolve().parents[3],
+                    )
+                    if profile
+                    else None
+                ),
             )
             engine.generate()
             write_output_target_marker(gen_gt_dir, output_target)
@@ -1980,6 +1998,7 @@ def generate(
                     OBSERVATION_MANIFEST_FILENAME,
                     ARTIFACTS_MANIFEST_FILENAME,
                     COLLECTION_PROFILE_FILENAME,
+                    GENERATION_PROFILE_FILENAME,
                     "STORAGE_MANIFEST.json",
                     OUTPUT_TARGET_FILENAME,
                     RESOLVED_SCENARIO_FILENAME,

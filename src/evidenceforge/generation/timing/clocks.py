@@ -9,6 +9,7 @@ import hashlib
 import math
 import sys
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import RLock
@@ -82,6 +83,82 @@ class SourceClockSpec:
         validate_distribution_spec(self.drift_ppm)
         if not isinstance(self.wander, ClockWanderSpec):
             raise TimingDistributionError("wander must be a ClockWanderSpec")
+
+
+class _WanderKnotCache:
+    """Bounded process-local cache for pure deterministic clock knots."""
+
+    def __init__(self, max_entries: int) -> None:
+        self._max_entries = max_entries
+        self._values: OrderedDict[tuple[str, int, SourceClockKey, ClockWanderSpec, int], float] = (
+            OrderedDict()
+        )
+        self._lock = RLock()
+
+    def get_or_create(
+        self,
+        key: tuple[str, int, SourceClockKey, ClockWanderSpec, int],
+        factory: Callable[[], float],
+    ) -> float:
+        """Return one cached value or install its deterministic recomputation."""
+
+        with self._lock:
+            cached = self._values.get(key)
+            if cached is not None:
+                self._values.move_to_end(key)
+                return cached
+        value = factory()
+        with self._lock:
+            cached = self._values.get(key)
+            if cached is not None:
+                self._values.move_to_end(key)
+                return cached
+            self._values[key] = value
+            while len(self._values) > self._max_entries:
+                self._values.popitem(last=False)
+        return value
+
+    def clear(self) -> None:
+        """Discard every recomputable cached knot."""
+
+        with self._lock:
+            self._values.clear()
+
+    @property
+    def size(self) -> int:
+        """Return the current bounded entry count."""
+
+        with self._lock:
+            return len(self._values)
+
+
+_WANDER_KNOT_CACHE = _WanderKnotCache(max_entries=16_384)
+
+
+def _cached_wander_knot(
+    namespace: str,
+    generation_seed: int,
+    key: SourceClockKey,
+    spec: ClockWanderSpec,
+    ordinal: int,
+) -> float:
+    """Return one bounded, recomputable source-clock wander knot."""
+
+    cache_key = (namespace, generation_seed, key, spec, ordinal)
+
+    def sample() -> float:
+        sampler = TimingSampler(namespace=namespace, generation_seed=generation_seed)
+        return sampler.sample_value(
+            spec.knot_distribution_microseconds,
+            relationship_key="clock.wander_microseconds",
+            scope=SourceClockRegistry._scope(key, ordinal=ordinal),
+            sample_key="knot",
+        )
+
+    return _WANDER_KNOT_CACHE.get_or_create(
+        cache_key,
+        sample,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,13 +470,18 @@ class SourceClockRegistry:
     ) -> float:
         """Return one stateless wander-knot value."""
 
-        scope = self._scope(key, ordinal=ordinal)
-        return self._sampler.sample_value(
+        value = _cached_wander_knot(
+            self._sampler.namespace,
+            self._sampler.generation_seed,
+            key,
+            spec,
+            ordinal,
+        )
+        self._sampler.record_logical_sample(
             spec.knot_distribution_microseconds,
             relationship_key="clock.wander_microseconds",
-            scope=scope,
-            sample_key="knot",
         )
+        return value
 
     @staticmethod
     def _scope(key: SourceClockKey, *, ordinal: int = 0) -> TimingScope:
@@ -696,12 +778,18 @@ class SourceClockRegistryPreparation:
         spec: ClockWanderSpec,
         ordinal: int,
     ) -> float:
-        return self._sampler.sample_value(
+        value = _cached_wander_knot(
+            self._sampler.namespace,
+            self._sampler.generation_seed,
+            key,
+            spec,
+            ordinal,
+        )
+        self._sampler.record_logical_sample(
             spec.knot_distribution_microseconds,
             relationship_key="clock.wander_microseconds",
-            scope=SourceClockRegistry._scope(key, ordinal=ordinal),
-            sample_key="knot",
         )
+        return value
 
     def overlay_digest(self) -> str:
         """Return a stable digest of compact clock-cache state and counters."""

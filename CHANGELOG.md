@@ -6,8 +6,43 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+**Performance**
+
+- Reduced exact SMB connection-state validation work by collapsing redundant validation within
+  locked transitions, retaining already-validated authority state, and avoiding temporary text and
+  integer encodings during callback-safe key checks. In the original pre-`dev`-integration
+  assessment, the representative all-source median improved by 5.64%. Post-integration correctness
+  and determinism were revalidated; all 25 concrete log formats and deterministic sidecars remain
+  byte-identical to the preceding build.
+- Reused the existing timing-seed byte contract more efficiently and cached pure deterministic
+  source-clock wander knots in a bounded process-local store. In the original pre-`dev`-integration
+  assessment, the representative all-source median improved by a further 6.66%. Post-integration
+  correctness and determinism were revalidated; all 25 concrete log formats and deterministic
+  sidecars remain byte-identical to the preceding build.
+- Specialized the exact packed-digest index read loop while preserving unsigned-64-bit validation,
+  sentinel normalization, probing, collision behavior, and defaults. Focused hit/miss throughput
+  improved by about 35%/39%, target-exclusive samples fell 77.8%, and the corrected-baseline
+  all-source median improved by at least 3.59%. All 25 concrete log formats, artifacts, and
+  deterministic sidecars remain byte-identical to the preceding build.
+
+**Performance and deterministic output changes**
+
+- Made equal-second `cisco_asa` publication independent of external-sort and checkpoint run
+  boundaries by preserving ASA lifecycle precedence and applying a stable source-native tie-break
+  before appliance-local connection IDs are finalized. Only `cisco_asa` bytes change: tied rows
+  may be ordered differently and their generated appliance-local connection IDs may change. Row
+  counts, schemas, field meanings, lifecycle pairing, and the other 24 concrete formats are
+  unchanged. Repeated generation and same-build checkpoint resume are byte-identical. Checkpoints
+  created before this change require `--resume-policy attempt` after successful full hydration;
+  the measured revision-12 all-source checkpoint completed byte-identically, but historical output
+  equivalence remains conservatively unguaranteed for that compatibility transition.
+
 **Fixed**
 
+- Kept failure cleanup usable for partially constructed generation-engine recovery and test
+  harnesses that do not carry the optional process-local profiler field.
+- Kept the opt-in generation profiler outside checkpoint payloads so checkpoint-enabled generation
+  can suspend and each resumed invocation retains only its own profiling state.
 - Prevented a later SSH transport that reuses a completed network tuple from inheriting the
   earlier session's `sshd` worker, including when resuming a legacy checkpoint with a retained
   window-long responder binding.

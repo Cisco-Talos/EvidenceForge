@@ -1161,6 +1161,57 @@ def _terminal_smb_connection() -> tuple[
     return manager, pin, terminal, initial
 
 
+def test_smb_finalization_validates_canonical_indexes_once_per_locked_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internal handoffs reuse a validation completed under the same State lock."""
+
+    manager, _owner, pin, session_identity, initial = _pinned_smb_root()
+    original = manager._validate_smb_connection_active_canonical_locked
+    calls = 0
+
+    def count_validation(active: object) -> None:
+        nonlocal calls
+        calls += 1
+        original(active)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        manager,
+        "_validate_smb_connection_active_canonical_locked",
+        count_validation,
+    )
+    builder = manager.begin_action_cohort_materialization()
+    builder.finalize_smb_connection(
+        pin,
+        _cumulative_smb_transaction(initial),
+        session_identity,
+        end_time=initial.closed_at,
+    )
+    assert calls == 1
+
+    plan = builder.seal()
+    assert calls == 2
+
+    result = manager.materialize_action_cohort(plan)
+    assert calls == 4
+    assert result.smb_connection_finalization is not None
+
+
+def test_smb_exact_text_validation_keeps_utf8_and_blank_bounds() -> None:
+    """The allocation-free ASCII path retains the prior bounded-text contract."""
+
+    manager = StateManager()
+    manager._validate_smb_connection_text("conn-1", label="test")
+    manager._validate_smb_connection_text("", label="test", allow_blank=True)
+
+    with pytest.raises(StateError, match="bounded UTF-8 length"):
+        manager._validate_smb_connection_text("é" * 8_193, label="test")
+    with pytest.raises(StateError, match="not valid UTF-8"):
+        manager._validate_smb_connection_text("\ud800", label="test")
+    with pytest.raises(StateError, match="cannot be blank"):
+        manager._validate_smb_connection_text(" \t", label="test")
+
+
 def _assert_no_smb_connection_pin_authority(manager: StateManager) -> None:
     """Assert every observable pin/result/ack owner has converged to zero."""
 

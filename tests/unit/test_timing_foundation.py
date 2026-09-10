@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import random
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -30,6 +33,7 @@ from evidenceforge.generation.timing import (
     TruncatedNormalDistribution,
     WeightedDistribution,
 )
+from evidenceforge.generation.timing.clocks import _WANDER_KNOT_CACHE
 from evidenceforge.utils.rng import generation_seed_scope
 
 T0 = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
@@ -109,6 +113,38 @@ def test_sampler_generation_seed_is_stable_across_worker_contexts() -> None:
 
     assert sampler.generation_seed == 9_137
     assert concurrent == serial
+
+
+@pytest.mark.parametrize("generation_seed", [42, 9_137])
+def test_sampler_seed_fast_path_matches_legacy_encoding(generation_seed: int) -> None:
+    """Optimized seed construction must retain the exact legacy RNG stream."""
+
+    namespace = "seed-compatibility-✓"
+    relationship_key = "source.éxact"
+    sample_key = "observed"
+    scope = TimingScope(
+        stable_id="event-雪",
+        host="höst",
+        source="ecar",
+        lifecycle_id="life-1",
+        ordinal=-7,
+    )
+    seed_material = json.dumps(
+        (namespace, relationship_key, sample_key, *scope.seed_parts()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    stable_key = f"timing:{seed_material}"
+    if generation_seed != 42:
+        stable_key = f"seed:{generation_seed}:{stable_key}"
+    legacy_seed = int(hashlib.sha256(stable_key.encode()).hexdigest(), 16) % (2**32)
+
+    sampler = TimingSampler(namespace=namespace, generation_seed=generation_seed)
+
+    assert (
+        sampler._rng(relationship_key, scope, sample_key).getstate()
+        == random.Random(legacy_seed).getstate()
+    )
 
 
 @pytest.mark.parametrize(
@@ -339,6 +375,41 @@ def test_source_clock_audit_is_independent_of_cache_hits_and_eviction() -> None:
     assert cached == uncached
     assert cached.sample_counts["clock.offset_microseconds"] == 8
     assert cached.sample_counts["clock.drift_ppm"] == 8
+
+
+def test_source_clock_wander_cache_is_bounded_exact_and_audit_neutral() -> None:
+    """Recomputed knots and cache hits must preserve values and logical sample counts."""
+
+    _WANDER_KNOT_CACHE.clear()
+    audit = TimingAudit()
+    registry = SourceClockRegistry(
+        reference_time=T0,
+        sampler=TimingSampler(namespace="wander-cache-test", observer=audit),
+    )
+    key = SourceClockKey(kind="sensor", identity="sensor-1")
+    spec = SourceClockSpec(
+        wander=ClockWanderSpec(
+            knot_distribution_microseconds=TriangularDistribution(
+                minimum=-10_000,
+                mode=0,
+                maximum=10_000,
+            ),
+            knot_interval=timedelta(seconds=1),
+        )
+    )
+    canonical_time = T0 + timedelta(milliseconds=250)
+    first = registry.project(canonical_time, key=key, spec=spec)
+    second = registry.project(canonical_time, key=key, spec=spec)
+
+    assert second == first
+    assert audit.snapshot().sample_counts["clock.wander_microseconds"] == 4
+
+    for ordinal in range(17_000):
+        registry.project(T0 + timedelta(seconds=ordinal), key=key, spec=spec)
+    assert _WANDER_KNOT_CACHE.size == 16_384
+
+    _WANDER_KNOT_CACHE.clear()
+    assert registry.project(canonical_time, key=key, spec=spec) == first
 
 
 @pytest.mark.parametrize("worker_count", [1, 4, 8])

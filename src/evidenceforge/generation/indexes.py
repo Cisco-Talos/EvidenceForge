@@ -188,8 +188,20 @@ class PackedUniqueDigestMap:
     def get_digest(self, digest: int, default: int | None = None) -> int | None:
         """Return the locator for one prehashed digest, or ``default``."""
 
-        position, found = self._find_slot(self._normalize_digest(digest))
-        return self._values[position] if found else default
+        empty = self._EMPTY
+        if digest < 0 or digest > empty:
+            raise ValueError("Packed route digest must fit in an unsigned 64-bit integer")
+        canonical_digest = empty - 1 if digest == empty else digest
+        keys = self._keys
+        mask = len(keys) - 1
+        position = canonical_digest & mask
+        while True:
+            retained = keys[position]
+            if retained == empty:
+                return default
+            if retained == canonical_digest:
+                return self._values[position]
+            position = (position + 1) & mask
 
     def _delete_position(self, gap: int) -> None:
         mask = len(self._keys) - 1
@@ -1284,6 +1296,26 @@ class IndexedEntityStore(MutableMapping[K, V], Generic[K, V]):
         """Return matching primary keys in their index insertion order."""
         bucket = self._indexes[index_name].get(indexed_value, {})
         return tuple(key for key in bucket if key in self._items)
+
+    def metrics(self, *, estimate_bytes: bool = False) -> IndexMetrics:
+        """Return constant-time primary cardinality for diagnostics."""
+
+        live_entries = len(self._items)
+        estimated_bytes = 0
+        if estimate_bytes:
+            estimated_bytes = (
+                sys.getsizeof(self)
+                + sys.getsizeof(self._items)
+                + sys.getsizeof(self._indexes)
+                + sys.getsizeof(self._indexed_values)
+            )
+        return IndexMetrics(
+            live_entries=live_entries,
+            backing_entries=live_entries,
+            high_water_mark=live_entries,
+            estimated_bytes=estimated_bytes,
+            primary_map_entries=live_entries,
+        )
 
 
 class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):

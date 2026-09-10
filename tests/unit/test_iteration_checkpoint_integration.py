@@ -64,6 +64,8 @@ def test_cisco_asa_rebuilds_canonical_connection_ids_from_restored_runs(
     run = tmp_path / "checkpoint-run.log"
     run.write_text(
         "<166>Mar 18 12:00:03 fw-perimeter %ASA-6-302013: Built inbound TCP connection "
+        "1681559 for outside:192.0.2.2/50001 to inside:10.0.0.1/443\n"
+        "<166>Mar 18 12:00:03 fw-perimeter %ASA-6-302013: Built inbound TCP connection "
         "1681558 for outside:192.0.2.1/50000 to inside:10.0.0.1/443\n"
         "<166>Mar 18 12:00:04 fw-perimeter %ASA-6-302014: Teardown TCP connection "
         "1681558 for outside:192.0.2.1/50000 to inside:10.0.0.1/443\n",
@@ -72,4 +74,10 @@ def test_cisco_asa_rebuilds_canonical_connection_ids_from_restored_runs(
 
     emitter.checkpoint_sorted_runs_restored((run,))
 
-    assert emitter._canonical_connection_ids == {("fw-perimeter", 1_681_558)}
+    lines = run.read_text(encoding="utf-8").splitlines()
+    assert "1681558" in lines[0]
+    assert "1681559" in lines[1]
+    assert emitter._canonical_connection_ids == {
+        ("fw-perimeter", 1_681_558),
+        ("fw-perimeter", 1_681_559),
+    }

@@ -16,6 +16,7 @@ from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.generation.profiling import GENERATION_PROFILE_FILENAME
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 
 from .artifacts import GENERATION_MANIFEST_FILENAME, RESOLVED_SCENARIO_FILENAME
@@ -45,6 +46,7 @@ class SidecarRegistry:
             SidecarSpec(COLLECTION_PROFILE_FILENAME),
             SidecarSpec(OUTPUT_TARGET_FILENAME, required=True),
             SidecarSpec("STORAGE_MANIFEST.json"),
+            SidecarSpec(GENERATION_PROFILE_FILENAME),
             SidecarSpec("artifacts", directory=True),
             SidecarSpec(RESOLVED_SCENARIO_FILENAME, required=True),
             # The run manifest is deliberately installed last.

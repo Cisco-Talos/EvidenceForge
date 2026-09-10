@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 9
+current_revision: 15
 history_start_revision: 1
-behavior_surface_sha256: "752a28a829809adef1050a9fa04033944b442a5a1ca5c27ee391ad2203ba71f3"
+behavior_surface_sha256: "a87b45e39e8dc2312ac7989f1d2b75e1f4e5bfaa775f8ad91e54f5224c50498f"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -107,3 +107,46 @@ changes:
       - composition-identity
     formats: []
     summary: Separates checkpoint-control metadata from semantic resolved identity and verifies explicit resume inputs against the retained snapshot.
+  - revision: 10
+    id: opt-in-generation-profiling
+    impact: none
+    domains:
+      - all-generation
+    formats: []
+    summary: Adds opt-in diagnostic instrumentation without changing deterministic rendered output.
+  - revision: 11
+    id: exact-smb-validation-fast-paths
+    impact: none
+    domains:
+      - smb-connection-lifecycle
+    formats: []
+    summary: Reuses SMB validation inside locked transitions and avoids temporary encodings without changing output.
+  - revision: 12
+    id: exact-timing-seed-fast-paths
+    impact: none
+    domains:
+      - canonical-timing
+    formats: []
+    summary: Reuses exact timing-seed encoding, digest extraction, and bounded clock knots without changing samples.
+  - revision: 13
+    id: deterministic-cisco-asa-equal-second-order
+    impact: localized
+    domains:
+      - cisco-asa-publication-order
+    formats:
+      - cisco_asa
+    summary: Applies a stable tie-break to equal-second ASA rows before finalizing appliance-local connection IDs.
+  - revision: 14
+    id: profiler-free-recovery-engine
+    impact: none
+    domains:
+      - generation-failure-cleanup
+    formats: []
+    summary: Keeps failure cleanup usable when a recovery or test harness omits the optional process-local profiler field.
+  - revision: 15
+    id: exact-packed-digest-read-fast-path
+    impact: none
+    domains:
+      - canonical-state-indexes
+    formats: []
+    summary: Specializes exact packed-digest reads without changing normalization, collision handling, or output.

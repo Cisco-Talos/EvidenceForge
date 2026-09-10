@@ -39,8 +39,10 @@ import random
 import shlex
 import string
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import perf_counter_ns
 from typing import TYPE_CHECKING, Any, Literal
 
 from evidenceforge.config import get_activity_directory
@@ -1899,6 +1901,14 @@ class BaselineMixin:
 
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
+
+    def _baseline_profile_span(self, name: str) -> AbstractContextManager[None]:
+        """Return an optional span for engines and minimal mixin test harnesses."""
+
+        profiler = getattr(self, "profiler", None)
+        if profiler is None:
+            return nullcontext()
+        return profiler.span(name)
 
     def _linux_snapd_message(self, hostname: str, rng: random.Random) -> str:
         """Return one stateful snapd baseline message for a Linux host.
@@ -4047,6 +4057,59 @@ class BaselineMixin:
                 )
         self.activity_generator.set_proxy_auth_session_deadlines(proxy_auth_deadlines)
 
+        with BaselineMixin._baseline_profile_span(self, "baseline.user_activity"):
+            self._generate_user_activity_for_hour(
+                current_hour=current_hour,
+                enabled_users=enabled_users,
+                local_dt=local_dt,
+                local_weekday=local_weekday,
+                is_weekend=is_weekend,
+                planned_logoffs=planned_logoffs,
+            )
+
+        with BaselineMixin._baseline_profile_span(self, "baseline.smb"):
+            self._generate_baseline_smb_activity(current_hour)
+        with BaselineMixin._baseline_profile_span(self, "baseline.system_traffic"):
+            self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
+        with BaselineMixin._baseline_profile_span(self, "baseline.email"):
+            self._generate_baseline_email(current_hour, enabled_users)
+        with BaselineMixin._baseline_profile_span(self, "baseline.traffic_affinities"):
+            self._generate_traffic_affinities(current_hour, local_dt, planned_logoffs)
+        with BaselineMixin._baseline_profile_span(self, "baseline.stale_accounts"):
+            self._generate_stale_account_noise(current_hour)
+        with BaselineMixin._baseline_profile_span(self, "baseline.failed_logons"):
+            self._generate_baseline_failed_logons(current_hour)
+        with BaselineMixin._baseline_profile_span(self, "baseline.lateral_movement"):
+            self._generate_lateral_movement_noise(current_hour)
+        with BaselineMixin._baseline_profile_span(self, "baseline.suspicious_noise"):
+            self._generate_suspicious_noise(current_hour)
+        with BaselineMixin._baseline_profile_span(self, "baseline.firewall_denies"):
+            self._generate_firewall_deny_baseline(current_hour)
+
+        if emit_storylines:
+            with BaselineMixin._baseline_profile_span(self, "baseline.authored_events"):
+                self._execute_authored_events_for_hour(current_hour)
+
+        with BaselineMixin._baseline_profile_span(self, "baseline.lifecycle_cleanup"):
+            self._terminate_stale_processes(current_hour)
+            self._generate_logoffs_for_hour(enabled_users, current_hour, planned_logoffs)
+
+        if flush_emitters:
+            with BaselineMixin._baseline_profile_span(self, "baseline.emitter_barrier"):
+                self._barrier_flush_all_emitters()
+
+    def _generate_user_activity_for_hour(
+        self,
+        *,
+        current_hour: datetime,
+        enabled_users: list,
+        local_dt: datetime,
+        local_weekday: int,
+        is_weekend: bool,
+        planned_logoffs: dict[tuple[str, str], float],
+    ) -> None:
+        """Generate the per-user portion of one baseline hour."""
+
         for user in enabled_users:
             persona = self._get_user_persona(user)
             user_offsets = self._user_time_offsets.get(user.username)
@@ -4092,25 +4155,6 @@ class BaselineMixin:
 
                 for event_time in event_times:
                     self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
-
-        self._generate_baseline_smb_activity(current_hour)
-        self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
-        self._generate_baseline_email(current_hour, enabled_users)
-        self._generate_traffic_affinities(current_hour, local_dt, planned_logoffs)
-        self._generate_stale_account_noise(current_hour)
-        self._generate_baseline_failed_logons(current_hour)
-        self._generate_lateral_movement_noise(current_hour)
-        self._generate_suspicious_noise(current_hour)
-        self._generate_firewall_deny_baseline(current_hour)
-
-        if emit_storylines:
-            self._execute_authored_events_for_hour(current_hour)
-
-        self._terminate_stale_processes(current_hour)
-        self._generate_logoffs_for_hour(enabled_users, current_hour, planned_logoffs)
-
-        if flush_emitters:
-            self._barrier_flush_all_emitters()
 
     def _baseline_pass_end(self, current_hour: datetime) -> datetime:
         """Return the exclusive end of this full warm-up or bounded output pass."""
@@ -5528,6 +5572,9 @@ class BaselineMixin:
         resume_in_warmup = resume_cursor is not None and resume_cursor.phase == "warmup"
         if warmup_hours > 0 and (resume_cursor is None or resume_in_warmup):
             logger.info(f"Running {warmup_hours}-hour warm-up for state pre-population")
+            profiler = getattr(self, "profiler", None)
+            if profiler is not None:
+                profiler.begin_phase("warmup")
             self._report_progress(
                 "phase_start",
                 {
@@ -5554,31 +5601,37 @@ class BaselineMixin:
                     },
                 )
 
+                BaselineMixin._profile_begin_hour(self, "warmup", current_hour)
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
                 next_hour = self._baseline_pass_end(current_hour)
-                self.state_manager.sweep_closed_connections(next_hour)
-                allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
-                self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
-                self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
-                self.activity_generator.advance_process_state_watermark(allocation_cutoff)
-                self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
-                # The application watermark may retire a deferred SSH channel and
-                # transfer its authenticated retirement proof to the action-owned
-                # close continuation. Consume every due continuation before a
-                # checkpoint attempts to capture transient-free owner state.
-                self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
+                with BaselineMixin._baseline_profile_span(self, "baseline.post_hour_cleanup"):
+                    self.state_manager.sweep_closed_connections(next_hour)
+                    allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+                    self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+                    self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
+                    self.activity_generator.advance_process_state_watermark(allocation_cutoff)
+                    self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+                    # The application watermark may retire a deferred SSH channel and
+                    # transfer its authenticated retirement proof to the action-owned
+                    # close continuation. Consume every due continuation before a
+                    # checkpoint attempts to capture transient-free owner state.
+                    self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
                 checkpoint_after_hour = getattr(self, "_checkpoint_after_completed_hour", None)
                 if next_hour < self.start_time and checkpoint_after_hour is not None:
-                    checkpoint_after_hour(
-                        completed_simulated_hours=warmup_count,
-                        next_hour=next_hour,
-                    )
+                    with BaselineMixin._baseline_profile_span(self, "baseline.checkpoint"):
+                        checkpoint_after_hour(
+                            completed_simulated_hours=warmup_count,
+                            next_hour=next_hour,
+                        )
+                BaselineMixin._profile_end_hour(self)
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
             self._report_progress("phase_end", {"phase": "warmup"})
+            if profiler is not None:
+                profiler.end_phase("warmup")
             from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
 
             # Warm-up pre-populates durable state but does not emit visible shell/syslog rows.
@@ -5589,6 +5642,9 @@ class BaselineMixin:
             self._extra_syslog_sudo_command_host_counts = {}
 
         # --- Real baseline: emit sensor startup and begin output ---
+        profiler = getattr(self, "profiler", None)
+        if profiler is not None:
+            profiler.begin_phase("collection")
         checkpoint_after_hour = getattr(self, "_checkpoint_after_completed_hour", None)
         if resume_cursor is None or resume_in_warmup:
             self._emit_sensor_startup()
@@ -5623,24 +5679,30 @@ class BaselineMixin:
                 },
             )
 
+            BaselineMixin._profile_begin_hour(self, "collection", current_hour)
             self._generate_hour(current_hour, enabled_users)
             # Evict completed/failed connections to bound memory during long runs
             next_hour = self._baseline_pass_end(current_hour)
-            self.state_manager.sweep_closed_connections(next_hour)
-            allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
-            self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
-            self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
-            self.activity_generator.advance_process_state_watermark(allocation_cutoff)
-            self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
-            self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
+            with BaselineMixin._baseline_profile_span(self, "baseline.post_hour_cleanup"):
+                self.state_manager.sweep_closed_connections(next_hour)
+                allocation_cutoff = next_hour - _PID_ALLOCATION_OPEN_WINDOW
+                self.state_manager.advance_pid_allocation_watermark(allocation_cutoff)
+                self.activity_generator.finalize_foreground_process_lifetimes(allocation_cutoff)
+                self.activity_generator.advance_process_state_watermark(allocation_cutoff)
+                self.activity_generator.advance_application_channel_watermark(allocation_cutoff)
+                self.activity_generator.finalize_ssh_session_lifecycles(allocation_cutoff)
             if checkpoint_after_hour is not None:
-                checkpoint_after_hour(
-                    completed_simulated_hours=warmup_hours + hour_count,
-                    next_hour=next_hour,
-                )
+                with BaselineMixin._baseline_profile_span(self, "baseline.checkpoint"):
+                    checkpoint_after_hour(
+                        completed_simulated_hours=warmup_hours + hour_count,
+                        next_hour=next_hour,
+                    )
+            BaselineMixin._profile_end_hour(self)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
+        if profiler is not None:
+            profiler.end_phase("collection")
 
     def _generate_stale_account_noise(self, current_hour: datetime) -> None:
         """Generate noise events for stale/inactive accounts.
@@ -7715,6 +7777,38 @@ class BaselineMixin:
                 logon_type=live_session.logon_type,
             )
 
+    def _profile_begin_hour(
+        self,
+        phase: Literal["warmup", "collection"],
+        simulated_time: datetime,
+    ) -> None:
+        """Begin one optional hour-level profile without touching generation state."""
+
+        profiler = getattr(self, "profiler", None)
+        if profiler is not None:
+            try:
+                profiler.begin_hour(phase=phase, simulated_time=simulated_time)
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                profiler.mark_degraded(f"Unable to begin hour profile metrics: {exc}")
+
+    def _profile_end_hour(self) -> None:
+        """Capture optional post-hour emitter and state snapshots."""
+
+        profiler = getattr(self, "profiler", None)
+        if profiler is None or not profiler.active:
+            return
+        try:
+            emitter_snapshots = {
+                str(format_name): emitter.profiling_snapshot()
+                for format_name, emitter in self.emitters.items()
+            }
+            profiler.end_hour(
+                emitter_snapshots=emitter_snapshots,
+                state_metrics=self.state_manager.profiling_metrics(),
+            )
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            profiler.mark_degraded(f"Unable to complete hour profile metrics: {exc}")
+
     def _barrier_flush_all_emitters(self) -> None:
         """Flush all emitters and wait for completion (hour-level barrier).
 
@@ -7722,8 +7816,33 @@ class BaselineMixin:
         before hour N+1 begins.
         """
         logger.debug("Barrier flush: waiting for all emitters to complete")
-        for _format_name, emitter in self.emitters.items():
+        profiler = getattr(self, "profiler", None)
+        if profiler is None or not profiler.active:
+            for emitter in self.emitters.values():
+                emitter.barrier_flush()
+            logger.debug("Barrier flush: all emitters complete")
+            return
+        for format_name, emitter in self.emitters.items():
+            queue_depth = 0
+            try:
+                emitter.enable_profiling_metrics()
+                queue_depth = int(emitter.profiling_snapshot().get("queue_depth") or 0)
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                profiler.mark_degraded(
+                    f"Unable to capture {format_name} pre-barrier profile metrics: {exc}"
+                )
+            started_ns = perf_counter_ns()
             emitter.barrier_flush()
+            try:
+                profiler.record_emitter_barrier(
+                    format_name=str(format_name),
+                    elapsed_seconds=max(0.0, (perf_counter_ns() - started_ns) / 1e9),
+                    queue_depth_before=queue_depth,
+                )
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                profiler.mark_degraded(
+                    f"Unable to capture {format_name} barrier profile metrics: {exc}"
+                )
         logger.debug("Barrier flush: all emitters complete")
 
     def _get_user_persona(self, user: User) -> Persona | None:
