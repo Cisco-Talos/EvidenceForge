@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; post-1.0 quality improvements ongoing
+**Status:** 2.0.0 release-candidate validation; post-1.0 quality improvements ongoing
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-08-24
+**Last Roadmap Review:** 2026-09-10
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -131,18 +131,18 @@ without turning `TODO.md` back into a high-conflict work journal.
   the immediate Loop 30 baseline, but 17.5 better than the later post-P1 checkpoint. See the
   [implementation worklog](docs/worklog/2026-08-16-v2-family-foundations.md) and
   [final assessment](docs/design/realism-review/v2-family-foundations-final/REPORT.md).
-- [ ] **P2** Revisit proxy access log realism and parser compatibility; consider
-  switching `proxy_access.log` from W3C Extended format to Apache/Nginx
-  combined-style output with absolute URLs and CONNECT targets.
+- [x] **P2** Switch `proxy_access.log` from W3C Extended format to Apache/Nginx
+  combined-style output with absolute URLs and CONNECT targets, with target-specific parser
+  compatibility coverage.
 - [ ] **P2** Review shared Windows Event XML helper opportunities across
   Security and Sysmon emitters without hiding provider-specific field semantics.
-- [ ] **P2** Add output-target ingest guides covering which generated sources
+- [x] **P2** Add output-target ingest guides covering which generated sources
   are parsed and normalized, parsed-only, unsupported, and how to ingest each
   target-specific dataset.
 - [x] **P1** Add focused machine-readable `eforge schema` selectors, executable minimal examples,
   actionable grouped validation diagnostics, and staged authoring guidance while retaining focused
   references as the semantic authoring guide.
-- [ ] **P1** Before the final 2.0.0 release, reconcile the roadmap and release documentation:
+- [x] **P1** Before the final 2.0.0 release, reconcile the roadmap and release documentation:
   retire completed or stale TODO items, align the README proxy-format description with the
   implemented combined-log output, update Ruff's target to Python 3.12, and clear release-tree
   whitespace and working-copy hygiene issues.
@@ -157,12 +157,16 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
-- [ ] **P1** Make process-to-file and process-to-registry effects actor-native by construction:
-  stop attaching Defender, WER, CBS, Office MRU, UserAssist, and shell-state artifacts to arbitrary
-  live or newly launched processes, and add ProcessGuid/PID causality probes for each family.
-- [ ] **P1** Give one-shot Windows foreground tools executable-aware lifetimes so argument-less
-  `runas.exe`, `git`, `kubectl`, `wevtutil`, and similar commands do not survive until interactive
-  session teardown unless an explicit hung/long-running outcome owns that lifecycle.
+- [x] **P1** Make process-to-file and process-to-registry effects actor-native by construction.
+  Data-driven executable eligibility and canonical process/session ownership now cover Defender,
+  WER, CBS, Office MRU, UserAssist, and shell-state artifacts, with PID/ProcessGuid correlation
+  checks. The dedicated Loop 41 assessment and Loop 42 target confirmation found no recurrence; see
+  `docs/worklog/2026-08-09-iteration-test-expanded-ids-loops-35-44.md`.
+- [ ] **P1** Finish executable-aware lifetimes for one-shot Windows foreground tools. Existing
+  bounded handling covers `wevtutil.exe` and the established admin-tool set, but argument-less
+  `runas.exe`, Windows `git`/`git.exe`, `kubectl`/`kubectl.exe`, and similar unclassified commands
+  can still fall through to session teardown unless an explicit hung/long-running outcome owns
+  that lifecycle.
 - [x] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
   means "we stopped collecting data," not that systems shut down or every active connection,
   session, process, and application operation ended cleanly. Mirror warm-up behavior at the tail:
@@ -191,26 +195,27 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
-- [ ] **P1** Model Windows inbound/server-side endpoint network telemetry for
-  DC/server roles, including Security 5156 and Sysmon Event 3
-  `Initiated=false`, or add an explicit collection profile that plausibly
-  filters inbound endpoint flow events while preserving hunt semantics.
-- [ ] **P1** Separate public IP pools by role so hostile scanner/red-herring
-  sources, ordinary public web clients, crawlers, API clients, ordinary service
-  responders, public DNS/NTP/CDN destinations, and PTR/provider identities do
-  not reuse the same IPs in contradictory ways; keep User-Agent/persona behavior
-  stable per external source.
-- [ ] **P1** Model Windows Security and Sysmon `EventRecordID` gaps against
+- [ ] **P1** Finish Windows inbound/server-side endpoint network telemetry for DC/server roles.
+  Destination-side Security 5156 with responder PID/image ownership is implemented and tested;
+  add Sysmon Event 3 `Initiated=false`, or an explicit collection profile that plausibly filters
+  inbound Sysmon flow events while preserving hunt semantics.
+- [ ] **P1** Finish public-IP role partitioning. Scanner/storyline sources, generic public web
+  clients, outbound benign destinations, public NTP, and mail identities now have disjoint or
+  reserved pools, and external web persona/User-Agent selection is source-sticky. Remaining work
+  is to give crawler/API-client and ordinary responder/CDN/PTR identities explicit role ownership
+  instead of relying on shared generated public pools.
+- [x] **P1** Model Windows Security and Sysmon `EventRecordID` gaps against
   plausible hidden event volume while preserving near-adjacent native pairings
   such as Security `4624`/`4672` and tightly coupled Sysmon process events.
-- [ ] **P2** Validate and improve Sysmon `ProcessGuid` morphology against
+- [x] **P2** Validate and improve Sysmon `ProcessGuid` morphology against
   native Sysmon output while preserving stable process correlation.
 - [ ] **P2** Separate NTP infrastructure/server IP pools from hostile scanner
   pools and make UDP/123 Zeek output consistently include or omit NTP analyzer
   evidence according to modeled sensor configuration.
-- [ ] **P1** Improve public PTR, TLS, and provider realism so public reverse DNS
-  is sparse/provider-style rather than forward-hostname-derived, and
-  SNI/certificate issuer/provider relationships remain plausible.
+- [x] **P1** Improve public PTR, TLS, and provider realism. Public PTR responses are now
+  deterministically sparse and provider-style rather than forward-hostname echoes; domain-aware CA
+  overrides keep SNI/certificate issuer relationships plausible, and raw-IP TLS avoids invented
+  SNI and public-CA DNS identities. Covered by public-DNS, TLS, certificate, and raw-IP regressions.
 - [x] **P2** Add true HTTP multipart transactions with ordered/nested parts,
   per-part size/MIME/filename/FUID metadata, envelope overhead, curl form parsing,
   multiple correlated local file reads, proxy legs, and span-aware loss. See the
@@ -319,10 +324,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P2** Tighten Linux SSH command/process-to-transport timing so most LAN
   SSH commands reach the TCP/22 connection in sub-second to low-single-digit
   seconds, reserving longer gaps for DNS, retries, or explicit delay.
-- [ ] **P1** Bind Linux bash-history command sequences to concrete SSH or local
-  session intervals so commands, especially `exit`, do not render after all
-  visible sessions for that user/host have closed unless supporting console,
-  tmux, screen, sudo, or detached-shell evidence exists.
+- [x] **P1** Bind Linux bash-history command sequences to concrete SSH or local session intervals.
+  Commands are fitted to visible session windows or suppressed when no owner exists, including
+  serialized commands after session close; the Loop 238 hard probe checked 202 commands with zero
+  outside syslog/eCAR session intervals. See
+  `docs/worklog/2026-05-current-dev-assessment-continuation.md`.
 - [ ] **P2** Reduce direct root/password SSH volume and model routine Linux
   administration through bastions, named admin users, sudo, and service
   automation instead of repeated polished interactive root access.
@@ -364,8 +370,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Fix DLL files rendered as `NewProcessName` in Windows 4688 events.
 - [ ] Fix 4648 targets that render as localhost instead of the DC for domain
   commands.
-- [ ] Render 4728 `MemberName` as the added member DN instead of `-`.
-- [ ] Add Windows 4778/4779 RDP reconnect/disconnect evidence.
+- [x] Render 4728 `MemberName` as the added member DN instead of `-`.
+- [x] Add Windows 4778/4779 RDP reconnect/disconnect evidence.
 - [ ] Model integrity levels well enough that Mimikatz at Medium integrity does
   not appear to succeed unrealistically.
 - [ ] Add configurable per-host/source log deployment coverage for named host
@@ -382,7 +388,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 ### Short-Term
 
 - [ ] Configurable work-week schedules and per-persona day-of-week overrides.
-- [ ] Storyline cadence field: `human`, `automated`, or periodic interval with
+- [x] Storyline cadence field: `human`, `automated`, or periodic interval with
   jitter.
 - [ ] Cloud/SaaS log formats: Azure AD, AWS CloudTrail, GCP audit logs, and M365.
 - [x] Correlated multi-SID IDS attachments on typed transport-owning events,
