@@ -188,8 +188,20 @@ class PackedUniqueDigestMap:
     def get_digest(self, digest: int, default: int | None = None) -> int | None:
         """Return the locator for one prehashed digest, or ``default``."""
 
-        position, found = self._find_slot(self._normalize_digest(digest))
-        return self._values[position] if found else default
+        empty = self._EMPTY
+        if digest < 0 or digest > empty:
+            raise ValueError("Packed route digest must fit in an unsigned 64-bit integer")
+        canonical_digest = empty - 1 if digest == empty else digest
+        keys = self._keys
+        mask = len(keys) - 1
+        position = canonical_digest & mask
+        while True:
+            retained = keys[position]
+            if retained == empty:
+                return default
+            if retained == canonical_digest:
+                return self._values[position]
+            position = (position + 1) & mask
 
     def _delete_position(self, gap: int) -> None:
         mask = len(self._keys) - 1

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 14
+current_revision: 15
 history_start_revision: 1
-behavior_surface_sha256: "b24d3cf2db8cc21d475e7a3a9ac917c648ceda83063400fef766228f20eeb51e"
+behavior_surface_sha256: "a87b45e39e8dc2312ac7989f1d2b75e1f4e5bfaa775f8ad91e54f5224c50498f"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -143,3 +143,10 @@ changes:
       - generation-failure-cleanup
     formats: []
     summary: Keeps failure cleanup usable when a recovery or test harness omits the optional process-local profiler field.
+  - revision: 15
+    id: exact-packed-digest-read-fast-path
+    impact: none
+    domains:
+      - canonical-state-indexes
+    formats: []
+    summary: Specializes exact packed-digest reads without changing normalization, collision handling, or output.

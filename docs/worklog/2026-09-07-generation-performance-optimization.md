@@ -57,6 +57,17 @@ Non-timing-sensitive integration validation completed on 2026-09-09:
   busy-machine phase. Those measurements, the real checkpoint/output comparison, and the extended
   resource-intensive slow/soak gates remain deferred to a quiet-machine window.
 
+Post-ASA cumulative correctness validation later completed with 8,350 routine tests passing, five
+skipped, and 2,008 slow/soak tests deselected. The complete slow tier passed 1,777 tests and exposed
+two instances of one profiler robustness defect in a partially constructed RDP failure harness;
+commit `5a2a55ef7` made optional profiler access safe, and both affected slow cases plus all 11
+profiling tests then passed. The other 1,777 slow cases require no rerun because they completed
+successfully against the same cumulative candidate. Non-timing-sensitive soak gates passed for
+31-day mixed Windows/Samba retention, 45-day connection state, and all three ordinary/HTTP/proxy
+one-thousand-handoff capacity variants.
+The 31-day external-sort bound and million-entry index compaction soak gates also passed once
+machine contention subsided. The representative medium-generation gate passed in the slow tier.
+
 ### Target 1: SMB connection state validation and encoding — retained, exact
 
 Three exact designs were evaluated together after isolated measurements:
@@ -202,8 +213,311 @@ Decision after `dev` integration (2026-09-09): **retain no lifecycle change**. A
 designs failed an acceptance gate, and no semantic fallback was justified. The incomplete A1/B1
 pair remains historical diagnostic evidence only; do not resume that sequence. Re-profile the
 post-integration accepted runtime before deciding whether another materially different exact
-lifecycle design is warranted. Generation behavior therefore ends at optimization revision 12
-(exact timing), and no lifecycle changelog entry or affected format exists.
+lifecycle design is warranted. No lifecycle changelog entry or affected format exists. Revision
+13 records the separately approved localized ASA checkpoint-order repair, revision 14 records the
+profiler-free recovery fix, and Target 5 uses exact revision 15.
+
+### Target 4: JSON serialization — subsumed by exact timing work
+
+The accepted timing profile reduced standard-library JSON encoder work from a ranked family to 375
+exclusive samples out of 76,950 (**0.49%**). Encoder `iterencode` itself was 0.33% exclusive. The
+remaining sampled callers were primarily exact Windows/Sysmon spool records, with a smaller amount
+of timing-seed encoding and scattered source/checkpoint serialization. This is below the threshold
+that justifies forcing a JSON representation change or a broad encoder refactor.
+
+The first fresh post-`dev` accepted-build profile confirmed that JSON encoding and decoding remain
+below 1% exclusive CPU in aggregate (790 of 87,336 samples, **0.90%**). No Target 4 code change is
+justified. Close this target as subsumed by the exact timing work; no representation changed, no
+format is affected, and no semantic JSON fallback is authorized by the evidence.
+
+### Target 5: generic indexes and mappings — exact candidate 1 rejected
+
+The accepted pre-integration timing profile identified two concrete avoidable costs in
+`CompactIndexedStore`: generic `collections.abc` `get` dispatch consumed 591 exclusive samples and
+1,175 inclusive samples (**1.53% inclusive**), while runtime-only `typing.cast` calls across index
+paths consumed another 264 exclusive samples (**0.34%**). The dominant generic `get` caller was the
+process lifecycle index; exact active/retired-map lookup and packed digest routes accounted for the
+remaining index work.
+
+The first exact candidate attempted:
+
+- Add direct `get` and membership paths that resolve active and incrementally retired primary maps
+  without generic ABC dispatch or exception-driven misses.
+- Use the same direct resolution for `__getitem__` and `handle_for`, preserving active-map
+  precedence and exact `KeyError` behavior.
+- Remove runtime-only casts from live compact-slot reads; no container layout, lookup result,
+  iteration order, compaction behavior, or checkpoint payload changes.
+
+Focused rotation, active/retired lookup, deletion, missing-default, handle-reuse, collision,
+lifecycle, application-channel, process-cache, state, and checkpoint coverage passed: 697 tests
+with 14 slow/soak cases deselected. The complete routine suite passed with 8,348 tests, five skips,
+and 2,008 slow/soak tests deselected. Provisional generation-behavior revision 13 allowed checkpoint
+tests to exercise the candidate and was removed when the candidate failed its performance gate.
+
+Those timing steps were deliberately not started on 2026-09-09 because unrelated Logitech helper,
+browser, window-server, and security processes were consuming substantial CPU. Results collected
+under that contention would not be comparable to the campaign baseline.
+
+The first post-`dev` accepted-build profile and isolated-candidate screening profile completed on
+2026-09-09:
+
+| Run | Wall | Process CPU | Peak RSS | Samples |
+|---|---:|---:|---:|---:|
+| accepted profile A1 | 942.781 s | 937.602 s | 1,319,436,288 B | 87,336 |
+| index candidate profile B1 | 862.266 s | 856.963 s | 1,318,780,928 B | 79,051 |
+| accepted profile A2 | 837.254 s | 832.923 s | 1,346,191,360 B | 75,883 |
+
+Both bundles verify with 287 manifest-tracked files. Their `data/**`, `artifacts/**`, and every
+deterministic sidecar are byte-identical. Candidate peak RSS is 0.05% lower. Focused A-B-B-A-A-B
+microbenchmarks over one million operations improved active-hit `get` by 22-26%, missing `get` by
+79%, and membership by 22-25%, satisfying the focused-operation threshold.
+
+The apparent A1-to-B1 process-CPU improvement was machine/run variance: the unchanged A2 accepted
+build was another 2.9% faster than B1. Warm-up was effectively unchanged while collection hours
+varied substantially. Runtime casts fell from 273 to 25 samples, but packed-map `_find_slot` rose
+from 1,885 to 2,284 samples and generic-plus-direct mapping `get` samples did not fall. Compared with
+A2, the targeted mapping/index sample total fell only about 1.5%, far short of the required 25%,
+while macro process CPU regressed 2.9%. The candidate therefore failed the campaign gate and was
+reverted in full. No production code, behavior revision, changelog entry, or format impact remains.
+
+The integrated profile also exposed a separate residual Target 2 cost: generated dataclass hashing
+is 5.20-5.27% exclusive and is dominated by nested source-clock and wander-cache keys. Those caches
+are rebuilt rather than checkpointed, but any exact hash-key follow-up must be evaluated separately
+from the Target 5 patch so performance attribution remains non-overlapping.
+
+#### Exact candidate 2: singleton-first sparse temporal routes — rejected
+
+The dominant packed-map samples came from `_SparseTemporalIndex.iter_after`: lifecycle identities
+normally occur once, but each singleton query checked the empty promoted-history map before the
+singleton map. Candidate 2 reverses those exact checks in add, predecessor, successor, and removal
+paths. Promoted histories still resolve through the same segmented temporal index, and absent keys
+still check both maps. It changes no retained layout, digest, collision check, iteration order, or
+checkpoint representation.
+
+A focused regression asserts that singleton predecessor/successor queries issue only one packed
+route probe. The broader index, lifecycle, checkpoint, state-manager, application-channel,
+process-cache, concurrency, and behavior suite passes with 792 tests and seven slow cases
+deselected. Interleaved one-million-operation microbenchmarks improved singleton successor lookup
+by 20-32% and predecessor lookup by 15-26%. Provisional behavior revision 13 declares `impact:
+none` with no formats.
+
+The first candidate profile completed with 943.303 s wall, 935.592 s process CPU, 1,230,700,544 B
+peak RSS, 86,810 samples, and no degradation or dropped samples. Its two dominant singleton
+`iter_after` probe stacks fell from 2,055 samples in accepted A2 to 1,072 (**47.8%**), while total
+packed `_find_slot` samples fell from 2,504 to 1,810 (**27.7%**). The bundle verifies with 287
+tracked files and is byte-identical to accepted A2 across `data/**`, `artifacts/**`, and every
+deterministic sidecar. Whole-run timing remains inconclusive: candidate C1 clusters with slow
+accepted A1 rather than fast accepted A2. Repeat the profile and complete interleaved unprofiled
+macro runs before deciding whether the target-family reduction meets the macro-within-1% gate.
+
+Candidate profile C2 completed with 890.782 s wall, 885.131 s process CPU, 1,312,129,024 B peak
+RSS, 80,826 samples, and no degradation or dropped samples. It verifies and is byte-identical to
+C1 across generated data and deterministic sidecars. Across the two accepted and two candidate
+profiles, median singleton `iter_after` probe samples fell from 1,586.5 to 1,237 (**22.0%**) and
+median total `_find_slot` samples fell from 2,194.5 to 1,944 (**11.4%**). Sampling variance is high:
+accepted singleton stacks ranged from 1,109 to 2,064 despite byte-identical work. The profile pair
+therefore does not independently clear the 25% target-exclusive gate. Candidate 2 advances only to
+the alternative acceptance path: the unprofiled A-B-B-A-A-B sequence must demonstrate at least
+1.5% median all-source wall improvement.
+
+The unprofiled macro gate rejected candidate 2:
+
+| Run | Build | Wall | User + system CPU |
+|---|---|---:|---:|
+| A1 | accepted | 799.05 s | 794.84 s |
+| B1 | candidate | 885.52 s | 880.86 s |
+| B2 | candidate | 849.47 s | 844.71 s |
+| A2 | accepted | 904.16 s | 891.73 s |
+| A3 | accepted | 833.90 s | 829.81 s |
+| B3 | candidate | not run | not run |
+
+The accepted wall median is 833.90 s. Even if B3 were arbitrarily fast, the candidate median could
+not be lower than B2's 849.47 s, while the 1.5% acceptance threshold required 821.39 s or less.
+Likewise, its best possible CPU median was already a 1.8% regression. B3 was started, then stopped
+after 38.98 s at the user's direction because it could no longer influence the decision; it is not
+part of the measurement table. Candidate 2 was reverted in full. No production code, behavior
+revision, test, changelog entry, or format impact remains.
+
+#### Exact candidate 3: specialized packed-digest reads — retained, exact
+
+The final materially different Target 5 design keeps the packed arrays and mutation paths intact,
+but specializes the dominant read-only `PackedUniqueDigestMap.get_digest` loop. It performs the
+same unsigned-64-bit validation and sentinel normalization inline, probes the same open-addressed
+cluster, and returns the same locator/default without an extra classmethod call or temporary
+`(position, found)` tuple. A focused boundary test covers sentinel aliasing, defaults, and invalid
+digests. The same 792-test broad focused suite passes with seven slow cases deselected.
+
+Interleaved five-million-lookup microbenchmarks improved packed hits by about 35% and misses by
+about 39%. The first all-source profile completed with 745.049 s wall, 741.769 s process CPU,
+1,364,312,064 B peak RSS, 66,301 samples, and no degradation or dropped samples. Combined
+`get_digest` plus `_find_slot` exclusive samples fell from the two-profile accepted median of 2,388
+to 437 (**81.7%**). Peak RSS is 1.3-3.4% above the two accepted profiles, within the 5% gate. The
+bundle verifies with 287 tracked files and is byte-identical to accepted A2 across `data/**`,
+`artifacts/**`, and every deterministic sidecar. Candidate 3 clears the focused-operation and
+target-exclusive CPU gates; retain it only if unprofiled macro runtime remains within 1% of the
+accepted build and the remaining correctness/scale gates pass.
+
+The decision-sensitive unprofiled sequence used the immediately preceding accepted A3 as A1, then
+ran B1-B2-A2-A3. B3 was skipped because it could no longer change either median decision:
+
+| Run | Build | Wall | User + system CPU |
+|---|---|---:|---:|
+| A1 | accepted | 833.90 s | 829.81 s |
+| B1 | candidate | 776.64 s | 773.53 s |
+| B2 | candidate | 780.73 s | 776.51 s |
+| A2 | accepted | 927.99 s | 921.52 s |
+| A3 | accepted | 799.29 s | 795.68 s |
+| B3 | candidate | not run | not run |
+
+The accepted median is 833.90 s wall and 829.81 s CPU. Regardless of B3, the candidate median can
+be no worse than 780.73 s wall and 776.51 s CPU: at least **6.38% faster by wall** and **6.42%
+faster by CPU**. B3 cannot influence retention and was omitted under the user's stop-when-fixed
+guidance. All five completed macro bundles verify with 286 tracked files, and candidate runs are
+byte-identical to the accepted run across generated data, artifacts, and deterministic sidecars.
+Candidate 3 passes its performance and memory gates and advanced provisionally to compatibility
+testing.
+
+The checkpoint gate exposed a pre-existing ASA exact-resume defect rather than a packed-map
+regression:
+
+- An accepted revision-12 run suspended normally after the one-hour warm-up. The revision-13
+  candidate classified it as load-compatible with the expected localized behavior-history and
+  build differences. Full isolated hydration passed for all 28 participants. On macOS the first
+  verifier attempt used the `/var` alias and Snort rejected that symlinked ancestry; repeating with
+  the real `TMPDIR=/private/tmp` scratch root passed and did not alter the checkpoint.
+- The candidate resumed the accepted checkpoint and completed both collection hours. All generated
+  files, artifacts, and deterministic sidecars matched the uninterrupted accepted bundle except
+  `data/profile-firewall/cisco_asa.log`. It retained exactly 87,559 rows, but one equal-second pair
+  changed order and therefore exchanged the appliance-local finalized connection IDs. The resumed
+  ASA SHA-256 was `cea4d688cd3058dc15d00b5420917b6d49798f347203f24281e72229e8dece79`;
+  the uninterrupted SHA-256 was
+  `ed5adc5664aaa9666788252b00342664441861d462c6156bf32d475e0e1161ba`.
+- A second checkpoint was created and resumed entirely under the unchanged accepted revision-12
+  build. It produced the same resumed ASA hash as the candidate while every other generated file,
+  artifact, and deterministic sidecar matched. This proves the packed-digest read path neither
+  caused nor worsened the mismatch. ASA's timestamp-only external merge leaves equal-second row
+  order dependent on run boundaries, and final connection-ID allocation makes that latent ordering
+  difference visible.
+- One first repair attempt used a full lexical line tie-break after lifecycle priority. It preserved
+  the ASA semantic multiset and changed no other format, but final connection-ID rewriting could
+  disturb that order. It was refined rather than retained.
+
+The user authorized the exact-first campaign's localized semantic fallback for this pre-existing
+defect. Commit `f16bfd50d` applies a source-native total order: RFC3164 second, ASA lifecycle
+priority, stable rendered content with generated TCP/UDP connection-ID digits removed, and the
+numeric connection ID only as a final disambiguator. Restored immutable runs are normalized
+atomically before canonical connection IDs are rebuilt. Generation behavior revision 13 declares
+`impact: localized`, domain `cisco-asa-publication-order`, and concrete format `cisco_asa`.
+
+The definitive uninterrupted all-source bundle changed only
+`data/profile-firewall/cisco_asa.log` relative to the pre-repair build. The other 24 concrete
+formats were byte-identical. ASA retained 87,559 rows and 43,746 connection-build rows; after
+normalizing generated connection IDs, the old and new files were identical multisets. Final build
+IDs are contiguous from 1,371,431 through 1,415,176, and the output satisfies the new total order.
+Its ASA SHA-256 is `6b729959d06e3b813872ef4a27e04d3421f012dfda3f6785be4cfa6848c7caa0`.
+
+A same-build checkpoint from the pre-profiler-fix candidate epoch suspended after warm-up, hydrated
+all 28 participants, resumed
+under `--resume-policy exact`, and matched the uninterrupted bundle byte-for-byte across generated
+data, artifacts, and deterministic sidecars. A historical revision-12 checkpoint also hydrated all
+28 participants and completed under the required `--resume-policy attempt`; empirically it matched
+the current uninterrupted bundle byte-for-byte, although compatibility remains conservatively
+documented as historically unguaranteed. The full-volume ASA repair therefore establishes a
+corrected baseline against which candidate 3 can be revalidated without waiving its exact-output
+gate.
+
+The corrected all-source bundle verified and the authorized large evaluation parsed 588,060
+records from 23 non-empty source families. It scored 94.67 overall with 100% specification
+conformance, format constraints, value plausibility, IDS integrity, causal ordering, event
+presence, pivot/linkability, temporal, storyline, and intent-reconciliation scores; field agreement
+was 99.27 and indicator accuracy 98.99. The remaining Windows 4779 unknown-field warning and
+web/Zeek status/OCSP diagnostics predate this optimization and did not fail a hard gate.
+
+Candidate 3 was reapplied unchanged on top of the committed ASA and profiler-recovery fixes as
+behavior revision 15, `impact: none`, and compared with immediate predecessor `5a2a55ef7`. The
+corrected-baseline all-source sequence was `A-B-B-A-A`; B3 was omitted because it could no longer
+change either median decision:
+
+| Run | Build | Wall | User + system CPU |
+|---|---|---:|---:|
+| A1 | accepted | 806.77 s | 803.54 s |
+| B1 | candidate | 784.73 s | 781.69 s |
+| B2 | candidate | 786.91 s | 784.27 s |
+| A2 | accepted | 816.20 s | 813.02 s |
+| A3 | accepted | 818.92 s | 816.60 s |
+| B3 | candidate | not run | not run |
+
+The accepted medians are 816.20 seconds wall and 813.02 seconds CPU. Regardless of B3, the
+candidate median is bounded at 784.73-786.91 seconds wall and 781.69-784.27 seconds CPU. It is
+therefore guaranteed to improve whole-run wall time by at least **3.59%** and process CPU by at
+least **3.54%**; the two-run candidate centers improve them by **3.72%** and **3.69%**. All five
+bundles verify with 286 tracked files and are byte-identical across `data/**`, `artifacts/**`, and
+every deterministic sidecar. The corrected ASA SHA-256 remains
+`6b729959d06e3b813872ef4a27e04d3421f012dfda3f6785be4cfa6848c7caa0`.
+
+The historical Zeek-focused sequence also stopped after `A-B-B-A-A` once B3 became unable to
+change the regression decision:
+
+| Run | Build | Wall | User + system CPU |
+|---|---|---:|---:|
+| A1 | accepted | 209.19 s | 208.31 s |
+| B1 | candidate | 211.32 s | 210.27 s |
+| B2 | candidate | 210.05 s | 209.26 s |
+| A2 | accepted | 211.18 s | 210.51 s |
+| A3 | accepted | 212.36 s | 211.52 s |
+| B3 | candidate | not run | not run |
+
+The accepted wall median is 211.18 seconds. The worst possible candidate median is 211.32 seconds,
+only a **0.07%** regression, while its two-run center is 0.23% faster. All five historical bundles
+verify with 26 tracked files, and candidate generated data and deterministic sidecars remain
+byte-identical.
+
+Two final candidate profiles completed at 808.72 and 809.31 profiled invocation seconds with
+73,325 and 73,023 samples, zero drops, and no degradation. Combined `get_digest` and `_find_slot`
+exclusive samples were 560 and 501, a **77.8%** reduction from the accepted two-profile median of
+2,388 samples. Their top five leaf ranks moved by at most one position and relative share changed
+by less than 7%, so no third profile was required. Peak RSS was 1,321,451,520 and 1,425,162,240
+bytes; the 1,373,306,880-byte median is **3.04%** above the 1,332,813,824-byte accepted-profile
+median and passes the 5% gate. Both profile sidecars validate, are manifest-hashed, and accompany
+generated data byte-identical to the unprofiled candidate.
+
+The final revision-15 same-build run suspended after warm-up, was classified as behavior and
+output-equivalence exact, hydrated all 28 participants, and resumed under `--resume-policy exact`.
+Its 286-file completed bundle verifies and matches uninterrupted candidate generation byte-for-byte
+across data, artifacts, and deterministic sidecars. The first scratch verification attempt again
+demonstrated the existing macOS `/var` alias rejection; canonical `TMPDIR=/private/tmp` hydration
+passed without changing the checkpoint.
+
+Decision: **retain candidate 3 as exact**. Focused hit/miss throughput improves by about 35%/39%,
+target-exclusive samples fall 77.8%, all-source wall time improves by at least 3.59%, historical
+runtime stays within 0.07% in the worst possible median, median RSS grows 3.04%, and all 25 concrete
+formats remain byte-identical to the corrected ASA baseline. No semantic index fallback was used.
+The direct retained-stage medians (8.77% after SMB plus timing, then the 3.72% candidate center)
+imply about **12.16% cumulative improvement** over the original profiler foundation, while the
+intervening `dev` merge means that cumulative figure is staged evidence rather than one single-epoch
+A/B comparison.
+
+#### Final residual leaf ranking
+
+The two final profiles leave the following non-overlapping exclusive leaf paths. This is a
+navigation aid for a future campaign rather than permission to optimize them in this one. Amdahl
+maximum again means the impossible best case where the measured leaf becomes free.
+
+| Rank | Residual leaf path | Mean exclusive share | Amdahl maximum | Principal scope |
+|---:|---|---:|---:|---|
+| 1 | SMB connection text validation | 7.87% | 1.085x | SMB lifecycle across endpoint, network, and Samba evidence |
+| 2 | Generated dataclass hashing | 5.97% | 1.063x | Timing/cache keys shared by correlated outputs |
+| 3 | Generated dataclass initialization | 3.93% | 1.041x | Canonical event/context construction |
+| 4 | RFC3164 timestamp formatting | 3.83% | 1.040x | Syslog-family and Cisco ASA rendering |
+| 5 | Deep-copy | 2.52% | 1.026x | Immutable canonical/network snapshots |
+| 6 | Thread condition notification | 2.32% | 1.024x | Emitter queues and barriers |
+| 7 | Lifecycle `__post_init__` | 2.31% | 1.024x | Canonical lifecycle objects |
+| 8 | Generic index `__getitem__` | 1.99% | 1.020x | Shared state lookup |
+| 9 | Lifecycle weak-reference cleanup | 1.91% | 1.019x | Authority retirement |
+| 10 | Jinja template compilation | 1.79% | 1.018x | Text/XML source rendering |
+
+The optimized packed `get_digest` plus `_find_slot` path now averages only 0.73% exclusive share,
+so further work on that exact path has little remaining whole-run ceiling.
 
 ## Reusable profiling capability
 

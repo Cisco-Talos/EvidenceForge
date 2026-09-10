@@ -11,14 +11,19 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 - Reduced exact SMB connection-state validation work by collapsing redundant validation within
   locked transitions, retaining already-validated authority state, and avoiding temporary text and
   integer encodings during callback-safe key checks. In the original pre-`dev`-integration
-  assessment, the representative all-source median improved by 5.64% and all 25 concrete log
-  formats and deterministic sidecars remained byte-identical to the preceding build. Integrated
-  measurements will replace these historical figures before the campaign is finalized.
+  assessment, the representative all-source median improved by 5.64%. Post-integration correctness
+  and determinism were revalidated; all 25 concrete log formats and deterministic sidecars remain
+  byte-identical to the preceding build.
 - Reused the existing timing-seed byte contract more efficiently and cached pure deterministic
   source-clock wander knots in a bounded process-local store. In the original pre-`dev`-integration
-  assessment, the representative all-source median improved by a further 6.66% and all 25 concrete
-  log formats and deterministic sidecars remained byte-identical to the preceding build. Integrated
-  measurements will replace these historical figures before the campaign is finalized.
+  assessment, the representative all-source median improved by a further 6.66%. Post-integration
+  correctness and determinism were revalidated; all 25 concrete log formats and deterministic
+  sidecars remain byte-identical to the preceding build.
+- Specialized the exact packed-digest index read loop while preserving unsigned-64-bit validation,
+  sentinel normalization, probing, collision behavior, and defaults. Focused hit/miss throughput
+  improved by about 35%/39%, target-exclusive samples fell 77.8%, and the corrected-baseline
+  all-source median improved by at least 3.59%. All 25 concrete log formats, artifacts, and
+  deterministic sidecars remain byte-identical to the preceding build.
 
 **Performance and deterministic output changes**
 

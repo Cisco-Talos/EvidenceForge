@@ -78,6 +78,22 @@ def test_packed_unique_digest_map_probes_resizes_mutates_and_pops_exactly() -> N
     assert metrics.primary_map_backing_bytes > 0
 
 
+def test_packed_unique_digest_map_read_fast_path_preserves_digest_boundaries() -> None:
+    """Specialized reads retain sentinel normalization, defaults, and range rejection."""
+
+    routes = PackedUniqueDigestMap(b"ef-test-read")
+    sentinel_digest = routes._EMPTY
+    routes.set_digest(sentinel_digest, 11)
+
+    assert routes.get_digest(sentinel_digest) == 11
+    assert routes.get_digest(routes._EMPTY - 1) == 11
+    assert routes.get_digest(123, 22) == 22
+    with pytest.raises(ValueError, match="unsigned 64-bit"):
+        routes.get_digest(-1)
+    with pytest.raises(ValueError, match="unsigned 64-bit"):
+        routes.get_digest(routes._EMPTY + 1)
+
+
 @pytest.mark.slow
 def test_packed_unique_digest_map_releases_empty_peak_capacity_in_constant_work() -> None:
     """Forced empty compaction drops peak arrays without scanning old slots."""
