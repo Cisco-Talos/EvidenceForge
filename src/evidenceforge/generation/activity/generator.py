@@ -386,6 +386,9 @@ from evidenceforge.generation.timing import (
     TruncatedLognormalDistribution,
     WeightedDistribution,
 )
+from evidenceforge.generation.windows_tokens import (
+    windows_process_token_profile as _windows_token_profile,
+)
 from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
 from evidenceforge.models.scenario import (
     EmailMessageEventSpec,
@@ -1999,18 +2002,6 @@ def _windows_script_host_process(
     if command_lower.startswith("cmd "):
         return host_image, f"cmd.exe {stripped[4:]}"
     return host_image, f"cmd.exe /c {stripped or ntpath.basename(process_name)}"
-
-
-def _windows_token_profile(username: str, integrity_level: str) -> tuple[str, str, str]:
-    """Return source-native Windows token fields for a process owner."""
-    normalized = username.upper().split("\\")[-1]
-    if normalized in _SYSTEM_ACCOUNTS:
-        return "System", "%%1936", "S-1-16-16384"
-    if integrity_level == "High":
-        return "High", "%%1936", "S-1-16-12288"
-    if integrity_level == "Low":
-        return "Low", "%%1938", "S-1-16-4096"
-    return "Medium", "%%1938", "S-1-16-8192"
 
 
 def _windows_service_process_account(process_name: str, command_line: str) -> str | None:

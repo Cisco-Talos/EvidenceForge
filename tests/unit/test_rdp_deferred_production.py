@@ -309,6 +309,7 @@ def _open_rdp_terminal_harness(
     open_time: datetime = _START,
     expect_exact_initial: bool = True,
     source_process_lead_seconds: float = 3.0,
+    privileged_user: bool = False,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -383,6 +384,7 @@ def _open_rdp_terminal_harness(
         username="analyst",
         full_name="Security Analyst",
         email="analyst@example.test",
+        persona="sysadmin" if privileged_user else "",
     )
     generator._ip_to_system = (
         {source.ip: source, target.ip: target} if modeled_source else {target.ip: target}
@@ -2695,6 +2697,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         modeled_target_pid4=True,
         modeled_source_pid4=True,
         production_timing_runtime=True,
+        privileged_user=True,
     )
     sysmon = harness.sysmon
     assert sysmon is not None
@@ -2802,6 +2805,9 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     )
     assert _field(type_ten, "TargetUserSid").startswith("S-")
     assert re.fullmatch(r"\{[0-9a-f-]{36}\}", _field(type_ten, "LogonGuid"), re.I)
+    session_logon_guid = _field(type_ten, "LogonGuid")
+    assert _field(target_rows["userinit.exe"], "LogonGuid") == session_logon_guid
+    assert _field(target_rows["explorer.exe"], "LogonGuid") == session_logon_guid
 
     process_rows = {
         _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
@@ -2812,6 +2818,12 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert _field(process_rows["winlogon.exe"], "SubjectUserSid") == "S-1-5-18"
     assert _field(process_rows["winlogon.exe"], "SubjectUserName") == "SYSTEM"
     assert _field(process_rows["winlogon.exe"], "SubjectLogonId") == "0x3e7"
+    assert _field(target_rows["userinit.exe"], "IntegrityLevel") == "High"
+    assert _field(process_rows["userinit.exe"], "MandatoryLabel") == "S-1-16-12288"
+    assert _field(process_rows["userinit.exe"], "TokenElevationType") == "%%1937"
+    assert _field(target_rows["explorer.exe"], "IntegrityLevel") == "Medium"
+    assert _field(process_rows["explorer.exe"], "MandatoryLabel") == "S-1-16-8192"
+    assert _field(process_rows["explorer.exe"], "TokenElevationType") == "%%1938"
     assert _field(type_ten, "ProcessId") == _field(process_rows["winlogon.exe"], "NewProcessId")
     assert _event_time(process_rows["winlogon.exe"]) < _event_time(type_ten)
     assert _field(process_rows["winlogon.exe"], "ParentProcessName") == "System"

@@ -986,6 +986,7 @@ class NetworkTransactionPlanner:
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
+        from evidenceforge.generation.windows_tokens import windows_process_token_profile
 
         if type(authority) is not DeferredSessionNetworkAuthority:
             raise TypeError("Deferred session dependent authority changed exact type")
@@ -1119,6 +1120,21 @@ class NetworkTransactionPlanner:
                 )
                 parent_identity = member.parent_identity
                 system_subject = identity.principal.casefold() == "system"
+                integrity_level, token_elevation, mandatory_label = (
+                    windows_process_token_profile(
+                        identity.principal,
+                        member.integrity_level,
+                    )
+                    if is_rdp
+                    else (member.integrity_level, "", "")
+                )
+                owning_session = (
+                    batch.session.identity
+                    if batch.session is not None
+                    and member.auth_session_id == batch.session.identity.session_id
+                    and identity.logon_id == batch.session.identity.logon_id
+                    else None
+                )
                 builder = OccurrenceBuilder(
                     timestamp=spec.canonical_time,
                     event_type=spec.event_type.value,
@@ -1129,7 +1145,7 @@ class NetworkTransactionPlanner:
                         image=identity.image,
                         command_line=identity.command_line,
                         username=identity.principal,
-                        integrity_level=member.integrity_level,
+                        integrity_level=integrity_level,
                         logon_id=identity.logon_id,
                         start_time=identity.started_at,
                         parent_image=(parent_identity.image if parent_identity is not None else ""),
@@ -1142,6 +1158,8 @@ class NetworkTransactionPlanner:
                         parent_start_time=(
                             parent_identity.started_at if parent_identity is not None else None
                         ),
+                        token_elevation=token_elevation,
+                        mandatory_label=mandatory_label,
                     ),
                     auth=(
                         AuthContext(
@@ -1156,6 +1174,9 @@ class NetworkTransactionPlanner:
                             subject_logon_id="0x3e7" if system_subject else "",
                             session_kind="rdp",
                             auth_protocol="rdp",
+                            logon_guid=(
+                                owning_session.logon_guid if owning_session is not None else ""
+                            ),
                         )
                         if is_rdp
                         else None

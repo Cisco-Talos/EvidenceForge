@@ -738,6 +738,60 @@ def test_same_connection_observations_preserve_canonical_request_order() -> None
         assert timedelta(microseconds=990) <= observed_delta <= timedelta(microseconds=1010)
 
 
+def test_proxy_child_observation_stays_after_connect_request() -> None:
+    """A shared proxy route projection preserves request-before-origin causality."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    parent_group_id = "proxy-transaction-observation-order"
+    client = _network_event(
+        start=T0,
+        stable_id="network:proxy-client",
+        protocol="tcp",
+        zeek_uid="CProxyClient",
+    )
+    client.dns = None
+    client.network = replace(client.network, service="http")
+    client.http = HttpContext(
+        method="CONNECT",
+        host="updates.example.com",
+        uri="updates.example.com:443",
+        canonical_request_time=T0 + timedelta(microseconds=100),
+    )
+    client.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-client",
+        canonical_start=T0,
+        phase="prerequisite",
+        parent_group_id=parent_group_id,
+    )
+    client._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_http": ["source-tap", "destination-tap"],
+    }
+    origin = _network_event(
+        start=T0 + timedelta(microseconds=200),
+        stable_id="network:proxy-origin",
+        protocol="tcp",
+        zeek_uid="CProxyOrigin",
+    )
+    origin.dns = None
+    origin.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-origin",
+        canonical_start=T0 + timedelta(microseconds=200),
+        phase="dependent",
+        parent_group_id=parent_group_id,
+    )
+    origin._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+    }
+
+    client_observations = _observation_by_sensor(planner.plan(client, {"zeek_conn", "zeek_http"}))
+    origin_observations = _observation_by_sensor(planner.plan(origin, {"zeek_conn"}))
+
+    for sensor_identity, client_observation in client_observations.items():
+        client_times = dict(client_observation.source_times)
+        assert client_times["zeek_http"] < origin_observations[sensor_identity].observed_start_time
+
+
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:
     """Only an explicit capture-loss profile may change observed counters."""
 

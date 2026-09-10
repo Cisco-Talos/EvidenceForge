@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 21
+current_revision: 22
 history_start_revision: 1
-behavior_surface_sha256: "e2fd9ba8a5ddd80d400f112060ce1f85eb39b0d1e90445b86b2e57eaf6722350"
+behavior_surface_sha256: "23b4c5d8bc2fec6661d5dfadd9b64483bbce3605b58702921c24a94b8ff64c57"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -217,3 +217,18 @@ changes:
       - zeek_conn
       - zeek_dns
     summary: Makes response-bearing synthesized DNS close timing packet-owned and terminates RDP userinit after desktop readiness through the exact lifecycle journal.
+  - revision: 22
+    id: proxy-phase-and-windows-token-identity
+    impact: material
+    domains:
+      - explicit-proxy-source-timing
+      - windows-process-token-identity
+      - rdp-session-identity
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_http
+      - zeek_ssl
+    summary: Preserves CONNECT-before-origin packet ordering at every shared sensor and renders one canonical Windows process token and RDP LogonGuid across endpoint sources.

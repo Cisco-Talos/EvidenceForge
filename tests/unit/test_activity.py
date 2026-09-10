@@ -9544,7 +9544,7 @@ class TestActivityGenerator:
         ]
         event = process_events[-1]
         assert event.process.integrity_level == "High"
-        assert event.process.token_elevation == "%%1936"
+        assert event.process.token_elevation == "%%1937"
         assert event.process.mandatory_label == "S-1-16-12288"
 
     def test_windows_singleton_process_uses_seeded_pid_without_create_event(

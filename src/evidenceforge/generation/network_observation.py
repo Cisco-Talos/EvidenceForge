@@ -2421,6 +2421,11 @@ class NetworkObservationPlanner:
                 path_role,
                 transaction.conn_id or transaction.zeek_uid or transaction.stable_id,
                 runtime,
+                parent_group_id=(
+                    event.lifecycle.parent_group_id
+                    if event.lifecycle is not None and event.lifecycle.parent_group_id is not None
+                    else ""
+                ),
             )
             observation_scope = TimingScope(
                 stable_id=transaction.stable_id or transaction.zeek_uid,
@@ -2945,15 +2950,20 @@ class NetworkObservationPlanner:
         path_role: str,
         transaction_id: str,
         runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        *,
+        parent_group_id: str = "",
     ) -> tuple[datetime, datetime | None]:
         """Project one canonical interval through a physical sensor clock and route."""
 
         clock_key = cls._sensor_clock_key(sensor_identity, timing.profile_name)
         clock_spec = cls._sensor_clock_spec(timing)
+        coherent_proxy_group = (
+            parent_group_id if parent_group_id.startswith("proxy-transaction-") else ""
+        )
         scope = TimingScope(
-            stable_id=transaction_id,
+            stable_id=coherent_proxy_group or transaction_id,
             source=sensor_identity.casefold(),
-            lifecycle_id=path_role,
+            lifecycle_id=coherent_proxy_group or path_role,
         )
         route_delay = runtime.sampler.sample_timedelta(
             cls._right_skew_distribution(
@@ -3264,16 +3274,21 @@ class NetworkObservationPlanner:
             if observed_close is not None and ocsp_duration_floor_us:
                 downstream_reserve_us = file_window.min_ms * 1_000 + ocsp_duration_floor_us + 3
                 http_upper = observed_close - timedelta(microseconds=downstream_reserve_us)
-            http_time = cls._sample_after_within(
-                request_anchor,
-                http_upper,
-                minimum_us=http_window.min_ms * 1_000,
-                maximum_us=http_window.max_ms * 1_000,
-                relationship_key="source.zeek_http_request",
-                scope=scope,
-                sample_key=f"http:{http.trans_depth}",
-                runtime=runtime,
-            )
+            if canonical_request is not None:
+                http_time = request_anchor
+                if http_upper is not None:
+                    http_time = min(http_time, http_upper)
+            else:
+                http_time = cls._sample_after_within(
+                    request_anchor,
+                    http_upper,
+                    minimum_us=http_window.min_ms * 1_000,
+                    maximum_us=http_window.max_ms * 1_000,
+                    relationship_key="source.zeek_http_request",
+                    scope=scope,
+                    sample_key=f"http:{http.trans_depth}",
+                    runtime=runtime,
+                )
             if "zeek_http" in visible_formats:
                 source_times[network_source_timing_key("zeek_http")] = http_time
 

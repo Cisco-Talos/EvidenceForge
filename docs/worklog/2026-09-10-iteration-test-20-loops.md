@@ -111,3 +111,46 @@
   unanimously Synthetic.
 - Next highest-impact families: explicit-proxy request/child phase causality and one
   canonical Windows process/session token identity across Security, Sysmon, and eCAR.
+
+## Loop 59 Family Contract
+
+### Explicit-proxy packet-phase causality
+
+- **Classification:** `family_level`; loop-58 `hard_contradiction` in the explicit-proxy
+  transaction family.
+- **Owning abstraction:** `ProxyPhasePlanner` owns canonical CONNECT/origin phases, while
+  `NetworkObservationPlanner` owns projection of those packet phases through each sensor clock.
+- **Invariant:** for one transaction-bound tunnel at every common sensor, the observed CONNECT
+  request precedes the proxy-origin TCP open and outbound TLS detection. HTTP `ts` represents the
+  request packet time, not a later analyzer-queue delay. All child transports in one explicit-proxy
+  action share the sensor-local route delay so canonical parent-before-child gaps survive projection.
+- **Entry paths:** explicit CONNECT requests, inspected HTTPS tunnel setup, gateway attempts, and
+  direct HTTP proxy requests; reused preexisting tunnels keep their explicit manager-owned path.
+- **Consumers:** Zeek conn/http/ssl, proxy access, canonical tunnel state, deterministic timing
+  evaluation, and exact-byte/SNI blind correlation.
+- **Layer rationale:** the canonical planner already orders request and child phases; independent
+  transport route delay and HTTP timestamp sampling invert them only at the source-observation
+  owner. Emitter clamping would leave sibling sensors inconsistent.
+- **Sibling risks:** ordinary unrelated transports retain independent route texture; only members
+  sharing an explicit-proxy parent action share the offset. HTTP rows without a canonical request
+  anchor retain their compatibility timing.
+
+### Canonical Windows process/session token identity
+
+- **Classification:** `family_level`; loop-58 `hard_contradiction` and `contract_gap` across the
+  process and RDP families.
+- **Owning abstraction:** canonical Windows token profiling owns integrity, elevation type, and
+  mandatory label; deferred session composition owns the LogonGuid before endpoint publication.
+- **Invariant:** one Windows process renders the same integrity truth in Security 4688 and Sysmon
+  Event 1, with mandatory-label and elevation fields derived from that token. Every RDP
+  `userinit.exe` and `explorer.exe` receives the same nonzero session LogonGuid as its Type 10 4624
+  before any source is dispatched.
+- **Entry paths:** ordinary process generation, exact initial RDP session composition, system and
+  user processes, and deferred publication/recovery.
+- **Consumers:** Windows Security 4688, Sysmon Event 1, eCAR PROCESS CREATE, state identities, and
+  cross-source process/session joins.
+- **Layer rationale:** token and session identity are shared canonical truth. Deriving defaults in
+  individual emitters caused Medium/High disagreement and zero-to-nonzero GUID transitions.
+- **Sibling risks:** SYSTEM and built-in service tokens retain Default/System semantics; a High user
+  token uses Full elevation unless a future canonical alternate-token model explicitly says
+  otherwise. Non-RDP compatibility events may still use zero GUID when no session owns one.
