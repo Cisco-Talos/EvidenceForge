@@ -30,7 +30,8 @@ domains:
 
 Query `eforge info dns_tags` rather than copying a hardcoded tag list. Domain
 entries merge by `domain`; lists append unless that keyed entry uses `_replace: true`. Other roots
-include `long_tail`, `cdn_ranges`, `ipv6_map`, and `ipv6_prefixes`; preserve their packaged shapes.
+include `long_tail`, `ipv6_map`, and `ipv6_prefixes`; preserve their packaged shapes. Public CDN
+address ownership belongs to `public_identity_profiles.yaml`.
 
 Use `environment.network_identities` for a domain needed by one scenario. Do not add a real malicious
 IOC when a reserved, behavior-shaped identity will satisfy the exercise.
@@ -42,9 +43,9 @@ IOC when a reserved, behavior-shaped identity will satisfy the exercise.
 shape with inbound/outbound branches or the supported list shape—match the surrounding default.
 
 `traffic_rates.yaml` owns intensity-level count/range defaults. `network_params.yaml` owns OUI data,
-public DNS/NTP fallback servers, external-client exclusions, Linux SMB connection owners, DNS-tunnel
-timing/answers, scanner port mixes, and proxy status messages. Do not use it for scenario-defined
-internal infrastructure.
+external-client compatibility exclusions, Linux SMB connection owners, DNS-tunnel timing/answers,
+scanner port mixes, and proxy status messages. Public DNS/NTP identities belong to the canonical
+public identity registry. Do not use this file for scenario-defined internal infrastructure.
 
 ### `public_dns_profiles.yaml`
 
@@ -114,8 +115,11 @@ subtree, change only the intended leaf, and validate.
 - `tls_issuers.yaml`: issuers merge by `name`; domain overrides must reference an issuer.
 - `tls_realism.yaml`: deep-merges SAN, serial-number, OCSP, chain, and destination profiles. OCSP
   responder hosts also need DNS identity. Preserve issuer/key/signature compatibility.
-- `network_params.yaml`: fallback resolvers, NTP servers, scanner/network pools, and protocol timing;
-  not canonical scenario infrastructure.
+- `public_identity_profiles.yaml`: provider-owned public IP, forward/PTR, TLS, and client traits for
+  scanners, external/failed logons, C2, human/crawler/API clients, ordinary responders, CDN, DNS,
+  NTP, and mail.
+- `network_params.yaml`: scanner protocol mixes and network timing; not public identity ownership or
+  canonical scenario infrastructure.
 
 ## Generated identity pools
 
@@ -123,15 +127,15 @@ subtree, change only the intended leaf, and validate.
 
 | File | Purpose and key |
 |---|---|
+| `public_identity_profiles.yaml` | Canonical providers and roles keyed by `id`, with fixed identities, public address ranges, DNS/PTR, TLS, and client traits. |
 | `email_background.yaml` | Weighted `external_domains` (`domain`) and inbound/outbound local parts (`local_part`). |
-| `mail_public_identities.yaml` | Reserved replacement domains and provider entries keyed by `name`. |
-| `external_actor_profiles.yaml` | Weighted fallback public IPs for logon, failed-logon, and C2 roles, keyed by `ip`. |
 | `suspicious_benign.yaml` | Benign-but-suspicious DNS and connection hosts, keyed by `hostname`. |
 | `command_parameter_pools.yaml` | Deep-merged command URL/host substitution pools. |
 
 Use reserved/documentation identities where required by safety policy. Do not reuse one public
 identity for contradictory client, hostile, and service roles. Scenario-authored identities take
-precedence over these fallbacks.
+precedence over these fallbacks. Compatibility input and its 3.0 removal path are documented only
+in the project migration guide.
 
 ## Repair decisions
 

@@ -6,6 +6,19 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+**2.0 P1 realism and identity completion**
+
+- Added typed Windows foreground lifetime plans so one-shot commands close promptly and
+  operation/session/persistent processes retain only their actual owner.
+- Added canonical responder endpoint observations and inbound Sysmon Event 3
+  `Initiated=false` alongside responder-owned Security 5156, with shared transaction/process
+  identity and deployment, denial, and observation-policy gating.
+- Added `public_identity_profiles.yaml` as the canonical role/provider registry for generated
+  public IP, DNS/PTR, TLS, and client traits. Shipped external-actor, mail, CDN, DNS, and NTP data
+  now use it; user-owned legacy identity overlays translate silently through 2.x, while only
+  `eforge validate` emits one actionable migration warning per consumed file. Compatibility
+  adapters are scheduled for removal in 3.0; a scenario-local schema field remains future work.
+
 **Performance**
 
 - Reduced exact SMB connection-state validation work by collapsing redundant validation within

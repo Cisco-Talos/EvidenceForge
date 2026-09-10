@@ -14,6 +14,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | File | Loader | Purpose |
 |------|--------|---------|
 | `dns_registry.yaml` | `dns_registry.py` | Domain-to-IP mappings with tags (web, saas, email, etc.). Builds forward/reverse DNS indexes. |
+| `public_identity_profiles.yaml` | `public_identity_profiles.py` | Canonical role/provider bindings for Internet clients, hostile actors, responders, CDN, DNS, NTP, and mail infrastructure. |
 | `spawn_rules.yaml` | `spawn_rules.py` | Parent-child process relationships for Windows and Linux. Builds reverse child-to-parent index. |
 | `bash_commands.yaml` | `bash_commands.py` | Per-role bash command pools (sysadmin, dba, developer, generic) with `{placeholder}` templates. |
 | `system_processes.yaml` | `system_processes.py` | Baseline Windows scheduled tasks and system services (svchost, MpCmdRun, etc.), including optional scheduled-task weights, host-type eligibility, per-host caps, and cooldowns. |
@@ -28,7 +29,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `observation_profiles.yaml` | `config/observation_profiles.py` | Versioned named source-observation profiles for optional source-level missingness, delays, batching, and collection windows. Scenario `observation_profile` defaults to `complete`; generation records status in `OBSERVATION_MANIFEST.json` for eval. |
 | `timing_profiles.yaml` | `generation/activity/timing_profiles.py` | Causal/source-native timing, endpoint host-clock offset/drift shared by OS logs and host-resident eCAR, and independent network sensor clock-offset/route-delay profiles. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates, plaintext HTTP policy, and referrer policy for proxy/HTTP logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
-| `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, DNS tunnel RTT bounds, bounded nmap address-space planning, and opaque Linux TCP/445 owner selection. |
+| `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, DNS tunnel RTT bounds, bounded nmap address-space planning, and opaque Linux TCP/445 owner selection. |
 | `smb_profiles.yaml` | `smb_profiles.py` | Platform-native SMB client processes, Samba listener/worker identity, advertised-filesystem defaults, and profile-gated Samba audit operation mappings. Typed Linux SMB uses CIFS mounts or `smbclient`; GVFS remains transport-only texture. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
 | `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. Journald capacity/vacuum housekeeping is generated sparsely by the engine; GUI polkit agent churn is workstation-gated. |

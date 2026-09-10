@@ -1146,7 +1146,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
 
-**Data-driven identity pools:** Realism-sensitive fallback identities are owned by overlay-aware YAML files under `config/activity/`: baseline email domains/local-parts, public mail replacement domains, omitted storyline external IP pools, suspicious-benign DNS/connection targets, and command URL/host placeholder pools. Scenario-authored IPs/domains remain authoritative; config pools are used only for deterministic fallback and background generation.
+**Data-driven identity pools:** `public_identity_profiles.yaml` is the scenario-scoped canonical registry for generated Internet identities. Immutable bindings join semantic role, provider, IP, forward/PTR names, TLS profile, and persona/User-Agent traits once using stable semantic keys. Default scanner, authentication, C2, human, crawler, API-client, ordinary-responder, CDN, DNS, NTP, and mail pools are disjoint unless provider infrastructure is explicitly shared. Scenario-authored IPs/domains remain authoritative and contradictory cross-role reuse is diagnostic. Other overlay-aware YAML files continue to own baseline email local parts/domains, suspicious-benign targets, and command placeholders.
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
 

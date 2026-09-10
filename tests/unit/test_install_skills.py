@@ -70,6 +70,7 @@ EXPECTED_CHATGPT_REFERENCES = {
     "config": PROJECT_CONTEXT_REFERENCE
     | {
         "references/config-apps-processes.md",
+        "references/config-compatibility.md",
         "references/config-dependency-graph.md",
         "references/config-dns-network.md",
         "references/config-host-activity.md",
@@ -181,6 +182,31 @@ class TestInstallSkills:
             text = project_context.read_text(encoding="utf-8")
             assert "Run from the intended working directory and omit `--project-root`" in text
             assert "Never search parents, siblings, the home directory" in text
+
+    def test_installed_config_skills_use_canonical_public_identity_registry(self, tmp_path):
+        """Claude, ChatGPT, and Codex installs inherit canonical identity guidance."""
+
+        claude_root = tmp_path / "claude"
+        chatgpt_root = tmp_path / "chatgpt"
+        codex_root = tmp_path / "codex"
+        install_skills(claude_root)
+        install_chatgpt_skills(chatgpt_root)
+        install_codex_skills(codex_root)
+
+        skill_files = (
+            claude_root / "eforge" / "config.md",
+            chatgpt_root / "eforge-config" / "SKILL.md",
+            codex_root / "eforge-config" / "SKILL.md",
+        )
+        for skill_file in skill_files:
+            text = skill_file.read_text(encoding="utf-8")
+            assert "public_identity_profiles.yaml" in text
+            assert "Do not recreate public identity pools" in text
+
+        for root in (chatgpt_root, codex_root):
+            reference = root / "eforge-config" / "references" / "config-dns-network.md"
+            text = reference.read_text(encoding="utf-8")
+            assert "Canonical providers and roles keyed by `id`" in text
 
     def test_long_reference_docs_have_navigation(self):
         """References over 100 lines expose their scope before detailed content."""

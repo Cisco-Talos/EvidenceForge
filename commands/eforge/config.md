@@ -62,10 +62,9 @@ eforge info personas
 eforge info dns_tags
 eforge info application_ids
 eforge info identity_pools
-eforge info ids_signatures
-eforge info paths.activity
-eforge info paths.personas
 ```
+
+For Internet-facing identity customization, use only `.eforge/config/activity/public_identity_profiles.yaml`; it binds role, provider, IP, DNS/PTR, TLS, and persona/User-Agent traits together. Read `references/config-dns-network.md` before changing keyed `providers` or `roles`. Do not recreate public identity pools elsewhere.
 
 Use `eforge info --fields` to discover field names and `eforge info --json` only
 when several inventories are genuinely needed. Treat an `<error: ...>` value as a failed discovery
@@ -83,6 +82,7 @@ Read the package default and existing overlay for the affected family, then read
 | Operation | Read |
 |---|---|
 | DNS, traffic, proxy, HTTP, web, TLS, identities | `references/config-dns-network.md` |
+| Legacy public identity overlay migration | `references/config-compatibility.md` |
 | Applications, typed releases/modules, installed-software identity, process relationships, endpoint pools, RSAT | `references/config-apps-processes.md` |
 | Persona fields and runtime meaning | `references/config-personas.md` |
 | Host/auth activity, rates, observation, timing | `references/config-host-activity.md` |
