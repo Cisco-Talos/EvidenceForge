@@ -2033,7 +2033,8 @@ class WindowsEventEmitter(LogEmitter):
         net = event.network
         host = self._get_host(event)
         proc = event.process
-        is_outbound = net.src_ip == host.ip
+        endpoint = event.network_endpoint
+        is_outbound = endpoint.initiated if endpoint is not None else net.src_ip == host.ip
         local_process_pid = proc.pid if proc is not None and proc.pid > 0 else -1
         if is_outbound:
             pid = local_process_pid if local_process_pid > 0 else net.initiating_pid
@@ -2061,7 +2062,9 @@ class WindowsEventEmitter(LogEmitter):
         layer_name, layer_rtid = _wfp_layer_fields(direction)
         event_data = {
             "EventID": 5156,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": (
+                ensure_utc(endpoint.observed_at) if endpoint is not None else event.timestamp
+            ),
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,

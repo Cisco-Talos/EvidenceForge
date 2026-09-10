@@ -2251,7 +2251,12 @@ class SysmonEventEmitter(LogEmitter):
             process_start_time = event.timestamp
         if pid <= 0 or image == "-":
             return  # Cannot attribute to a process — don't emit phantom Event 3
-        native_time, render_time = self._render_times(event, "network")
+        endpoint = event.network_endpoint
+        if endpoint is not None:
+            native_time = ensure_utc(endpoint.observed_at)
+            render_time = native_time
+        else:
+            native_time, render_time = self._render_times(event, "network")
         utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(
             host.hostname,
@@ -2279,7 +2284,6 @@ class SysmonEventEmitter(LogEmitter):
         src_port = net.src_port or 0
         dst_port = net.dst_port or 0
         proto = (net.protocol or "tcp").lower()
-        endpoint = event.network_endpoint
         initiated = endpoint.initiated if endpoint is not None else True
         source_hostname = (
             self._resolve_destination_hostname(src_ip, src_port)

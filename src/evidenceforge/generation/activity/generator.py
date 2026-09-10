@@ -20092,19 +20092,23 @@ class ActivityGenerator:
                 if parent_exe not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
                     return None
             minimum_seconds, maximum_seconds = lifetime
-            lifetime_rng = random.Random(
-                _stable_seed(
-                    "prepared-windows-foreground-lifetime:"
-                    f"{request.stable_id}:{actor.stable_id}:{lifetime_plan.mode.value}"
-                )
-            )
             mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
-            sampled_seconds = lifetime_rng.triangular(
-                minimum_seconds,
-                maximum_seconds,
-                mode_seconds,
+            return self.timing_runtime.sampler.after(
+                actor.started_at,
+                TriangularDistribution(
+                    minimum=minimum_seconds * 1_000_000,
+                    mode=mode_seconds * 1_000_000,
+                    maximum=maximum_seconds * 1_000_000,
+                ),
+                relationship_key="activity.process.windows_foreground_lifetime",
+                scope=TimingScope(
+                    stable_id=request.stable_id,
+                    host=request.system.hostname,
+                    source="endpoint_process",
+                    lifecycle_id=actor.lifecycle_id,
+                ),
+                sample_key=f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}",
             )
-            return actor.started_at + timedelta(seconds=sampled_seconds)
 
         if os_category != "linux" or not _linux_shell_process_reserves_foreground(
             actor.image, actor.command_line

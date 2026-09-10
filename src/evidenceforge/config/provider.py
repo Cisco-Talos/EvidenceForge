@@ -1397,9 +1397,12 @@ def _prepare_legacy_registry_values(
             "activity/dns_registry.yaml",
             merge_operation,
         )
-        public_identity_module = importlib.import_module(
-            "evidenceforge.generation.activity.public_identity_profiles"
+        public_identity_module = dict.get(
+            modules,
+            "evidenceforge.generation.activity.public_identity_profiles",
         )
+        if type(public_identity_module) is not ModuleType:
+            raise RuntimeError("public identity registry module is not an exact module")
         reset_public_identity_profiles_cache = (
             public_identity_module.reset_public_identity_profiles_cache
         )
