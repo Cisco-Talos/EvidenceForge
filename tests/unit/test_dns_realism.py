@@ -1818,6 +1818,11 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_bytes != 512
         assert event.network.orig_bytes < 80
         assert event.network.resp_bytes < 140
+        assert event.network.history == "Dd"
+        assert event.network.orig_pkts == 1
+        assert event.network.resp_pkts == 1
+        assert event.network.duration > event.dns.rtt
+        assert event.network.duration - event.dns.rtt <= 0.012001
 
     def test_udp_dns_with_explicit_conn_state_uses_udp_history(
         self, activity_gen, timestamp, state_manager, mock_emitters

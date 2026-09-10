@@ -4919,6 +4919,7 @@ class _RdpLifecycleJournalEntry:
     """Mutable progress for one immutable committed RDP continuation."""
 
     continuation: Any
+    userinit_terminated: bool = False
     disconnect_published: bool = False
     source_terminated: bool = False
     source_termination_at: datetime | None = None
@@ -7259,6 +7260,34 @@ class ActivityGenerator:
             if continuation.disconnect_at > canonical_cutoff:
                 continue
             self._disconnect_exact_rdp_entry(entry)
+
+        # Preserve disconnect as the first terminal phase when a caller advances
+        # across both frontiers at once. Fine-grained generation watermarks still
+        # close userinit near desktop readiness before transport disconnect.
+        for entry in pending:
+            continuation = entry.continuation
+            userinit_identity = getattr(continuation.prepared, "userinit_identity", None)
+            userinit_terminate_at = getattr(
+                continuation.prepared,
+                "userinit_terminate_at",
+                None,
+            )
+            if (
+                userinit_identity is not None
+                and userinit_terminate_at is not None
+                and not entry.userinit_terminated
+                and userinit_terminate_at <= canonical_cutoff
+            ):
+                timing_proof = self._rdp_bundle_for_continuation(
+                    continuation
+                ).terminate_exact_rdp_process(
+                    continuation,
+                    userinit_identity,
+                    userinit_terminate_at,
+                )
+                if timing_proof.canonical_time != userinit_terminate_at:
+                    raise StateError("Exact RDP userinit termination changed its canonical time")
+                entry.userinit_terminated = True
 
         # A due RDP session can itself own a later nested RDP client process. Close every
         # due transport and source process before logging out any session so a parent

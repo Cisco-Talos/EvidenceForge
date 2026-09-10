@@ -53,3 +53,41 @@
   unanimously Synthetic.
 - Next highest-impact families: packet-owned UDP DNS close timing and short-lived
   RDP `userinit.exe` terminalization.
+
+## Loop 58 Family Contract
+
+### Packet-owned UDP DNS close timing
+
+- **Classification:** `family_level`; loop-57 `sibling_defect` in the canonical
+  network-transaction family.
+- **Owning abstraction:** `NetworkTransactionPlanner` owns DNS packet accounting,
+  response RTT, and canonical transport close duration.
+- **Invariant:** a response-bearing UDP DNS transaction whose `Dd` history proves
+  one request and one response closes after the response plus only the modeled DNS
+  close slack; a generic caller duration cannot create an unexplained idle tail.
+- **Entry paths:** explicit `DnsContext` requests, hostname-synthesized DNS context,
+  baseline resolver traffic, and compatibility callers using `generate_connection`.
+- **Consumers:** Zeek `conn.log` and `dns.log`, source-timing constraints, canonical
+  network state, deterministic evaluation, and blind packet-accounting review.
+- **Layer rationale:** the canonical network transaction owns packet and close truth;
+  changing only Zeek rendering would leave state and sibling consumers inconsistent.
+- **Sibling risks:** TCP DNS and unanswered DNS retain their protocol-specific close
+  behavior; response-bearing synthesized UDP DNS is the bounded target.
+
+### Short-lived RDP session initializer
+
+- **Classification:** `family_level`; loop-57 `sibling_defect` in the exact RDP
+  lifecycle family.
+- **Owning abstraction:** `RdpSessionActionBundle` and its authenticated exact
+  lifecycle continuation own target process creation and termination.
+- **Invariant:** initial Type 10 sessions terminate `userinit.exe` shortly after
+  `explorer.exe` is ready, independently of the interactive session and transport
+  close, while preserving the canonical winlogon -> userinit -> explorer ancestry.
+- **Entry paths:** exact initial RDP publication and its continuation recovery path;
+  reconnects do not create or terminate another session initializer.
+- **Consumers:** state lifecycle, Windows Security 4688/4689, Sysmon 1/5, eCAR
+  PROCESS CREATE/TERMINATE, and final RDP session teardown.
+- **Layer rationale:** early initializer exit is lifecycle truth shared by every
+  endpoint projection; emitter-specific terminal rows would orphan canonical state.
+- **Sibling risks:** `winlogon.exe` and `explorer.exe` remain session-lived, and final
+  teardown must naturally exclude the already-closed initializer.

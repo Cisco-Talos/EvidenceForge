@@ -381,6 +381,10 @@ def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
             if entry.disconnect_published
             else set()
         )
+        if entry.userinit_terminated:
+            if prepared.userinit_identity is None or prepared.userinit_terminate_at is None:
+                raise CheckpointError("RDP checkpoint userinit progress lost its owner")
+            expected_phases.add(f"process:{prepared.userinit_identity.object_id}")
         if set(completed_phases) != expected_phases or set(timing_proofs) != (
             expected_phases - {"disconnect"}
         ):
@@ -427,6 +431,9 @@ def _capture_rdp_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 ),
                 completed_phases,
                 proof_rows,
+                encode_state_value(prepared.userinit_identity),
+                encode_state_value(prepared.userinit_terminate_at),
+                entry.userinit_terminated,
             ]
         )
     return rows
@@ -484,7 +491,7 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
     for row in rows:
         if (
             type(row) is not list
-            or len(row) != 20
+            or len(row) != 23
             or type(row[0]) is not str
             or not row[0]
             or type(row[2]) is not str
@@ -502,6 +509,7 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             or any(type(phase) is not str or not phase for phase in row[18])
             or len(row[18]) != len(set(row[18]))
             or type(row[19]) is not list
+            or type(row[22]) is not bool
             or row[0] in restored
         ):
             raise CheckpointCorruptionError("RDP checkpoint journal row is invalid")
@@ -516,6 +524,8 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
         transaction = decode_state_value(row[11])
         stored_session = decode_state_value(row[12])
         source_termination_at = decode_state_value(row[15])
+        userinit_identity = _canonical_process_identity(generator, row[20])
+        userinit_terminate_at = decode_state_value(row[21])
         if (
             not isinstance(target_system, System)
             or not isinstance(user, User)
@@ -539,6 +549,14 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
                     or source_termination_at.tzinfo is not UTC
                 )
             )
+            or (
+                userinit_terminate_at is not None
+                and (
+                    type(userinit_terminate_at) is not datetime
+                    or userinit_terminate_at.tzinfo is not UTC
+                )
+            )
+            or ((userinit_identity is None) != (userinit_terminate_at is None))
         ):
             raise CheckpointCorruptionError("RDP checkpoint journal row changed type")
         manager_session = generator._rdp_session_manager.get(
@@ -562,6 +580,8 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             action_source_deadline=action_source_deadline,
             expected_generation=row[9],
             source_tag=row[10],
+            userinit_identity=userinit_identity,
+            userinit_terminate_at=userinit_terminate_at,
         )
         continuation = _RdpLifecycleContinuation(
             prepared=prepared,
@@ -632,6 +652,10 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             if row[13]
             else set()
         )
+        if row[22]:
+            if userinit_identity is None or userinit_terminate_at is None:
+                raise CheckpointCorruptionError("RDP checkpoint userinit progress lost its owner")
+            expected_phases.add(f"process:{userinit_identity.object_id}")
         if set(row[18]) != expected_phases or set(proofs) != (expected_phases - {"disconnect"}):
             raise CheckpointCorruptionError(
                 "RDP checkpoint terminal ledger disagrees with journal progress"
@@ -656,6 +680,7 @@ def _restore_rdp_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             )
         restored_entry = _RdpLifecycleJournalEntry(
             continuation,
+            userinit_terminated=row[22],
             disconnect_published=row[13],
             source_terminated=row[14],
             source_termination_at=source_termination_at,

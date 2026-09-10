@@ -556,6 +556,8 @@ class _PreparedRdpLifecycleContinuation:
     action_source_deadline: datetime | None
     expected_generation: int
     source_tag: str
+    userinit_identity: ProcessIdentity | None
+    userinit_terminate_at: datetime | None
     projection_ledger: _RdpTerminalProjectionLedger = field(
         default_factory=_RdpTerminalProjectionLedger,
         compare=False,
@@ -1519,6 +1521,20 @@ class RdpSessionActionBundle:
             parent_plan=userinit,
             session_plan=session_plan,
         )
+        userinit_terminate_at = explorer_time + timedelta(
+            seconds=self._timing_planner().triangular_seconds(
+                relationship_key="rdp.userinit_after_desktop_ready",
+                stable_id=action_id,
+                minimum=0.65,
+                mode=2.1,
+                maximum=4.900001,
+                host=self._request.target_system.hostname,
+                lifecycle_id=action_id,
+                sample_key="userinit_terminate",
+            )
+        )
+        if userinit_terminate_at >= transport_close:
+            raise StateError("Exact RDP transport closes before userinit can terminate")
         batch_builder.bind_session_processes(
             session_plan,
             user_manager_plan=userinit,
@@ -1605,6 +1621,8 @@ class RdpSessionActionBundle:
             action_source_deadline=self._action_source_deadline(),
             expected_generation=0,
             source_tag=self._request.source,
+            userinit_identity=userinit.identity,
+            userinit_terminate_at=userinit_terminate_at,
         )
         prepared = _PreparedDeferredRdpOpen(
             authority=authority,
@@ -1880,6 +1898,8 @@ class RdpSessionActionBundle:
             action_source_deadline=self._action_source_deadline(),
             expected_generation=prior.generation.ordinal + 1,
             source_tag=self._request.source,
+            userinit_identity=None,
+            userinit_terminate_at=None,
         )
         prepared = _PreparedDeferredRdpReconnect(
             authority=authority,

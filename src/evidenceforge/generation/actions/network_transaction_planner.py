@@ -4281,9 +4281,9 @@ class NetworkTransactionPlanner:
                 else:
                     event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
                     event.network.resp_ip_bytes = event.network.resp_bytes + overhead
-            event.network.duration = max(
-                event.network.duration or 0.0,
-                self._dns_transport_duration_seconds(request, synthesized_rtt),
+            event.network.duration = self._dns_transport_duration_seconds(
+                request,
+                synthesized_rtt,
             )
 
         # Proxy context: attach only for established outbound internet traffic.

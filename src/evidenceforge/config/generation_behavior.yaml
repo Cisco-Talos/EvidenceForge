@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 20
+current_revision: 21
 history_start_revision: 1
-behavior_surface_sha256: "387c3ae544456e27a507334915407ef275ff20f72b842989ddaeeb8fdb766869"
+behavior_surface_sha256: "e2fd9ba8a5ddd80d400f112060ce1f85eb39b0d1e90445b86b2e57eaf6722350"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -203,3 +203,17 @@ changes:
       - zeek_dhcp
       - windows_event_sysmon
     summary: Plans independent DHCP endpoint phase observations around the canonical wire interval and preserves exact parent principals for process rendering.
+  - revision: 21
+    id: dns-close-and-rdp-userinit-lifecycle
+    impact: material
+    domains:
+      - dns-transport-lifecycle
+      - rdp-session-lifecycle
+      - process-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_dns
+    summary: Makes response-bearing synthesized DNS close timing packet-owned and terminates RDP userinit after desktop readiness through the exact lifecycle journal.
