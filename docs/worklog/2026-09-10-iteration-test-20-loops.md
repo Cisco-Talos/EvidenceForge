@@ -34,6 +34,7 @@
 | Loop | Selected family | Automated | Blind average | Outcome |
 |---:|---|---:|---:|---|
 | 57 | DHCP phase timing; canonical parent principal | 97.36 PASS | 69.00 initial / 82.25 deliberated | complete |
+| 58 | UDP DNS close timing; RDP userinit lifecycle | 96.28 PASS | 71.75 initial / 86.75 deliberated | complete |
 
 ## Loop 57 Verification
 
@@ -91,3 +92,22 @@
   endpoint projection; emitter-specific terminal rows would orphan canonical state.
 - **Sibling risks:** `winlogon.exe` and `explorer.exe` remain session-lived, and final
   teardown must naturally exclude the already-closed initializer.
+
+## Loop 58 Verification
+
+- Commit: `1840f0663` (canonical DNS duration and exact RDP lifecycle fix).
+- Routine gate: 8,379 passed, 5 skipped; Ruff check and format check passed.
+- Generated bundle: 122,916 records across 22 evaluated sources.
+- Deterministic evaluation: 96.2817, acceptance PASS; pillars 100.00 parseability,
+  96.82 plausibility, 93.95 causality, and 92.95 timing.
+- Rendered DNS probe: all 3,255 matched response-bearing UDP DNS transactions close
+  0.075-9.462 ms after response, with no negative or over-12.001 ms tail. Loop 57 had
+  42 tails over 100 ms and a 4.902802-second maximum.
+- Rendered RDP probe: all 15 visible Type 10 `userinit.exe` processes terminate
+  1.150-3.408 seconds after creation. Loop 57's 18 matched processes all exceeded
+  5.5 seconds and had a 2,514.518-second median lifetime.
+- Blind panel: initial scores 44/70/91/82 (mean 71.75); verdict disagreement and a
+  47-point spread triggered deliberation. Final scores 80/87/91/89 (mean 86.75),
+  unanimously Synthetic.
+- Next highest-impact families: explicit-proxy request/child phase causality and one
+  canonical Windows process/session token identity across Security, Sysmon, and eCAR.

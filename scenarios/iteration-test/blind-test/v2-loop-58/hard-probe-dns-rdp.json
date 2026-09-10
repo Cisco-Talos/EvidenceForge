@@ -1,0 +1,29 @@
+{
+  "udp_dns": {
+    "matched_response_transactions": 3255,
+    "missing_dns_companions": 619,
+    "response_to_close_slack_ms_min": 0.075,
+    "response_to_close_slack_ms_median": 0.412,
+    "response_to_close_slack_ms_max": 9.462,
+    "violations_over_12_001_ms": 0,
+    "negative_close_violations": 0
+  },
+  "rdp_userinit_sysmon": {
+    "type10_visible_starts": 15,
+    "matched_visible_closes": 15,
+    "missing_visible_closes": 0,
+    "lifetime_seconds_min": 1.15,
+    "lifetime_seconds_median": 2.704,
+    "lifetime_seconds_max": 3.408,
+    "outside_0_65_to_5_5_seconds": 0
+  },
+  "loop_57_comparison": {
+    "udp_dns_response_tail_over_100_ms": 42,
+    "udp_dns_response_tail_max_seconds": 4.902802,
+    "rdp_userinit_matched_lifecycles": 18,
+    "rdp_userinit_lifetime_seconds_min": 508.485,
+    "rdp_userinit_lifetime_seconds_median": 2514.518,
+    "rdp_userinit_lifetime_seconds_max": 9262.764,
+    "rdp_userinit_lifetimes_over_5_5_seconds": 18
+  }
+}
