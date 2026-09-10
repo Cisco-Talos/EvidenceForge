@@ -82,6 +82,17 @@ _ASA_CONNECTION_ID_RE = re.compile(
 _ASA_LINE_HOST_RE = re.compile(
     r"^<\d+>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+(?P<hostname>\S+)\s+%ASA-"
 )
+_ASA_MESSAGE_ID_RE = re.compile(r"%ASA-\d-(?P<message_id>\d{6}):")
+_ASA_LIFECYCLE_PRIORITY = {
+    305011: 10,
+    302013: 20,
+    302015: 20,
+    302020: 20,
+    302014: 30,
+    302016: 30,
+    302021: 30,
+    305012: 40,
+}
 _EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
     (FieldConstraint, "field_constraint"),
     (FieldDefinition, "field_definition"),
@@ -91,6 +102,30 @@ _EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
 )
 _EXACT_FORMAT_SNAPSHOT_MAX_DEPTH = 64
 _EXACT_FORMAT_SNAPSHOT_MAX_NODES = 100_000
+
+
+def _cisco_asa_sort_key(line: str) -> tuple[int, int, int, int, int, int, str, int]:
+    """Return a total ASA order independent of external-sort run topology."""
+
+    message_match = _ASA_MESSAGE_ID_RE.search(line)
+    message_id = int(message_match.group("message_id")) if message_match is not None else 0
+    lifecycle_priority = _ASA_LIFECYCLE_PRIORITY.get(message_id, 50)
+    connection_match = _ASA_CONNECTION_ID_RE.search(line)
+    if connection_match is None:
+        stable_line = line
+        connection_id = -1
+    else:
+        stable_line = (
+            line[: connection_match.start("connection_id")]
+            + line[connection_match.end("connection_id") :]
+        )
+        connection_id = int(connection_match.group("connection_id"))
+    return (
+        *rfc3164_timestamp_sort_key(line),
+        lifecycle_priority,
+        stable_line,
+        connection_id,
+    )
 
 
 def _exact_cisco_format_snapshot_value(value: object) -> object:
@@ -262,7 +297,7 @@ def _new_cisco_exact_projection_binding_registry() -> tuple[
                 buffer_size=buffer_size,
                 sort_before_flush=True,
                 external_sorting=True,
-                sort_key=rfc3164_timestamp_sort_key,
+                sort_key=_cisco_asa_sort_key,
             ),
         )
         with registry_lock:
@@ -443,7 +478,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
     _sort_before_flush = True
     _external_sorting = True
-    _sort_key_func = staticmethod(rfc3164_timestamp_sort_key)
+    _sort_key_func = staticmethod(_cisco_asa_sort_key)
     supports_exact_projection_publication = True
 
     def __init__(
@@ -519,12 +554,34 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         return replacements
 
     def checkpoint_sorted_runs_restored(self, paths: tuple[Path, ...]) -> None:
-        """Rebuild canonical ASA lifecycle IDs from authenticated sorted runs."""
+        """Normalize restored runs and rebuild canonical ASA lifecycle IDs."""
 
         if self._connection_ids_finalized or self._final_connection_id_replacements is not None:
             raise RuntimeError("Cisco ASA checkpoint restore requires unfinalized emitter state")
         for path in paths:
-            for line in path.read_text(encoding="utf-8").splitlines():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            ordered = sorted(lines, key=_cisco_asa_sort_key)
+            if lines != ordered:
+                descriptor, raw_pending = tempfile.mkstemp(
+                    prefix=f".{path.name}.",
+                    suffix=".asa-order",
+                    dir=path.parent,
+                )
+                os.close(descriptor)
+                pending = Path(raw_pending)
+                try:
+                    with pending.open("w", encoding="utf-8", newline="\n") as stream:
+                        for line in ordered:
+                            stream.write(line)
+                            stream.write("\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(pending, path)
+                    fsync_directory(path.parent)
+                except BaseException:
+                    pending.unlink(missing_ok=True)
+                    raise
+            for line in ordered:
                 match = _ASA_CONNECTION_ID_RE.search(line)
                 host_match = _ASA_LINE_HOST_RE.match(line)
                 if match is None or host_match is None or " Built " not in match.group("prefix"):

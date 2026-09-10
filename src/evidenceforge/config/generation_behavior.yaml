@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 12
+current_revision: 13
 history_start_revision: 1
-behavior_surface_sha256: "e37e2cb077700b8c614de2e1034747be8386be8bfdc0f0f92d28fd443aebb9f7"
+behavior_surface_sha256: "9d7a000017264787e415a2fc91f881b2f623ea869954ae2c9a6fc448f7a182c7"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -128,3 +128,11 @@ changes:
       - canonical-timing
     formats: []
     summary: Reuses exact timing-seed encoding, digest extraction, and bounded clock knots without changing samples.
+  - revision: 13
+    id: deterministic-cisco-asa-equal-second-order
+    impact: localized
+    domains:
+      - cisco-asa-publication-order
+    formats:
+      - cisco_asa
+    summary: Applies a stable tie-break to equal-second ASA rows before finalizing appliance-local connection IDs.

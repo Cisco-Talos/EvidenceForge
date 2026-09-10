@@ -25,6 +25,7 @@
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -277,6 +278,56 @@ class TestConnectionIdFinalization:
         assert built_lines == sorted(built_lines)
         assert len(built_ids) == len(set(built_ids))
         assert built_ids == list(range(built_ids[0], built_ids[0] + len(built_ids)))
+
+    def test_equal_second_output_is_independent_of_spill_topology(self, tmp_path) -> None:
+        """ASA tie ordering and finalized IDs do not depend on run boundaries."""
+
+        def configured_emitter(root: Path, buffer_size: int) -> CiscoAsaEmitter:
+            emitter = CiscoAsaEmitter(
+                load_format("cisco_asa"),
+                root,
+                buffer_size=buffer_size,
+                sensor_hostnames=["fw01"],
+            )
+            emitter.configure_output_target("sof-elk")
+            emitter._segment_config = [
+                {"name": "workstations", "cidr": "10.0.10.0/24"},
+            ]
+            emitter._sensor_interfaces = {"fw01": {"workstations": "inside", "_default": "outside"}}
+            return emitter
+
+        early_spills = configured_emitter(tmp_path / "early-spills", 1)
+        one_spill = configured_emitter(tmp_path / "one-spill", 100)
+        ascending = [
+            _make_connection_event(
+                src_port=50_000 + ordinal,
+                timestamp=T0,
+                duration=1.0,
+                conn_id=f"conn-{ordinal}",
+            )
+            for ordinal in range(3)
+        ]
+        descending = [
+            _make_connection_event(
+                src_port=50_000 + ordinal,
+                timestamp=T0,
+                duration=1.0,
+                conn_id=f"conn-{ordinal}",
+            )
+            for ordinal in reversed(range(3))
+        ]
+
+        for event in descending:
+            early_spills.emit(event)
+        for event in ascending:
+            one_spill.emit(event)
+        early_spills.close()
+        one_spill.close()
+
+        relative = Path("fw01") / "2024" / "cisco_asa.log"
+        assert (tmp_path / "early-spills" / relative).read_bytes() == (
+            tmp_path / "one-spill" / relative
+        ).read_bytes()
 
     def test_repeated_close_is_byte_idempotent(self, asa_emitter, tmp_path):
         asa_emitter.emit(_make_connection_event())
