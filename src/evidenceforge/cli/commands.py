@@ -1165,6 +1165,54 @@ def _validate_compiled_scenario(
         return validator, validator.validate()
 
 
+def _legacy_public_identity_deprecation_issues(
+    compiled: CompiledScenario,
+) -> list["ValidationIssue"]:
+    """Return validate-only warnings for consumed user-owned identity overlays."""
+
+    from evidenceforge.validation.schema import ValidationIssue
+
+    if compiled.authored_kind == "resolved":
+        return []
+    replacements = {
+        "activity/external_actor_profiles.yaml": "roles for external_logon, failed_logon, and c2",
+        "activity/mail_public_identities.yaml": "the mail role and its providers",
+    }
+
+    def consumed(path: str) -> bool:
+        document = compiled.effective_config.project_overlays.get(path)
+        if not isinstance(document, dict):
+            return False
+        if path.endswith("external_actor_profiles.yaml"):
+            return any(
+                isinstance(document.get(field), list) and bool(document[field])
+                for field in (
+                    "logon_source_ips",
+                    "failed_logon_source_ips",
+                    "connection_c2_ips",
+                )
+            )
+        return bool(document.get("providers") or document.get("reserved_replacement_domains"))
+
+    return [
+        ValidationIssue(
+            severity="warning",
+            field_path=f".eforge/config/{path}",
+            message=(
+                f"Consumed deprecated user overlay {path}; move {description} to "
+                "activity/public_identity_profiles.yaml. Legacy identity overlays remain "
+                "compatible throughout 2.x and will be removed in EvidenceForge 3.0."
+            ),
+            suggestion=(
+                "Translate this file into .eforge/config/activity/"
+                "public_identity_profiles.yaml; canonical values win when both are present."
+            ),
+        )
+        for path, description in replacements.items()
+        if consumed(path)
+    ]
+
+
 @app.command()
 def generate(
     scenario_file: Path | None = typer.Argument(
@@ -2277,6 +2325,8 @@ def validate(
 
     Checks YAML structure, Pydantic schema compliance, and internal consistency
     (user/system/persona references, network topology, etc.) without generating logs.
+    This is the only command that warns when a user-owned legacy public-identity
+    overlay was consumed; migrate it to activity/public_identity_profiles.yaml before 3.0.
 
     Exit codes:
     - 0: Validation passed
@@ -2379,6 +2429,7 @@ def validate(
         scenario_file.parent,
         allow_large_workload=allow_large_workload,
     )
+    issues.extend(_legacy_public_identity_deprecation_issues(compiled))
 
     from evidenceforge.config.provider import effective_config_scope
 

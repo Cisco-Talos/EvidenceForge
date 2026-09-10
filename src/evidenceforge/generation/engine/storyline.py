@@ -70,7 +70,6 @@ from evidenceforge.generation.actions.rdp_session import (
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
-from evidenceforge.generation.activity.external_actor_profiles import pick_external_actor_ip
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -4483,7 +4482,13 @@ class StorylineMixin:
                 )
                 source_ip = "-"
             else:
-                source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
+                source_ip = (
+                    spec.source_ip
+                    or self.public_identity_registry.bind(
+                        "external_logon",
+                        f"storyline-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
+                    ).ip
+                )
                 logon_id = self.activity_generator.generate_logon(
                     user=actor,
                     system=system,
@@ -4501,9 +4506,12 @@ class StorylineMixin:
             self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)
 
         elif spec.type == "failed_logon":
-            source_ip = spec.source_ip or pick_external_actor_ip(
-                "failed_logon_source_ips",
-                rng,
+            source_ip = (
+                spec.source_ip
+                or self.public_identity_registry.bind(
+                    "failed_logon",
+                    f"storyline-failed-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
+                ).ip
             )
             dc = next(
                 (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
@@ -5452,7 +5460,11 @@ class StorylineMixin:
                 if resolved_dst_ip:
                     effective_dst_ip = resolved_dst_ip
             if not effective_dst_ip:
-                effective_dst_ip = pick_external_actor_ip("connection_c2_ips", rng)
+                effective_dst_ip = self.public_identity_registry.bind(
+                    "c2",
+                    f"storyline-connection:{system.hostname}:{time.isoformat()}:{spec.dst_port}",
+                    forward_hostname=spec.hostname,
+                ).ip
             if (
                 not _is_private_ip(source_ip)
                 and hasattr(self, "dispatcher")

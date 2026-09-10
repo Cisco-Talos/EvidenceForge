@@ -46,6 +46,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
         "references/project-context.md",
         "references/config-apps-processes.md",
+        "references/config-compatibility.md",
         "references/config-dependency-graph.md",
         "references/config-dns-network.md",
         "references/config-host-activity.md",

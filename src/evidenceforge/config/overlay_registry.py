@@ -132,8 +132,8 @@ _FAMILIES = (
     _family(
         "activity/external_actor_profiles.yaml",
         "keyed-entry",
-        "config-dns-network.md",
-        "External actor IP pools used when scenarios omit concrete identities.",
+        "config-compatibility.md",
+        "Deprecated 2.x compatibility overlay translated into public identity roles; remove for 3.0.",
     ),
     _family(
         "activity/extra_syslog_messages.yaml",
@@ -168,8 +168,8 @@ _FAMILIES = (
     _family(
         "activity/mail_public_identities.yaml",
         "mixed",
-        "config-dns-network.md",
-        "Public SMTP provider and reserved-domain replacement identities.",
+        "config-compatibility.md",
+        "Deprecated 2.x mail-provider overlay translated into the public identity registry.",
     ),
     _family(
         "activity/network_params.yaml",
@@ -182,6 +182,12 @@ _FAMILIES = (
         "deep-mapping",
         "config-host-activity.md",
         "Source collection coverage and delay profiles.",
+    ),
+    _family(
+        "activity/public_identity_profiles.yaml",
+        "keyed-entry",
+        "config-dns-network.md",
+        "Canonical role/provider registry for public IP, DNS, TLS, and client identities.",
     ),
     _family(
         "activity/payload_families.yaml",

@@ -10217,6 +10217,15 @@ class TestActivityGenerator:
         assert target_wfp.network.dst_ip == dc_system.ip
         assert target_wfp.network.responding_pid == lsass_pid
         assert target_wfp.process.image.endswith("lsass.exe")
+        assert target_wfp.network_endpoint is not None
+        assert target_wfp.network_endpoint.role == "responder"
+        assert target_wfp.network_endpoint.initiated is False
+        assert target_wfp.network_endpoint.local_hostname == dc_system.hostname
+        assert target_wfp.network_endpoint.local_ip == dc_system.ip
+        assert target_wfp.network_endpoint.process.pid == lsass_pid
+        assert target_wfp.network_endpoint.transaction_id == target_wfp.network.stable_id
+        assert target_wfp.identity_plan is not None
+        assert target_wfp.identity_plan.actor == target_wfp.network_endpoint.process
         connection_event = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 16
+current_revision: 19
 history_start_revision: 1
-behavior_surface_sha256: "0d325877743fa86cfcc9ccc98560010e0cea22fa34dbe0fee9e02cc644fabcbd"
+behavior_surface_sha256: "181edbc078901377fcd97cf67aa9c42d2b80c9164367df1ca9a58dcb3df5c1ef"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -157,3 +157,37 @@ changes:
       - all-generation
     formats: []
     summary: Adopts Python 3.12 type-alias and generic syntax without changing generated output.
+  - revision: 17
+    id: typed-windows-foreground-lifetimes
+    impact: localized
+    domains:
+      - process-lifecycle
+    formats:
+      - ecar
+      - sysmon
+      - windows_event
+    summary: Classifies Windows foreground tools before publication and closes bounded one-shot processes promptly.
+  - revision: 18
+    id: responder-side-windows-network-observation
+    impact: localized
+    domains:
+      - network-endpoint-observation
+      - windows-inbound-telemetry
+    formats:
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Projects successful inbound Windows transports through one responder process identity into WFP 5156 and Sysmon Event 3 with source-native direction.
+  - revision: 19
+    id: canonical-public-identity-registry
+    impact: material
+    domains:
+      - public-identity
+      - baseline-network
+      - storyline-network
+      - public-mail
+      - dns-ntp-cdn
+    formats:
+      - all-network
+      - all-email
+      - all-authentication
+    summary: Binds generated Internet identities once by semantic role and provider, with deterministic canonical overlays and silent 2.x legacy translation.

@@ -162,9 +162,23 @@ def reset_network_params_cache() -> None:
 
 
 def public_ntp_servers() -> list[dict[str, Any]]:
-    """Return configured public NTP server profiles."""
-    servers = load_network_params().get("public_ntp_servers", [])
-    return [server for server in servers if isinstance(server, dict)]
+    """Return canonical public NTP identities through the retained helper shape."""
+
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        default_public_identity_registry,
+    )
+
+    return [
+        {
+            "name": binding.trait("name", binding.ptr),
+            "ip": binding.ip,
+            "operator": binding.trait("operator", binding.provider),
+            "stratum": binding.trait("stratum", 2),
+            "ref_id": binding.trait("ref_id", ".GPS."),
+            "weight": weight,
+        }
+        for binding, weight in default_public_identity_registry().fixed_binding_records("ntp")
+    ]
 
 
 def nmap_command_probe_config() -> NmapCommandProbeConfig:
@@ -183,10 +197,21 @@ def public_ntp_ips() -> list[str]:
 
 
 def public_dns_resolvers() -> list[dict[str, Any]]:
-    """Return configured public recursive DNS resolver profiles."""
+    """Return canonical DNS identities through the retained helper shape."""
 
-    resolvers = load_network_params().get("public_dns_resolvers", [])
-    return [resolver for resolver in resolvers if isinstance(resolver, dict)]
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        default_public_identity_registry,
+    )
+
+    return [
+        {
+            "name": binding.trait("name", binding.ptr),
+            "ip": binding.ip,
+            "operator": binding.trait("operator", binding.provider),
+            "weight": weight,
+        }
+        for binding, weight in default_public_identity_registry().fixed_binding_records("dns")
+    ]
 
 
 def external_client_excluded_cidrs() -> list[str]:

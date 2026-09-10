@@ -29,6 +29,7 @@ your-project/
 │   └── config/
 │       ├── activity/
 │       │   ├── dns_registry.yaml
+│       │   ├── public_identity_profiles.yaml
 │       │   ├── application_catalog.yaml
 │       │   └── smb_profiles.yaml
 │       └── personas/
@@ -156,6 +157,33 @@ Query `eforge info dns_tags` for the live tags. Add a custom tag under
 Adding a domain does not automatically require a proxy URI template or site map. Add those only
 when the intended behavior calls for them; generic fallbacks can be valid.
 
+### Customize public Internet identities
+
+Use `.eforge/config/activity/public_identity_profiles.yaml` for generated Internet-facing
+identities. Roles separate scanners, external and failed logons, C2, humans, crawlers, API
+clients, ordinary responders, CDN, DNS, NTP, and mail. Providers own address ranges, DNS/PTR and
+TLS identity, and persona/User-Agent traits. Canonical role and provider entries merge by `id`;
+when both compatibility and canonical overlays exist, the canonical entry wins.
+
+```yaml
+roles:
+  - id: ordinary_responder
+    providers: [audit-cloud]
+providers:
+  - id: audit-cloud
+    roles: [ordinary_responder]
+    ipv4_prefixes: [[45, 67, 80, 95]]
+    tls_profile: public-service
+    traits:
+      persona: ordinary_service
+      user_agent_family: service_client
+```
+
+Keep unrelated role pools disjoint. Use `share_with_roles` only for deliberately shared provider
+infrastructure. Scenario-authored identities remain authoritative; validation reports
+contradictory authored cross-role reuse without rewriting it. There is no Scenario 2.0 field for
+registry customization in this release.
+
 ### Extend application access
 
 ```yaml
@@ -239,7 +267,7 @@ files or another installation.
 | Endpoint diversity | `sysmon_filters.yaml`, `edr_pools.yaml`, `calltrace_patterns.yaml`, `process_access_patterns.yaml`, `create_remote_thread_patterns.yaml` |
 | Host/auth activity | `bash_commands.yaml`, `systemd_schedules.yaml`, `extra_syslog_messages.yaml`, `kerberos_realism.yaml`, `windows_auth_realism.yaml`, `auth_noise.yaml`, `endpoint_noise.yaml`, `host_activity_profiles.yaml` |
 | Collection/timing | `observation_profiles.yaml`, `timing_profiles.yaml` |
-| Generated identities | `email_background.yaml`, `mail_public_identities.yaml`, `external_actor_profiles.yaml`, `suspicious_benign.yaml`, `command_parameter_pools.yaml` |
+| Generated identities | `public_identity_profiles.yaml`, `email_background.yaml`, `suspicious_benign.yaml`, `command_parameter_pools.yaml` |
 | SMB provider/process profiles | `smb_profiles.yaml` |
 | SMB corpus defaults | `storage_catalog.yaml`; portable storage vocabulary belongs in a pack |
 

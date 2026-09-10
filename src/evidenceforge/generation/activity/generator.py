@@ -127,6 +127,7 @@ from evidenceforge.events.lifecycle import (
 )
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    NetworkEndpointObservationPlan,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
@@ -263,17 +264,16 @@ from evidenceforge.generation.actions.endpoint_effects import (
 from evidenceforge.generation.actions.network_connection import (
     DeferredSessionNetworkAuthority,
 )
-from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionReuseIntent,
+    ProcessLifetimeMode,
+    ProcessLifetimePlan,
+)
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
-from evidenceforge.generation.activity.mail_public_identities import (
-    generate_public_mail_ip,
-    public_mail_ptr_name,
-    public_safe_mail_hostname,
-)
 from evidenceforge.generation.activity.network_params import (
     linux_smb_connection_owner,
     nmap_command_probe_config,
@@ -287,6 +287,12 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
+)
+from evidenceforge.generation.activity.public_identity_profiles import (
+    PublicIdentityRegistry,
+    generate_public_mail_ip,
+    public_mail_ptr_name,
+    public_safe_mail_hostname,
 )
 from evidenceforge.generation.activity.service_process_profiles import (
     ServiceProcessFamily,
@@ -2189,12 +2195,49 @@ _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
 }
 
 
-def _windows_foreground_lifetime(
-    process_name: str, command_line: str
-) -> tuple[float, float] | None:
-    """Estimate Windows foreground command lifetime for baseline process state."""
+_WINDOWS_SESSION_OWNED_EXECUTABLES = {
+    "acrobat.exe",
+    "chrome.exe",
+    "code.exe",
+    "excel.exe",
+    "firefox.exe",
+    "iexplore.exe",
+    "msedge.exe",
+    "notepad++.exe",
+    "outlook.exe",
+    "powerpnt.exe",
+    "sublime_text.exe",
+    "teams.exe",
+    "winword.exe",
+}
+
+
+def _bounded_windows_lifetime(
+    minimum_seconds: float,
+    maximum_seconds: float,
+    classification: str,
+    *,
+    mode: ProcessLifetimeMode = ProcessLifetimeMode.BOUNDED,
+) -> ProcessLifetimePlan:
+    """Build one validated bounded Windows process lifetime plan."""
+
+    return ProcessLifetimePlan(
+        mode=mode,
+        minimum_seconds=minimum_seconds,
+        maximum_seconds=maximum_seconds,
+        classification=classification,
+    )
+
+
+def _windows_process_lifetime_plan(
+    process_name: str,
+    command_line: str,
+) -> ProcessLifetimePlan:
+    """Classify one Windows process lifetime before canonical publication."""
+
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     command = command_line.lower()
+    padded_command = f" {command} "
     if any(
         pattern in command
         for pattern in (
@@ -2208,19 +2251,79 @@ def _windows_foreground_lifetime(
             " -l ",
         )
     ):
-        return None
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.PERSISTENT,
+            classification="explicit-continuous-command",
+        )
+    if exe_name in _WINDOWS_SESSION_OWNED_EXECUTABLES:
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-desktop-application",
+        )
+    if exe_name in {"runas.exe", "runas"}:
+        return _bounded_windows_lifetime(0.4, 8.0, "runas-launcher")
+    if exe_name in {"git.exe", "git"}:
+        if any(
+            marker in padded_command
+            for marker in (" clone ", " fetch ", " pull ", " push ", " lfs ")
+        ):
+            return _bounded_windows_lifetime(
+                3.0,
+                180.0,
+                "git-network-operation",
+                mode=ProcessLifetimeMode.OPERATION_OWNED,
+            )
+        return _bounded_windows_lifetime(0.3, 20.0, "git-one-shot")
+    if exe_name in {"kubectl.exe", "kubectl"}:
+        continuous_markers = (
+            " port-forward ",
+            " proxy ",
+            " logs -f ",
+            " logs --follow ",
+            " --watch ",
+            " -w ",
+        )
+        if any(marker in padded_command for marker in continuous_markers):
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="kubectl-continuous-operation",
+            )
+        if " exec " in padded_command and any(
+            marker in padded_command for marker in (" -it ", " -i ", " -t ")
+        ):
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.SESSION_OWNED,
+                classification="kubectl-interactive-exec",
+            )
+        operation_mode = any(
+            marker in padded_command
+            for marker in (" apply ", " cp ", " create ", " delete ", " rollout ")
+        )
+        return _bounded_windows_lifetime(
+            0.8,
+            90.0 if operation_mode else 20.0,
+            "kubectl-operation" if operation_mode else "kubectl-one-shot",
+            mode=(
+                ProcessLifetimeMode.OPERATION_OWNED
+                if operation_mode
+                else ProcessLifetimeMode.BOUNDED
+            ),
+        )
     if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
-        return (0.8, 12.0)
+        return _bounded_windows_lifetime(0.8, 12.0, "http-client")
     if exe_name == "service-healthcheck.exe":
         if "--service" in command:
-            return None
-        return (2.0, 45.0)
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="service-health-worker",
+            )
+        return _bounded_windows_lifetime(2.0, 45.0, "service-health-check")
     if " check --once" in f" {command} ":
-        return (2.0, 45.0)
+        return _bounded_windows_lifetime(2.0, 45.0, "explicit-one-shot-check")
     if any(marker in command for marker in ("--silent", " /quiet", " /norestart")) and any(
         marker in exe_name for marker in ("setup", "installer", "update", "updater", "msi")
     ):
-        return (8.0, 360.0)
+        return _bounded_windows_lifetime(8.0, 360.0, "unattended-installer")
     if exe_name in {
         "whoami.exe",
         "hostname.exe",
@@ -2245,12 +2348,14 @@ def _windows_foreground_lifetime(
         "sc.exe",
         "wevtutil.exe",
     }:
-        return (0.4, 6.0)
-    padded_command = f" {command} "
+        return _bounded_windows_lifetime(0.4, 6.0, "administrative-utility")
     if exe_name == "cmd.exe":
         if " /c " in padded_command:
-            return (0.4, 8.0)
-        return None
+            return _bounded_windows_lifetime(0.4, 8.0, "cmd-one-shot-wrapper")
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-command-shell",
+        )
     if exe_name in {"powershell.exe", "pwsh.exe"}:
         one_shot_markers = (
             " -command ",
@@ -2262,13 +2367,32 @@ def _windows_foreground_lifetime(
             " downloadstring",
         )
         if any(marker in padded_command for marker in one_shot_markers):
-            return (2.0, 25.0)
-        return None
+            return _bounded_windows_lifetime(2.0, 25.0, "powershell-one-shot")
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.SESSION_OWNED,
+            classification="interactive-powershell",
+        )
     if exe_name in {"wmic.exe", "certutil.exe"}:
-        return (4.0, 35.0)
+        return _bounded_windows_lifetime(4.0, 35.0, "administrative-operation")
     if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
-        return (2.0, 25.0)
-    return None
+        return _bounded_windows_lifetime(2.0, 25.0, "sql-query")
+    return _bounded_windows_lifetime(
+        1.0,
+        8.0,
+        "unclassified-foreground-candidate",
+        mode=ProcessLifetimeMode.UNCLASSIFIED,
+    )
+
+
+def _windows_foreground_lifetime(
+    process_name: str, command_line: str
+) -> tuple[float, float] | None:
+    """Return bounded legacy lifetime semantics for known Windows foreground tools."""
+
+    plan = _windows_process_lifetime_plan(process_name, command_line)
+    if plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
+        return None
+    return plan.bounds
 
 
 def _is_bare_windows_explorer_launch(process_name: str, command_line: str) -> bool:
@@ -5398,6 +5522,7 @@ class ActivityGenerator:
         generation_window_end: datetime | None = None,
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
         rdp_session_manager: RdpReconnectStateManager | None = None,
+        public_identity_registry: PublicIdentityRegistry | None = None,
     ):
         """Initialize activity generator.
 
@@ -5429,8 +5554,10 @@ class ActivityGenerator:
             runtime_content_manager: Optional engine-owned local artifact/content
                 identity manager. Production shares the dispatcher's exact registry.
             rdp_session_manager: Optional engine-owned reconnectable RDP owner.
+            public_identity_registry: Scenario-scoped canonical Internet identity registry.
         """
         self.state_manager = state_manager
+        self.public_identity_registry = public_identity_registry or PublicIdentityRegistry()
         self._execution_effect_audit = ExecutionEffectAuditCounter()
         dispatcher_artifacts = (
             getattr(dispatcher, "local_artifact_registry", None) if dispatcher is not None else None
@@ -19807,9 +19934,11 @@ class ActivityGenerator:
                 if allocation_free_endpoint is not None
                 else None
             )
+            lifetime_plan = self._plan_process_lifetime(request, actor)
             provisional_termination = self._plan_process_provisional_termination(
                 request,
                 actor,
+                lifetime_plan,
             )
             endpoint_close_floor: datetime | None = None
             if (
@@ -19905,6 +20034,7 @@ class ActivityGenerator:
                 actor=actor,
                 endpoint=endpoint,
                 runtime_image_load=runtime_image_load,
+                lifetime_plan=lifetime_plan,
                 provisional_termination=provisional_termination,
                 root_binary_publication=root_binary_publication,
             )
@@ -19939,12 +20069,49 @@ class ActivityGenerator:
         self,
         request: ProcessExecutionRequest,
         actor: "PreparedProcessEffectActor",
+        lifetime_plan: ProcessLifetimePlan,
     ) -> datetime | None:
-        """Freeze a Linux foreground close time before allocating its PID or state."""
+        """Freeze a foreground close time before allocating its PID or state."""
 
-        if _get_os_category(
-            request.system.os
-        ) != "linux" or not _linux_shell_process_reserves_foreground(
+        os_category = _get_os_category(request.system.os)
+        lifetime = lifetime_plan.bounds
+        if lifetime is None:
+            return None
+
+        if os_category == "windows":
+            if lifetime_plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
+                parent = self.state_manager.get_process(
+                    request.system.hostname,
+                    request.parent_pid,
+                )
+                parent_exe = (
+                    parent.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].casefold()
+                    if parent is not None
+                    else ""
+                )
+                if parent_exe not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+                    return None
+            distribution, relationship_key, scope, sample_key = (
+                self._process_provisional_termination_timing_request(
+                    request,
+                    actor,
+                    lifetime_plan,
+                )
+            )
+            owner_sampler = self.timing_runtime.sampler
+            preview_sampler = TimingSampler(
+                namespace=owner_sampler.namespace,
+                generation_seed=owner_sampler.generation_seed,
+            )
+            return preview_sampler.after(
+                actor.started_at,
+                distribution,
+                relationship_key=relationship_key,
+                scope=scope,
+                sample_key=sample_key,
+            )
+
+        if os_category != "linux" or not _linux_shell_process_reserves_foreground(
             actor.image, actor.command_line
         ):
             return None
@@ -19977,27 +20144,110 @@ class ActivityGenerator:
             )
         if not parent_owns_foreground:
             return None
-        lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
-        if lifetime is None:
-            return None
-        minimum_seconds, maximum_seconds = lifetime
-        median_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
-        return self.timing_runtime.sampler.after(
+        distribution, relationship_key, scope, sample_key = (
+            self._process_provisional_termination_timing_request(
+                request,
+                actor,
+                lifetime_plan,
+            )
+        )
+        owner_sampler = self.timing_runtime.sampler
+        preview_sampler = TimingSampler(
+            namespace=owner_sampler.namespace,
+            generation_seed=owner_sampler.generation_seed,
+        )
+        return preview_sampler.after(
             actor.started_at,
-            TruncatedLognormalDistribution(
-                median=median_seconds * 1_000_000,
+            distribution,
+            relationship_key=relationship_key,
+            scope=scope,
+            sample_key=sample_key,
+        )
+
+    @staticmethod
+    def _process_provisional_termination_timing_request(
+        request: ProcessExecutionRequest,
+        actor: "PreparedProcessEffectActor",
+        lifetime_plan: ProcessLifetimePlan,
+    ) -> tuple[DistributionSpec, str, TimingScope, str]:
+        """Return one deterministic lifetime draw request for preview and commit."""
+
+        lifetime = lifetime_plan.bounds
+        if lifetime is None:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "provisional process termination timing requires bounded lifetime ownership",
+            )
+        minimum_seconds, maximum_seconds = lifetime
+        mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
+        os_category = _get_os_category(request.system.os)
+        if os_category == "windows":
+            distribution: DistributionSpec = TriangularDistribution(
+                minimum=minimum_seconds * 1_000_000,
+                mode=mode_seconds * 1_000_000,
+                maximum=maximum_seconds * 1_000_000,
+            )
+            relationship_key = "activity.process.windows_foreground_lifetime"
+            sample_key = f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}"
+        elif os_category == "linux":
+            distribution = TruncatedLognormalDistribution(
+                median=mode_seconds * 1_000_000,
                 sigma=0.78,
                 minimum=minimum_seconds * 1_000_000,
                 maximum=maximum_seconds * 1_000_000,
-            ),
-            relationship_key="activity.process.linux_foreground_lifetime",
-            scope=TimingScope(
+            )
+            relationship_key = "activity.process.linux_foreground_lifetime"
+            sample_key = "provisional_close"
+        else:
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                "provisional process termination timing requires Windows or Linux",
+            )
+        return (
+            distribution,
+            relationship_key,
+            TimingScope(
                 stable_id=request.stable_id,
                 host=request.system.hostname,
                 source="endpoint_process",
                 lifecycle_id=actor.lifecycle_id,
             ),
-            sample_key="provisional_close",
+            sample_key,
+        )
+
+    @staticmethod
+    def _plan_process_lifetime(
+        request: ProcessExecutionRequest,
+        actor: "PreparedProcessEffectActor",
+    ) -> ProcessLifetimePlan:
+        """Return the immutable lifetime ownership for one prepared process actor."""
+
+        os_category = _get_os_category(request.system.os)
+        if os_category == "windows":
+            return _windows_process_lifetime_plan(actor.image, actor.command_line)
+        if os_category == "linux":
+            lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
+            if lifetime is not None:
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.BOUNDED,
+                    minimum_seconds=lifetime[0],
+                    maximum_seconds=lifetime[1],
+                    classification="linux-foreground-command",
+                )
+            if _linux_shell_process_reserves_foreground(actor.image, actor.command_line):
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.SESSION_OWNED,
+                    classification="linux-interactive-foreground-command",
+                )
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.PERSISTENT,
+                classification="linux-background-or-service-process",
+            )
+        return ProcessLifetimePlan(
+            mode=ProcessLifetimeMode.UNCLASSIFIED,
+            minimum_seconds=1.0,
+            maximum_seconds=8.0,
+            classification="unsupported-platform-process",
         )
 
     def _prepare_process_effect_actor(
@@ -21172,6 +21422,22 @@ class ActivityGenerator:
             return tuple(publications)
 
         with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
+            if (
+                prepared_effects is not None
+                and prepared_effects.provisional_termination is not None
+                and prepared_effects.lifetime_plan is not None
+            ):
+                lifetime_distribution, lifetime_relationship, _scope, _sample_key = (
+                    self._process_provisional_termination_timing_request(
+                        request,
+                        prepared_effects.actor,
+                        prepared_effects.lifetime_plan,
+                    )
+                )
+                timing_preparation.planning_runtime.sampler.record_logical_sample(
+                    lifetime_distribution,
+                    relationship_key=lifetime_relationship,
+                )
             self._plan_process_source_create_times(
                 event,
                 not_after=effective_source_visible_by,
@@ -34984,9 +35250,11 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ProcessContext
 
         process = None
+        process_identity = None
         if pid > 0:
             running = self.state_manager.get_process(system.hostname, pid)
             if running is not None:
+                process_identity = self.state_manager.get_process_identity(system.hostname, pid)
                 process = ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid,
@@ -35034,12 +35302,34 @@ class ActivityGenerator:
             )
             return
         time = candidate_time
+        endpoint_role = (
+            "responder"
+            if system.ip == network.dst_ip and pid == network.responding_pid
+            else "initiator"
+        )
+        endpoint_plan = (
+            NetworkEndpointObservationPlan(
+                role=endpoint_role,
+                local_hostname=system.hostname,
+                local_ip=system.ip,
+                process=process_identity,
+                initiated=endpoint_role == "initiator",
+                observed_at=time,
+                transaction_id=network.stable_id,
+            )
+            if process_identity is not None and network.stable_id
+            else None
+        )
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="wfp_connection",
             src_host=self._build_host_context(system),
             network=network,
+            network_endpoint=endpoint_plan,
             process=process,
+            identity_plan=(
+                EventIdentityPlan(actor=process_identity) if process_identity is not None else None
+            ),
             lifecycle=(
                 ActionLifecycleContext(
                     group_id=network.stable_id,

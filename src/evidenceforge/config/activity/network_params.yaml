@@ -31,32 +31,6 @@ oui_prefixes:
     vendor: "Intel"
     weight: 5
 
-public_dns_resolvers:
-  - name: "cloudflare-primary"
-    ip: "1.1.1.1"
-    operator: "Cloudflare"
-    weight: 30
-  - name: "cloudflare-secondary"
-    ip: "1.0.0.1"
-    operator: "Cloudflare"
-    weight: 10
-  - name: "google-primary"
-    ip: "8.8.8.8"
-    operator: "Google"
-    weight: 25
-  - name: "google-secondary"
-    ip: "8.8.4.4"
-    operator: "Google"
-    weight: 10
-  - name: "quad9-primary"
-    ip: "9.9.9.9"
-    operator: "Quad9"
-    weight: 15
-  - name: "opendns-primary"
-    ip: "208.67.222.222"
-    operator: "Cisco OpenDNS"
-    weight: 10
-
 # Globally assigned networks that are implausible as ordinary Internet visitors.
 # These US Department of Defense allocations may satisfy ipaddress.is_global,
 # but should not appear in the synthetic residential/business client population.
@@ -113,50 +87,6 @@ nmap_command_probe:
   connect_window_seconds_max: 12.0
   discovery_window_seconds_min: 2.0
   discovery_window_seconds_max: 5.0
-
-public_ntp_servers:
-  - name: "time-a-g.nist.gov"
-    ip: "129.6.15.28"
-    operator: "NIST"
-    stratum: 1
-    ref_id: ".NIST."
-    weight: 20
-  - name: "time-b-g.nist.gov"
-    ip: "129.6.15.29"
-    operator: "NIST"
-    stratum: 1
-    ref_id: ".NIST."
-    weight: 15
-  - name: "time.cloudflare.com"
-    ip: "162.159.200.1"
-    operator: "Cloudflare"
-    stratum: 2
-    ref_id: ".GPS."
-    weight: 20
-  - name: "time.google.com"
-    ip: "216.239.35.0"
-    operator: "Google"
-    stratum: 2
-    ref_id: ".GOOG."
-    weight: 15
-  - name: "time.apple.com"
-    ip: "17.253.34.125"
-    operator: "Apple"
-    stratum: 2
-    ref_id: ".PPS."
-    weight: 10
-  - name: "ntp.ubuntu.com"
-    ip: "91.189.89.198"
-    operator: "Canonical"
-    stratum: 2
-    ref_id: ".GPS."
-    weight: 10
-  - name: "pool.ntp.org"
-    ip: "23.186.168.130"
-    operator: "NTP Pool"
-    stratum: 2
-    ref_id: ".PPS."
-    weight: 10
 
 dns_tunnel_rtt:
   min_seconds: 0.04

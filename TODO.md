@@ -162,11 +162,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   WER, CBS, Office MRU, UserAssist, and shell-state artifacts, with PID/ProcessGuid correlation
   checks. The dedicated Loop 41 assessment and Loop 42 target confirmation found no recurrence; see
   `docs/worklog/2026-08-09-iteration-test-expanded-ids-loops-35-44.md`.
-- [ ] **P1** Finish executable-aware lifetimes for one-shot Windows foreground tools. Existing
-  bounded handling covers `wevtutil.exe` and the established admin-tool set, but argument-less
-  `runas.exe`, Windows `git`/`git.exe`, `kubectl`/`kubectl.exe`, and similar unclassified commands
-  can still fall through to session teardown unless an explicit hung/long-running outcome owns
-  that lifecycle.
+- [x] **P1** Finish executable-aware lifetimes for one-shot Windows foreground tools. Typed
+  preflight plans now distinguish bounded, operation-, session-, and persistent ownership;
+  argument-less/help/error `runas`, `git`, and `kubectl` close promptly, while transfers and
+  continuous modes retain only their real owner.
 - [x] **P2** Separate the collection cutoff from the modeled lifecycle horizon. The scenario end
   means "we stopped collecting data," not that systems shut down or every active connection,
   session, process, and application operation ended cleanly. Mirror warm-up behavior at the tail:
@@ -195,23 +194,22 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [x] **P1** Add source-side file-read, archive, browser-upload, or
   proxy-client staging evidence around large outbound HTTP POST/upload flows so
   multi-hundred-MB uploads have plausible endpoint preparation and ownership.
-- [ ] **P1** Finish Windows inbound/server-side endpoint network telemetry for DC/server roles.
-  Destination-side Security 5156 with responder PID/image ownership is implemented and tested;
-  add Sysmon Event 3 `Initiated=false`, or an explicit collection profile that plausibly filters
-  inbound Sysmon flow events while preserving hunt semantics.
-- [ ] **P1** Finish public-IP role partitioning. Scanner/storyline sources, generic public web
-  clients, outbound benign destinations, public NTP, and mail identities now have disjoint or
-  reserved pools, and external web persona/User-Agent selection is source-sticky. Remaining work
-  is to give crawler/API-client and ordinary responder/CDN/PTR identities explicit role ownership
-  instead of relying on shared generated public pools.
+- [x] **P1** Finish Windows inbound/server-side endpoint network telemetry for DC/server roles.
+  Canonical initiator/responder observation plans now render responder-owned Security 5156 and
+  deployed Sysmon Event 3 with `Initiated=false`, exact tuple/process identity, and coherent
+  denial/deployment/observation-policy behavior.
+- [x] **P1** Finish public-IP role partitioning. The canonical public identity registry now owns
+  deterministic role/provider bindings for scanners, authentication, C2, humans, crawlers, API
+  clients, ordinary responders, CDN, DNS, NTP, and mail, including DNS/PTR/TLS/client traits and
+  explicit sharing diagnostics.
 - [x] **P1** Model Windows Security and Sysmon `EventRecordID` gaps against
   plausible hidden event volume while preserving near-adjacent native pairings
   such as Security `4624`/`4672` and tightly coupled Sysmon process events.
 - [x] **P2** Validate and improve Sysmon `ProcessGuid` morphology against
   native Sysmon output while preserving stable process correlation.
-- [ ] **P2** Separate NTP infrastructure/server IP pools from hostile scanner
-  pools and make UDP/123 Zeek output consistently include or omit NTP analyzer
-  evidence according to modeled sensor configuration.
+- [ ] **P2** Make UDP/123 Zeek output consistently include or omit NTP analyzer evidence according
+  to modeled sensor configuration. NTP infrastructure/server identities are now separated from
+  hostile scanners by the canonical public identity registry.
 - [x] **P1** Improve public PTR, TLS, and provider realism. Public PTR responses are now
   deterministically sparse and provider-style rather than forward-hostname echoes; domain-aware CA
   overrides keep SNI/certificate issuer relationships plausible, and raw-IP TLS avoids invented
@@ -269,6 +267,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] **P3** Add TLS client-certificate/mTLS profiles with client chains,
   `client_cert_chain_fuids`, X.509/file projection, and TLS-version-specific
   visibility semantics.
+- [ ] **P3** Remove the 2.x public-identity compatibility adapters and legacy overlay filenames in
+  EvidenceForge 3.0 after migration telemetry and documentation have had a full major-version
+  window.
+- [ ] **P3** Evaluate a typed Scenario schema field for scenario-local public identity bindings in
+  a future schema revision; 2.0 intentionally keeps this project-wide registry overlay-only.
 - [ ] **P2** Add friction and timing texture to staged intrusion/exfiltration
   chains, including retries, failed commands, dwell-time slack, partial cleanup,
   tool residue, competing benign traffic, and less perfectly staged large-file

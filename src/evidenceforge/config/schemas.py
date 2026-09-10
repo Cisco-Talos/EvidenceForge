@@ -397,6 +397,162 @@ class ExternalActorProfilesConfig(BaseModel, extra="forbid"):
         return self
 
 
+class PublicIdentityEntry(BaseModel, extra="forbid"):
+    """One fixed public identity available to a canonical role."""
+
+    ip: str
+    provider: str
+    weight: int = Field(default=1, gt=0)
+    forward_names: list[str] = Field(default_factory=list)
+    ptr: str = ""
+    tls_profile: str = ""
+    traits: dict[str, Any] = Field(default_factory=dict)
+    source: str = "packaged"
+
+    @field_validator("ip")
+    @classmethod
+    def public_ip_valid(cls, value: str) -> str:
+        parsed = ipaddress.ip_address(value)
+        if not parsed.is_global:
+            raise ValueError(f"{value!r} must be a globally routable public IP address")
+        return str(parsed)
+
+    @field_validator("forward_names")
+    @classmethod
+    def forward_names_valid(cls, values: list[str]) -> list[str]:
+        return [_normalized_hostname(value) for value in values]
+
+    @field_validator("ptr")
+    @classmethod
+    def ptr_valid(cls, value: str) -> str:
+        return _normalized_hostname(value) if value else ""
+
+
+class PublicIdentityProviderProfile(BaseModel, extra="forbid"):
+    """Provider-owned public address and source-native identity traits."""
+
+    id: str
+    roles: list[str]
+    weight: int = Field(default=1, gt=0)
+    hostname_patterns: list[str] = Field(default_factory=list)
+    ipv4_prefixes: list[tuple[int, int, int, int]] = Field(default_factory=list)
+    forward_names: list[str] = Field(default_factory=list)
+    ptr_templates: list[str] = Field(default_factory=list)
+    tls_profile: str = ""
+    traits: dict[str, Any] = Field(default_factory=dict)
+    source: str = "packaged"
+
+    @model_validator(mode="after")
+    def provider_valid(self) -> Self:
+        if not self.id.strip() or not self.roles:
+            raise ValueError("public identity providers require id and roles")
+        for first, second, third_min, third_max in self.ipv4_prefixes:
+            if not all(0 <= value <= 255 for value in (first, second, third_min, third_max)):
+                raise ValueError("ipv4_prefixes octets must be between 0 and 255")
+            if third_min > third_max:
+                raise ValueError("ipv4_prefixes third-octet minimum cannot exceed maximum")
+        self.hostname_patterns[:] = [
+            value.strip().lower().rstrip(".") for value in self.hostname_patterns
+        ]
+        self.forward_names[:] = [_normalized_hostname(value) for value in self.forward_names]
+        return self
+
+
+class PublicIdentityRoleProfile(BaseModel, extra="forbid"):
+    """Canonical role with provider and fixed-identity choices."""
+
+    id: str
+    providers: list[str]
+    identities: list[PublicIdentityEntry] = Field(default_factory=list)
+    allow_same_role_nat: bool = True
+    share_with_roles: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def role_valid(self) -> Self:
+        if not self.id.strip() or not self.providers:
+            raise ValueError("public identity roles require id and providers")
+        _unique_values(self.identities, "ip", f"roles.{self.id}.identities")
+        return self
+
+
+class PublicIdentityProfilesConfig(BaseModel, extra="forbid"):
+    """Canonical public identity registry configuration."""
+
+    schema_version: Literal["1.0"]
+    reserved_replacement_domains: list[str]
+    providers: list[PublicIdentityProviderProfile]
+    roles: list[PublicIdentityRoleProfile]
+
+    @model_validator(mode="after")
+    def registry_consistent(self) -> Self:
+        if not self.reserved_replacement_domains:
+            raise ValueError("reserved_replacement_domains must not be empty")
+        self.reserved_replacement_domains[:] = [
+            _normalized_domain(value) for value in self.reserved_replacement_domains
+        ]
+        _unique_values(self.providers, "id", "providers")
+        _unique_values(self.roles, "id", "roles")
+        if len(set(self.reserved_replacement_domains)) != len(self.reserved_replacement_domains):
+            raise ValueError("reserved_replacement_domains contains duplicate domains")
+        provider_ids = {provider.id for provider in self.providers}
+        role_ids = {role.id for role in self.roles}
+        required_roles = {
+            "scanner",
+            "external_logon",
+            "failed_logon",
+            "c2",
+            "human",
+            "crawler",
+            "api_client",
+            "ordinary_responder",
+            "cdn",
+            "dns",
+            "ntp",
+            "mail",
+        }
+        if missing_roles := required_roles - role_ids:
+            raise ValueError(f"public identity registry is missing roles: {sorted(missing_roles)}")
+        providers_by_id = {provider.id: provider for provider in self.providers}
+        owners: dict[str, tuple[str, str]] = {}
+        for role in self.roles:
+            unknown = set(role.providers) - provider_ids
+            if unknown:
+                raise ValueError(
+                    f"role {role.id!r} references unknown providers: {sorted(unknown)}"
+                )
+            if unknown_roles := set(role.share_with_roles) - role_ids:
+                raise ValueError(
+                    f"role {role.id!r} shares with unknown roles: {sorted(unknown_roles)}"
+                )
+            for provider_id in role.providers:
+                if role.id not in providers_by_id[provider_id].roles:
+                    raise ValueError(f"provider {provider_id!r} does not declare role {role.id!r}")
+            for identity in role.identities:
+                if identity.provider not in role.providers:
+                    raise ValueError(
+                        f"role {role.id!r} identity provider {identity.provider!r} is not enabled"
+                    )
+                previous = owners.get(identity.ip)
+                if (
+                    previous is not None
+                    and previous[0] not in role.share_with_roles
+                    and not previous[1].startswith("legacy:")
+                    and not identity.source.startswith("legacy:")
+                ):
+                    raise ValueError(
+                        f"public IP {identity.ip} is reused by disjoint roles {previous[0]!r} "
+                        f"and {role.id!r}"
+                    )
+                owners[identity.ip] = (role.id, identity.source)
+        for provider in self.providers:
+            unknown = set(provider.roles) - role_ids
+            if unknown:
+                raise ValueError(
+                    f"provider {provider.id!r} references unknown roles: {sorted(unknown)}"
+                )
+        return self
+
+
 class SuspiciousBenignDnsHostEntry(BaseModel, extra="forbid"):
     """Weighted suspicious-looking benign DNS hostname entry."""
 

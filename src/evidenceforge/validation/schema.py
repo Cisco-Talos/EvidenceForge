@@ -267,11 +267,50 @@ class ScenarioValidator:
         self._validate_firewall_config()
         self._validate_observation_profile()
         self._validate_network_identities()
+        self._validate_public_identity_reuse()
         self._validate_traffic_affinities()
         self._validate_storage()
         self._validate_legacy_smb_connections()
         self._sort_issues()
         return self.issues
+
+    def _validate_public_identity_reuse(self) -> None:
+        """Report authored public addresses assigned contradictory semantic roles."""
+
+        from pydantic import ValidationError
+
+        from evidenceforge.generation.activity.public_identity_profiles import (
+            authored_public_identity_reuse,
+        )
+
+        try:
+            findings = authored_public_identity_reuse(self.scenario)
+        except (ValidationError, ValueError) as exc:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=".eforge/config/activity/public_identity_profiles.yaml",
+                    message=f"Public identity registry is invalid: {exc}",
+                    suggestion="Run eforge validate-config --json and repair the reported overlay.",
+                )
+            )
+            return
+
+        for reuse in findings:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path=reuse.field_paths[0],
+                    message=(
+                        f"Authored public IP {reuse.ip} is reused across disjoint public identity "
+                        f"roles: {', '.join(reuse.roles)}."
+                    ),
+                    suggestion=(
+                        "Use separate addresses, or explicitly allow the shared infrastructure "
+                        "between those roles in activity/public_identity_profiles.yaml."
+                    ),
+                )
+            )
 
     def evidence_reachability_issues(self) -> list[ValidationIssue]:
         """Return only source-instance-aware behavior reachability findings."""

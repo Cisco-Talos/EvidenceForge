@@ -1,0 +1,284 @@
+# Canonical public identity registry for every generated Internet-facing role.
+#
+# Overlay: .eforge/config/activity/public_identity_profiles.yaml
+# Providers and roles merge by id; canonical overlay values win over translated
+# EvidenceForge 2.x compatibility data.
+
+schema_version: "1.0"
+
+reserved_replacement_domains:
+  - postrelay.net
+  - mailbridge.io
+  - relaygridmail.com
+  - inboxroute.net
+  - sendmesh.io
+  - edgepostmail.com
+
+providers:
+  - id: hostile-scanner
+    roles: [scanner]
+    weight: 1
+    ipv4_prefixes: [[45, 33, 0, 255], [185, 220, 0, 255]]
+    tls_profile: opportunistic-client
+    traits: {persona: automated_scanner, user_agent_family: scanner}
+  - id: external-access
+    roles: [external_logon]
+    weight: 1
+    ipv4_prefixes: [[116, 202, 0, 255]]
+    tls_profile: interactive-client
+    traits: {persona: external_operator, user_agent_family: native_client}
+  - id: credential-abuse
+    roles: [failed_logon]
+    weight: 1
+    ipv4_prefixes: [[194, 26, 0, 255]]
+    tls_profile: opportunistic-client
+    traits: {persona: credential_abuse, user_agent_family: native_client}
+  - id: c2-vps
+    roles: [c2]
+    weight: 1
+    ipv4_prefixes: [[159, 65, 0, 255], [134, 209, 0, 255], [167, 71, 0, 255]]
+    tls_profile: commodity-vps
+    traits: {persona: command_and_control, user_agent_family: custom_client}
+  - id: residential-human
+    roles: [human]
+    weight: 4
+    ipv4_prefixes: [[73, 0, 0, 255], [98, 0, 0, 255]]
+    tls_profile: browser-client
+    traits: {persona: human_browser, user_agent_family: browser_any}
+  - id: business-human
+    roles: [human]
+    weight: 2
+    ipv4_prefixes: [[50, 192, 0, 255], [96, 224, 0, 255]]
+    tls_profile: browser-client
+    traits: {persona: human_browser, user_agent_family: browser_any}
+  - id: public-crawler
+    roles: [crawler]
+    weight: 1
+    ipv4_prefixes: [[66, 249, 64, 95], [157, 55, 0, 255], [54, 36, 0, 255]]
+    tls_profile: crawler-client
+    traits: {persona: crawler, user_agent_family: crawler}
+  - id: cloud-api-client
+    roles: [api_client]
+    weight: 1
+    ipv4_prefixes: [[18, 204, 0, 255], [35, 184, 0, 255], [20, 80, 0, 255]]
+    tls_profile: service-client
+    traits: {persona: api_client, user_agent_family: api_client}
+  - id: ordinary-cloud-service
+    roles: [ordinary_responder]
+    weight: 1
+    ipv4_prefixes: [[13, 236, 0, 255], [20, 205, 0, 255], [34, 104, 0, 255]]
+    tls_profile: public-service
+    traits: {persona: ordinary_service, user_agent_family: service_client}
+  - id: cloudflare-cdn
+    roles: [cdn]
+    weight: 3
+    ipv4_prefixes: [[104, 16, 0, 255], [104, 18, 0, 255]]
+    forward_names: [cdn.cloudflare.net]
+    ptr_templates: ["{third}-{fourth}.cdn.cloudflare.net"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: fastly-cdn
+    roles: [cdn]
+    weight: 2
+    ipv4_prefixes: [[151, 101, 0, 255]]
+    forward_names: [global.fastly.net]
+    ptr_templates: ["{third}-{fourth}.global.fastly.net"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: akamai-cdn
+    roles: [cdn]
+    weight: 2
+    ipv4_prefixes: [[23, 45, 0, 255], [23, 72, 0, 255]]
+    forward_names: [akamaiedge.net]
+    ptr_templates: ["a{third}-{fourth}.deploy.static.akamaitechnologies.com"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: cloudfront-cdn
+    roles: [cdn]
+    weight: 2
+    ipv4_prefixes: [[52, 84, 0, 255], [54, 230, 0, 255]]
+    forward_names: [cloudfront.net]
+    ptr_templates: ["server-{third}-{fourth}.cloudfront.net"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: azure-cdn
+    roles: [cdn]
+    weight: 1
+    ipv4_prefixes: [[13, 107, 0, 255]]
+    forward_names: [azureedge.net]
+    ptr_templates: ["{third}-{fourth}.azureedge.net"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: google-cdn
+    roles: [cdn]
+    weight: 2
+    ipv4_prefixes: [[142, 250, 0, 255], [172, 217, 0, 255]]
+    forward_names: [googleusercontent.com]
+    ptr_templates: ["{third}-{fourth}.googleusercontent.com"]
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: compatibility-cdn
+    roles: [cdn]
+    weight: 1
+    tls_profile: cdn-edge
+    traits: {persona: cdn_edge, user_agent_family: none}
+  - id: public-dns
+    roles: [dns]
+    weight: 1
+    tls_profile: resolver
+    traits: {persona: recursive_resolver, user_agent_family: none}
+  - id: public-ntp
+    roles: [ntp]
+    weight: 1
+    tls_profile: none
+    traits: {persona: time_server, user_agent_family: none}
+  - id: google-workspace
+    roles: [mail]
+    weight: 4
+    hostname_patterns: [google.com, googlemail.com, aspmx.l.google.com]
+    ipv4_prefixes: [[64, 233, 160, 191], [66, 102, 0, 15], [74, 125, 0, 255], [142, 250, 0, 255], [173, 194, 0, 255], [209, 85, 128, 255]]
+    ptr_templates: ["mail-{third}-{fourth}.google.com", mx.google.com, aspmx.l.google.com]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: microsoft-365
+    roles: [mail]
+    weight: 4
+    hostname_patterns: [protection.outlook.com, mail.protection.outlook.com, outlook.com, office365.com]
+    ipv4_prefixes: [[40, 92, 0, 255], [40, 107, 0, 255], [52, 100, 0, 255], [104, 47, 0, 255]]
+    ptr_templates: ["mail-{third}-{fourth}.outbound.protection.outlook.com", "{third}-{fourth}.mail.protection.outlook.com", mx.microsoft.com]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: proofpoint
+    roles: [mail]
+    weight: 4
+    hostname_patterns: [pphosted.com, pphostedmail.net]
+    ipv4_prefixes: [[148, 163, 128, 191], [199, 255, 192, 195]]
+    ptr_templates: ["mx{slot}.{domain}", "mail{slot}.{domain}", "mta-{third}-{fourth}.pphostedmail.net"]
+    tls_profile: public-mail
+    traits: {persona: mail_gateway, user_agent_family: smtp}
+  - id: sendgrid
+    roles: [mail]
+    weight: 3
+    hostname_patterns: [sendgrid.net, outbound-mail]
+    ipv4_prefixes: [[167, 89, 0, 127], [198, 37, 144, 159]]
+    ptr_templates: ["o{third}.outbound-mail.{domain}", "mta-{third}-{fourth}.sendgrid.net", "smtp{slot}.{domain}"]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: mimecast
+    roles: [mail]
+    weight: 3
+    hostname_patterns: [mimecast.com, mimecast.net]
+    ipv4_prefixes: [[103, 13, 68, 70], [185, 58, 84, 85], [207, 211, 30, 31], [216, 205, 24, 25]]
+    ptr_templates: ["us-smtp-inbound-{slot}.mimecast.com", "eu-smtp-inbound-{slot}.mimecast.com", mx.mimecast.com]
+    tls_profile: public-mail
+    traits: {persona: mail_gateway, user_agent_family: smtp}
+  - id: amazon-ses
+    roles: [mail]
+    weight: 2
+    hostname_patterns: [amazonses.com, amazonaws.com, feedback-smtp, inbound-smtp]
+    ipv4_prefixes: [[23, 251, 224, 255], [54, 240, 0, 127], [69, 169, 224, 255]]
+    ptr_templates: ["a{third}-{fourth}.smtp-out.amazonses.com", inbound-smtp.us-east-1.amazonaws.com, feedback-smtp.us-west-2.amazonses.com]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: fastmail
+    roles: [mail]
+    weight: 2
+    hostname_patterns: [messagingengine.com, fastmail.com]
+    ipv4_prefixes: [[66, 111, 4, 7], [103, 168, 172, 175]]
+    ptr_templates: ["in{slot}-smtp.messagingengine.com", "out{slot}-smtp.messagingengine.com"]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: mailgun
+    roles: [mail]
+    weight: 2
+    hostname_patterns: [mailgun.org, mailgun.net]
+    ipv4_prefixes: [[198, 61, 254, 255], [209, 61, 151, 151]]
+    ptr_templates: [mxa.mailgun.org, mxb.mailgun.org, "smtp-out-{third}-{fourth}.mailgun.org"]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: zoho
+    roles: [mail]
+    weight: 2
+    hostname_patterns: [zoho.com, zoho.eu]
+    ipv4_prefixes: [[136, 143, 176, 191], [204, 141, 32, 63]]
+    ptr_templates: [mx.zoho.com, "mx{slot}.zoho.com", "smtp-{third}-{fourth}.zoho.com"]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: hosted-mail
+    roles: [mail]
+    weight: 3
+    hostname_patterns: [ionos.com, secureserver.net, emailsrvr.com]
+    ipv4_prefixes: [[66, 96, 128, 191], [74, 208, 0, 255]]
+    ptr_templates: ["mx{slot}.{domain}", "smtp{slot}.{domain}", "mail-{third}-{fourth}.{domain}"]
+    tls_profile: public-mail
+    traits: {persona: mail_relay, user_agent_family: smtp}
+  - id: legacy-external-actor
+    roles: [scanner, external_logon, failed_logon, c2]
+    weight: 1
+    tls_profile: unknown
+    traits: {persona: legacy_external_actor, user_agent_family: unknown}
+
+roles:
+  - id: scanner
+    providers: [hostile-scanner]
+    identities:
+      - {ip: 45.33.32.156, provider: hostile-scanner, weight: 3}
+      - {ip: 185.220.101.34, provider: hostile-scanner, weight: 3}
+      - {ip: 91.240.118.172, provider: hostile-scanner, weight: 2}
+      - {ip: 194.26.29.77, provider: hostile-scanner, weight: 2}
+      - {ip: 162.247.74.27, provider: hostile-scanner, weight: 1}
+      - {ip: 198.98.51.189, provider: hostile-scanner, weight: 1}
+  - id: external_logon
+    providers: [external-access]
+    identities:
+      - {ip: 45.79.19.196, provider: external-access, weight: 2}
+      - {ip: 139.162.174.124, provider: external-access, weight: 2}
+      - {ip: 91.219.236.174, provider: external-access, weight: 2}
+      - {ip: 23.129.64.210, provider: external-access, weight: 1}
+      - {ip: 116.202.120.181, provider: external-access, weight: 1}
+  - id: failed_logon
+    providers: [credential-abuse]
+    identities:
+      - {ip: 89.248.165.16, provider: credential-abuse, weight: 2}
+      - {ip: 193.32.162.90, provider: credential-abuse, weight: 2}
+      - {ip: 185.156.73.54, provider: credential-abuse, weight: 2}
+  - id: c2
+    providers: [c2-vps]
+    identities:
+      - {ip: 159.65.43.201, provider: c2-vps, weight: 2}
+      - {ip: 134.209.29.115, provider: c2-vps, weight: 2}
+      - {ip: 167.71.156.88, provider: c2-vps, weight: 2}
+  - {id: human, providers: [residential-human, business-human]}
+  - id: crawler
+    providers: [public-crawler]
+    identities:
+      - {ip: 66.249.66.1, provider: public-crawler, forward_names: [crawl-66-249-66-1.googlebot.com], ptr: crawl-66-249-66-1.googlebot.com}
+      - {ip: 157.55.39.1, provider: public-crawler, forward_names: [msnbot-157-55-39-1.search.msn.com], ptr: msnbot-157-55-39-1.search.msn.com}
+      - {ip: 54.36.148.1, provider: public-crawler, forward_names: [bot-54-36-148-1.ahrefs.com], ptr: bot-54-36-148-1.ahrefs.com}
+  - {id: api_client, providers: [cloud-api-client]}
+  - {id: ordinary_responder, providers: [ordinary-cloud-service]}
+  - id: cdn
+    providers: [cloudflare-cdn, fastly-cdn, akamai-cdn, cloudfront-cdn, azure-cdn, google-cdn]
+    share_with_roles: [mail]
+  - id: dns
+    providers: [public-dns]
+    identities:
+      - {ip: 1.1.1.1, provider: public-dns, weight: 30, forward_names: [one.one.one.one], ptr: one.one.one.one, traits: {name: cloudflare-primary, operator: Cloudflare}}
+      - {ip: 1.0.0.1, provider: public-dns, weight: 10, forward_names: [one.one.one.one], ptr: one.one.one.one, traits: {name: cloudflare-secondary, operator: Cloudflare}}
+      - {ip: 8.8.8.8, provider: public-dns, weight: 25, forward_names: [dns.google], ptr: dns.google, traits: {name: google-primary, operator: Google}}
+      - {ip: 8.8.4.4, provider: public-dns, weight: 10, forward_names: [dns.google], ptr: dns.google, traits: {name: google-secondary, operator: Google}}
+      - {ip: 9.9.9.9, provider: public-dns, weight: 15, forward_names: [dns9.quad9.net], ptr: dns9.quad9.net, traits: {name: quad9-primary, operator: Quad9}}
+      - {ip: 208.67.222.222, provider: public-dns, weight: 10, forward_names: [resolver1.opendns.com], ptr: resolver1.opendns.com, traits: {name: opendns-primary, operator: Cisco OpenDNS}}
+  - id: ntp
+    providers: [public-ntp]
+    identities:
+      - {ip: 129.6.15.28, provider: public-ntp, weight: 20, forward_names: [time-a-g.nist.gov], ptr: time-a-g.nist.gov, traits: {name: time-a-g.nist.gov, operator: NIST, stratum: 1, ref_id: .NIST.}}
+      - {ip: 129.6.15.29, provider: public-ntp, weight: 15, forward_names: [time-b-g.nist.gov], ptr: time-b-g.nist.gov, traits: {name: time-b-g.nist.gov, operator: NIST, stratum: 1, ref_id: .NIST.}}
+      - {ip: 162.159.200.1, provider: public-ntp, weight: 20, forward_names: [time.cloudflare.com], ptr: time.cloudflare.com, traits: {name: time.cloudflare.com, operator: Cloudflare, stratum: 2, ref_id: .GPS.}}
+      - {ip: 216.239.35.0, provider: public-ntp, weight: 15, forward_names: [time.google.com], ptr: time.google.com, traits: {name: time.google.com, operator: Google, stratum: 2, ref_id: .GOOG.}}
+      - {ip: 17.253.34.125, provider: public-ntp, weight: 10, forward_names: [time.apple.com], ptr: time.apple.com, traits: {name: time.apple.com, operator: Apple, stratum: 2, ref_id: .PPS.}}
+      - {ip: 91.189.89.198, provider: public-ntp, weight: 10, forward_names: [ntp.ubuntu.com], ptr: ntp.ubuntu.com, traits: {name: ntp.ubuntu.com, operator: Canonical, stratum: 2, ref_id: .GPS.}}
+      - {ip: 23.186.168.130, provider: public-ntp, weight: 10, forward_names: [pool.ntp.org], ptr: pool.ntp.org, traits: {name: pool.ntp.org, operator: NTP Pool, stratum: 2, ref_id: .PPS.}}
+  - id: mail
+    providers: [google-workspace, microsoft-365, proofpoint, sendgrid, mimecast, amazon-ses, fastmail, mailgun, zoho, hosted-mail]
+    share_with_roles: [cdn]

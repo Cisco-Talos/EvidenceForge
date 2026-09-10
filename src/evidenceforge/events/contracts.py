@@ -101,6 +101,7 @@ class ContextKind(StrEnum):
     LIFECYCLE = "lifecycle"
     NAT = "nat"
     NETWORK = "network"
+    NETWORK_ENDPOINT = "network_endpoint"
     NTP = "ntp"
     OCSP = "ocsp"
     OCSP_TRANSACTION = "ocsp_transaction"
@@ -583,6 +584,10 @@ def _contract(
 
 
 _WINDOWS_SECURITY = _formats(FormatKind.WINDOWS_EVENT_SECURITY)
+_WINDOWS_NETWORK_ENDPOINT = _formats(
+    FormatKind.WINDOWS_EVENT_SECURITY,
+    FormatKind.WINDOWS_EVENT_SYSMON,
+)
 _WINDOWS_ENDPOINT = _formats(
     FormatKind.ECAR,
     FormatKind.WINDOWS_EVENT_SECURITY,
@@ -1015,12 +1020,16 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.WFP_CONNECTION: _contract(
         EventKind.WFP_CONNECTION,
         required=_contexts(ContextKind.NETWORK, ContextKind.SRC_HOST),
-        optional=_contexts(ContextKind.LIFECYCLE, ContextKind.PROCESS),
-        src=HostSemantic.TRANSPORT_SOURCE,
+        optional=_contexts(
+            ContextKind.LIFECYCLE,
+            ContextKind.NETWORK_ENDPOINT,
+            ContextKind.PROCESS,
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
         dst=HostSemantic.TRANSPORT_DESTINATION,
         lifecycle=LifecycleRole.DEPENDENT,
         state=StateEffect.READ,
-        emitters=_WINDOWS_SECURITY,
+        emitters=_WINDOWS_NETWORK_ENDPOINT,
     ),
     EventKind.WORKSTATION_LOCKED: _contract(
         EventKind.WORKSTATION_LOCKED,

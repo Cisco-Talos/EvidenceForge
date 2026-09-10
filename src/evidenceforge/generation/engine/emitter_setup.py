@@ -46,6 +46,7 @@ from evidenceforge.generation.activity.network_params import (
     external_client_excluded_cidrs,
     load_network_params,
 )
+from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityRegistry
 from evidenceforge.generation.activity.smb_profiles import (
     render_process as render_smb_process,
 )
@@ -1597,11 +1598,11 @@ class EmitterSetupMixin:
         scanner_rng = random.Random(_stable_seed("external_scanners"))
         prolific = []
         for _ in range(scanner_rng.randint(8, 15)):
-            ip = self._generate_external_client_ip(scanner_rng)
+            ip = self._generate_external_client_ip(scanner_rng, role="scanner")
             weight = scanner_rng.randint(45, 2000)
             prolific.append((ip, weight))
         tail = [
-            (self._generate_external_client_ip(scanner_rng), 1)
+            (self._generate_external_client_ip(scanner_rng, role="scanner"), 1)
             for _ in range(scanner_rng.randint(30, 80))
         ]
         pool = prolific + tail
@@ -2193,29 +2194,41 @@ class EmitterSetupMixin:
                 return seg
         return None
 
-    def _generate_external_client_ip(self, rng) -> str:
-        """Generate a random external (non-RFC1918) IP for web server clients.
+    def _generate_external_client_ip(self, rng, *, role: str = "human") -> str:
+        """Bind a role-scoped public identity outside the scenario's address space.
 
-        Excludes non-global special-use ranges and the scenario's own
-        org CIDRs (internal segments + public_cidrs) so generated external
-        client IPs never accidentally land inside the org's address space.
+        Stable semantic keys come from the caller's scoped RNG, preserving serial/parallel
+        determinism without sharing mutable registry state.
         """
         import ipaddress as _ipa_ext
 
         org_nets = getattr(self, "_org_cidr_networks", [])
-        excluded_nets = [
-            _ipa_ext.ip_network(cidr, strict=False) for cidr in external_client_excluded_cidrs()
-        ]
-        for _ in range(1000):  # safety bound
-            ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
-            addr = _ipa_ext.ip_address(ip)
-            if not addr.is_global:
-                continue
-            if any(addr in net for net in excluded_nets):
-                continue
-            # Exclude org's own CIDRs
-            if org_nets:
-                if any(addr in net for net in org_nets):
+        registry = getattr(self, "public_identity_registry", None)
+        if not isinstance(registry, PublicIdentityRegistry):
+            excluded_nets = [
+                _ipa_ext.ip_network(cidr, strict=False) for cidr in external_client_excluded_cidrs()
+            ]
+            for _ in range(1000):
+                ip = (
+                    f"{rng.randint(1, 223)}.{rng.randint(0, 255)}."
+                    f"{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                )
+                addr = _ipa_ext.ip_address(ip)
+                if not addr.is_global or any(addr in net for net in excluded_nets):
                     continue
+                if not any(addr in net for net in org_nets):
+                    return ip
             return ip
-        return ip  # fallback after safety bound
+
+        ip = ""
+        for _ in range(1000):
+            semantic_key = f"runtime:{role}:{rng.getrandbits(128):032x}"
+            ip = registry.bind(
+                role,
+                semantic_key,
+                prefer_fixed=role not in {"scanner", "human", "ordinary_responder"},
+            ).ip
+            addr = _ipa_ext.ip_address(ip)
+            if not any(addr in net for net in org_nets):
+                return ip
+        return ip

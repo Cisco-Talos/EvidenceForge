@@ -70,6 +70,7 @@ def test_config_skill_and_focused_references_fit_small_contexts() -> None:
     referenced = set(re.findall(r"`references/(config-[a-z0-9-]+\.md)`", _skill_text()))
     assert referenced == {
         "config-apps-processes.md",
+        "config-compatibility.md",
         "config-dependency-graph.md",
         "config-dns-network.md",
         "config-host-activity.md",
@@ -105,6 +106,9 @@ def test_config_guidance_preserves_typed_deployment_and_compatibility_contracts(
         "auth_policy.mode: legacy",
         "auth_policy.mode: realistic",
         "EvidenceForgeDeprecationWarning",
+        "public_identity_profiles.yaml",
+        "EvidenceForge 3.0",
+        "only `eforge validate`",
     ):
         assert expected in compatibility
 

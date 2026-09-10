@@ -91,6 +91,9 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Resource forecasts are advisory. They model the 24-hour checkpoint default; pass the intended
   `--checkpoint-hours` value (`0` disables it) when generation will override that cadence.
   Distinguish final output from peak working disk and do not use hidden workload override flags.
+- A warning that a user-owned legacy public-identity overlay was consumed is emitted only by this
+  command. Migrate the named file to `activity/public_identity_profiles.yaml` before 3.0; do not
+  expect `generate`, `resolve`, or `validate-config` to repeat the warning.
 
 A topology declared without sensors is valid for host/web/proxy-only output. Sensor-backed formats require matching sensors; a proxy-only lab does not need a placeholder Zeek sensor. For
 `ids_alerts`, each SID is unique within its event and must resolve to one effective policy across

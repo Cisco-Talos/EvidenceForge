@@ -723,6 +723,11 @@ def validate_config(
                 "connection_c2_ips": "ip",
             },
         },
+        "activity/public_identity_profiles.yaml": {
+            "list_fields": {"providers": "id", "roles": "id"},
+            "string_list_fields": {"reserved_replacement_domains"},
+            "scalar_fields": {"schema_version": str},
+        },
         "activity/suspicious_benign.yaml": {
             "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
         },
@@ -1228,6 +1233,33 @@ def validate_config(
                     )
                     overlay_errors = True
 
+            if rel_path == "activity/external_actor_profiles.yaml":
+                from evidenceforge.config.schemas import ExternalActorIpEntry
+
+                for field_name in (
+                    "logon_source_ips",
+                    "failed_logon_source_ips",
+                    "connection_c2_ips",
+                ):
+                    entries = data.get(field_name, [])
+                    if not isinstance(entries, list):
+                        continue
+                    for index, entry in enumerate(entries):
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            ExternalActorIpEntry.model_validate(entry)
+                        except ValidationError as exc:
+                            message = exc.errors()[0].get("msg", str(exc))
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "external_actor_profiles.yaml",
+                                    f"{field_name} entry #{index + 1}: {message}",
+                                )
+                            )
+                            overlay_errors = True
+
     # Validate overlay persona files specifically (one-file-per-persona pattern)
     if overlay_dir:
         overlay_personas_dir = overlay_dir / "personas"
@@ -1311,6 +1343,9 @@ def validate_config(
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        load_public_identity_profiles,
+    )
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
@@ -1341,6 +1376,7 @@ def validate_config(
     email_background_data = load_email_background()
     mail_public_identities_data = load_mail_public_identities()
     external_actor_profiles_data = load_external_actor_profiles()
+    public_identity_profiles_data = load_public_identity_profiles()
     suspicious_benign_data = load_suspicious_benign()
     command_parameter_pools_data = load_command_parameter_pools()
     process_access_data = load_process_access_patterns()
@@ -3286,6 +3322,7 @@ def validate_config(
         ProxyUserAgentOverrideEntry,
         PublicDnsProfilesConfig,
         PublicDnsResolverEntry,
+        PublicIdentityProfilesConfig,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
@@ -3306,6 +3343,11 @@ def validate_config(
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
         ([email_background_data], EmailBackgroundConfig, "email_background.yaml"),
+        (
+            [public_identity_profiles_data],
+            PublicIdentityProfilesConfig,
+            "public_identity_profiles.yaml",
+        ),
         ([mail_public_identities_data], MailPublicIdentitiesConfig, "mail_public_identities.yaml"),
         (
             [external_actor_profiles_data],

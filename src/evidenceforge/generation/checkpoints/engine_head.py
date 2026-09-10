@@ -24,7 +24,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "4"
+_SCHEMA_VERSION = "5"
 _SIMPLE_FIELDS = tuple(
     field.name
     for field in GENERATION_ENGINE_CHECKPOINT_FIELDS

@@ -82,7 +82,11 @@ from evidenceforge.events.cryptography import (
 )
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
-from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
+from evidenceforge.events.network import (
+    NetworkEndpointObservationPlan,
+    NetworkSensorObservation,
+    NetworkTransactionPlan,
+)
 from evidenceforge.events.protocol import ProtocolTransactionPlan
 
 if TYPE_CHECKING:
@@ -114,6 +118,7 @@ class OccurrenceBuilder:
     remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkTransactionPlan | None = None
+    network_endpoint: NetworkEndpointObservationPlan | None = None
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
@@ -265,6 +270,7 @@ class CanonicalOccurrence:
     remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkTransactionPlan | None = None
+    network_endpoint: NetworkEndpointObservationPlan | None = None
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None

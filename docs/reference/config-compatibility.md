@@ -1,13 +1,15 @@
 # Configuration Compatibility and Migration
 
 EvidenceForge normalizes supported legacy configuration at the model or cached loader boundary.
-Generation consumes only the normalized form; emitters do not reinterpret legacy fields. Each
-legacy entry or authored use emits an `EvidenceForgeDeprecationWarning` with its exact replacement
-and states that the legacy shape will be removed in a future release.
+Generation consumes only the normalized form; emitters do not reinterpret legacy fields. Most
+legacy model fields emit an `EvidenceForgeDeprecationWarning` with their exact replacement and
+removal target. Public-identity overlay migration is intentionally different: only `eforge validate`
+reports those file-level warnings, so normal validate-before-generate workflows
+show one actionable message without every command repeating it.
 
 Warnings are intentionally visible. Update automation and tests to current syntax instead of
-suppressing them globally. Cached configuration loaders warn only on the first load of one legacy
-document in a process.
+suppressing them globally. Other cached configuration loaders warn only on the first load of one
+legacy document in a process.
 
 ## Supported migrations
 
@@ -19,10 +21,25 @@ document in a process.
 | Observation profiles | An unversioned `profiles:` document | `schema_version: 2` with the same named profiles | Profile fields and source behavior are unchanged. |
 | Applications | An unversioned catalog, a platform without `deployment`, or a managed descriptor without `kind` | Version 2 catalog and explicit `deployment.kind` | Missing deployment becomes `legacy_static`; a descriptor with release fields becomes `managed`. |
 | Installed software | `{name, publisher, version}` | Explicit product/release/build/architecture/scope fields | Display output is unchanged; compatibility derives a stable name-based product ID, `build: version`, `architectures: [neutral]`, and `scope: machine`. |
+| Public external actors | `activity/external_actor_profiles.yaml` | `activity/public_identity_profiles.yaml` roles `external_logon`, `failed_logon`, and `c2` | Accepted for user-owned overlays throughout 2.x and translated before the canonical overlay. Removed in 3.0. |
+| Public mail infrastructure | `activity/mail_public_identities.yaml` | `activity/public_identity_profiles.yaml` role `mail` and provider entries | Accepted for user-owned overlays throughout 2.x and translated before the canonical overlay. Removed in 3.0. |
 
 These are the complete supported aliases. EvidenceForge does not guess near-miss field names.
 Supplying a legacy and current timing field with different values, or only part of the current
 installed-software identity, fails validation instead of choosing one silently.
+
+## Public identity overlays
+
+New configuration should use only `.eforge/config/activity/public_identity_profiles.yaml`.
+Providers and roles merge by `id`; canonical values apply after translated compatibility input and
+therefore win conflicts. Translation preserves the original project-overlay document in resolved
+effective-config provenance and fingerprints, while generated bindings record their translated
+source and canonical fingerprint.
+
+`eforge validate` emits one warning for each consumed user-owned legacy file, names the canonical
+replacement, and states the EvidenceForge 3.0 removal target. `generate`, `resolve`,
+`validate-config`, `info`, evaluation, pack, and checkpoint commands stay silent. Packaged
+configuration and authoritative resolved scenarios never produce these warnings.
 
 ## Observation profiles
 

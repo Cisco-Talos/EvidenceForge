@@ -32,8 +32,8 @@ present. JSON is the machine contract; do not scrape human-formatted text.
   endpoint pools, RSAT tools, web-scan IDS rules, and signature identity/policy.
 - SMB profile schema/defaults, advertised-filesystem and Samba audit maps, OS/access/path/transport
   compatibility, native process templates, operation operands, and listener/worker lifecycles.
-- Generated identity pools including `command_parameter_pools.yaml`, email identities, public actor
-  IPs, and suspicious-benign host/IP pairs.
+- Generated identity pools including canonical public role/provider bindings,
+  `command_parameter_pools.yaml`, email identities, and suspicious-benign host/IP pairs.
 - Secret/payload family synthesis, poison markers, reserved-host safety, and carrier rendering.
 
 Validation is authoritative for acceptance, but it cannot determine whether an invented site route,
