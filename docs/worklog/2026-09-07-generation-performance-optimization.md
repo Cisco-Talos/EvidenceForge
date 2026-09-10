@@ -58,12 +58,13 @@ Non-timing-sensitive integration validation completed on 2026-09-09:
   resource-intensive slow/soak gates remain deferred to a quiet-machine window.
 
 Post-ASA cumulative correctness validation later completed with 8,350 routine tests passing, five
-skipped, and 2,008 slow/soak tests deselected. The complete slow tier passed 1,777 tests and exposed
-two instances of one profiler robustness defect in a partially constructed RDP failure harness;
-commit `5a2a55ef7` made optional profiler access safe, and both affected slow cases plus all 11
-profiling tests then passed. The other 1,777 slow cases require no rerun because they completed
-successfully against the same cumulative candidate. Non-timing-sensitive soak gates passed for
-31-day mixed Windows/Samba retention, 45-day connection state, and all three ordinary/HTTP/proxy
+skipped, and 2,008 slow/soak tests deselected. The first complete slow-tier attempt passed 1,777
+tests and exposed two instances of one profiler robustness defect in a partially constructed RDP
+failure harness. Commit `5a2a55ef7` made optional profiler access safe, and both affected cases plus
+all 11 profiling tests passed immediately. The required single post-fix invocation of
+`uv run pytest -m slow --no-cov` then passed all **1,779** selected tests with 8,584 deselected and
+zero failures in 987.73 seconds. Non-timing-sensitive soak gates passed for 31-day mixed
+Windows/Samba retention, 45-day connection state, and all three ordinary/HTTP/proxy
 one-thousand-handoff capacity variants.
 The 31-day external-sort bound and million-entry index compaction soak gates also passed once
 machine contention subsided. The representative medium-generation gate passed in the slow tier.
