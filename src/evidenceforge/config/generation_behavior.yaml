@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 17
+current_revision: 18
 history_start_revision: 1
-behavior_surface_sha256: "36da2b134f5fc2ea180fb8a2d71d786e3fd9876289450d3e130f6542a2e91971"
+behavior_surface_sha256: "8b3ce9ff77966b7a51577b661ca006af82b9469e8d3d00ec23749b3209dafa31"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -167,3 +167,13 @@ changes:
       - sysmon
       - windows_event
     summary: Classifies Windows foreground tools before publication and closes bounded one-shot processes promptly.
+  - revision: 18
+    id: responder-side-windows-network-observation
+    impact: localized
+    domains:
+      - network-endpoint-observation
+      - windows-inbound-telemetry
+    formats:
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Projects successful inbound Windows transports through one responder process identity into WFP 5156 and Sysmon Event 3 with source-native direction.

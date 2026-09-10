@@ -28,7 +28,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+from evidenceforge.events.identity import ProcessIdentity
+
 NetworkTransactionOutcome = Literal["success", "failure", "denied"]
+NetworkEndpointRole = Literal["initiator", "responder"]
 PayloadDirection = Literal["none", "orig", "resp", "either"]
 TransportPhase = Literal["attempt", "established", "application", "response"]
 InspectionCapability = Literal["metadata", "payload_cleartext", "payload_decrypted"]
@@ -43,6 +46,29 @@ SemanticClaim = Literal[
     "dns_response",
     "file_content",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkEndpointObservationPlan:
+    """Host-local process observation of one canonical network transaction."""
+
+    role: NetworkEndpointRole
+    local_hostname: str
+    local_ip: str
+    process: ProcessIdentity
+    initiated: bool
+    observed_at: datetime
+    transaction_id: str
+
+    def __post_init__(self) -> None:
+        """Reject endpoint observations that disagree with their declared role."""
+
+        if not self.local_hostname or not self.local_ip or not self.transaction_id:
+            raise ValueError("Network endpoint observations require host, IP, and transaction ID")
+        if self.process.hostname.casefold() != self.local_hostname.casefold():
+            raise ValueError("Network endpoint process identity must belong to the local host")
+        if self.initiated != (self.role == "initiator"):
+            raise ValueError("Network endpoint initiation flag must match the endpoint role")
 
 
 def normalize_zeek_history(conn_state: str, history: str) -> str:

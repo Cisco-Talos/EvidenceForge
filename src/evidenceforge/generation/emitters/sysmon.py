@@ -442,6 +442,7 @@ class SysmonEventEmitter(LogEmitter):
         "create_remote_thread",
         "process_access",
         "connection",  # Event 3 (NetworkConnect) + Event 22 (DNSQuery)
+        "wfp_connection",  # Responder-side Event 3 (NetworkConnect)
         "file_create",  # Event 11 (FileCreate)
         "file_modify",  # Event 11 (FileCreate — overwrites also trigger)
         "registry_modify",  # Events 12/13 (RegistryEvent)
@@ -1448,6 +1449,22 @@ class SysmonEventEmitter(LogEmitter):
             return False
         if event.src_host is None or event.src_host.os_category != "windows":
             return False
+        if event.event_type == "wfp_connection":
+            endpoint = event.network_endpoint
+            network = event.network
+            return bool(
+                endpoint is not None
+                and network is not None
+                and endpoint.role == "responder"
+                and not endpoint.initiated
+                and endpoint.local_hostname.casefold() == event.src_host.hostname.casefold()
+                and endpoint.local_ip == event.src_host.ip == network.dst_ip
+                and endpoint.process.pid == network.responding_pid
+                and endpoint.transaction_id == network.stable_id
+                and endpoint.observed_at == event.timestamp
+                and network.outcome != "denied"
+                and not network.application_layer_only
+            )
         return True
 
     def emit(self, event: CanonicalOccurrence) -> None:
@@ -1465,7 +1482,7 @@ class SysmonEventEmitter(LogEmitter):
                 self._render_sysmon_create_remote_thread(event)
             elif event.event_type == "process_access":
                 self._render_sysmon_process_access(event)
-            elif event.event_type == "connection":
+            elif event.event_type in ("connection", "wfp_connection"):
                 # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
                 is_application_layer_only = (
                     event.network is not None and event.network.application_layer_only
@@ -1480,7 +1497,11 @@ class SysmonEventEmitter(LogEmitter):
                 )
                 if not is_application_layer_only and event3_eligible:
                     self._render_sysmon_network_connect(event)
-                if event.dns and self._passes_event22_filter(event):
+                if (
+                    event.event_type == "connection"
+                    and event.dns
+                    and self._passes_event22_filter(event)
+                ):
                     self._render_sysmon_dns_query(event)
             elif event.event_type in ("file_create", "file_modify"):
                 if event.file and self._passes_event11_filter(event):
@@ -2006,6 +2027,8 @@ class SysmonEventEmitter(LogEmitter):
             return False
         if not event.network:
             return False
+        if event.network_endpoint is not None and event.network_endpoint.role == "responder":
+            return True
 
         mode = cfg.get("mode", "include")
         if mode != "include":
@@ -2085,7 +2108,7 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         network = event.network
         if (
-            event.event_type != "connection"
+            event.event_type not in {"connection", "wfp_connection"}
             or host is None
             or host.os_category != "windows"
             or network is None
@@ -2256,6 +2279,18 @@ class SysmonEventEmitter(LogEmitter):
         src_port = net.src_port or 0
         dst_port = net.dst_port or 0
         proto = (net.protocol or "tcp").lower()
+        endpoint = event.network_endpoint
+        initiated = endpoint.initiated if endpoint is not None else True
+        source_hostname = (
+            self._resolve_destination_hostname(src_ip, src_port)
+            if endpoint is not None and endpoint.role == "responder"
+            else host.fqdn
+        )
+        destination_hostname = (
+            host.fqdn
+            if endpoint is not None and endpoint.role == "responder"
+            else self._resolve_destination_hostname(dst_ip, dst_port)
+        )
 
         event_data = {
             "EventID": 3,
@@ -2271,15 +2306,15 @@ class SysmonEventEmitter(LogEmitter):
             "Image": image,
             "User": user,
             "Protocol": proto,
-            "Initiated": "true",
+            "Initiated": "true" if initiated else "false",
             "SourceIsIpv6": "true" if ":" in src_ip else "false",
             "SourceIp": src_ip,
-            "SourceHostname": host.fqdn,
+            "SourceHostname": source_hostname,
             "SourcePort": src_port,
             "SourcePortName": _PORT_NAMES.get(src_port, "-"),
             "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
             "DestinationIp": dst_ip,
-            "DestinationHostname": self._resolve_destination_hostname(dst_ip, dst_port),
+            "DestinationHostname": destination_hostname,
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }

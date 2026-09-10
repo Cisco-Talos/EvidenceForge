@@ -4,6 +4,7 @@
 """Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
 
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -20,6 +21,8 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     RegistryContext,
 )
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.network import NetworkEndpointObservationPlan
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.dll_load_profiles import get_module_pe_metadata
 from evidenceforge.generation.emitters import SysmonEventEmitter
@@ -48,6 +51,68 @@ def _linux_host():
         system_type="server",
         domain="corp.local",
         fqdn="SRV-01.corp.local",
+    )
+
+
+def _responder_wfp_event(*, application_only: bool = False):
+    timestamp = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+    host = HostContext(
+        hostname="DC-01",
+        ip="10.0.2.20",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="domain_controller",
+        domain="corp.local",
+        fqdn="DC-01.corp.local",
+        netbios_domain="CORP",
+    )
+    identity = ProcessIdentity(
+        hostname=host.hostname,
+        object_id="process:dc-01:684",
+        pid=684,
+        parent_pid=500,
+        image=r"C:\Windows\System32\lsass.exe",
+        command_line="lsass.exe",
+        principal="SYSTEM",
+        logon_id="0x3e7",
+        started_at=timestamp - timedelta(minutes=30),
+        lifecycle_group_id="process-lsass",
+    )
+    network = network_plan(
+        src_ip="10.0.1.10",
+        src_port=49152,
+        dst_ip=host.ip,
+        dst_port=88,
+        protocol="tcp",
+        conn_state="SF",
+        initiating_pid=4567,
+        responding_pid=identity.pid,
+        application_layer_only=application_only,
+    )
+    return OccurrenceBuilder(
+        timestamp=timestamp,
+        event_type="wfp_connection",
+        src_host=host,
+        process=ProcessContext(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            logon_id=identity.logon_id,
+            start_time=identity.started_at,
+        ),
+        identity_plan=EventIdentityPlan(actor=identity),
+        network=network,
+        network_endpoint=NetworkEndpointObservationPlan(
+            role="responder",
+            local_hostname=host.hostname,
+            local_ip=host.ip,
+            process=identity,
+            initiated=False,
+            observed_at=timestamp,
+            transaction_id=network.stable_id,
+        ),
     )
 
 
@@ -83,6 +148,24 @@ class TestCanHandle:
             network=network_plan(
                 src_ip="10.0.2.10", dst_ip="10.0.1.10", src_port=49152, dst_port=22, protocol="tcp"
             ),
+        )
+        assert emitter.can_handle(event) is False
+
+    def test_responder_wfp_on_windows(self, emitter):
+        assert emitter.can_handle(_responder_wfp_event()) is True
+
+    def test_responder_wfp_rejects_denied_or_application_only_traffic(self, emitter):
+        denied = _responder_wfp_event()
+        denied.network = replace(denied.network, outcome="denied")
+        assert emitter.can_handle(denied) is False
+        assert emitter.can_handle(_responder_wfp_event(application_only=True)) is False
+
+    def test_initiator_wfp_does_not_duplicate_connection_event3(self, emitter):
+        event = _responder_wfp_event()
+        event.network_endpoint = replace(
+            event.network_endpoint,
+            role="initiator",
+            initiated=True,
         )
         assert emitter.can_handle(event) is False
 
@@ -464,6 +547,23 @@ class TestRenderEvent3:
         assert "10.0.2.20" in content
         assert "4444" in content
         assert "tcp" in content
+
+    def test_renders_responder_event3_with_local_process_and_inbound_direction(self, emitter):
+        event = _responder_wfp_event()
+
+        emitter.emit(event)
+
+        assert len(emitter._event_dicts) == 1
+        rendered = emitter._event_dicts[0]
+        assert rendered["EventID"] == 3
+        assert rendered["Initiated"] == "false"
+        assert rendered["ProcessId"] == 684
+        assert rendered["Image"].endswith("lsass.exe")
+        assert rendered["SourceIp"] == "10.0.1.10"
+        assert rendered["SourcePort"] == 49152
+        assert rendered["DestinationIp"] == "10.0.2.20"
+        assert rendered["DestinationPort"] == 88
+        assert rendered["DestinationHostname"] == "DC-01.corp.local"
 
     def test_event3_uses_source_native_timestamp_offset(self, emitter):
         event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)

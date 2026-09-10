@@ -12919,6 +12919,7 @@
           "contexts_attached_at_construction": [
             "lifecycle",
             "network",
+            "network_endpoint",
             "process",
             "src_host"
           ],
@@ -12934,11 +12935,13 @@
       "contexts_attached_at_literal_constructors": [
         "lifecycle",
         "network",
+        "network_endpoint",
         "process",
         "src_host"
       ],
       "emitter_consumers": [
-        "windows_event_security"
+        "windows_event_security",
+        "windows_event_sysmon"
       ],
       "event_type": "wfp_connection",
       "kind": "internal_occurrence",
@@ -15990,6 +15993,7 @@
       "lifecycle",
       "nat",
       "network",
+      "network_endpoint",
       "network_observations",
       "ntp",
       "ocsp",

@@ -127,6 +127,7 @@ from evidenceforge.events.lifecycle import (
 )
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
+    NetworkEndpointObservationPlan,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
@@ -35173,9 +35174,11 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ProcessContext
 
         process = None
+        process_identity = None
         if pid > 0:
             running = self.state_manager.get_process(system.hostname, pid)
             if running is not None:
+                process_identity = self.state_manager.get_process_identity(system.hostname, pid)
                 process = ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid,
@@ -35223,12 +35226,34 @@ class ActivityGenerator:
             )
             return
         time = candidate_time
+        endpoint_role = (
+            "responder"
+            if system.ip == network.dst_ip and pid == network.responding_pid
+            else "initiator"
+        )
+        endpoint_plan = (
+            NetworkEndpointObservationPlan(
+                role=endpoint_role,
+                local_hostname=system.hostname,
+                local_ip=system.ip,
+                process=process_identity,
+                initiated=endpoint_role == "initiator",
+                observed_at=time,
+                transaction_id=network.stable_id,
+            )
+            if process_identity is not None and network.stable_id
+            else None
+        )
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="wfp_connection",
             src_host=self._build_host_context(system),
             network=network,
+            network_endpoint=endpoint_plan,
             process=process,
+            identity_plan=(
+                EventIdentityPlan(actor=process_identity) if process_identity is not None else None
+            ),
             lifecycle=(
                 ActionLifecycleContext(
                     group_id=network.stable_id,
