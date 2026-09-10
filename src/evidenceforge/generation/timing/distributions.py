@@ -17,7 +17,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from statistics import NormalDist
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 from evidenceforge.utils.rng import (
     DEFAULT_GENERATION_SEED,
@@ -166,7 +166,7 @@ class MixtureDistribution:
             raise TimingDistributionError("mixture weights must have a finite positive sum")
 
 
-DistributionSpec: TypeAlias = (
+type DistributionSpec = (
     ConstantDistribution
     | TriangularDistribution
     | TruncatedNormalDistribution

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 15
+current_revision: 16
 history_start_revision: 1
-behavior_surface_sha256: "a87b45e39e8dc2312ac7989f1d2b75e1f4e5bfaa775f8ad91e54f5224c50498f"
+behavior_surface_sha256: "0d325877743fa86cfcc9ccc98560010e0cea22fa34dbe0fee9e02cc644fabcbd"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -150,3 +150,10 @@ changes:
       - canonical-state-indexes
     formats: []
     summary: Specializes exact packed-digest reads without changing normalization, collision handling, or output.
+  - revision: 16
+    id: python-312-typing-syntax
+    impact: none
+    domains:
+      - all-generation
+    formats: []
+    summary: Adopts Python 3.12 type-alias and generic syntax without changing generated output.

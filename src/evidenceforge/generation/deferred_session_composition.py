@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from secrets import token_hex
-from typing import TypeAlias
 
 from evidenceforge.events.application import (
     ApplicationChannelIdentity,
@@ -90,8 +89,8 @@ class DeferredSessionKind(StrEnum):
     RDP = "rdp"
 
 
-DeferredSessionApplicationToken: TypeAlias = SshChannelAdmissionToken | RdpSessionAdmissionToken
-DeferredSessionStatePlan: TypeAlias = SessionMaterializationPlan | ProcessMaterializationPlan
+type DeferredSessionApplicationToken = SshChannelAdmissionToken | RdpSessionAdmissionToken
+type DeferredSessionStatePlan = SessionMaterializationPlan | ProcessMaterializationPlan
 
 
 @dataclass(frozen=True, slots=True)

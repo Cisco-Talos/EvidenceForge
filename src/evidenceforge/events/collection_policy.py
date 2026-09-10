@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntFlag, StrEnum
 from types import MappingProxyType
-from typing import Self, TypeAlias
+from typing import Self
 
-SourceInstanceKey: TypeAlias = tuple[str, str, str]
+type SourceInstanceKey = tuple[str, str, str]
 
 
 def _required_text(value: str, field_name: str) -> str:

@@ -22,7 +22,6 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from heapq import heapify, heappop, heappush
 from threading import Lock, get_ident
-from typing import TypeAlias
 
 from evidenceforge.events.contracts import (
     EffectOccurrenceDisposition,
@@ -612,7 +611,7 @@ class WindowsAuditEffectIntent:
         )
 
 
-CommandEffectIntent: TypeAlias = (
+type CommandEffectIntent = (
     ChildProcessEffectIntent
     | FileEffectIntent
     | NetworkEffectIntent

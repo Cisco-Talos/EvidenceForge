@@ -41,12 +41,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from itertools import chain
 from time import perf_counter
-from typing import Generic, TypeVar, cast
-
-K = TypeVar("K", bound=Hashable)
-V = TypeVar("V")
-G = TypeVar("G", bound=Hashable)
-OwnerT = TypeVar("OwnerT", bound=Hashable)
+from typing import cast
 
 _MISSING = object()
 _INLINE_TEMPORAL_GROUP = object()
@@ -453,7 +448,7 @@ class CompactEqualityIndex(_CompactSecondaryIndex):
     """Public handle-only equality index for packed registry value columns."""
 
 
-class CompactIndexedStore(MutableMapping[K, V], Generic[K, V]):
+class CompactIndexedStore[K: Hashable, V](MutableMapping[K, V]):
     """Primary storage with compact integer-handle equality indexes.
 
     Values are expected to be immutable while stored. Replacing a value updates
@@ -797,7 +792,7 @@ class CompactIndexedStore(MutableMapping[K, V], Generic[K, V]):
         )
 
 
-class CompactHandleStore(Generic[V]):
+class CompactHandleStore[V]:
     """Dense handle-owned values with lazy equality indexes and no key map.
 
     An external exact route may already own semantic-key-to-handle resolution.
@@ -1096,7 +1091,7 @@ class PackedByteRowStore:
         )
 
 
-class IncrementalExactMap(MutableMapping[K, V], Generic[K, V]):
+class IncrementalExactMap[K: Hashable, V](MutableMapping[K, V]):
     """Lean exact map with bounded active/retired dictionary rotation.
 
     Unlike :class:`CompactIndexedStore`, this structure owns no values-by-handle
@@ -1228,7 +1223,7 @@ class IncrementalExactMap(MutableMapping[K, V], Generic[K, V]):
         )
 
 
-class IndexedEntityStore(MutableMapping[K, V], Generic[K, V]):
+class IndexedEntityStore[K: Hashable, V](MutableMapping[K, V]):
     """Insertion-ordered primary storage with synchronized equality indexes."""
 
     def __init__(self, **indexers: Callable[[V], Hashable]) -> None:
@@ -1318,7 +1313,7 @@ class IndexedEntityStore(MutableMapping[K, V], Generic[K, V]):
         )
 
 
-class ExpiringIndex(MutableMapping[K, V], Generic[K, V]):
+class ExpiringIndex[K: Hashable, V](MutableMapping[K, V]):
     """Key/value storage with ordered deadline eviction and stale-heap repair."""
 
     _COMPACT_MIN_BACKING = 4_096
@@ -2085,7 +2080,7 @@ class PackedHandleExpiryIndex:
         )
 
 
-class ShardedExpiringIndex(Generic[K, V]):
+class ShardedExpiringIndex[K: Hashable, V]:
     """Lazy deterministic shards around deadline indexes.
 
     The caller supplies a stable integer shard selector, normally derived from
@@ -2237,7 +2232,7 @@ class ShardedExpiringIndex(Generic[K, V]):
         )
 
 
-class GroupedTemporalIndex(Generic[G, K]):
+class GroupedTemporalIndex[G: Hashable, K: Hashable]:
     """Persistent per-group time index with ordered range lookup."""
 
     def __init__(self) -> None:
@@ -2362,7 +2357,7 @@ class _SegmentedTemporalGroup:
     stale_count: int = 0
 
 
-class SegmentedTemporalIndex(Generic[G]):
+class SegmentedTemporalIndex[G: Hashable]:
     """Packed grouped temporal records keyed by compact integer handles.
 
     Semantic IDs belong in ``CompactIndexedStore``; this index stores only its
@@ -3035,14 +3030,14 @@ class SegmentedTemporalIndex(Generic[G]):
 
 
 @dataclass(frozen=True, slots=True)
-class _ReferenceLeaseRecord(Generic[K, OwnerT]):
+class _ReferenceLeaseRecord[K: Hashable, OwnerT: Hashable]:
     """One compact exact lease pair used by both equality indexes."""
 
     key: K
     owner: OwnerT
 
 
-class ReferenceLeaseIndex(Generic[K, OwnerT]):
+class ReferenceLeaseIndex[K: Hashable, OwnerT: Hashable]:
     """Explicit owner/deadline leases for retained canonical identities."""
 
     def __init__(self) -> None:

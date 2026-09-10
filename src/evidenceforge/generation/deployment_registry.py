@@ -50,7 +50,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from itertools import islice
 from threading import Condition, Lock, RLock, get_ident
-from typing import Generic, TypeVar, cast
+from typing import cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.content_identity import (
@@ -90,9 +90,6 @@ from evidenceforge.generation.indexes import (
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
-
-K = TypeVar("K", bound=Hashable)
-V = TypeVar("V")
 
 _PLATFORMS = {"windows", "linux", "macos"}
 _ARCHITECTURES = {"x86", "x64", "arm64", "neutral"}
@@ -471,7 +468,7 @@ def _normalized_unique_names(values: tuple[str, ...], field_name: str) -> tuple[
     return normalized
 
 
-def _insert_unique(
+def _insert_unique[K: Hashable, V](
     store: CompactIndexedStore[K, V],
     key: K,
     value: V,
@@ -483,7 +480,7 @@ def _insert_unique(
     return store.handle_for(key)
 
 
-def _require_unique_index(
+def _require_unique_index[K: Hashable, V](
     store: CompactIndexedStore[K, V],
     index_name: str,
     indexed_value: Hashable,
@@ -794,7 +791,7 @@ class _PackedDigestGroupIndex:
         return retained
 
 
-class _PackedFrozenIndexedStore(Generic[K, V]):
+class _PackedFrozenIndexedStore[K: Hashable, V]:
     """Immutable value rows with exact packed primary and secondary routes."""
 
     __slots__ = (
@@ -5372,7 +5369,7 @@ class DeploymentContentRegistry:
             + self._local_artifact_path_index.estimated_bytes()
         )
 
-    def _iter_group(
+    def _iter_group[K: Hashable, V](
         self,
         store: CompactIndexedStore[K, V],
         queries: tuple[tuple[str, Hashable], ...],
@@ -5380,14 +5377,14 @@ class DeploymentContentRegistry:
         for index_name, indexed_value in queries:
             yield from store.find_iter(index_name, indexed_value)
 
-    def _count_group(
+    def _count_group[K: Hashable, V](
         self,
         store: CompactIndexedStore[K, V],
         queries: tuple[tuple[str, Hashable], ...],
     ) -> int:
         return sum(store.count(index_name, indexed_value) for index_name, indexed_value in queries)
 
-    def _page_group(
+    def _page_group[K: Hashable, V](
         self,
         store: CompactIndexedStore[K, V],
         group_name: str,
@@ -5448,7 +5445,7 @@ class DeploymentContentRegistry:
             )
         return tuple(page), next_cursor
 
-    def _page_handle_group(
+    def _page_handle_group[K: Hashable, V](
         self,
         store: CompactIndexedStore[K, V],
         handles: tuple[int, ...],

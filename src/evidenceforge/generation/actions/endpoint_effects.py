@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.contracts import OccurrenceRole
@@ -44,7 +44,7 @@ from evidenceforge.utils.time import ensure_utc
 _MAX_EFFECT_NODES = 64
 _MAX_EFFECT_OCCURRENCES = 4096
 
-EndpointEffectIntent: TypeAlias = FileEffectIntent | RegistryEffectIntent | TransferEffectIntent
+type EndpointEffectIntent = FileEffectIntent | RegistryEffectIntent | TransferEffectIntent
 
 
 class EndpointStateDisposition(StrEnum):
@@ -163,7 +163,7 @@ class PreparedRegistryEffectPayload:
             )
 
 
-EndpointEffectPayload: TypeAlias = PreparedFileEffectPayload | PreparedRegistryEffectPayload
+type EndpointEffectPayload = PreparedFileEffectPayload | PreparedRegistryEffectPayload
 
 
 @dataclass(frozen=True, slots=True)

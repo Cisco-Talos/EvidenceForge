@@ -41,24 +41,24 @@ import ntpath
 import posixpath
 import re
 from dataclasses import dataclass, field
-from typing import Literal, TypeAlias, cast
+from typing import Literal, cast
 
-Platform: TypeAlias = Literal["windows", "linux", "macos"]
-Architecture: TypeAlias = Literal["x86", "x64", "arm64", "neutral"]
-InstallationScope: TypeAlias = Literal["machine", "user"]
+type Platform = Literal["windows", "linux", "macos"]
+type Architecture = Literal["x86", "x64", "arm64", "neutral"]
+type InstallationScope = Literal["machine", "user"]
 
-BinaryReleaseCanonicalKey: TypeAlias = tuple[str, str, str, str, str, str, str]
-InstalledSoftwareReleaseCanonicalKey: TypeAlias = tuple[str, str, str, str, str, str]
-FileVersionCanonicalKey: TypeAlias = tuple[str, int]
-UserProfileCanonicalKey: TypeAlias = tuple[str, str, str, str]
-InstallationCanonicalKey: TypeAlias = tuple[str, str, str, str, str, str, str]
-ApplicationProfileCanonicalKey: TypeAlias = tuple[str, str, str, str, str, str, str]
-CompiledServiceDeploymentCanonicalKey: TypeAlias = tuple[str, str]
-CompiledTaskDeploymentCanonicalKey: TypeAlias = tuple[str, str]
-RuntimeServiceDeploymentCanonicalKey: TypeAlias = tuple[str, str, str]
-LocalArtifactObjectKey: TypeAlias = tuple[str, str, str, str, str, str, str, str]
-LocalArtifactCanonicalKey: TypeAlias = tuple[str, str, str, str, str, str, str, str, int]
-LocalArtifactBinaryCanonicalKey: TypeAlias = tuple[str, str, str, str, str]
+type BinaryReleaseCanonicalKey = tuple[str, str, str, str, str, str, str]
+type InstalledSoftwareReleaseCanonicalKey = tuple[str, str, str, str, str, str]
+type FileVersionCanonicalKey = tuple[str, int]
+type UserProfileCanonicalKey = tuple[str, str, str, str]
+type InstallationCanonicalKey = tuple[str, str, str, str, str, str, str]
+type ApplicationProfileCanonicalKey = tuple[str, str, str, str, str, str, str]
+type CompiledServiceDeploymentCanonicalKey = tuple[str, str]
+type CompiledTaskDeploymentCanonicalKey = tuple[str, str]
+type RuntimeServiceDeploymentCanonicalKey = tuple[str, str, str]
+type LocalArtifactObjectKey = tuple[str, str, str, str, str, str, str, str]
+type LocalArtifactCanonicalKey = tuple[str, str, str, str, str, str, str, str, int]
+type LocalArtifactBinaryCanonicalKey = tuple[str, str, str, str, str]
 
 _HEX_LENGTHS = {"md5": 32, "sha1": 40, "sha256": 64, "imphash": 32}
 _PLATFORMS = {"windows", "linux", "macos"}
@@ -755,7 +755,7 @@ class RuntimeServiceDeploymentIdentity:
         return (self.identity_kind, self.hostname, self.canonical_id)
 
 
-ServiceDeploymentIdentity: TypeAlias = (
+type ServiceDeploymentIdentity = (
     CompiledServiceDeploymentIdentity | RuntimeServiceDeploymentIdentity
 )
 
@@ -991,7 +991,7 @@ class UnresolvedBinaryIdentity:
         return self
 
 
-ProcessBinaryIdentity: TypeAlias = (
+type ProcessBinaryIdentity = (
     BinaryReleaseIdentity
     | LocalArtifactBinaryIdentity
     | VirtualKernelBinaryIdentity

@@ -20,7 +20,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from threading import RLock, get_ident
-from typing import Any, TypeAlias, cast
+from typing import Any, cast
 from weakref import ReferenceType, ref
 
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
@@ -51,7 +51,7 @@ from evidenceforge.generation.timing import (
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
-TimingOccurrence: TypeAlias = OccurrenceBuilder | CanonicalOccurrence
+type TimingOccurrence = OccurrenceBuilder | CanonicalOccurrence
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
 _PROCESS_CREATE_SOURCE_KEYS = {

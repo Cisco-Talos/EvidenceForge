@@ -21,7 +21,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from ipaddress import ip_address
-from typing import TypeAlias
 
 from evidenceforge.events.contracts import EventKind
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
@@ -518,7 +517,7 @@ class RdpDeferredSessionIntent:
         object.__setattr__(self, "logical_session_id", logical_id)
 
 
-DeferredSessionPresealIntent: TypeAlias = SshDeferredSessionIntent | RdpDeferredSessionIntent
+type DeferredSessionPresealIntent = SshDeferredSessionIntent | RdpDeferredSessionIntent
 
 
 @dataclass(frozen=True, slots=True)
@@ -634,7 +633,7 @@ class DeferredSessionProcessMemberSpec:
         object.__setattr__(self, "session_member_id", session_member_id)
 
 
-DeferredSessionStateMemberSpec: TypeAlias = (
+type DeferredSessionStateMemberSpec = (
     DeferredSessionSessionMemberSpec | DeferredSessionProcessMemberSpec
 )
 
@@ -868,8 +867,8 @@ class RdpReconnectAdmissionSpec:
         return (self.prior_transport_id, self.current_transport_id)
 
 
-RdpDeferredAdmissionSpec: TypeAlias = RdpOpenAdmissionSpec | RdpReconnectAdmissionSpec
-DeferredSessionAdmissionSpec: TypeAlias = SshDeferredAdmissionSpec | RdpDeferredAdmissionSpec
+type RdpDeferredAdmissionSpec = RdpOpenAdmissionSpec | RdpReconnectAdmissionSpec
+type DeferredSessionAdmissionSpec = SshDeferredAdmissionSpec | RdpDeferredAdmissionSpec
 
 
 @dataclass(frozen=True, slots=True)

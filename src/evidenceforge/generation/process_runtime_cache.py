@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from threading import RLock
-from typing import Generic, TypeVar, cast
+from typing import cast
 
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
@@ -26,9 +26,6 @@ from evidenceforge.generation.indexes import (
 from evidenceforge.utils.time import ensure_utc
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-
-K = TypeVar("K", bound=Hashable)
-V = TypeVar("V")
 
 _COMPACT_STORE_GET = CompactIndexedStore.__getitem__
 _COMPACT_STORE_SET = CompactIndexedStore.__setitem__
@@ -691,13 +688,13 @@ def snapshot_activity_generator_mutable_fields(
 
 
 @dataclass(frozen=True, slots=True)
-class _RuntimeCacheRecord(Generic[V]):
+class _RuntimeCacheRecord[V]:
     value: V
     deadline_seconds: float
     retained_bytes: int
 
 
-class BoundedRuntimeCache(Generic[K, V]):
+class BoundedRuntimeCache[K: Hashable, V]:
     """Exact map with paged expiry and observationally eager watermarks.
 
     Physical reclamation is bounded. An entry left behind after one page is

@@ -26,9 +26,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Literal
 
-EntityIdentityKind: TypeAlias = Literal[
+type EntityIdentityKind = Literal[
     "authentication_attempt",
     "authentication_occurrence",
     "file",
@@ -141,7 +141,7 @@ class SessionIdentity:
             raise ValueError("Session ID must be a non-negative host-local identifier")
 
 
-IdentityObject: TypeAlias = ProcessIdentity | ThreadIdentity | SessionIdentity | EntityIdentity
+type IdentityObject = ProcessIdentity | ThreadIdentity | SessionIdentity | EntityIdentity
 
 
 @dataclass(frozen=True, slots=True)

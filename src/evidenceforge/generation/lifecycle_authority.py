@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
 from types import MemberDescriptorType
-from typing import Any, Generic, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
@@ -2269,10 +2269,7 @@ class _OrderedIntent(Protocol):
     def order_key(self) -> tuple[datetime, datetime, str, int]: ...
 
 
-_IntentT = TypeVar("_IntentT", bound=_OrderedIntent)
-
-
-class _StableIntentHeap(Generic[_IntentT]):
+class _StableIntentHeap[IntentT: _OrderedIntent]:
     """Version-tolerant full commit-order heap with bounded rebuilding."""
 
     _COMPACT_MIN_BACKING = 4_096
@@ -2285,18 +2282,18 @@ class _StableIntentHeap(Generic[_IntentT]):
 
     @staticmethod
     def _entry(
-        intent: _IntentT,
+        intent: IntentT,
         handle: int,
     ) -> tuple[datetime, datetime, str, int, int]:
         return (*intent.order_key, handle)
 
-    def push(self, handle: int, intent: _IntentT) -> None:
+    def push(self, handle: int, intent: IntentT) -> None:
         heapq.heappush(self._heap, self._entry(intent, handle))
 
     @staticmethod
     def _valid_head(
         heap: list[tuple[datetime, datetime, str, int, int]],
-        store: CompactIndexedStore[Any, _IntentT],
+        store: CompactIndexedStore[Any, IntentT],
     ) -> tuple[datetime, datetime, str, int, int] | None:
         while heap:
             entry = heap[0]
@@ -2313,7 +2310,7 @@ class _StableIntentHeap(Generic[_IntentT]):
 
     def _head_with_heap(
         self,
-        store: CompactIndexedStore[Any, _IntentT],
+        store: CompactIndexedStore[Any, IntentT],
     ) -> (
         tuple[
             tuple[datetime, datetime, str, int, int],
@@ -2333,7 +2330,7 @@ class _StableIntentHeap(Generic[_IntentT]):
 
     def first_due(
         self,
-        store: CompactIndexedStore[Any, _IntentT],
+        store: CompactIndexedStore[Any, IntentT],
         cutoff: datetime,
         *,
         inclusive: bool,
@@ -2350,7 +2347,7 @@ class _StableIntentHeap(Generic[_IntentT]):
 
     def pop_expected(
         self,
-        store: CompactIndexedStore[Any, _IntentT],
+        store: CompactIndexedStore[Any, IntentT],
         expected: tuple[tuple[datetime, datetime, str, int], int],
     ) -> bool:
         """Pop only the still-current exact head selected by a global merge."""
@@ -2363,7 +2360,7 @@ class _StableIntentHeap(Generic[_IntentT]):
 
     def compact(
         self,
-        store: CompactIndexedStore[Any, _IntentT],
+        store: CompactIndexedStore[Any, IntentT],
         *,
         max_slots: int,
     ) -> int:
