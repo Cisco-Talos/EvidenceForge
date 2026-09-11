@@ -4808,6 +4808,7 @@ class StorylineMixin:
                         requested_time=time,
                         process_name=process_name,
                         command_line=process_command_line,
+                        authoritative_time=True,
                     )
                 )
                 if isinstance(reserved_start_time, datetime):

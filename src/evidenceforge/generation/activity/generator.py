@@ -7888,19 +7888,19 @@ class ActivityGenerator:
         requested_time: datetime,
         process_name: str,
         command_line: str,
+        authoritative_time: bool = False,
     ) -> datetime:
-        """Return a shell-serialized start time for a Linux foreground process."""
+        """Return a shell-serialized start time for a Linux foreground process.
+
+        Authored events can be visited after later baseline reservations. When
+        ``authoritative_time`` is true, preserve a viable authored anchor instead
+        of moving it into the owning session's terminal release margin.
+        """
         if _get_os_category(system.os) != "linux":
             return requested_time
         if _linux_foreground_lifetime(process_name, command_line) is None:
             return requested_time
-        reserved_time = max(
-            requested_time,
-            self._bash_history_next_time.get(
-                (system.hostname, username, logon_id),
-                requested_time,
-            ),
-        )
+        authored_candidate = requested_time
         session = self.state_manager.get_session(logon_id)
         if session is not None and session.session_kind.casefold() == "ssh":
             shell_ready = self._linux_ssh_process_shell_ready_time(
@@ -7908,10 +7908,20 @@ class ActivityGenerator:
                 session=session,
                 username=username,
                 parent_pid=parent_pid,
-                activity_time=reserved_time,
+                activity_time=authored_candidate,
             )
-            reserved_time = max(reserved_time, shell_ready + timedelta(milliseconds=50))
-        return self._reserve_foreground_shell_time(
+            authored_candidate = max(
+                authored_candidate,
+                shell_ready + timedelta(milliseconds=50),
+            )
+        reserved_time = max(
+            authored_candidate,
+            self._bash_history_next_time.get(
+                (system.hostname, username, logon_id),
+                authored_candidate,
+            ),
+        )
+        serialized_time = self._reserve_foreground_shell_time(
             system=system,
             username=username,
             logon_id=logon_id,
@@ -7919,6 +7929,21 @@ class ActivityGenerator:
             requested_time=reserved_time,
             seed_text=command_line,
         )
+        if authoritative_time:
+            session_deadline = self.state_manager.get_session_end_time(logon_id)
+            active_deadline = _session_activity_end_time(session) if session is not None else None
+            if active_deadline is not None:
+                session_deadline = (
+                    active_deadline
+                    if session_deadline is None
+                    else min(ensure_utc(session_deadline), active_deadline)
+                )
+            if session_deadline is not None:
+                deadline = ensure_utc(session_deadline)
+                margin = timedelta(milliseconds=_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25)
+                if serialized_time + margin >= deadline and authored_candidate + margin < deadline:
+                    return authored_candidate
+        return serialized_time
 
     def _linux_ssh_process_shell_ready_time(
         self,
@@ -19989,7 +20014,11 @@ class ActivityGenerator:
                 if provisional_termination <= actor.started_at:
                     raise ExecutionEffectPlanError(
                         ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared process actor leaves no interval for its lifecycle close",
+                        "prepared process actor leaves no interval for its lifecycle close: "
+                        f"host={request.system.hostname!r} image={actor.image!r} "
+                        f"started_at={actor.started_at.isoformat()} "
+                        f"session_deadline={actor.session_deadline.isoformat()} "
+                        f"planned_close={provisional_termination.isoformat()}",
                     )
 
             root_binary_publication: LocalArtifactPublishToken | None = None
@@ -20416,6 +20445,7 @@ class ActivityGenerator:
         if (
             _get_os_category(system.os) == "linux"
             and request.source_visible_by is None
+            and not request.from_storyline
             and _linux_shell_process_reserves_foreground(process_name, command_line)
             and _linux_foreground_lifetime(process_name, command_line) is not None
         ):

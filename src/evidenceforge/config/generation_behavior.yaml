@@ -1,7 +1,7 @@
 schema_version: "1.0"
 current_revision: 29
 history_start_revision: 1
-behavior_surface_sha256: "3d93b8804254832eb6435cd9f9026d804b0b81221da33acbe0aac4f6b2604605"
+behavior_surface_sha256: "df044281d87ab2a3adff9c8149d3a054a0e3397b4d091325091351ed4ed5a6cf"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -313,4 +313,4 @@ changes:
     formats:
       - ecar
       - syslog
-    summary: Routes one-shot anacron activity through the canonical host PID allocator and gives hidden Linux process churn stable host-specific workload magnitude.
+    summary: Routes one-shot anacron activity through the canonical host PID allocator, gives hidden Linux process churn stable host-specific workload magnitude, and preserves viable authored shell anchors against later traversal-order reservations.

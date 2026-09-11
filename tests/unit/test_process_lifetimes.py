@@ -1185,8 +1185,19 @@ def test_linux_unbounded_foreground_child_reserves_until_session_boundary() -> N
         process_name="/usr/bin/hostname",
         command_line="hostname -f",
     )
+    authored = generator.reserve_linux_foreground_process_start(
+        system=system,
+        username=user.username,
+        logon_id=logon_id,
+        parent_pid=shell_pid,
+        requested_time=start + timedelta(seconds=30),
+        process_name="/usr/bin/hostname",
+        command_line="hostname -f",
+        authoritative_time=True,
+    )
 
     assert reserved > session_end
+    assert authored == start + timedelta(seconds=30)
 
 
 def test_anchored_linux_client_uses_sibling_shell_when_foreground_is_busy() -> None:
