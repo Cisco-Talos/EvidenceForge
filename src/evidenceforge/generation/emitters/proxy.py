@@ -51,7 +51,6 @@ class _PendingTunnelSummary:
     tunnel_cs_bytes: int = 0
     tunnel_sc_bytes: int = 0
     latest_child_end: datetime | None = None
-    transport_duration_ms: int | None = None
 
     def add_child(
         self,
@@ -79,7 +78,6 @@ class _ObservedTunnelChild:
     child_end: datetime
     cs_bytes: int
     sc_bytes: int
-    transport_duration_ms: int | None
 
 
 def _combined_log_value(value: Any) -> str:
@@ -206,7 +204,9 @@ def _connect_tunnel_payload_fields(
         "tunnel_cs_bytes": max(0, int(net.orig_bytes or 0) - setup_cs_bytes),
         "tunnel_sc_bytes": max(0, int(net.resp_bytes or 0) - setup_sc_bytes),
     }
-    if net.duration is not None:
+    if transaction is not None and transaction.tunnel_duration_seconds is not None:
+        fields["tunnel_duration_ms"] = round(transaction.tunnel_duration_seconds * 1000)
+    elif net.duration is not None:
         fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
     return fields
 
@@ -466,11 +466,6 @@ class ProxyEmitter(HostMultiplexEmitter):
                     + timedelta(milliseconds=max(0, int(px.time_taken or 0))),
                     cs_bytes=max(0, int(px.cs_bytes or 0)),
                     sc_bytes=max(0, int(px.sc_bytes or 0)),
-                    transport_duration_ms=(
-                        max(0, round(float(net.duration) * 1000))
-                        if net is not None and net.duration is not None
-                        else None
-                    ),
                 )
             )
         else:
@@ -521,12 +516,9 @@ class ProxyEmitter(HostMultiplexEmitter):
         latest_child_end = pending.latest_child_end or pending.last_activity_at
         visible_duration_ms = max(
             0,
-            round((latest_child_end - pending.opened_at).total_seconds() * 1000) + 999,
+            round((latest_child_end - pending.opened_at).total_seconds() * 1000),
         )
-        connect_data["tunnel_duration_ms"] = max(
-            visible_duration_ms,
-            pending.transport_duration_ms or 0,
-        )
+        connect_data["tunnel_duration_ms"] = visible_duration_ms
         self._dispatch(connect_data)
 
     def _fold_observed_tunnel_children(self) -> None:
@@ -547,11 +539,8 @@ class ProxyEmitter(HostMultiplexEmitter):
                     connect_data=child.connect_data,
                     opened_at=child.connect_data["timestamp"],
                     last_activity_at=child.request_time,
-                    transport_duration_ms=child.transport_duration_ms,
                 )
                 self._pending_tunnels[child.key] = pending
-            elif child.transport_duration_ms is not None:
-                pending.transport_duration_ms = child.transport_duration_ms
             pending.add_child(
                 cs_bytes=child.cs_bytes,
                 sc_bytes=child.sc_bytes,

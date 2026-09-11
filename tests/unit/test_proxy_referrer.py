@@ -11,6 +11,7 @@ from unittest.mock import patch
 from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HttpContext, ProxyContext
+from evidenceforge.events.proxy import ProxyTransactionPlan
 from tests.network_factories import network_plan
 
 
@@ -501,7 +502,7 @@ class TestProxyActionSemantics:
                     protocol="tcp",
                     service="http",
                     zeek_uid="Cproxyreused",
-                    duration=0.398,
+                    duration=25.0,
                     application_layer_only=idx > 0,
                 ),
                 proxy=ProxyContext(
@@ -533,6 +534,83 @@ class TestProxyActionSemantics:
         assert connect_fields["tunnel_cs_bytes"] == sum(100 + idx for idx in range(5))
         assert connect_fields["tunnel_sc_bytes"] == sum(1000 + idx for idx in range(5))
         assert connect_fields["tunnel_duration_ms"] >= 20_044
+        assert connect_fields["tunnel_duration_ms"] <= 25_000
+
+    def test_planned_tunnel_duration_fits_inside_client_transport(self):
+        """CONNECT setup plus the nested tunnel must not outlive its TCP carrier."""
+
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        connected_at = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        tunnel_requested_at = connected_at + timedelta(milliseconds=100)
+        request_at = connected_at + timedelta(milliseconds=200)
+        client_flush_at = connected_at + timedelta(milliseconds=800)
+        closed_at = connected_at + timedelta(seconds=1)
+        plan = ProxyTransactionPlan(
+            stable_id="proxy-tunnel-bound",
+            terminal_outcome="success",
+            resolver_mode="resolver_cache_hit",
+            client_connect_at=connected_at,
+            tunnel_request_at=tunnel_requested_at,
+            request_at=request_at,
+            decision_at=request_at + timedelta(milliseconds=20),
+            dns_query_at=None,
+            dns_response_at=None,
+            origin_connect_at=request_at + timedelta(milliseconds=40),
+            tls_complete_at=request_at + timedelta(milliseconds=80),
+            origin_request_at=request_at + timedelta(milliseconds=81),
+            origin_response_at=request_at + timedelta(milliseconds=500),
+            origin_close_at=request_at + timedelta(milliseconds=550),
+            client_flush_at=client_flush_at,
+            close_at=closed_at,
+            origin_conn_state="SF",
+            tunnel_setup_cs_bytes=300,
+            tunnel_setup_sc_bytes=180,
+            tunnel_setup_time_taken_ms=100,
+        )
+        event = OccurrenceBuilder(
+            timestamp=connected_at,
+            event_type="connection",
+            network=network_plan(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.3.10",
+                dst_port=8080,
+                protocol="tcp",
+                service="http",
+                zeek_uid="Cproxybounded",
+                duration=plan.client_duration_seconds,
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/page",
+                host="example.com",
+                proxy_fqdn="PROXY-01",
+                status_code=200,
+                cs_bytes=100,
+                sc_bytes=1000,
+                time_taken=plan.time_taken_ms,
+                cache_result="MISS",
+                proxy_action="ssl-inspect",
+                transaction=plan,
+            ),
+        )
+        emitter = ProxyEmitter(load_format("proxy_access"), Path("/tmp/test_proxy"))
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+
+        emitter.emit(event)
+        emitter.close()
+
+        connect = _parse_proxy_fields(
+            next(line for line in rendered_lines if '"CONNECT example.com:443 HTTP/1.1"' in line)
+        )
+        setup_offset_ms = round((tunnel_requested_at - connected_at).total_seconds() * 1000)
+        assert setup_offset_ms + connect["tunnel_duration_ms"] <= 1000
 
     def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
         from evidenceforge.formats import load_format

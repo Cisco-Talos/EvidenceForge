@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 35
+current_revision: 36
 history_start_revision: 1
-behavior_surface_sha256: "3a3042fa9936afb29d4c885dffe6b13c04a38866bcec70a2b0076fdfd81299ec"
+behavior_surface_sha256: "315ed77f4389fbff1cd45c4d056eb5fbd930d281d437b9f46f6659c20f0355cf"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -380,3 +380,15 @@ changes:
       - proxy_access
       - zeek_http
     summary: Preserves the proxy transaction's normalized origin authority and Referer across client-facing proxy evidence and origin-facing HTTP requests, preventing sibling Host mutations or isolated header disagreement.
+  - revision: 36
+    id: proxy-connect-nested-transport-lifetime
+    impact: material
+    domains:
+      - explicit-proxy-transactions
+      - application-lifecycle
+      - network-transport
+    formats:
+      - proxy_access
+      - zeek_conn
+      - ecar
+    summary: Derives successful CONNECT duration from the nested tunnel lifecycle and removes fabricated summary slack so tunnel setup and payload remain bounded by the exact carrying client transport.

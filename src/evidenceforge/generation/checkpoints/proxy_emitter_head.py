@@ -14,7 +14,7 @@ from .participants import OwnerStateField, ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 
 class _ProxyEmitterHead(BaseModel):
@@ -74,7 +74,6 @@ class ProxyEmitterParticipant:
                         if pending.latest_child_end is None
                         else pending.latest_child_end.isoformat()
                     ),
-                    pending.transport_duration_ms,
                 ]
             )
         document = _ProxyEmitterHead(
@@ -114,7 +113,7 @@ class ProxyEmitterParticipant:
         for row in document.pending_tunnels:
             if (
                 type(row) is not list
-                or len(row) != 9
+                or len(row) != 8
                 or type(row[0]) is not str
                 or not row[0]
                 or type(row[1]) is not str
@@ -123,7 +122,6 @@ class ProxyEmitterParticipant:
                 or row[5] < 0
                 or type(row[6]) is not int
                 or row[6] < 0
-                or (row[8] is not None and (type(row[8]) is not int or row[8] < 0))
             ):
                 raise CheckpointCorruptionError("proxy emitter checkpoint row is invalid")
             key = (row[0], row[1])
@@ -148,7 +146,6 @@ class ProxyEmitterParticipant:
                 tunnel_cs_bytes=row[5],
                 tunnel_sc_bytes=row[6],
                 latest_child_end=latest_child_end,
-                transport_duration_ms=row[8],
             )
         self.emitter._observed_tunnel_children.clear()
         self.emitter._pending_tunnels = restored

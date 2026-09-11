@@ -137,6 +137,17 @@ class ProxyTransactionPlan:
         return max(0.000001, (self.close_at - self.client_connect_at).total_seconds())
 
     @property
+    def tunnel_duration_seconds(self) -> float | None:
+        """Return the successful nested CONNECT tunnel lifetime when modeled."""
+
+        if self.tunnel_request_at is None or self.terminal_outcome != "success":
+            return None
+        established_at = (
+            self.request_at if self.tunnel_request_at < self.request_at else self.decision_at
+        )
+        return max(0.0, (self.close_at - established_at).total_seconds())
+
+    @property
     def origin_duration_seconds(self) -> float | None:
         """Return the attempted origin transport lifetime when present."""
 
