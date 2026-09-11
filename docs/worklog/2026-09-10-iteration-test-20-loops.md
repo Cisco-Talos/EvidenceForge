@@ -666,3 +666,26 @@
 - **Sibling risks:** concurrent sessions for one user must retain distinct terminals; closed
   sessions must release their routes; a malformed multi-TTY reverse route must fail closed;
   foreground timing and strict lifecycle rollback remain unchanged.
+
+## Loop 69 Result
+
+- **Implementation commit:** `72de4fb4e` (`fix: keep Linux session TTY identity stable`).
+- **Behavior contract:** revision 33,
+  `a1de251c88268c81cd920a8d23ff49da1ca08eb36b1b35a8d9f6067c2f28f7ff`.
+- **Verification:** 8,402 routine tests passed, 5 skipped, and 2,009 deselected; Ruff check and
+  format check passed across 769 files; all 92 configuration files validated; the scenario remained
+  valid with the existing 24 informational pivot notes.
+- **Rendered invariant:** 78 sudo rows correlated across 18 continuing shells and 11 hosts; maximum
+  controlling terminals per shell was one, with zero violations. Two source-locally unobserved eCAR
+  creates were excluded from the join.
+- **Automated evaluation:** 97.04987119847662 PASS across 124,332 records (parseability
+  99.99919570183059, plausibility 96.85872154275857, causality 97.12464221795368, timing
+  92.77135773874691).
+- **Initial panel:** Threat Hunter 44 (Inconclusive, 79 verdict confidence), Detection Engineer 76
+  (Synthetic, 86), Network Forensics 65 (Synthetic, 82), Host/EDR 72 (Synthetic, 84); mean 64.25.
+- **Deliberation:** triggered by verdict disagreement and a 32-point spread. Revised scores were
+  68, 78, 72, and 77; mean 73.75 with four Synthetic verdicts.
+- **Target-family disposition:** the loop-68 multi-TTY continuing-shell contradiction did not recur
+  in the rendered probe or any initial expert report.
+- **Next family:** replace the 120-of-120 integer-millisecond SMB mapping offsets with
+  source-native, microsecond-textured tree-connect timing owned by the SMB action/timing layer.
