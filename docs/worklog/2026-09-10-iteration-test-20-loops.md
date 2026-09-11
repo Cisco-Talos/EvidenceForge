@@ -469,3 +469,25 @@
 - **Sibling risks:** durable boot daemons retain their fixed boot PIDs, explicit PID namespaces
   remain valid, out-of-order 30-second allocation lanes retain capacity, PID wrap/reuse rules stay
   unchanged, and anacron source rows remain one coherent daily lifecycle.
+
+## Loop 65 Verification
+
+- Implementation commits: `e13597b6d` (`fix: unify Linux transient process identity`) and
+  `441077661` (`fix: preserve authored Linux shell anchors`).
+- Behavior contract: revision 29, surface digest
+  `df044281d87ab2a3adff9c8149d3a054a0e3397b4d091325091351ed4ed5a6cf`.
+- Routine gate: 8,396 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 125,715 evaluated records across 22 sources.
+- Deterministic evaluation: 96.6689, acceptance PASS; pillars 99.9992 parseability,
+  96.8782 plausibility, 95.6657 causality, and 92.6659 timing.
+- Rendered PID probe: all ten anacron hosts retained one PID across five syslog rows plus eCAR
+  create/terminate, with zero violations. Eleven Linux host PID slopes ranged from 1.8850 to
+  3.4776 PIDs/second, a 1.8449x spread.
+- Blind initial panel: 86/67/36/71 (mean 65.00), with three Synthetic and one Real verdict.
+  Deliberation was triggered by verdict disagreement and a 50-point spread; final scores were
+  92/83/58/85 (mean 79.50), with three Synthetic and one Inconclusive verdict.
+- The repaired low-PID anacron contradiction and fleet-wide narrow PID slope did not recur in the
+  final prioritized evidence. The panel exposed an RDP session-before-use inversion and a visible
+  Nmap-command/target-expansion mismatch as the highest-impact next families.
+- Highest-impact next families: RDP session lifecycle ordering, Nmap semantic target expansion,
+  and complete host-build Windows PE metadata.
