@@ -1,0 +1,55 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 59,
+  "automated_eval": {
+    "score": 96.28166816842574,
+    "status": "PASS",
+    "records": 122916,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 99.99918643626543,
+      "plausibility": 96.81863497762828,
+      "causality": 93.94790448493055,
+      "timing": 92.95138685953201
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Inconclusive",
+      "verdict_confidence": 82,
+      "synthetic_confidence": 44,
+      "interpretation": "mixed/inconclusive",
+      "report_path": "threat-hunter.md"
+    },
+    "detection_engineer": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 78,
+      "synthetic_confidence": 72,
+      "interpretation": "likely synthetic",
+      "report_path": "detection-engineer.md"
+    },
+    "network_forensics": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 84,
+      "synthetic_confidence": 72,
+      "interpretation": "likely synthetic",
+      "report_path": "network-forensics.md"
+    },
+    "host_forensics": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 84,
+      "synthetic_confidence": 72,
+      "interpretation": "likely synthetic",
+      "report_path": "host-forensics.md"
+    },
+    "average_synthetic_confidence": 65.0,
+    "average_interpretation": "likely synthetic"
+  },
+  "deliberation": {
+    "triggered": true,
+    "reason": "Verdict disagreement between the Threat Hunter and three Synthetic assessments",
+    "average_synthetic_confidence": 77.5,
+    "average_interpretation": "likely synthetic",
+    "report_path": "deliberation.md"
+  }
+}

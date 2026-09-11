@@ -35,6 +35,7 @@
 |---:|---|---:|---:|---|
 | 57 | DHCP phase timing; canonical parent principal | 97.36 PASS | 69.00 initial / 82.25 deliberated | complete |
 | 58 | UDP DNS close timing; RDP userinit lifecycle | 96.28 PASS | 71.75 initial / 86.75 deliberated | complete |
+| 59 | Proxy phase causality; Windows token/session identity | 96.28 PASS | 65.00 initial / 77.50 deliberated | complete |
 
 ## Loop 57 Verification
 
@@ -154,3 +155,22 @@
 - **Sibling risks:** SYSTEM and built-in service tokens retain Default/System semantics; a High user
   token uses Full elevation unless a future canonical alternate-token model explicitly says
   otherwise. Non-RDP compatibility events may still use zero GUID when no session owns one.
+
+## Loop 59 Verification
+
+- Commit: `7b947962f` (explicit-proxy observation causality and canonical Windows
+  token/session identity).
+- Routine gate: 8,380 passed, 5 skipped; Ruff check and format check passed.
+- Generated bundle: 122,916 records across 22 evaluated sources.
+- Deterministic evaluation: 96.2817, acceptance PASS; pillars 100.00 parseability,
+  96.82 plausibility, 93.95 causality, and 92.95 timing.
+- Rendered proxy probe: all 522 exact-byte/SNI-matched successful tunnels on the DMZ
+  sensor place CONNECT before origin TCP and TLS; minimum gaps are 8.074 ms and
+  31.597 ms. Loop 58 had 392 origin and 115 TLS inversions in the same 522-tunnel set.
+- Rendered Windows probe: all 969 exact Security 4688/Sysmon Event 1 joins agree on
+  integrity, no High user token has a non-Full elevation type, and all 30 matched Type
+  10 `userinit.exe`/`explorer.exe` rows share the nonzero session LogonGuid.
+- Blind panel: initial scores 44/72/72/72 (mean 65.00); verdict disagreement triggered
+  deliberation. Final scores 70/78/82/80 (mean 77.50), unanimously Synthetic.
+- Next highest-impact families: packet-derived Zeek DNS query/response identity, unified
+  SSH session/history/process timing, and KDC-local AS/TGS/logon ordering.
