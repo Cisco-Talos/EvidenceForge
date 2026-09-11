@@ -1,7 +1,7 @@
 schema_version: "1.0"
 current_revision: 23
 history_start_revision: 1
-behavior_surface_sha256: "fc4e39137f123383354ba4ec0ededa67f6c9dda8bb18ed92224c39673c7051d4"
+behavior_surface_sha256: "03252e79c7ed086114913a224d6539d9d37bf6619af1af38f79591e450f72531"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -242,3 +242,12 @@ changes:
       - zeek_conn
       - zeek_dns
     summary: Makes one-query one-response UDP DNS rows share exact request and response packet anchors with their parent connection at every sensor.
+  - revision: 23
+    id: submillisecond-wfp-transport-admission
+    impact: localized
+    domains:
+      - windows-endpoint-source-timing
+      - network-transport-lifecycle
+    formats:
+      - windows_event_security
+    summary: Admits Windows WFP observations inside valid sub-millisecond canonical transport intervals without imposing the generic 1 ms lifecycle gap.

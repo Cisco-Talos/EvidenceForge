@@ -198,3 +198,23 @@
   jitter would recreate the defect after sensor projection.
 - **Sibling risks:** DNS retries, truncation/TCP fallback, response loss, and true multipacket
   exchanges must not be collapsed into the single-exchange contract.
+
+### Sub-millisecond Windows WFP transport admission
+
+- **Classification:** `family_level`; generation-discovered `sibling_defect` in endpoint
+  source timing exposed by the exact DNS packet interval.
+- **Owning abstraction:** `SourceTimingPlanner` owns admission of Windows WFP observations into
+  their source-local canonical transport interval.
+- **Invariant:** a WFP 5156 observation is at or after the source-local transport open and strictly
+  before transport close. The planner reserves only source timestamp precision at the close edge;
+  it must not require the generic 1 ms lifecycle ordering gap when the complete transport is shorter
+  than 1 ms.
+- **Entry paths:** source- and destination-side Windows WFP projections for UDP and TCP connections,
+  including packet-derived DNS exchanges and remote-authentication transports.
+- **Consumers:** Windows Security 5156, endpoint admission state, remote-auth transport anchors,
+  authentication timing, and rendered cross-source transport probes.
+- **Layer rationale:** the impossible interval is created by generic source timing before rendering;
+  changing Windows emitter timestamps would bypass frozen timing and admission state.
+- **Sibling risks:** process-create/dependent ordering keeps its 1 ms lifecycle gap. WFP process
+  attribution is retained only when its already-modeled process lifecycle is valid; this fix does
+  not fabricate or move process identity.

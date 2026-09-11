@@ -2540,6 +2540,34 @@ def test_windows_wfp_late_candidate_uses_transport_interior_without_close_atom()
     assert candidate < wfp_time < projected_close
 
 
+def test_windows_wfp_admits_submillisecond_transport_interval() -> None:
+    """A packet-sized DNS interval must not inherit the 1 ms lifecycle epsilon."""
+
+    planner = _source_timing_planner("complete")
+    flow_event, login_event = _remote_auth_timing_events()
+    candidate = datetime(2024, 3, 18, 12, 4, 22, 616309, tzinfo=UTC)
+    canonical_close = candidate + timedelta(microseconds=463)
+    wfp_event = _remote_auth_wfp_event(flow_event, login_event)
+    wfp_event.timestamp = candidate
+    wfp_event.network = network_plan(
+        src_ip="10.0.0.10",
+        src_port=53000,
+        dst_ip="10.0.0.53",
+        dst_port=53,
+        protocol="udp",
+        service="dns",
+        duration=0.000463,
+        source_visible_start_time=candidate,
+        source_visible_close_time=canonical_close,
+        conn_state="SF",
+    )
+
+    planner.plan_event(wfp_event, "windows_event_security")
+
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    assert candidate <= wfp_time < canonical_close
+
+
 def test_windows_wfp_source_clock_adjustment_is_applied_once() -> None:
     """The WFP source floor must translate clocks without adding skew twice."""
 

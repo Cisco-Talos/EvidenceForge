@@ -54,6 +54,7 @@ from evidenceforge.utils.time import ensure_utc
 type TimingOccurrence = OccurrenceBuilder | CanonicalOccurrence
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
+_WFP_TRANSPORT_EPSILON = timedelta(microseconds=1)
 _PROCESS_CREATE_SOURCE_KEYS = {
     "source.windows_security_process_create",
     "source.sysmon_process_create",
@@ -4943,11 +4944,11 @@ class SourceTimingPlanner:
                 f"host={hostname} floor={source_floor.isoformat()} "
                 f"close={source_close.isoformat()}"
             )
-        if source_floor <= preferred < source_close - _SOURCE_EPSILON:
+        if source_floor <= preferred < source_close - _WFP_TRANSPORT_EPSILON:
             return preferred
 
         available_us = int(
-            (source_close - _SOURCE_EPSILON - source_floor).total_seconds() * 1_000_000
+            (source_close - _WFP_TRANSPORT_EPSILON - source_floor).total_seconds() * 1_000_000
         )
         if available_us <= 1:
             raise StateError(
