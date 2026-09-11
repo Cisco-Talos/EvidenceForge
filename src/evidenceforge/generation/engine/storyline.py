@@ -4501,6 +4501,13 @@ class StorylineMixin:
             session = self.state_manager.get_session(logon_id)
             if session:
                 session.storyline_protected = True
+                if getattr(session, "session_kind", "") in {"rdp", "ssh"}:
+                    self._record_storyline_session_ready(
+                        system=system,
+                        actor=actor,
+                        session=session,
+                        rng=rng,
+                    )
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
             self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)

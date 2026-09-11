@@ -491,3 +491,30 @@
   Nmap-command/target-expansion mismatch as the highest-impact next families.
 - Highest-impact next families: RDP session lifecycle ordering, Nmap semantic target expansion,
   and complete host-build Windows PE metadata.
+
+## Loop 66 Family Contract
+
+### RDP session publication before dependent user activity
+
+- **Classification:** `family_level`; loop-65 `hard_contradiction` spanning Windows Security,
+  Sysmon, and eCAR session/process evidence.
+- **Owning abstraction:** the RDP action bundle owns the session authentication frontier through
+  `SessionMaterializationPlan.source_ready_time`; the storyline scheduler owns applying that
+  frontier before dispatching dependent authored activity.
+- **Invariant:** a remote-interactive transport and successful Type 10 login are observable before
+  any non-bootstrap process or command uses the resulting logon ID. Source-native delay may not
+  invert that relationship in Security, Sysmon, or eCAR. The bundle's `winlogon.exe` bootstrap may
+  precede authentication, while `userinit.exe`, `explorer.exe`, and authored user activity retain
+  their lifecycle order after the authentication frontier.
+- **Entry paths:** typed `rdp_session`, legacy/compatibility `logon_type: 10`, baseline remote
+  administration, successful remote-interactive authentication, reconnect/session reuse, and
+  deferred RDP publication/recovery.
+- **Consumers:** Security 4624/4688, Sysmon Event 1, eCAR USER_SESSION/PROCESS/FLOW, session state,
+  source-timing planners, follow-on storyline placement, checkpoint/retry replay, and blind
+  cross-source chronology probes.
+- **Layer rationale:** the exact RDP bundle already owns and persists the authentication-ready
+  frontier. The contradiction is introduced when one storyline entry path ignores that canonical
+  truth, so the repair belongs in storyline scheduling rather than emitter timestamp rewriting.
+- **Sibling risks:** preserve source-side `mstsc.exe` and TCP/3389 transport-before-auth ordering,
+  successful-flow semantics, bootstrap process order, explicit logoff/session close, reconnect
+  behavior, source publication deadlines, and exact deferred continuation recovery.

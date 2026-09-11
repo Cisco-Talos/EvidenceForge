@@ -5635,6 +5635,13 @@ class NetworkTransactionPlanner:
                     for builder, state_member in deferred_state_starts
                 )
 
+        if prepared_deferred_session_dispatches:
+            if prepared_dispatch is None:
+                raise StateError("Deferred-session timing lost its transport projection")
+            executor.dispatcher.stage_deferred_session_publication_timing(
+                (prepared_dispatch, *prepared_deferred_session_dispatches),
+                boundary.timing_preparation,
+            )
         boundary.seal_timing()
         if prepared_dispatch is not None:
             executor.dispatcher.validate_prepared(prepared_dispatch)

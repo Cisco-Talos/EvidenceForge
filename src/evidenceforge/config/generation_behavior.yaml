@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 29
+current_revision: 30
 history_start_revision: 1
-behavior_surface_sha256: "df044281d87ab2a3adff9c8149d3a054a0e3397b4d091325091351ed4ed5a6cf"
+behavior_surface_sha256: "9ad3c48fa5b74e270d2ba31d3da22649500cb5a703f62999e6db564f576780f2"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -314,3 +314,15 @@ changes:
       - ecar
       - syslog
     summary: Routes one-shot anacron activity through the canonical host PID allocator, gives hidden Linux process churn stable host-specific workload magnitude, and preserves viable authored shell anchors against later traversal-order reservations.
+  - revision: 30
+    id: deferred-remote-session-publication-frontier
+    impact: material
+    domains:
+      - remote-session-lifecycle
+      - source-timing
+      - storyline-scheduling
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Commits admitted deferred-session source indexes with the exact timing transaction and applies remote-session readiness before authored follow-on activity, preventing RDP LogonID use before source-visible login.

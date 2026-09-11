@@ -943,6 +943,104 @@ def test_explicit_logoff_delegates_bundle_owned_rdp_graph_to_exact_owner(
     assert child_terminations[0]["timestamp_ms"] < target_logouts[0]["timestamp_ms"]
 
 
+def test_initial_rdp_publishes_login_before_immediate_authored_process(
+    tmp_path: Path,
+) -> None:
+    """An immediate RDP child process cannot render before its owning login."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        include_sysmon=True,
+        include_sysmon_during_open=True,
+        modeled_source=False,
+        modeled_target_pid4=True,
+        production_timing_runtime=True,
+    )
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None
+    login_source_time = harness.dispatcher.source_timing_planner.session_start_source_time(
+        "ecar",
+        session.lifecycle_group_id,
+    )
+    assert login_source_time is not None
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    assert session.explorer_pid is not None
+    explorer_identity = harness.state.get_process_identity(
+        harness.target_hostname,
+        session.explorer_pid,
+    )
+    assert explorer_identity is not None
+    child_pid = harness.generator.generate_process(
+        user,
+        target,
+        explorer_identity.started_at + timedelta(milliseconds=20),
+        harness.logon_id,
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "powershell.exe -NoProfile Get-Process",
+        parent_pid=explorer_identity.pid,
+        from_storyline=True,
+    )
+    child_identity = harness.state.get_process_identity(harness.target_hostname, child_pid)
+    assert child_identity is not None
+    assert child_identity.parent_lifecycle_group_id == session.lifecycle_group_id
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    login = next(
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and row.get("object") == "USER_SESSION"
+        and row.get("action") == "LOGIN"
+        and row.get("objectID") == harness.session_object_id
+    )
+    child = next(
+        row
+        for row in ecar_rows
+        if row.get("object") == "PROCESS"
+        and row.get("action") == "CREATE"
+        and row.get("objectID") == child_identity.object_id
+    )
+    assert login["timestamp_ms"] < child["timestamp_ms"]
+
+    rendered_security = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    security_login_time = _windows_security_time(rendered_security, 4624)
+    security_process_time = _windows_security_time(
+        rendered_security,
+        4688,
+        process_name="powershell.exe",
+    )
+    assert security_login_time < security_process_time
+
+    rendered_sysmon = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "sysmon").rglob("*.xml")
+    )
+    sysmon_process_time = _windows_security_time(
+        rendered_sysmon,
+        1,
+        process_name="powershell.exe",
+    )
+    assert security_login_time < sysmon_process_time
+
+
 def test_hourly_stale_cleanup_drains_due_rdp_before_consuming_exact_mstsc(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
