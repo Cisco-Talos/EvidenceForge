@@ -38272,6 +38272,66 @@ class ActivityGenerator:
                 raise StateError("Linux sudo TTY availability route has a malformed deadline")
             return logon_id, deadline
 
+    def _linux_sudo_terminal_for_session(self, logon_id: str) -> str | None:
+        """Return the sole controlling terminal already bound to one live session."""
+
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo terminal lookup requires a non-empty exact LogonID")
+        with self._linux_sudo_tty_lock:
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            sessions = self._linux_sudo_tty_sessions
+            if type(reverse) is not dict or type(sessions) is not dict:
+                raise StateError("Linux sudo terminal routes must be exact dictionaries")
+            tty_keys = dict.get(reverse, logon_id)
+            if tty_keys is None:
+                return None
+            if type(tty_keys) is not set or not tty_keys:
+                raise StateError("Linux sudo terminal route has a malformed reverse bucket")
+            normalized = tuple(sorted(self._validate_linux_sudo_tty_key(key) for key in tty_keys))
+            if len(normalized) != 1:
+                raise StateError("One Linux session cannot own multiple controlling terminals")
+            tty_key = normalized[0]
+            if dict.get(sessions, tty_key) != logon_id:
+                raise StateError("Linux sudo terminal reverse route lost its exact session owner")
+            return tty_key[2]
+
+    def _linux_sudo_tty_request_for_session(
+        self,
+        logon_id: str,
+    ) -> tuple[str, str, str] | None:
+        """Return the exact allocator request that owns one session's terminal."""
+
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo TTY request lookup requires a non-empty exact LogonID")
+        with self._linux_sudo_tty_lock:
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            sessions = self._linux_sudo_tty_sessions
+            assignments = self._linux_sudo_tty_assignments
+            owners = self._linux_sudo_tty_owners
+            if any(
+                type(mapping) is not dict for mapping in (reverse, sessions, assignments, owners)
+            ):
+                raise StateError("Linux sudo terminal ownership maps must be exact dictionaries")
+            tty_keys = dict.get(reverse, logon_id)
+            if tty_keys is None:
+                return None
+            if type(tty_keys) is not set or not tty_keys:
+                raise StateError("Linux sudo terminal route has a malformed reverse bucket")
+            normalized = tuple(sorted(self._validate_linux_sudo_tty_key(key) for key in tty_keys))
+            if len(normalized) != 1:
+                raise StateError("One Linux session cannot own multiple controlling terminals")
+            tty_key = normalized[0]
+            inverse_key = (tty_key[0], tty_key[2])
+            requested_tty_key = dict.get(owners, inverse_key)
+            if (
+                dict.get(sessions, tty_key) != logon_id
+                or type(requested_tty_key) is not tuple
+                or self._validate_linux_sudo_tty_key(requested_tty_key) != requested_tty_key
+                or dict.get(assignments, requested_tty_key) != tty_key[2]
+            ):
+                raise StateError("Linux sudo terminal route lost its exact allocator owner")
+            return requested_tty_key
+
     def _has_linux_sudo_tty_route(self, logon_id: str) -> bool:
         """Return whether one exact nonempty reverse TTY route exists for a session."""
 
@@ -38554,6 +38614,10 @@ class ActivityGenerator:
             current_keys = dict.get(reverse, logon_id)
             if current_keys is not None and type(current_keys) is not set:
                 raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+            if session is not None and current_keys and tty_key not in current_keys:
+                raise StateError(
+                    "One live Linux session cannot publish a second controlling terminal"
+                )
 
             previous_after = set(previous_keys or ())
             previous_after.discard(tty_key)
@@ -39698,7 +39762,34 @@ class ActivityGenerator:
         if complete_by is None:
             complete_by = ensure_utc(reserve_until) + timedelta(milliseconds=50)
         user = self._user_model_for_username(sudo_user)
-        requested_tty_key = (system.hostname, sudo_user, tty)
+        compatible_at_request = [
+            candidate
+            for candidate in self.state_manager.get_active_sessions_for_user_at(
+                user.username,
+                sudo_time,
+            )
+            if candidate.system == system.hostname
+            and candidate.session_kind in {"interactive", "ssh"}
+            and _session_active_for_activity(
+                candidate,
+                reserve_until,
+                margin_seconds=1.0,
+            )
+        ]
+        requested_tty_key: tuple[str, str, str]
+        if compatible_at_request:
+            preferred_session = max(
+                compatible_at_request,
+                key=lambda candidate: candidate.start_time,
+            )
+            existing_request = self._linux_sudo_tty_request_for_session(preferred_session.logon_id)
+            if existing_request is not None:
+                requested_tty_key = existing_request
+                tty = requested_tty_key[2]
+            else:
+                requested_tty_key = (system.hostname, sudo_user, tty)
+        else:
+            requested_tty_key = (system.hostname, sudo_user, tty)
         capacity_claim = object()
         tty_pair_published = False
         handoff_pair_deltas: list[tuple[bool, bool]] = []
@@ -39735,20 +39826,24 @@ class ActivityGenerator:
                 ):
                     session = candidate
             if session is None:
-                compatible_sessions = [
-                    candidate
-                    for candidate in self.state_manager.get_active_sessions_for_user_at(
-                        user.username,
-                        effective_sudo_time,
-                    )
-                    if candidate.system == system.hostname
-                    and candidate.session_kind in {"interactive", "ssh"}
-                    and _session_active_for_activity(
-                        candidate,
-                        reserve_until,
-                        margin_seconds=1.0,
-                    )
-                ]
+                compatible_sessions = []
+                for candidate in self.state_manager.get_active_sessions_for_user_at(
+                    user.username,
+                    effective_sudo_time,
+                ):
+                    if (
+                        candidate.system != system.hostname
+                        or candidate.session_kind not in {"interactive", "ssh"}
+                        or not _session_active_for_activity(
+                            candidate,
+                            reserve_until,
+                            margin_seconds=1.0,
+                        )
+                    ):
+                        continue
+                    candidate_terminal = self._linux_sudo_terminal_for_session(candidate.logon_id)
+                    if candidate_terminal is None or candidate_terminal == assigned_tty:
+                        compatible_sessions.append(candidate)
                 if compatible_sessions:
                     session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
             if latest_end is not None:

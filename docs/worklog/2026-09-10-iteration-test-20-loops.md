@@ -643,3 +643,26 @@
 - **Next family:** make controlling terminal identity immutable for each continuing interactive
   shell; the panel found 71 sudo rows across 14 shells and 11 hosts rotating among multiple
   `pts/*` devices without a new shell/session transition.
+
+## Loop 69 Family Contract
+
+### Immutable controlling terminal for a continuing Linux session shell
+
+- **Classification:** `family_level`; loop-68 `hard_contradiction` across eCAR process identity and
+  sudo syslog on 11 Linux hosts.
+- **Owning abstraction:** the Linux sudo session route owns the exact logon/session-to-TTY binding;
+  the per-session shell and all sudo children consume that binding.
+- **Invariant:** one live Linux interactive or SSH session and its continuing shell process may
+  publish at most one controlling terminal. A later sudo request routed to that same session must
+  reuse its existing `pts/*`; a different terminal requires a separately owned session and shell.
+- **Entry paths:** baseline extra-syslog sudo activity, typed sudo action bundles, pre-window
+  carried-in sessions, SSH-owned sessions, and direct generator compatibility calls.
+- **Consumers:** syslog sudo command rendering, PAM open/close rows, eCAR parent/child process
+  identity, foreground serialization, strict lifecycle retention, checkpoint state, and blind host
+  correlation.
+- **Layer rationale:** syslog already renders the effective TTY returned by the generator. The
+  contradiction is created earlier when different requested TTYs are allowed to bind to one reused
+  session shell, so enforcement belongs in the session-route owner rather than the emitter.
+- **Sibling risks:** concurrent sessions for one user must retain distinct terminals; closed
+  sessions must release their routes; a malformed multi-TTY reverse route must fail closed;
+  foreground timing and strict lifecycle rollback remain unchanged.

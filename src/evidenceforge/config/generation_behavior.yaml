@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 32
+current_revision: 33
 history_start_revision: 1
-behavior_surface_sha256: "921a464f493e07f915d0be797cf97bd48becb090e2503481f30aac8c9cdbf5bb"
+behavior_surface_sha256: "a1de251c88268c81cd920a8d23ff49da1ca08eb36b1b35a8d9f6067c2f28f7ff"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -346,3 +346,14 @@ changes:
     formats:
       - windows_event_security
     summary: Binds connection-triggered KDC audits to the exact canonical Kerberos transport and renders 4768, 4769, and 4771 strictly after target-side WFP admission and before transport close.
+  - revision: 33
+    id: immutable-linux-session-controlling-terminal
+    impact: material
+    domains:
+      - linux-session-identity
+      - process-lifecycle
+      - sudo-authentication
+    formats:
+      - ecar
+      - syslog
+    summary: Reuses the sole controlling terminal already owned by a continuing Linux interactive or SSH session so one persistent shell cannot publish sudo children across multiple pts identities.

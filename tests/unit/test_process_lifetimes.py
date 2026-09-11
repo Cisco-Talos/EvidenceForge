@@ -1333,7 +1333,7 @@ def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None
         session_kind="interactive"
     )
     start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
-    first_sudo, first_child, _, _ = generator.generate_linux_sudo_processes(
+    first_sudo, first_child, _, first_tty = generator.generate_linux_sudo_processes(
         system=system,
         sudo_time=start,
         child_time=start + timedelta(milliseconds=200),
@@ -1354,7 +1354,7 @@ def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None
         time=start + timedelta(seconds=10),
         pid=first_sudo,
     )
-    second_sudo, _second_child, _, _ = generator.generate_linux_sudo_processes(
+    second_sudo, _second_child, _, second_tty = generator.generate_linux_sudo_processes(
         system=system,
         sudo_time=start + timedelta(milliseconds=100),
         child_time=start + timedelta(milliseconds=300),
@@ -1381,7 +1381,54 @@ def test_linux_sudo_companions_share_shell_foreground_slot_across_ttys() -> None
     assert creates[first_sudo] < first_termination < creates[second_sudo]
     assert creates[first_sudo] >= start
     assert creates[second_sudo] > start + timedelta(seconds=10)
+    assert first_tty == second_tty == "pts/1"
     assert shell_pid > 0 and logon_id
+
+
+def test_linux_sudo_reuses_exact_requested_to_assigned_tty_route() -> None:
+    """A continuing shell reuses its allocator pair when its requested TTY was occupied."""
+    generator, _state, system, user, _logon_id, _shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    foreign_request = (system.hostname, "other-user", "pts/1")
+    generator._linux_sudo_tty_assignments[foreign_request] = "pts/1"
+    generator._linux_sudo_tty_owners[(system.hostname, "pts/1")] = foreign_request
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+
+    first_sudo, first_child, _, first_tty = generator.generate_linux_sudo_processes(
+        system=system,
+        sudo_time=start,
+        child_time=start + timedelta(milliseconds=200),
+        sudo_user=user.username,
+        tty="pts/1",
+        command="/usr/bin/id",
+        reserve_until=start + timedelta(seconds=2),
+        lifecycle_group_id="sudo:assigned-first",
+    )
+    assert first_child is not None
+    generator.terminate_linux_sudo_process(
+        system=system,
+        time=start + timedelta(seconds=1),
+        pid=first_child,
+    )
+    generator.terminate_linux_sudo_process(
+        system=system,
+        time=start + timedelta(seconds=2),
+        pid=first_sudo,
+    )
+    _second_sudo, _second_child, _, second_tty = generator.generate_linux_sudo_processes(
+        system=system,
+        sudo_time=start + timedelta(seconds=3),
+        child_time=start + timedelta(seconds=3, milliseconds=200),
+        sudo_user=user.username,
+        tty="pts/7",
+        command="/usr/bin/hostname",
+        reserve_until=start + timedelta(seconds=5),
+        lifecycle_group_id="sudo:assigned-second",
+    )
+
+    assert first_tty != "pts/1"
+    assert second_tty == first_tty
 
 
 def test_linux_sudo_rejects_foreground_shift_past_ssh_transport_close() -> None:
