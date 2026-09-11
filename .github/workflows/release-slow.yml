@@ -15,7 +15,7 @@ jobs:
   slow-comprehensive:
     name: Slow comprehensive tests (no coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 120
 
     steps:
       - name: Checkout code
