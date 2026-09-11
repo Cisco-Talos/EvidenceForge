@@ -52,16 +52,23 @@ lint/format checks:
 
 ```bash
 uv sync --all-extras
-uv run pytest --no-cov
+uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
 
-Run the slow comprehensive workload suite without coverage when your change
-touches generation behavior or before a release PR:
+Run the extended release gate without coverage when your change touches
+generation behavior or before a release PR:
 
 ```bash
-uv run pytest --include-slow -m slow --no-cov --durations=20
+uv run pytest -m slow --no-cov --durations=20
+```
+
+Million-entry, multi-week, exhaustive-matrix, and full-demo diagnostics are
+not release gates. Run only the soak tests relevant to the changed owner:
+
+```bash
+uv run pytest -m soak --no-cov --durations=20
 ```
 
 Run optional third-party parser validation when touching emitted log formats
@@ -137,8 +144,8 @@ cd EvidenceForge
 # Install dependencies and development tools (requires uv: https://docs.astral.sh/uv/)
 uv sync --all-extras
 
-# Run the test suite without coverage instrumentation (skips slow by default)
-uv run pytest --no-cov
+# Run the routine test tier (coverage is opt-in)
+uv run pytest
 
 # Lint and format
 uv run ruff check .
@@ -147,22 +154,27 @@ uv run ruff format --check .
 
 ### Test Markers
 
-- `@pytest.mark.slow`: large dataset and workload tests, skipped by default and normally
-  run without coverage instrumentation
+- `@pytest.mark.slow`: extended release-gate tests, excluded by default and run with
+  `uv run pytest -m slow --no-cov`. This lane holds distinct expensive fault matrices,
+  fresh-process determinism checks, and representative end-to-end generation.
+- `@pytest.mark.soak`: exceptional million-entry, multi-week, exhaustive-matrix, or full-demo
+  diagnostics,
+  excluded by routine and release gates. Run only when relevant with
+  `uv run pytest -m soak --no-cov`. Slow and soak are mutually exclusive tiers.
 - `@pytest.mark.external_parser`: third-party parser container tests, skipped by default
   and normally run only in an explicitly opted-in local or CI lane
 
 ```bash
 # Normal fast run
-uv run pytest --no-cov
+uv run pytest
 
 # Slow comprehensive run
-uv run pytest --include-slow -m slow --no-cov --durations=20
+uv run pytest -m slow --no-cov --durations=20
 
 # External parser run
 uv run pytest --include-external-parsers -m external_parser --no-cov
 
-# Release coverage gate; do not combine with --include-slow
+# Release coverage gate; do not combine with -m slow or -m soak
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 ```
 

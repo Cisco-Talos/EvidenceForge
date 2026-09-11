@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from evidenceforge.models.scenario import Scenario, System, User
@@ -26,6 +26,7 @@ class WindowsAccount:
     scope: WindowsScope
     domain: str = ""
     host: str | None = None
+    account_control: frozenset[str] = frozenset()
 
     @property
     def sam_name(self) -> str:
@@ -60,6 +61,7 @@ class IdentityDirectory:
     windows_accounts: dict[tuple[str, str], WindowsAccount] = field(default_factory=dict)
     linux_accounts: dict[tuple[str, str], LinuxAccount] = field(default_factory=dict)
     sid_registry: dict[str, str] = field(default_factory=dict)
+    windows_account_control: dict[str, frozenset[str]] = field(default_factory=dict)
     _next_domain_rid: int = 1001
 
     @classmethod
@@ -73,6 +75,10 @@ class IdentityDirectory:
             windows_domain=domain,
             domain_sid_base=domain_sid_base,
             has_windows_domain=has_windows_domain,
+            windows_account_control={
+                _key(name): frozenset(flags)
+                for name, flags in env.identity.windows_account_control.items()
+            },
         )
         directory._add_well_known_windows_accounts()
         directory._add_well_known_linux_accounts()
@@ -89,6 +95,12 @@ class IdentityDirectory:
             if host_account is not None:
                 return host_account
         return self.windows_accounts.get((normalized, "*"))
+
+    def windows_account_has_control(self, username: str, flag: str) -> bool:
+        """Return whether a resolved Windows principal explicitly owns an account-control flag."""
+        principal = username.strip().rsplit("\\", 1)[-1].split("@", 1)[0]
+        account = self.windows_account(principal)
+        return account is not None and flag in account.account_control
 
     def linux_account(self, username: str, host: str | None = None) -> LinuxAccount | None:
         """Return the best Linux account for a logical user and optional host."""
@@ -301,6 +313,11 @@ class IdentityDirectory:
             )
 
     def _store_windows(self, account: WindowsAccount) -> None:
+        flags = self.windows_account_control.get(_key(account.logical_name))
+        if flags is None:
+            flags = self.windows_account_control.get(_key(account.account_name))
+        if flags is not None:
+            account = replace(account, account_control=flags)
         host_key = _key(account.host) if account.host else "*"
         self.windows_accounts[(_key(account.logical_name), host_key)] = account
         self.sid_registry.setdefault(account.logical_name, account.sid)

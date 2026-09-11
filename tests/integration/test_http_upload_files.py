@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.http import HttpMultipartEntitySpec
@@ -34,6 +36,7 @@ def _read_ndjson(root: Path, filename: str) -> list[dict]:
     ]
 
 
+@pytest.mark.soak
 def test_curl_raw_42_mib_rar_upload_correlates_http_files_endpoint_and_ground_truth(
     tmp_path: Path,
 ) -> None:
@@ -78,6 +81,7 @@ def test_curl_raw_42_mib_rar_upload_correlates_http_files_endpoint_and_ground_tr
                         monitoring_segments=["workstations"],
                         direction="bidirectional",
                         placement="span",
+                        capture_profile="well_synced",
                         log_formats=["zeek"],
                     )
                 ],
@@ -187,6 +191,7 @@ def test_curl_raw_42_mib_rar_upload_correlates_http_files_endpoint_and_ground_tr
     }
 
 
+@pytest.mark.slow
 def test_curl_multipart_42_mib_rar_upload_uses_leaf_and_envelope_sizes(
     tmp_path: Path,
 ) -> None:
@@ -248,6 +253,7 @@ def test_curl_multipart_42_mib_rar_upload_uses_leaf_and_envelope_sizes(
                         monitoring_segments=["workstations"],
                         direction="bidirectional",
                         placement="span",
+                        capture_profile="well_synced",
                         log_formats=["zeek"],
                     )
                 ],

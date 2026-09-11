@@ -937,15 +937,22 @@ class TestDocsSync:
 
     def test_reference_doc_and_skills_reference_the_feature(self):
         assert (self._ROOT / "docs/reference/adversarial_payload.md").exists()
-        assert "payload_families.yaml" in self._read("commands/eforge/config.md")
-        assert "adversarial_payload" in self._read("commands/eforge/scenario.md")
-        # Both ground-truth kinds share the sidecar; eval skill must say so.
-        assert "adversarial_payload" in self._read("commands/eforge/evaluate.md")
+        assert "payload_families.yaml" in self._read(
+            "commands/eforge/references/config-host-activity.md"
+        )
+        payloads = self._read("commands/eforge/references/scenario-payloads.md")
+        assert "adversarial_payload" in payloads
+        assert "family" in payloads
+        assert "value" in payloads
+        assert "poison marker" in payloads
 
     def test_validate_skill_documents_adversarial_payload_errors(self):
-        # AGENTS.md convention: validate.md must carry error-handling guidance for new
-        # event types. adversarial_payload has surface/family/value-specific errors.
+        # The compact validator routes surface/family/value-specific errors to its
+        # focused safety reference instead of carrying the full contract inline.
         validate = self._read("commands/eforge/validate.md")
-        assert "adversarial_payload" in validate
-        assert "does not model surface" in validate  # the family↔surface error
-        assert "web_server" in validate  # the http_* surface error
+        assert "/eforge:references:validation-safety" in validate
+
+        safety = self._read("commands/eforge/references/validation-safety.md")
+        assert "adversarial_payload" in safety
+        assert "does not model surface" in safety  # the family↔surface error
+        assert "web_server" in safety  # the http_* surface error

@@ -33,6 +33,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
+from evidenceforge.events.content_identity import (
+    FileContentIdentity,
+    LocalArtifactIdentity,
+    ProcessBinaryIdentity,
+)
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -60,7 +65,13 @@ class HostContext:
 
 @dataclass(slots=True)
 class AuthContext:
-    """Authentication/session details."""
+    """Authentication/session details.
+
+    The Windows fields remain the source contract for Windows projections.  The
+    neutral fields at the end describe protocol-owned sessions (for example an
+    SMB session accepted by Samba) without inventing a Windows LUID or a Linux
+    PAM login.
+    """
 
     username: str
     full_name: str = ""
@@ -89,8 +100,18 @@ class AuthContext:
     process_pid: int = 0  # PID of process using explicit credentials (4648 ProcessId)
     target_server: str = ""  # 4648 TargetServerName (e.g., "fileserver01", "localhost")
     target_domain: str = ""  # 4648 TargetDomainName for target credentials
+    outbound_username: str = ""  # Alternate identity used by Type 9 network access
+    outbound_domain: str = ""  # Domain of the alternate Type 9 network identity
+    cloned_from_logon_id: str = ""  # Caller LUID cloned by a Type 9 session
     process_name: str = ""  # 4648 ProcessName (process using explicit creds)
     workstation_name: str = ""  # Windows WorkstationName for logon/failure events
+    session_kind: str = ""  # Platform-neutral semantic kind, for example "smb"
+    auth_protocol: str = ""  # Protocol-native mechanism, for example kerberos/ntlmssp
+    smb_principal: str = ""  # Credential identity, which may differ from local actor
+    account_scope: str = ""  # directory, local, service, or another provider scope
+    auth_session_ref: str = ""  # Neutral durable authentication/session reference
+    effective_uid: int | None = None  # Optional server-side Unix identity
+    effective_gid: int | None = None  # Optional server-side Unix primary group
 
 
 @dataclass(slots=True)
@@ -116,6 +137,7 @@ class ProcessContext:
     logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
     parent_image: str = ""  # ParentProcessName (4688)
     parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
+    parent_username: str = ""  # Canonical parent principal for source-native rendering
     parent_start_time: datetime | None = None  # Parent creation time for stable GUIDs
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
@@ -123,6 +145,7 @@ class ProcessContext:
     current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
     target_security_context: ProcessTargetSecurityContext | None = None
+    binary_identity: ProcessBinaryIdentity | None = None
 
 
 @dataclass(slots=True)
@@ -396,6 +419,8 @@ class FileContext:
     path: str
     action: str  # "create" | "modify" | "delete" | "read"
     pid: int = 0
+    artifact_identity: LocalArtifactIdentity | None = None
+    content_identity: FileContentIdentity | None = None
 
 
 @dataclass(slots=True)
@@ -404,6 +429,7 @@ class RegistryContext:
 
     key: str
     value: str = ""
+    value_type: Literal["string", "dword", "qword", "binary"] = "string"
     action: str = ""  # "create" | "modify" | "delete"
     pid: int = 0
 
@@ -418,6 +444,7 @@ class ImageLoadContext:
     signature_status: str = "Valid"  # Valid, Expired, Revoked, Unavailable
     load_phase: Literal["startup", "runtime"] = "runtime"
     load_order: int = 0
+    binary_identity: ProcessBinaryIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -730,6 +757,7 @@ class HttpContext:
     request_entity: HttpRequestEntityContext | None = None
     request_multipart: HttpMultipartEntityContext | None = None
     response_body_len: int = 0
+    response_content_identity: str = ""
     response_multipart: HttpMultipartEntityContext | None = None
     canonical_request_time: datetime | None = None
     flow_request_body_len: int | None = None
@@ -781,6 +809,7 @@ class FileTransferContext:
     source: str = ""  # "HTTP", "SSL", "SMTP"
     depth: int = 0
     filename: str = ""
+    content_identity: str = ""
     analyzers: tuple[str, ...] = ()
     mime_type: str = ""
     duration: float = 0.0
@@ -801,8 +830,75 @@ class FileTransferContext:
     entity_body_len: int | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "analyzers", tuple(self.analyzers))
+        analyzers = tuple(self.analyzers)
+        analyzer_names = {analyzer.upper() for analyzer in analyzers}
+        missing_digest_analyzers = [
+            analyzer
+            for field_name, analyzer in (
+                ("md5", "MD5"),
+                ("sha1", "SHA1"),
+                ("sha256", "SHA256"),
+            )
+            if getattr(self, field_name) and analyzer not in analyzer_names
+        ]
+        if missing_digest_analyzers:
+            missing = ", ".join(missing_digest_analyzers)
+            raise ValueError(
+                f"File transfer digest results require matching Zeek analyzers: {missing}"
+            )
+        object.__setattr__(self, "analyzers", analyzers)
         object.__setattr__(self, "multipart_part_path", tuple(self.multipart_part_path))
+
+
+@dataclass(frozen=True, slots=True)
+class SmbContext:
+    """Canonical SMB2/3 application phase attached to an existing transport."""
+
+    phase: Literal[
+        "tree_connect",
+        "directory_enumeration",
+        "open",
+        "read",
+        "write",
+        "rename",
+        "delete",
+        "close",
+    ]
+    operation: str
+    purpose: str
+    session_id: str
+    tree_id: str
+    share_ref: str
+    share_name: str
+    result: str
+    requested_access: Literal["list", "read", "write", "rename", "delete"] = "read"
+    client_path: str = ""
+    local_path: str = ""
+    share_path: str = ""
+    server_path: str = ""
+    share_local_path: str = ""
+    file_id: str = ""
+    content_version: int = 0
+    local_file_id: str = ""
+    local_content_version: int = 0
+    handle_id: str = ""
+    size_bytes: int = 0
+    previous_path: str = ""  # SMB wire/share-relative rename source
+    previous_client_path: str = ""  # Client-native mount, drive, or UNC rename source
+    previous_server_path: str = ""  # Server-local backing path rename source
+    # ``filesystem`` is retained as the backing-filesystem compatibility view.
+    # Zeek must render ``advertised_filesystem`` instead because Samba commonly
+    # reports NTFS over the wire while storing data on ext4 or XFS.
+    filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
+    backing_filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
+    advertised_filesystem: str = "NTFS"
+    server_platform: Literal["windows", "linux"] = "windows"
+    provider: Literal["windows", "samba"] = "windows"
+    client_access: Literal["windows_native", "cifs_mount", "smbclient", "external"] = (
+        "windows_native"
+    )
+    encrypted: bool = False
+    audit: Literal["minimal", "standard", "high"] = "standard"
 
 
 @dataclass(frozen=True, slots=True)

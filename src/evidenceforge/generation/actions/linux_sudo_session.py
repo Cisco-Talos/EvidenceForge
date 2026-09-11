@@ -34,6 +34,17 @@ from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
 
+def linux_sudo_intrinsic_close_headroom() -> timedelta:
+    """Return the maximum bundle-owned tail after the requested command runtime.
+
+    The PAM close may trail the runtime by 950 milliseconds and the owning sudo
+    process terminates at most another 50 milliseconds later. Executor-owned TTY
+    serialization is separate and is returned as ``timing_shift`` during execution.
+    """
+
+    return timedelta(seconds=1)
+
+
 @dataclass(frozen=True, slots=True)
 class LinuxSudoSessionRequest:
     """Intent for one allowed sudo command and its PAM session lifecycle."""
@@ -45,6 +56,7 @@ class LinuxSudoSessionRequest:
     uid: int
     runtime: timedelta
     source: str = "baseline"
+    latest_end: datetime | None = None
 
     def __post_init__(self) -> None:
         """Reject requests that cannot represent an allowed sudo invocation."""
@@ -55,6 +67,8 @@ class LinuxSudoSessionRequest:
             raise ValueError("Linux sudo session requests require a non-empty invoking user")
         if self.runtime < timedelta(0):
             raise ValueError("Linux sudo session runtime cannot be negative")
+        if self.latest_end is not None and self.latest_end < self.time:
+            raise ValueError("Linux sudo session latest_end cannot precede its command time")
 
     @property
     def stable_id(self) -> str:
@@ -96,6 +110,8 @@ class LinuxSudoSessionExecutor(Protocol):
         command: str,
         reserve_until: datetime,
         lifecycle_group_id: str,
+        complete_by: datetime | None = None,
+        latest_end: datetime | None = None,
     ) -> tuple[int, int | None, timedelta, str]:
         """Create session-owned sudo and elevated child processes."""
         ...
@@ -151,6 +167,7 @@ class LinuxSudoSessionActionBundle:
             + timedelta(milliseconds=120 + ((timing_seed >> 12) % 831))
         )
         close_time = max(close_time, open_time + timedelta(milliseconds=1))
+        parent_end_time = close_time + timedelta(milliseconds=10 + ((timing_seed >> 32) % 41))
         command = request.command_message.split("COMMAND=", 1)[1].strip()
         tty = (
             request.command_message.split("TTY=", 1)[1].split(" ;", 1)[0].strip()
@@ -166,6 +183,8 @@ class LinuxSudoSessionActionBundle:
             tty=tty,
             command=command,
             reserve_until=close_time,
+            complete_by=parent_end_time,
+            latest_end=request.latest_end,
             lifecycle_group_id=group_id,
         )
         if pid <= 0:
@@ -222,6 +241,6 @@ class LinuxSudoSessionActionBundle:
             )
         self._executor.terminate_linux_sudo_process(
             system=request.system,
-            time=close_time + timedelta(milliseconds=10 + ((timing_seed >> 32) % 41)),
+            time=parent_end_time + timing_shift,
             pid=pid,
         )

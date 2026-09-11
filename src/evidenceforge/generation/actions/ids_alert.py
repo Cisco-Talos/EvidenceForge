@@ -223,6 +223,7 @@ def _predicate_from_signature(
         inspection=spec.inspection,
         http_methods=tuple(spec.http_methods),
         http_statuses=tuple(spec.http_statuses),
+        http_user_agents=tuple(spec.http_user_agents),
         requires_http_body=spec.requires_http_body,
         tls_server_names=tuple(spec.tls_server_names),
         file_mime_types=tuple(spec.file_mime_types),
@@ -298,6 +299,12 @@ def ids_alert_matches_transaction(
         return False
     if predicate.http_statuses and (
         http is None or int(http.status_code) not in predicate.http_statuses
+    ):
+        return False
+    if predicate.http_user_agents and (
+        http is None
+        or str(http.user_agent).casefold()
+        not in {candidate.casefold() for candidate in predicate.http_user_agents}
     ):
         return False
     if predicate.requires_http_body and (http is None or int(http.request_body_len or 0) <= 0):

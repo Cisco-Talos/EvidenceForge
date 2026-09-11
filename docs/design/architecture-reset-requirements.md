@@ -194,7 +194,7 @@ No repo-local memory files were discovered during the scan.
 
 ## Implementation Requirements
 
-- Python 3.11+ is required.
+- Python 3.12+ is required.
 - Use `uv` for dependency and command execution.
 - Use Pydantic v2 for structured validation models.
 - Use Typer for CLI, Rich for progress/reporting, Jinja2 for templates, PyYAML for

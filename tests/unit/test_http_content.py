@@ -155,6 +155,12 @@ def test_response_mime_types_require_a_protocol_legal_visible_body():
     assert response_mime_types_for_status(200, "", 900) == ["application/octet-stream"]
 
 
+def test_error_response_rejects_requested_download_mime():
+    assert response_mime_types_for_status(403, "application/x-msdownload", 1474) == ["text/html"]
+    assert response_mime_types_for_status(404, "application/zip", 932) == ["text/html"]
+    assert response_mime_types_for_status(403, "application/json", 1474) == ["application/json"]
+
+
 @pytest.mark.parametrize(
     ("method", "status_code", "body_len", "expected"),
     [

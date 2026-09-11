@@ -39,18 +39,44 @@ from evidenceforge.events.contexts import (
     ProcessTargetSecurityContext,
 )
 from evidenceforge.formats import load_format
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
 from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
+    _enforce_windows_lock_dwell_after_normalization,
     _normalize_windows_time_created,
+    _repair_windows_lock_lifecycle_rows,
+    _shift_windows_lock_lifecycle_after_rendered_clock,
     _special_privilege_fallback,
     _windows_pid_hex,
+)
+from evidenceforge.generation.source_timing import (
+    compatibility_endpoint_event_times,
+    compatibility_relationship_time,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 from tests.network_factories import network_plan
+
+
+def _compatibility_timing_delta(
+    relationship_key: str,
+    *,
+    seed_parts: tuple[object, ...],
+) -> timedelta:
+    """Return the stateless raw-row relationship adapter as a legacy delta."""
+
+    anchor = seed_parts[-1]
+    assert isinstance(anchor, datetime)
+    return (
+        compatibility_relationship_time(
+            anchor,
+            relationship_key=relationship_key,
+            identity_parts=seed_parts,
+        )
+        - anchor
+    )
 
 
 class TestWindowsEventEmitter:
@@ -208,6 +234,59 @@ class TestWindowsEventEmitter:
         rendered = emitter.emit_event.call_args.args[0]
         assert rendered["ProcessName"] == expected_process
         assert rendered["ProcessId"] == f"0x{emitter._system_pids['WIN-TEST-01'][expected_role]:x}"
+
+    def test_type9_logon_renders_new_credentials_fields(self, format_def, temp_output):
+        """4624 Type 9 should render local source and alternate outbound identity."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WIN-TEST-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WIN-TEST-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x23456",
+                logon_type=9,
+                auth_package="Negotiate",
+                source_ip="-",
+                source_port=0,
+                logon_process="seclogo",
+                subject_sid="S-1-5-21-1-2-3-1001",
+                subject_username="alice",
+                subject_domain="CORP",
+                subject_logon_id="0x12345",
+                process_pid=1216,
+                process_name=r"C:\Windows\System32\svchost.exe",
+                outbound_username="admin01",
+                outbound_domain="CORP",
+                cloned_from_logon_id="0x12345",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="LogonType">9</Data>' in content
+        assert '<Data Name="TargetUserName">alice</Data>' in content
+        assert '<Data Name="TargetOutboundUserName">admin01</Data>' in content
+        assert '<Data Name="TargetOutboundDomainName">CORP</Data>' in content
+        assert '<Data Name="LogonProcessName">seclogo</Data>' in content
+        assert '<Data Name="AuthenticationPackageName">Negotiate</Data>' in content
+        assert '<Data Name="ProcessId">0x4c0</Data>' in content
+        assert '<Data Name="ProcessName">C:\\Windows\\System32\\svchost.exe</Data>' in content
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">-</Data>' in content
 
     def test_render_logoff_uses_host_lsass_provider_pid(self, format_def, temp_output):
         """A missing per-event PID must resolve to the host's canonical LSASS PID."""
@@ -605,7 +684,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -635,7 +714,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
         )
@@ -666,7 +745,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -696,7 +775,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_terminations_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_child",
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
@@ -888,7 +967,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_logoffs_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
@@ -921,7 +1000,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_logoffs_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.logoff_after_rendered_dependents",
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", logon_time),
         )
@@ -956,7 +1035,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_terminations_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_child",
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
@@ -988,7 +1067,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_terminations_after_dependents()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_dependent",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1027,7 +1106,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_terminations_after_dependents_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_dependent",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1064,7 +1143,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_dependents_after_create()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.process_exit_after_visible_create",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1099,7 +1178,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_process_dependents_after_create()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "source.windows_wfp_connection",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1136,7 +1215,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_process_dependents_after_create_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "source.windows_wfp_connection",
             seed_parts=(
                 "WIN-TEST-01.corp.local",
@@ -1177,7 +1256,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_network_logons_after_transport()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
@@ -1214,7 +1293,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_network_logons_after_transport()
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("WS-TEST-01.corp.local", "10.10.1.35", "53256", wfp_time),
         )
@@ -1258,12 +1337,12 @@ class TestWindowsEventEmitter:
         emitter._shift_network_logons_after_transport()
         emitter._shift_special_privileges_after_logons()
 
-        transport_delta = sample_timing_delta(
+        transport_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
         expected_logon_time = wfp_time + transport_delta
-        expected_privilege_delta = sample_timing_delta(
+        expected_privilege_delta = _compatibility_timing_delta(
             "windows.special_privilege_after_logon",
             seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
         )
@@ -1444,7 +1523,7 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_network_logons_after_transport_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        expected_delta = sample_timing_delta(
+        expected_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
@@ -1493,12 +1572,12 @@ class TestWindowsEventEmitter:
         emitter._shift_spooled_special_privileges_after_logons_unlocked()
         events = list(emitter._iter_spooled_events_unlocked())
 
-        transport_delta = sample_timing_delta(
+        transport_delta = _compatibility_timing_delta(
             "windows.network_logon_after_transport",
             seed_parts=("FILE-SRV-01.corp.local", "10.10.1.35", "59430", wfp_time),
         )
         expected_logon_time = wfp_time + transport_delta
-        expected_privilege_delta = sample_timing_delta(
+        expected_privilege_delta = _compatibility_timing_delta(
             "windows.special_privilege_after_logon",
             seed_parts=("FILE-SRV-01.corp.local", "0xf63a33e", expected_logon_time),
         )
@@ -1757,6 +1836,112 @@ class TestWindowsEventEmitter:
         gaps = [rendered_times[i] - rendered_times[i - 1] for i in range(1, len(rendered_times))]
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
+
+    def test_clamped_lock_lifecycle_preserves_canonical_dwell_time(self):
+        """A prior rendered clock should shift 4800/4801 together, not compress them."""
+        computer = "WIN-TEST-01.corp.local"
+        canonical_lock = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        canonical_unlock = canonical_lock + timedelta(minutes=12)
+        rendered_clock = canonical_lock + timedelta(minutes=20)
+        last_by_computer = {computer: rendered_clock}
+        shift_by_session: dict[tuple[str, str, str], timedelta] = {}
+        lock = {
+            "EventID": 4800,
+            "TimeCreated": canonical_lock,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        unlock = {
+            "EventID": 4801,
+            "TimeCreated": canonical_unlock,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+
+        _shift_windows_lock_lifecycle_after_rendered_clock(lock, last_by_computer, shift_by_session)
+        _shift_windows_lock_lifecycle_after_rendered_clock(
+            unlock, last_by_computer, shift_by_session
+        )
+
+        assert lock["TimeCreated"] == rendered_clock + timedelta(milliseconds=1)
+        assert unlock["TimeCreated"] - lock["TimeCreated"] == timedelta(minutes=12)
+        assert not shift_by_session
+
+    def test_normalized_lock_lifecycle_enforces_minimum_visible_dwell(self):
+        """Pre-compressed source timestamps should not render a millisecond lock cycle."""
+        computer = "WIN-TEST-01.corp.local"
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, 1000, tzinfo=UTC)
+        lock = {
+            "EventID": 4800,
+            "TimeCreated": lock_time,
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        unlock = {
+            "EventID": 4801,
+            "TimeCreated": lock_time + timedelta(milliseconds=1),
+            "Computer": computer,
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        rendered_locks: dict[tuple[str, str, str], datetime] = {}
+
+        _enforce_windows_lock_dwell_after_normalization(lock, rendered_locks)
+        _enforce_windows_lock_dwell_after_normalization(unlock, rendered_locks)
+
+        assert unlock["TimeCreated"] == lock_time + timedelta(seconds=min_unlock_gap_seconds())
+        assert not rendered_locks
+
+    def test_finalized_lock_lifecycle_repairs_reauth_order_and_dwell(self):
+        """Frozen cross-batch timing must still retain 4800 -> Type 7 -> 4801 order."""
+        computer = "WIN-TEST-01.corp.local"
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        rows = [
+            (
+                10,
+                {
+                    "EventID": 4800,
+                    "TimeCreated": lock_time,
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                11,
+                {
+                    "EventID": 4624,
+                    "LogonType": 7,
+                    "TimeCreated": lock_time - timedelta(seconds=29),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                12,
+                {
+                    "EventID": 4801,
+                    "TimeCreated": lock_time + timedelta(milliseconds=2),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+        ]
+
+        changed = _repair_windows_lock_lifecycle_rows(rows, {})
+
+        reauth_time = rows[1][1]["TimeCreated"]
+        unlock_time = rows[2][1]["TimeCreated"]
+        assert changed == {11, 12}
+        assert lock_time < reauth_time < unlock_time
+        assert unlock_time - lock_time == timedelta(seconds=min_unlock_gap_seconds())
 
     def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
         """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
@@ -2613,10 +2798,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert f'<Data Name="ProcessID">{pid}</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\program files\\mozilla '
-            "firefox\\firefox.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_uses_source_native_timestamp_offset(self, format_def, temp_output):
         """WFP 5156 should render with a host-audit offset from the canonical connection."""
@@ -2645,11 +2831,13 @@ class TestWindowsEventEmitter:
 
         emitter.emit(event)
 
-        expected_delta = sample_timing_delta(
-            "source.windows_wfp_connection",
-            seed_parts=("WKS-01", 4, "10.0.0.50", 49263, "93.184.216.34", 443, event_time),
+        _, expected_render_time = compatibility_endpoint_event_times(
+            event,
+            "windows_event_security",
+            "WKS-01",
         )
-        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+        assert emitter._event_dicts[0]["TimeCreated"] == expected_render_time
+        assert expected_render_time > event_time
 
     def test_wfp_connection_reuses_filter_rtid_per_policy_bucket(self, format_def, temp_output):
         """WFP 5156 should reuse runtime filter IDs for the same host policy bucket."""
@@ -2798,10 +2986,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="ProcessID">1184</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\'
-            "svchost.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_skips_unresolved_non_system_pid(self, format_def, temp_output):
         """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
@@ -2861,6 +3050,83 @@ class TestWindowsEventEmitter:
             WindowsEventEmitter._to_device_path(r"\device\harddiskvolume1\test.exe")
             == r"\device\harddiskvolume1\test.exe"
         )
+
+    def test_device_path_mapping_is_stable_per_installation_and_drive(self):
+        """Canonical host paths should use stable installation-local volume identities."""
+        hosts = [
+            HostContext(
+                hostname=f"WKS-{index:02d}",
+                ip=f"10.0.0.{index}",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn=f"WKS-{index:02d}.corp.local",
+            )
+            for index in range(1, 17)
+        ]
+
+        c_paths = {
+            WindowsEventEmitter._to_device_path(r"C:\Windows\System32\svchost.exe", host)
+            for host in hosts
+        }
+        first_c_path = WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+        first_d_path = WindowsEventEmitter._to_device_path(
+            r"D:\Program Files\agent.exe",
+            hosts[0],
+        )
+
+        assert len(c_paths) > 1
+        assert all(path.startswith(r"\device\harddiskvolume") for path in c_paths)
+        assert first_c_path != first_d_path
+        assert first_c_path == WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+
+    def test_provider_execution_threads_are_host_scoped_and_not_one_finite_pool(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Canonical provider thread populations should be aligned and host-specific."""
+        emitter = WindowsEventEmitter(format_def, temp_output)
+
+        def thread_ids(hostname: str) -> set[int]:
+            host = HostContext(
+                hostname=hostname,
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn=f"{hostname}.corp.local",
+            )
+            values: set[int] = set()
+            for minute in range(360):
+                event_id = 4624 if minute % 2 == 0 else 4625
+                event = OccurrenceBuilder(
+                    timestamp=datetime(2024, 1, 15, tzinfo=UTC) + timedelta(minutes=minute),
+                    event_type="logon" if event_id == 4624 else "failed_logon",
+                    src_host=host,
+                )
+                values.add(
+                    emitter._provider_execution_thread_id(
+                        {"EventID": event_id, "ExecutionProcessID": 600},
+                        event,
+                    )
+                )
+            return values
+
+        dc_01_threads = thread_ids("DC-01")
+        dc_02_threads = thread_ids("DC-02")
+
+        assert dc_01_threads == thread_ids("DC-01")
+        assert len(dc_01_threads) > 38
+        assert len(dc_02_threads) > 38
+        assert dc_01_threads != dc_02_threads
+        assert all(thread_id % 4 == 0 for thread_id in dc_01_threads | dc_02_threads)
 
     def test_timestamp_100ns_precision(self, format_def, temp_output):
         """Test that timestamps have EVTX-like 100ns precision."""

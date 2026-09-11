@@ -25,15 +25,142 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
+)
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+)
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
+
+_MAX_LINUX_PIPELINE_STAGES = 4
+_PIPELINE_STAGE_TIMING_RELATIONSHIP = "linux.pipeline_stage_start"
+
+
+def _pipeline_timing_runtime(
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+) -> TimingRuntime | SourceTimingPlanningRuntime:
+    """Return the exact canonical owner or its active staged planning view."""
+
+    if type(timing_runtime) is SourceTimingPlanningRuntime:
+        return timing_runtime
+    if type(timing_runtime) is not TimingRuntime:
+        raise StateError("Linux pipeline timing requires an exact engine TimingRuntime")
+    return active_source_timing_planning_runtime(timing_runtime) or timing_runtime
+
+
+def _pipeline_scope_identity(scope_parts: tuple[str, ...]) -> tuple[str, str, str]:
+    """Return bounded, delimiter-safe stable, host, and lifecycle identities."""
+
+    if type(scope_parts) is not tuple or not 1 <= len(scope_parts) <= 8:
+        raise StateError("Linux pipeline timing requires one to eight exact scope strings")
+    framed: list[str] = []
+    total_bytes = 0
+    for part in scope_parts:
+        if type(part) is not str:
+            raise StateError("Linux pipeline timing requires exact built-in scope strings")
+        try:
+            encoded = part.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise StateError("Linux pipeline timing scope strings must be valid UTF-8") from error
+        if len(encoded) > 1024:
+            raise StateError("Linux pipeline timing scope strings must be at most 1024 bytes")
+        total_bytes += len(encoded)
+        if total_bytes > 4096:
+            raise StateError("Linux pipeline timing scope must be at most 4096 bytes")
+        framed.append(f"{len(encoded)}:{part}")
+    return (
+        "linux-pipeline|" + "|".join(framed),
+        scope_parts[0],
+        scope_parts[2] if len(scope_parts) > 2 else "",
+    )
+
+
+def plan_linux_pipeline_stage_times(
+    base_time: datetime,
+    *,
+    stage_count: int,
+    scope_parts: tuple[str, ...],
+    active_process_count: int,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime,
+) -> tuple[datetime, ...]:
+    """Plan ordered, deterministic start times for one Linux shell pipeline.
+
+    The action anchor remains stage zero. Later stages use a bounded triangular
+    distribution at microsecond resolution. Its mode shifts with the number of
+    active processes on the host, approximating scheduler/run-queue pressure
+    without making stage admission depend on renderer-local timing.
+    """
+
+    runtime = _pipeline_timing_runtime(timing_runtime)
+    if type(stage_count) is not int:
+        raise StateError("Linux pipeline timing requires an exact integer stage count")
+    if stage_count > _MAX_LINUX_PIPELINE_STAGES:
+        raise StateError("Linux pipeline timing supports at most four stages")
+    if stage_count <= 0:
+        return ()
+    if not isinstance(base_time, datetime):
+        raise StateError("Linux pipeline timing requires a datetime action anchor")
+    if type(active_process_count) is not int or active_process_count < 0:
+        raise StateError("Linux pipeline timing requires a non-negative active process count")
+    if stage_count == 1:
+        return (base_time,)
+    stable_id, host, lifecycle_id = _pipeline_scope_identity(scope_parts)
+
+    window = get_timing_window(
+        _PIPELINE_STAGE_TIMING_RELATIONSHIP,
+        default_min_ms=6,
+        default_max_ms=115,
+        default_position="after",
+        default_class="burst_fanout",
+    )
+    minimum_us = max(1, window.min_ms * 1_000)
+    maximum_us = max(minimum_us, window.max_ms * 1_000)
+    pressure = min(active_process_count, 96) / 96.0
+    mode_fraction = 0.20 + (0.42 * math.sqrt(pressure))
+    mode_us = minimum_us + round((maximum_us - minimum_us) * mode_fraction)
+    distribution = (
+        ConstantDistribution(float(minimum_us))
+        if minimum_us == maximum_us
+        else TriangularDistribution(
+            minimum=float(minimum_us),
+            mode=float(mode_us),
+            maximum=float(maximum_us),
+        )
+    )
+
+    planned = [base_time]
+    cursor = base_time
+    for stage_index in range(1, stage_count):
+        cursor += runtime.sampler.sample_timedelta(
+            distribution,
+            relationship_key=_PIPELINE_STAGE_TIMING_RELATIONSHIP,
+            scope=TimingScope(
+                stable_id=stable_id,
+                host=host,
+                source="linux_shell",
+                lifecycle_id=lifecycle_id,
+                ordinal=stage_index,
+            ),
+            sample_key="stage_gap",
+        )
+        planned.append(cursor)
+    return tuple(planned)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +224,6 @@ class LinuxShellCommandExecutor(Protocol):
         command: str,
     ) -> None:
         """Create prerequisite session state needed for correlated process telemetry."""
-        ...
-
-    def _is_within_scenario_window(self, time: datetime) -> bool:
-        """Return true when the timestamp is within the generation window."""
         ...
 
     def _emit_bash_command_event(
@@ -169,8 +292,6 @@ class LinuxShellCommandActionBundle:
             command,
         )
         if scheduled_time is None:
-            return None
-        if not self._executor._is_within_scenario_window(scheduled_time):
             return None
         if self._request.emit_process_telemetry:
             self._executor._prepare_bash_process_session(

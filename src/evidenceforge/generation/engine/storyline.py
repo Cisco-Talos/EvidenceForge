@@ -45,6 +45,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.content_identity import FileContentIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import SignaturePredicate
 from evidenceforge.generation.actions import (
@@ -59,10 +60,16 @@ from evidenceforge.generation.actions import (
     WebScanActionBundle,
     WebScanRequest,
     dhcp_renewal_interval_seconds,
+    dns_transport_close_headroom_seconds,
+    network_transport_open_positive_headroom_seconds,
+)
+from evidenceforge.generation.actions.rdp_session import (
+    RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS,
+    rdp_action_deadline_source_tail,
+    rdp_action_deadline_transport_headroom_seconds,
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
-from evidenceforge.generation.activity.external_actor_profiles import pick_external_actor_ip
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -75,6 +82,13 @@ from evidenceforge.generation.activity.http_content import (
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.network_params import activity_dns_resolver_ips
 from evidenceforge.generation.intent_ledger import IntentSection
+from evidenceforge.generation.storage_world import CompiledStorageFile
+from evidenceforge.generation.world_model import (
+    RDP_BOOTSTRAP_MAX_LEAD_SECONDS,
+    RDP_BOOTSTRAP_MIN_LEAD_SECONDS,
+    RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS,
+    RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS,
+)
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
@@ -82,16 +96,19 @@ from evidenceforge.models.scenario import (
     BeaconHttpSequenceEntry,
     ConnectionEventSpec,
     EventSpacingConfig,
+    SmbClientLocation,
     System,
     User,
 )
 from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
-from evidenceforge.utils.time import parse_duration, parse_iso8601
+from evidenceforge.utils.time import ensure_utc, parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS = 30.0
+_AUTHORED_RDP_FRONTIER_EPSILON = timedelta(microseconds=1)
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _POWERSHELL_WEB_CMDLET_USER_AGENT = (
@@ -376,6 +393,40 @@ def _is_exfil_connection_spec(spec: Any) -> bool:
     return "exfil" in desc or "t1041" in tech or "t1048" in tech
 
 
+def _process_owns_storyline_multipart_upload(
+    process: Any,
+    image: str,
+    spec: Any,
+) -> bool:
+    """Return whether one live curl process owns an authored multipart upload."""
+
+    multipart = getattr(spec, "request_multipart", None)
+    if multipart is None:
+        return False
+    if image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].casefold() not in {"curl", "curl.exe"}:
+        return False
+    command = str(getattr(process, "command_line", "") or "")
+    command_lower = command.casefold()
+    if not any(marker in command_lower for marker in (" -f ", " --form ")):
+        return False
+    target = f"{getattr(spec, 'hostname', '') or getattr(spec, 'dst_ip', '')}"
+    target += str(getattr(spec, "uri", "") or "/")
+    if target.casefold() not in command_lower:
+        return False
+
+    local_paths: list[str] = []
+
+    def collect(parts: Any) -> None:
+        for part in parts or ():
+            local_path = str(getattr(part, "local_source_path", "") or "")
+            if local_path:
+                local_paths.append(local_path)
+            collect(getattr(part, "parts", ()))
+
+    collect(getattr(multipart, "parts", ()))
+    return bool(local_paths) and all(path.casefold() in command_lower for path in local_paths)
+
+
 def _is_c2_http_request(
     *,
     description: str | None,
@@ -547,6 +598,8 @@ def _iter_periodic_ticks(
     count: int | None,
     jitter: float,
     rng,
+    *,
+    exclusive_end_time: datetime | None = None,
 ):
     """Yield timestamps for periodic bulk events.
 
@@ -560,6 +613,8 @@ def _iter_periodic_ticks(
         count: Exact number of events to emit (None when using duration).
         jitter: Fraction of interval to randomize (0.0–1.0).
         rng: Random number generator instance.
+        exclusive_end_time: Optional scenario fence. Ticks that cannot land
+            before this timestamp are not sampled; later candidates are not yielded.
 
     Yields:
         datetime for each tick.
@@ -567,20 +622,28 @@ def _iter_periodic_ticks(
     t = 0.0
     emitted = 0
     end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
+    if exclusive_fence is not None and ensure_utc(start_time) >= exclusive_fence:
+        return
     last_tick = None
     while True:
         if duration_sec is not None and t > duration_sec:
             break
         if count is not None and emitted >= count:
             break
+        earliest_tick = start_time + timedelta(seconds=max(0.0, t - jitter * interval_sec))
+        if exclusive_fence is not None and ensure_utc(earliest_tick) >= exclusive_fence:
+            break
         jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
         tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
-        # Clamp to window end (jitter can push past duration)
+        # Clamp to the inclusive campaign end (jitter can push past duration).
         if end_time is not None and tick_time > end_time:
             tick_time = end_time
         # Ensure monotonic ordering (jitter can cause inversions)
         if last_tick is not None and tick_time < last_tick:
             tick_time = last_tick + timedelta(milliseconds=1)
+        if exclusive_fence is not None and ensure_utc(tick_time) >= exclusive_fence:
+            break
         last_tick = tick_time
         yield tick_time
         emitted += 1
@@ -594,24 +657,106 @@ def _iter_dns_tunnel_ticks(
     count: int | None,
     jitter: float,
     rng,
+    *,
+    exclusive_end_time: datetime | None = None,
 ):
-    """Yield DNS tunnel timestamps with pauses, skips, and variable pacing."""
+    """Yield DNS tunnel timestamps with transactional pauses, skips, and pacing.
+
+    A campaign that admits no paced tick restores its owner RNG so terminal
+    boundary rejection cannot perturb later storyline choices.
+    """
     end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
     pause_offset = 0.0
-    for tick_index, tick_time in enumerate(
-        _iter_periodic_ticks(start_time, interval_sec, duration_sec, count, jitter, rng)
-    ):
-        if tick_index > 0 and rng.random() < 0.045:
-            pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
-        if tick_index > 0 and rng.random() < 0.055:
-            continue
-        local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
-        if tick_index > 0 and rng.random() < 0.11:
-            local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
-        paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
-        if end_time is not None and paced_time > end_time:
-            break
-        yield paced_time
+    initial_rng_state = rng.getstate()
+    admitted_any = False
+    try:
+        for tick_index, tick_time in enumerate(
+            _iter_periodic_ticks(
+                start_time,
+                interval_sec,
+                duration_sec,
+                count,
+                jitter,
+                rng,
+                exclusive_end_time=exclusive_fence,
+            )
+        ):
+            if tick_index > 0 and rng.random() < 0.045:
+                pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
+            if tick_index > 0 and rng.random() < 0.055:
+                continue
+            local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
+            if tick_index > 0 and rng.random() < 0.11:
+                local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
+            paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
+            if end_time is not None and paced_time > end_time:
+                break
+            if exclusive_fence is not None and ensure_utc(paced_time) >= exclusive_fence:
+                break
+            admitted_any = True
+            yield paced_time
+    finally:
+        if not admitted_any:
+            rng.setstate(initial_rng_state)
+
+
+def _dns_periodic_exclusive_start_fence(
+    activity_generator: Any,
+    *,
+    window_start: datetime,
+    exclusive_end_time: datetime | None,
+    maximum_rtt_seconds: float,
+) -> datetime | None:
+    """Return the allocation-free exclusive fence for a fully rendered DNS request.
+
+    The canonical bound composes the transport-open displacement with DNS RTT and
+    teardown. The source tail uses every configured sensor route; checking both ends
+    of the canonical window bounds each profile's affine clock-drift adjustment.
+    """
+
+    if exclusive_end_time is None:
+        return None
+    canonical_headroom = timedelta(
+        seconds=(
+            network_transport_open_positive_headroom_seconds()
+            + dns_transport_close_headroom_seconds(
+                caller_rtt_maximum=maximum_rtt_seconds,
+            )
+        )
+    )
+    exclusive_fence = ensure_utc(exclusive_end_time)
+    source_tail = timedelta(0)
+    network_observation_planner = getattr(
+        getattr(activity_generator, "dispatcher", None),
+        "network_observation_planner",
+        None,
+    )
+    resolve_source_tail = getattr(
+        network_observation_planner,
+        "network_sensor_close_positive_headroom",
+        None,
+    )
+    if callable(resolve_source_tail):
+        earliest_close = min(
+            ensure_utc(window_start) + canonical_headroom,
+            exclusive_fence,
+        )
+        candidates = tuple(
+            resolve_source_tail(
+                canonical_time,
+                protocol="udp",
+                conn_state="SF",
+                payload_bytes=1,
+            )
+            for canonical_time in (earliest_close, exclusive_fence)
+        )
+        if any(
+            type(candidate) is not timedelta or candidate < timedelta(0) for candidate in candidates
+        ):
+            raise ValueError("DNS source-close planner returned an invalid positive headroom")
+        source_tail = max(candidates, default=timedelta(0))
+    return exclusive_fence - canonical_headroom - source_tail
 
 
 def _range_or_value(value: int | list[int] | None, rng: random.Random) -> int | None:
@@ -749,6 +894,31 @@ def _storyline_event_offsets(
     if offsets != sorted(offsets):
         raise ValueError("event_spacing explicit_offsets must be monotonic")
     return offsets
+
+
+def _storyline_session_required_until(
+    event_time: datetime,
+    cadence_offsets: Sequence[float],
+    event_index: int,
+    future_specs: Sequence[Any] = (),
+) -> datetime | None:
+    """Return the derived lifecycle horizon for an authored remote session."""
+
+    if not cadence_offsets or event_index >= len(cadence_offsets) - 1:
+        return None
+    remaining_seconds = max(0.0, cadence_offsets[-1] - cadence_offsets[event_index])
+    process_tail_seconds = 0.0
+    for future_spec in future_specs:
+        if getattr(future_spec, "type", "") != "process":
+            continue
+        process_name = str(getattr(future_spec, "process_name", "") or "")
+        command_line = str(getattr(future_spec, "command_line", "") or process_name)
+        lifetime = _estimate_process_lifetime(process_name, command_line)
+        if lifetime is not None:
+            # Same-shell child execution is serialized. Its maximum modeled
+            # lifetime contributes to when later authored children may start.
+            process_tail_seconds += lifetime[1] + 2.0
+    return event_time + timedelta(seconds=remaining_seconds + process_tail_seconds)
 
 
 def _choose_dns_tunnel_campaign_ttl(
@@ -1451,7 +1621,63 @@ class StorylineMixin:
         if parent_ref is None:
             return None
         refs = getattr(self, "_storyline_process_refs", {})
-        return refs.get((system.hostname, actor.username, parent_ref))
+        key = (system.hostname, actor.username, parent_ref)
+        resolved = refs.get(key)
+        if resolved is None:
+            return None
+        pid, image = resolved
+        state_manager = getattr(self, "state_manager", None)
+        if state_manager is None:
+            activity_generator = getattr(self, "activity_generator", None)
+            state_manager = getattr(activity_generator, "state_manager", None)
+        if state_manager is None:
+            return resolved
+        process = state_manager.get_process(system.hostname, pid)
+        if process is None or process.image != image:
+            refs.pop(key, None)
+            return None
+        return resolved
+
+    def _storyline_process_ref_release_index(
+        self,
+        *,
+        actor: User,
+        system: System,
+        process_ref: str,
+    ) -> int:
+        """Return the last storyline group that requires one named process to be live."""
+
+        target_key = (system.hostname.casefold(), actor.username.casefold(), process_ref)
+        active_ref_by_actor_system: dict[tuple[str, str], str] = {}
+        release_indices: dict[tuple[str, str, str], int] = {}
+        for event_index, storyline_event in enumerate(self.scenario.storyline):
+            actor_system = (
+                storyline_event.system.casefold(),
+                storyline_event.actor.casefold(),
+            )
+            for candidate in storyline_event.events:
+                candidate_type = getattr(candidate, "type", "")
+                if candidate_type == "process":
+                    parent_ref = getattr(candidate, "parent_ref", None)
+                    if parent_ref is not None:
+                        parent_key = (*actor_system, parent_ref)
+                        release_indices[parent_key] = max(
+                            event_index,
+                            release_indices.get(parent_key, event_index),
+                        )
+                    candidate_ref = getattr(candidate, "process_ref", None)
+                    if candidate_ref is not None:
+                        active_ref_by_actor_system[actor_system] = candidate_ref
+                        release_indices.setdefault((*actor_system, candidate_ref), event_index)
+                elif candidate_type in {"create_remote_thread", "process_access"}:
+                    active_ref = active_ref_by_actor_system.get(actor_system)
+                    if active_ref is not None:
+                        active_key = (*actor_system, active_ref)
+                        release_indices[active_key] = max(
+                            event_index,
+                            release_indices.get(active_key, event_index),
+                        )
+        return release_indices.get(target_key, 0)
 
     def _record_storyline_service_install(
         self,
@@ -1460,6 +1686,7 @@ class StorylineMixin:
         service_file_name: str,
         service_account: str,
         time: datetime,
+        lifecycle_group_id: str = "",
     ) -> None:
         """Remember installed storyline services for later service-backed beacons."""
         if not service_file_name:
@@ -1471,7 +1698,29 @@ class StorylineMixin:
             "service_file_name": service_file_name,
             "service_account": service_account,
             "installed_at": time,
+            "lifecycle_group_id": lifecycle_group_id
+            or self._storyline_remote_service_lifecycle_id(system, service_name),
         }
+
+    def _storyline_remote_service_lifecycle_id(
+        self,
+        system: System,
+        service_name: str,
+    ) -> str:
+        """Return the stable canonical lifecycle for one authored service action."""
+
+        dispatcher = getattr(self, "dispatcher", None)
+        cluster_id = getattr(dispatcher, "storyline_cluster_id", "") or getattr(
+            self,
+            "_current_storyline_spec_id",
+            "",
+        )
+        return stable_uuid(
+            "storyline-windows-remote-service",
+            cluster_id,
+            system.hostname,
+            service_name.casefold(),
+        )
 
     @staticmethod
     def _normalize_storyline_service_file_name(service_file_name: str) -> str:
@@ -1493,13 +1742,91 @@ class StorylineMixin:
         """Return a User model for service identities that can own process telemetry."""
         normalized = service_account.strip().replace("/", "\\")
         account_key = normalized.upper()
-        if account_key in {"LOCALSYSTEM", "LOCAL SYSTEM", "NT AUTHORITY\\SYSTEM", "SYSTEM"}:
+        builtin_accounts = {
+            "LOCALSYSTEM": ("SYSTEM", "Local System"),
+            "LOCAL SYSTEM": ("SYSTEM", "Local System"),
+            "NT AUTHORITY\\SYSTEM": ("SYSTEM", "Local System"),
+            "SYSTEM": ("SYSTEM", "Local System"),
+            "LOCALSERVICE": ("LOCAL SERVICE", "Local Service"),
+            "LOCAL SERVICE": ("LOCAL SERVICE", "Local Service"),
+            "NT AUTHORITY\\LOCAL SERVICE": ("LOCAL SERVICE", "Local Service"),
+            "NETWORKSERVICE": ("NETWORK SERVICE", "Network Service"),
+            "NETWORK SERVICE": ("NETWORK SERVICE", "Network Service"),
+            "NT AUTHORITY\\NETWORK SERVICE": ("NETWORK SERVICE", "Network Service"),
+        }
+        account = builtin_accounts.get(account_key)
+        if account is not None:
+            username, full_name = account
             return User(
-                username="SYSTEM",
-                full_name="Local System",
-                email="system@example.local",
+                username=username,
+                full_name=full_name,
+                email=f"{username.lower().replace(' ', '.')}@example.local",
             )
         return None
+
+    def _storyline_service_process_identity(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        process_name: str,
+        future_specs: Iterable[Any],
+    ) -> tuple[User, str, str] | None:
+        """Resolve an authored service executable to its configured built-in identity."""
+
+        process_image = self._normalize_storyline_service_file_name(process_name)
+        process_exe = process_image.rsplit("\\", 1)[-1].casefold()
+        recent_service = getattr(self, "_last_storyline_service_by_system", {}).get(
+            system.hostname,
+            {},
+        )
+        installed_image = self._normalize_storyline_service_file_name(
+            str(recent_service.get("service_file_name") or "")
+        )
+        installed_at = recent_service.get("installed_at")
+        if (
+            installed_image.rsplit("\\", 1)[-1].casefold() == process_exe
+            and isinstance(installed_at, datetime)
+            and installed_at <= time
+            and time - installed_at <= timedelta(minutes=30)
+        ):
+            service_user = self._service_account_user(
+                str(recent_service.get("service_account") or "")
+            )
+            if service_user is not None:
+                return (
+                    service_user,
+                    str(recent_service.get("service_name") or process_exe),
+                    str(recent_service.get("lifecycle_group_id") or ""),
+                )
+
+        matching_service_spec = next(
+            (
+                candidate
+                for candidate in future_specs
+                if getattr(candidate, "type", "") == "service_installed"
+                and self._normalize_storyline_service_file_name(
+                    str(getattr(candidate, "service_file_name", "") or "")
+                )
+                .rsplit("\\", 1)[-1]
+                .casefold()
+                == process_exe
+            ),
+            None,
+        )
+        if matching_service_spec is None:
+            return None
+        service_user = self._service_account_user(
+            str(getattr(matching_service_spec, "service_account", "") or "")
+        )
+        if service_user is None:
+            return None
+        service_name = str(getattr(matching_service_spec, "service_name", "") or process_exe)
+        return (
+            service_user,
+            service_name,
+            self._storyline_remote_service_lifecycle_id(system, service_name),
+        )
 
     def _storyline_service_context_for_process(
         self,
@@ -1507,7 +1834,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         process_name: str,
-    ) -> tuple[User, str, int] | None:
+    ) -> tuple[User, str, int, str] | None:
         """Return service identity/logon/parent PID for recent service-backed commands."""
         if _get_os_category(system.os) != "windows":
             return None
@@ -1564,7 +1891,12 @@ class StorylineMixin:
         )
         if service_pid <= 0:
             return None
-        return service_user, "0x3e7", service_pid
+        return (
+            service_user,
+            "0x3e7",
+            service_pid,
+            str(service.get("lifecycle_group_id") or ""),
+        )
 
     def _linux_native_service_user_for_storyline_actor(
         self,
@@ -1880,6 +2212,7 @@ class StorylineMixin:
             ensure_file_event=False,
             from_storyline=True,
             suppress_command_file_effect=True,
+            lifecycle_group_id=str(service.get("lifecycle_group_id") or ""),
         )
         self.activity_generator._record_user_process(system, actor, pid, service_file_name)
         self._record_last_storyline_process(system, pid, service_file_name)
@@ -1942,6 +2275,40 @@ class StorylineMixin:
                 )
             self._storyline_logoff_to_logon[logoff_id] = logon_id
 
+    def _storyline_new_credentials_caller(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> tuple[User, str]:
+        """Resolve a Type 9 local caller without manufacturing a desktop session."""
+
+        caller_session = self.activity_generator._active_interactive_windows_session(system, time)
+        if caller_session is None:
+            assigned_user = getattr(system, "assigned_user", "")
+            raise StateError(
+                "Storyline logon_type 9 requires an active local desktop caller on "
+                f"{system.hostname}; assigned_user={assigned_user or '-'} has no active "
+                "Type 2, 10, or 11 session before the event"
+            )
+        scenario_users = {
+            candidate.username: candidate for candidate in self.scenario.environment.users
+        }
+        caller = scenario_users.get(caller_session.username)
+        if caller is None:
+            raise StateError(
+                "Storyline logon_type 9 resolved local caller "
+                f"{caller_session.username!r} on {system.hostname}, but that caller is not "
+                "declared in environment.users"
+            )
+        if caller.username == actor.username:
+            raise StateError(
+                "Storyline logon_type 9 requires a distinct outbound credential identity; "
+                f"event actor {actor.username!r} is also the active local caller on "
+                f"{system.hostname}"
+            )
+        return caller, caller_session.logon_id
+
     def _last_storyline_logon_for_actor_system(
         self,
         actor: User,
@@ -1963,12 +2330,142 @@ class StorylineMixin:
                 if session.system == system.hostname
             }
         for logon_id in reversed(ordered):
-            if valid_ids is not None and logon_id not in valid_ids:
-                continue
             session = self.state_manager.get_session(logon_id)
+            if (
+                valid_ids is not None
+                and logon_id not in valid_ids
+                and (session is None or session.logon_type != 9)
+            ):
+                continue
             if session is not None and session.system == system.hostname:
                 return logon_id
         return None
+
+    def _storyline_smb_actor_and_spec(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        spec: Any,
+    ) -> tuple[User, Any]:
+        """Separate a Type 9 local token from its outbound SMB credential."""
+
+        logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=time)
+        session = self.state_manager.get_session(logon_id) if logon_id is not None else None
+        if (
+            session is None
+            or session.logon_type != 9
+            or session.username.casefold() == actor.username.casefold()
+        ):
+            return actor, spec
+        users = {
+            candidate.username.casefold(): candidate
+            for candidate in self.scenario.environment.users
+        }
+        local_actor = users.get(session.username.casefold())
+        if local_actor is None:
+            raise StateError(
+                "Storyline SMB activity resolved Type 9 local caller "
+                f"{session.username!r} on {system.hostname}, but that caller is not declared "
+                "in environment.users"
+            )
+        smb_principal = spec.smb_principal or actor.username
+        return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
+
+    @staticmethod
+    def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:
+        """Return one platform-aware key for a storyline-local file placement."""
+
+        normalized = path.replace("/", "\\") if _get_os_category(system.os) == "windows" else path
+        if _get_os_category(system.os) == "windows":
+            normalized = normalized.casefold()
+        return system.hostname.casefold(), normalized
+
+    def _remember_storyline_file_available(
+        self,
+        *,
+        system: System,
+        path: str,
+        available_at: datetime,
+        source_file: CompiledStorageFile | None = None,
+    ) -> None:
+        """Record when a canonical transfer first makes a local path consumable."""
+
+        if not hasattr(self, "_storyline_file_available_at"):
+            self._storyline_file_available_at: dict[tuple[str, str], datetime] = {}
+        key = self._storyline_local_file_key(system, path)
+        current = self._storyline_file_available_at.get(key)
+        if current is None or available_at < current:
+            self._storyline_file_available_at[key] = ensure_utc(available_at)
+        if source_file is not None:
+            if not hasattr(self, "_storyline_file_source_overrides"):
+                self._storyline_file_source_overrides: dict[
+                    tuple[str, str], CompiledStorageFile
+                ] = {}
+            self._storyline_file_source_overrides[key] = source_file
+
+    def _storyline_smb_source_override(
+        self,
+        *,
+        system: System,
+        spec: Any,
+    ) -> CompiledStorageFile | None:
+        """Return exact retained local-file truth for a dependent SMB upload."""
+
+        source = getattr(spec, "source", None)
+        if not isinstance(source, SmbClientLocation) or not source.path:
+            return None
+        return getattr(self, "_storyline_file_source_overrides", {}).get(
+            self._storyline_local_file_key(system, source.path)
+        )
+
+    def _storyline_smb_file_ready_time(
+        self,
+        *,
+        system: System,
+        spec: Any,
+        requested_at: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Delay a local-file SMB upload until its canonical source exists."""
+
+        source = getattr(spec, "source", None)
+        if not isinstance(source, SmbClientLocation) or not source.path:
+            return requested_at
+        available_at = getattr(self, "_storyline_file_available_at", {}).get(
+            self._storyline_local_file_key(system, source.path)
+        )
+        if available_at is None or requested_at > available_at:
+            return requested_at
+        return available_at + timedelta(milliseconds=rng.randint(1_200, 2_000))
+
+    def _storyline_local_process_actor_for_logon(
+        self,
+        actor: User,
+        system: System,
+        logon_id: str,
+    ) -> User:
+        """Return the immutable local token owner for a Windows process session."""
+
+        session = self.state_manager.get_session(logon_id)
+        if (
+            _get_os_category(system.os) != "windows"
+            or session is None
+            or session.logon_type != 9
+            or session.username.casefold() == actor.username.casefold()
+        ):
+            return actor
+        users = {
+            candidate.username.casefold(): candidate
+            for candidate in self.scenario.environment.users
+        }
+        local_actor = users.get(session.username.casefold())
+        if local_actor is None:
+            raise StateError(
+                "NewCredentials process ownership requires declared local caller "
+                f"{session.username!r} on {system.hostname}"
+            )
+        return local_actor
 
     def _ensure_storyline_session_end_pairs(self) -> None:
         """Pair explicit logoffs with the latest preceding durable session intent."""
@@ -2010,6 +2507,20 @@ class StorylineMixin:
         spec_id = getattr(self, "_current_storyline_spec_id", "")
         logoff_id = self._storyline_start_to_logoff.get(spec_id)
         return self._storyline_session_end_plans.get(logoff_id or "")
+
+    def _authored_rdp_session_end_plan(self) -> SessionEndPlan | None:
+        """Return the explicit RDP end or one action-owned scenario fence."""
+
+        explicit = self._session_end_plan_for_current_start()
+        if explicit is not None:
+            return explicit
+        scenario_end = getattr(self, "end_time", None)
+        if not isinstance(scenario_end, datetime):
+            return None
+        return SessionEndPlan(
+            canonical_end=ensure_utc(scenario_end),
+            authority="action_bundle",
+        )
 
     def _session_end_plan_for_current_logoff(self) -> tuple[str, SessionEndPlan] | None:
         """Return the exact session and close plan paired with the current logoff."""
@@ -2059,22 +2570,35 @@ class StorylineMixin:
             return logon_id
 
         required_until = self._next_storyline_logoff_time_for_actor_system(actor, system, time)
-        plan = self.world_model.plan_session(
-            user=actor,
-            target_system=system,
-            rng=rng,
-        )
+        session_kind = self._storyline_non_session_kind(actor, system, rng)
         target_session = self.world_planner.ensure_user_session(
             actor,
             system,
             time,
             rng,
-            session_kind=plan.session_kind,
+            session_kind=session_kind,
             storyline_protected=True,
             required_until=required_until,
         )
         self._record_storyline_logon(actor, system, target_session.logon_id)
         return target_session.logon_id
+
+    def _storyline_non_session_kind(
+        self,
+        actor: User,
+        system: System,
+        rng: random.Random,
+    ) -> str:
+        """Keep non-session authored activity from implicitly creating RDP."""
+
+        plan = self.world_model.plan_session(
+            user=actor,
+            target_system=system,
+            rng=rng,
+        )
+        if _get_os_category(system.os) == "windows" and plan.session_kind == "rdp":
+            return "interactive"
+        return plan.session_kind
 
     def _select_web_server_for_spillage(
         self, actor_system: System, requested_scheme: str | None
@@ -2219,6 +2743,7 @@ class StorylineMixin:
         actor: User,
         source_system: System | None,
         source_pid: int,
+        logon_id: str,
         archive_smb_path: str,
         local_staging_path: str,
         exfil_time: datetime,
@@ -2228,12 +2753,6 @@ class StorylineMixin:
 
         if source_system is None or _get_os_category(source_system.os) != "windows":
             return source_pid, "", "", "", False
-        logon_id = self._storyline_logon_for_process_owner(
-            actor,
-            source_system,
-            source_pid,
-            exfil_time,
-        )
         process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
         command_line = (
             "powershell.exe -NoProfile -Command "
@@ -2626,18 +3145,19 @@ class StorylineMixin:
         read_time = connection_time - timedelta(milliseconds=120)
         if running is not None:
             read_time = max(read_time, running.start_time + timedelta(milliseconds=1))
+        local_username = running.username if running is not None else actor.username
         self.dispatcher.dispatch_builder(
             OccurrenceBuilder(
                 timestamp=read_time,
                 event_type="file_read",
                 src_host=self.activity_generator._build_host_context(system),
-                auth=AuthContext(username=actor.username),
+                auth=AuthContext(username=local_username),
                 process=ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid if running is not None else 0,
                     image=process_image,
                     command_line=command_line,
-                    username=actor.username,
+                    username=local_username,
                     logon_id=running.logon_id if running is not None else "",
                     start_time=running.start_time if running is not None else None,
                 ),
@@ -2755,10 +3275,22 @@ class StorylineMixin:
         transfer_process = source_process
         transfer_command = source_command
         transfer_logon_id = ""
+        transfer_actor = actor
         terminate_transfer_process = False
         if source_system is not None:
-            source_file_read_path = self._local_staging_path_for_archive(
+            transfer_logon_id = self._storyline_logon_for_process_owner(
                 actor,
+                source_system,
+                source_pid,
+                exfil_time,
+            )
+            transfer_actor = self._storyline_local_process_actor_for_logon(
+                actor,
+                source_system,
+                transfer_logon_id,
+            )
+            source_file_read_path = self._local_staging_path_for_archive(
+                transfer_actor,
                 source_system,
                 archive.archive_path,
             )
@@ -2769,9 +3301,10 @@ class StorylineMixin:
                 transfer_logon_id,
                 terminate_transfer_process,
             ) = self._staged_archive_copy_process(
-                actor=actor,
+                actor=transfer_actor,
                 source_system=source_system,
                 source_pid=source_pid,
+                logon_id=transfer_logon_id,
                 archive_smb_path=archive.smb_filename,
                 local_staging_path=source_file_read_path,
                 exfil_time=exfil_time,
@@ -2780,7 +3313,8 @@ class StorylineMixin:
         emitted = StagedArchiveSmbReadActionBundle(
             self,
             StagedArchiveSmbReadRequest(
-                actor=actor,
+                actor=transfer_actor,
+                smb_principal=actor.username,
                 source_ip=source_ip,
                 staging_ip=archive.staging_ip,
                 archive_path=archive.archive_path,
@@ -2801,7 +3335,6 @@ class StorylineMixin:
                 source_file_read_path=source_file_read_path,
             ),
             rng,
-            emit_smb_logon_pair=getattr(self, "_emit_smb_logon_pair", None),
         ).execute()
         if emitted:
             archive.consumed = True
@@ -2834,11 +3367,42 @@ class StorylineMixin:
             if _get_os_category(system.os) == "windows"
             else ""
         )
-        if image_name in {"chrome.exe", "msedge.exe", "firefox.exe", "curl", "curl.exe"} and (
-            not expected_windows_browser
-            or (current_image or "").lower() == expected_windows_browser.lower()
+        multipart_requires_exact_owner = getattr(spec, "request_multipart", None) is not None
+        if (
+            running is not None
+            and multipart_requires_exact_owner
+            and _process_owns_storyline_multipart_upload(
+                running, current_image or running.image, spec
+            )
         ):
             return current_pid, current_image, current_command
+        if (
+            not multipart_requires_exact_owner
+            and image_name
+            in {
+                "chrome.exe",
+                "msedge.exe",
+                "firefox.exe",
+                "curl",
+                "curl.exe",
+            }
+            and (
+                not expected_windows_browser
+                or (current_image or "").lower() == expected_windows_browser.lower()
+            )
+        ):
+            return current_pid, current_image, current_command
+
+        if multipart_requires_exact_owner:
+            matching_processes = [
+                process
+                for process in self.state_manager.get_processes_on_system(system.hostname)
+                if ensure_utc(process.start_time) <= ensure_utc(time)
+                and _process_owns_storyline_multipart_upload(process, process.image, spec)
+            ]
+            if matching_processes:
+                exact_owner = max(matching_processes, key=lambda process: process.start_time)
+                return exact_owner.pid, exact_owner.image, exact_owner.command_line
 
         os_category = _get_os_category(system.os)
         scheme = "https" if spec.dst_port == 443 else "http"
@@ -2897,28 +3461,56 @@ class StorylineMixin:
         self._record_last_storyline_process(system, pid, process_name, command_line)
         return pid, process_name, command_line
 
-    def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
+    def _last_storyline_process_for_system(
+        self,
+        system: System | None,
+        actor: User | None = None,
+    ) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
         if system is None:
             return -1, None
         processes = getattr(self, "_last_storyline_process_by_system", {})
         pid, image = processes.get(system.hostname, (-1, ""))
         if pid <= 0 or not image:
-            return -1, None
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
 
         os_category = _get_os_category(system.os)
         if os_category == "windows" and image.startswith("/"):
             return -1, None
         if os_category == "linux" and re.match(r"^[A-Za-z]:\\", image):
             return -1, None
-        if self.state_manager.get_process(system.hostname, pid) is None:
+        process = self.state_manager.get_process(system.hostname, pid)
+        if process is None:
             processes.pop(system.hostname, None)
             if getattr(self, "_last_storyline_system", None) == system.hostname:
                 self._last_storyline_pid = -1
                 self._last_storyline_image = ""
                 self._last_storyline_system = ""
-            return -1, None
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
+        if actor is not None and process.username.casefold() != actor.username.casefold():
+            return self._latest_live_storyline_process_ref_for_system(system, actor=actor)
         return pid, image
+
+    def _latest_live_storyline_process_ref_for_system(
+        self,
+        system: System,
+        *,
+        actor: User | None = None,
+    ) -> tuple[int, str | None]:
+        """Return the newest live named process when an unreferenced process has ended."""
+
+        refs = getattr(self, "_storyline_process_refs", {})
+        for key, (pid, image) in reversed(tuple(refs.items())):
+            hostname, _username, _process_ref = key
+            if hostname != system.hostname or (
+                actor is not None and _username.casefold() != actor.username.casefold()
+            ):
+                continue
+            process = self.state_manager.get_process(system.hostname, pid)
+            if process is not None and process.image == image:
+                return pid, image
+            refs.pop(key, None)
+        return -1, None
 
     def _clamp_after_storyline_process_source_create(
         self,
@@ -2931,10 +3523,10 @@ class StorylineMixin:
         """Keep process-owned storyline network evidence after visible process creation."""
         if system is None or pid <= 0:
             return network_time
-        source_time_getter = getattr(self.activity_generator, "process_source_create_time", None)
+        source_time_getter = getattr(self.activity_generator, "process_source_create_bound", None)
         if not callable(source_time_getter):
             return network_time
-        process_source_time = source_time_getter(system.hostname, pid)
+        process_source_time = source_time_getter(system, pid)
         if not isinstance(process_source_time, datetime) or network_time > process_source_time:
             return network_time
         return process_source_time + timedelta(milliseconds=rng.randint(120, 700))
@@ -2968,7 +3560,7 @@ class StorylineMixin:
         output_file: str | None,
         rng: random.Random,
     ) -> datetime | None:
-        """Emit bash-history and process texture around high-risk Linux commands."""
+        """Emit bounded bash-history texture before an authored Linux process."""
         commands = _linux_storyline_shell_friction_commands(
             username=actor.username,
             process_name=process_name,
@@ -2979,23 +3571,26 @@ class StorylineMixin:
         if not commands:
             return None
 
-        requested_time = time - timedelta(
-            seconds=max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(5.0, 35.0)
+        lead_seconds = max(18.0, len(commands) * rng.uniform(8.0, 18.0)) + rng.uniform(
+            5.0,
+            35.0,
         )
+        first_anchor = time - timedelta(seconds=lead_seconds)
+        spacing_seconds = lead_seconds / (len(commands) + 1)
         latest_scheduled: datetime | None = None
-        for command in commands:
-            scheduled = self.activity_generator.generate_bash_command(
+        for command_index, command in enumerate(commands):
+            scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))
+            prepared_command = self.activity_generator._prepare_bash_history_command(
+                system,
+                command,
+            )
+            self.activity_generator._emit_bash_command_event(
                 actor,
                 system,
-                requested_time,
-                command,
-                emit_process_telemetry=True,
+                scheduled,
+                prepared_command,
             )
-            if isinstance(scheduled, datetime):
-                latest_scheduled = scheduled
-                requested_time = scheduled + timedelta(seconds=rng.uniform(2.0, 14.0))
-            else:
-                requested_time += timedelta(seconds=rng.uniform(4.0, 18.0))
+            latest_scheduled = scheduled
         return latest_scheduled
 
     def _recent_storyline_process_logon_id(
@@ -3039,40 +3634,105 @@ class StorylineMixin:
         pid: int,
         process_name: str,
         logon_id: str,
+        release_storyline_index: int | None = None,
     ) -> None:
-        """Defer storyline process termination until all same-step dependents run."""
+        """Defer termination until same-step and cross-step authored dependents run."""
         if not hasattr(self, "_pending_story_process_terminations"):
             self._pending_story_process_terminations = []
         self._pending_story_process_terminations.append(
             {
-                "actor": actor,
-                "system": system,
+                "actor": actor.username,
+                "system": system.hostname,
                 "time": time,
                 "pid": pid,
                 "process_name": process_name,
                 "logon_id": logon_id,
+                "release_storyline_index": release_storyline_index,
             }
         )
 
-    def _flush_story_process_terminations(self) -> None:
-        """Emit deferred storyline terminations after process activity is complete."""
+    def _flush_story_process_terminations(
+        self,
+        *,
+        completed_storyline_index: int | None = None,
+        release_time: datetime | None = None,
+    ) -> None:
+        """Emit due terminations while retaining processes needed by later authored work."""
         pending = getattr(self, "_pending_story_process_terminations", [])
         if not pending:
             return
-        self._pending_story_process_terminations = []
+        retained: list[dict[str, Any]] = []
         for item in pending:
-            proc = self.state_manager.get_process(item["system"].hostname, item["pid"])
+            required_index = item.get("release_storyline_index")
+            if (
+                required_index is not None
+                and completed_storyline_index is not None
+                and completed_storyline_index < required_index
+            ):
+                retained.append(item)
+                continue
+            find_system = getattr(self, "_find_system", None)
+            system = find_system(item["system"]) if callable(find_system) else None
+            if system is None:
+                system = next(
+                    (
+                        candidate
+                        for candidate in self.scenario.environment.systems
+                        if candidate.hostname == item["system"]
+                    ),
+                    None,
+                )
+            find_actor = getattr(self, "_find_actor", None)
+            actor = find_actor(item["actor"]) if callable(find_actor) else None
+            if actor is None:
+                actor = next(
+                    (
+                        candidate
+                        for candidate in self.scenario.environment.users
+                        if candidate.username == item["actor"]
+                    ),
+                    None,
+                )
+            if actor is None:
+                user_model = getattr(self.activity_generator, "_user_model_for_username", None)
+                actor = user_model(item["actor"]) if callable(user_model) else None
+            if system is None or actor is None:
+                raise StateError(
+                    "Deferred storyline process termination lost its actor or system identity"
+                )
+            proc = self.state_manager.get_process(system.hostname, item["pid"])
             if proc is None:
                 continue
+            termination_time = item["time"]
+            if release_time is not None:
+                termination_time = max(
+                    termination_time,
+                    ensure_utc(release_time) + timedelta(milliseconds=1),
+                )
             self.activity_generator.generate_process_termination(
-                user=item["actor"],
-                system=item["system"],
-                time=item["time"],
+                user=actor,
+                system=system,
+                time=termination_time,
                 pid=item["pid"],
                 process_name=item["process_name"],
                 logon_id=item["logon_id"],
                 from_storyline=True,
             )
+        self._pending_story_process_terminations = retained
+
+    def _record_storyline_group_completion(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> None:
+        """Preserve authored group order after independent deterministic jitter."""
+
+        key = self._storyline_host_actor_key(system, actor)
+        available = getattr(self, "_storyline_host_available_at", {})
+        available[key] = max(time, available.get(key, time))
+        self._storyline_host_available_at = available
 
     def _apply_storyline_shell_availability(
         self,
@@ -3096,6 +3756,286 @@ class StorylineMixin:
         if available_at is None or time >= available_at:
             return time
         return available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
+
+    def _authored_rdp_minimum_anchor(
+        self,
+        *,
+        spec: Any,
+        system: System,
+        child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> datetime | None:
+        """Return the earliest RDP action frontier one typed child can consume."""
+
+        if spec.type == "rdp_session":
+            return child_time - timedelta(seconds=RDP_BOOTSTRAP_MAX_LEAD_SECONDS)
+        if (
+            spec.type == "logon"
+            and spec.logon_type == 10
+            and _get_os_category(system.os) == "windows"
+            and spec.source_ip not in {"-", system.ip}
+        ):
+            return child_time
+        if (
+            spec.type != "credential_spray"
+            or spec.logon_type != 10
+            or spec.success is None
+            or _get_os_category(system.os) != "windows"
+            or spec.source_ip in (None, "", "-", system.ip)
+        ):
+            return None
+
+        start_time = (
+            self._parse_storyline_time(spec.start_time) + cumulative_shift
+            if spec.start_time
+            else child_time
+        )
+        interval_seconds = parse_duration(spec.interval).total_seconds()
+        success_after = int(spec.success["after"])
+        minimum_offset = max(0.0, (success_after - spec.jitter) * interval_seconds)
+        return start_time + timedelta(seconds=minimum_offset)
+
+    def _authored_event_rdp_nominal_lower_bound(
+        self,
+        event: Any,
+        event_time: datetime,
+    ) -> datetime | None:
+        """Return one conservative pre-execution RDP bound for an authored group."""
+
+        target_system = self._find_system(event.system)
+        if target_system is None:
+            return None
+        group_lower_bound = ensure_utc(event_time) - timedelta(
+            seconds=(_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS + RDP_BOOTSTRAP_MAX_LEAD_SECONDS)
+        )
+        lower_bounds: list[datetime] = []
+        for spec in event.events:
+            if spec.type == "rdp_session":
+                lower_bounds.append(group_lower_bound)
+                continue
+            if (
+                spec.type == "logon"
+                and spec.logon_type == 10
+                and _get_os_category(target_system.os) == "windows"
+                and spec.source_ip not in {"-", target_system.ip}
+            ):
+                lower_bounds.append(group_lower_bound)
+                continue
+            if (
+                spec.type != "credential_spray"
+                or spec.logon_type != 10
+                or spec.success is None
+                or _get_os_category(target_system.os) != "windows"
+                or spec.source_ip in (None, "", "-", target_system.ip)
+            ):
+                continue
+            start_time = (
+                self._parse_storyline_time(spec.start_time)
+                if spec.start_time
+                else ensure_utc(event_time)
+                - timedelta(seconds=_AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS)
+            )
+            interval_seconds = parse_duration(spec.interval).total_seconds()
+            success_after = int(spec.success["after"])
+            minimum_offset = max(0.0, (success_after - spec.jitter) * interval_seconds)
+            lower_bounds.append(start_time + timedelta(seconds=minimum_offset))
+        return min(lower_bounds) if lower_bounds else None
+
+    def _authored_rdp_latest_anchor(
+        self,
+        *,
+        actor: User,
+        spec: Any,
+        system: System,
+        shifted_child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> datetime | None:
+        """Return a conservative upper bound for one shifted RDP action anchor."""
+
+        child_time = ensure_utc(shifted_child_time)
+        if spec.type == "rdp_session":
+            source_candidates: list[System]
+            if spec.source_ip:
+                modeled_source = self.world_model.system_for_ip(spec.source_ip)
+                source_candidates = [modeled_source] if modeled_source is not None else []
+            else:
+                source_candidates = [
+                    candidate
+                    for candidate in self.scenario.environment.systems
+                    if candidate.ip != system.ip and _get_os_category(candidate.os) == "windows"
+                ]
+            if not source_candidates:
+                return child_time
+            earliest_initial_source_process = child_time - timedelta(
+                seconds=(RDP_BOOTSTRAP_MAX_LEAD_SECONDS + RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS)
+            )
+            latest_initial_source_process = child_time - timedelta(
+                seconds=(RDP_BOOTSTRAP_MIN_LEAD_SECONDS + RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS)
+            )
+            alignment_hour_end = latest_initial_source_process.replace(
+                minute=0,
+                second=0,
+                microsecond=0,
+            ) + timedelta(hours=1)
+            source_hostnames = {candidate.hostname for candidate in source_candidates}
+            has_possible_future_source_session = any(
+                session.system in source_hostnames
+                and session.logon_type in {2, 10, 11}
+                and session.session_kind not in {"network", "service"}
+                and earliest_initial_source_process
+                < ensure_utc(session.start_time)
+                < alignment_hour_end
+                for session in self.state_manager.get_sessions_for_user(actor.username)
+            )
+            if not has_possible_future_source_session:
+                return child_time
+            latest_aligned_transport = alignment_hour_end + timedelta(
+                seconds=RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS
+            )
+            return max(child_time, latest_aligned_transport)
+        if (
+            spec.type == "logon"
+            and spec.logon_type == 10
+            and _get_os_category(system.os) == "windows"
+            and spec.source_ip not in {"-", system.ip}
+        ):
+            return child_time
+        if (
+            spec.type != "credential_spray"
+            or spec.logon_type != 10
+            or spec.success is None
+            or _get_os_category(system.os) != "windows"
+            or spec.source_ip in (None, "", "-", system.ip)
+        ):
+            return None
+
+        start_time = (
+            self._parse_storyline_time(spec.start_time) + cumulative_shift
+            if spec.start_time
+            else child_time
+        )
+        interval_seconds = parse_duration(spec.interval).total_seconds()
+        success_after = int(spec.success["after"])
+        latest_offset = (success_after + spec.jitter) * interval_seconds
+        monotonic_clamp_margin = timedelta(milliseconds=success_after)
+        return ensure_utc(start_time) + timedelta(seconds=latest_offset) + monotonic_clamp_margin
+
+    def _authored_rdp_transport_lower_bound(self, current_hour: datetime) -> datetime | None:
+        """Return a best-effort current/next-hour fence that limits baseline distortion.
+
+        Live authored admission owns monotonicity; periodic specs may place an
+        explicit start outside the nominal group hour represented by this fence.
+        """
+
+        window_start = ensure_utc(current_hour)
+        hour_keys = (
+            int(window_start.timestamp()),
+            int((window_start + timedelta(hours=1)).timestamp()),
+        )
+        lower_bounds: list[datetime] = []
+        authored_groups = (
+            (self.scenario.storyline, getattr(self, "_storyline_by_hour", {})),
+            (self.scenario.red_herrings, getattr(self, "_red_herring_by_hour", {})),
+        )
+        for events, events_by_hour in authored_groups:
+            for hour_key in hour_keys:
+                for event_time, event_idx in events_by_hour.get(hour_key, ()):
+                    lower_bound = self._authored_event_rdp_nominal_lower_bound(
+                        events[event_idx],
+                        event_time,
+                    )
+                    if lower_bound is not None:
+                        lower_bounds.append(lower_bound)
+        return min(lower_bounds) if lower_bounds else None
+
+    def _shift_authored_rdp_child_after_frontier(
+        self,
+        *,
+        actor: User,
+        spec: Any,
+        system: System,
+        child_time: datetime,
+        cumulative_shift: timedelta,
+    ) -> tuple[datetime, timedelta]:
+        """Keep one RDP-producing child and its remaining siblings monotonic."""
+
+        minimum_anchor = self._authored_rdp_minimum_anchor(
+            spec=spec,
+            system=system,
+            child_time=child_time,
+            cumulative_shift=cumulative_shift,
+        )
+        if minimum_anchor is None:
+            return child_time, cumulative_shift
+        frontier = self.activity_generator._rdp_session_lifecycle_frontier()
+        required_anchor = frontier + _AUTHORED_RDP_FRONTIER_EPSILON
+        shift = max(timedelta(0), required_anchor - minimum_anchor)
+        shifted_child_time = child_time + shift
+        shifted_cumulative = cumulative_shift + shift
+        latest_anchor = self._authored_rdp_latest_anchor(
+            actor=actor,
+            spec=spec,
+            system=system,
+            shifted_child_time=shifted_child_time,
+            cumulative_shift=shifted_cumulative,
+        )
+        if latest_anchor is None:
+            raise StateError("Authored RDP admission lost its guarded action shape")
+        session_end_plan_getter = getattr(self, "_authored_rdp_session_end_plan", None)
+        session_end_plan = session_end_plan_getter() if callable(session_end_plan_getter) else None
+        explicit_anchor_limit = (
+            ensure_utc(session_end_plan.canonical_end)
+            - timedelta(milliseconds=RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS)
+            if session_end_plan is not None and session_end_plan.is_authoritative
+            else None
+        )
+        if explicit_anchor_limit is not None and latest_anchor >= explicit_anchor_limit:
+            raise StateError(
+                "Authored RDP cannot be serialized before its explicit session end: "
+                f"latest action anchor {latest_anchor.isoformat()} must precede "
+                f"{explicit_anchor_limit.isoformat()}"
+            )
+        activity_dispatcher = getattr(self.activity_generator, "dispatcher", None)
+        action_source_deadline = (
+            ensure_utc(session_end_plan.canonical_end)
+            if session_end_plan is not None and not session_end_plan.is_authoritative
+            else None
+        )
+        if action_source_deadline is not None:
+            source_timing_planner = getattr(
+                activity_dispatcher,
+                "source_timing_planner",
+                None,
+            )
+            network_observation_planner = getattr(
+                activity_dispatcher,
+                "network_observation_planner",
+                None,
+            )
+            source_tail = rdp_action_deadline_source_tail(
+                source_deadline=action_source_deadline,
+                source_timing_planner=source_timing_planner,
+                network_observation_planner=network_observation_planner,
+                source_ip=getattr(spec, "source_ip", None) or "",
+                target_ip=system.ip,
+            )
+            transport_headroom = timedelta(
+                seconds=rdp_action_deadline_transport_headroom_seconds(
+                    source_deadline=action_source_deadline,
+                    source_timing_planner=source_timing_planner,
+                    modeled_source=True,
+                )
+            )
+            scenario_anchor_limit = action_source_deadline - source_tail - transport_headroom
+        else:
+            scenario_anchor_limit = None
+        if scenario_anchor_limit is not None and latest_anchor > scenario_anchor_limit:
+            raise StateError(
+                "Authored RDP cannot be serialized before the scenario end: "
+                f"latest action anchor {latest_anchor.isoformat()} must not follow "
+                f"{scenario_anchor_limit.isoformat()}"
+            )
+        return shifted_child_time, shifted_cumulative
 
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
@@ -3160,6 +4100,8 @@ class StorylineMixin:
 
             previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
             self.dispatcher.storyline_cluster_id = storyline_event.id
+            cumulative_rdp_shift = timedelta(0)
+            group_completion_time = event_time
             try:
                 for i, spec in enumerate(storyline_event.events):
                     intent = self.authored_intent_ledger.intent_at(
@@ -3173,14 +4115,37 @@ class StorylineMixin:
                     self.dispatcher.authored_intent_id = intent.intent_id
                     self.intent_execution_ledger.mark_planned(intent.intent_id)
                     try:
-                        event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                        event_t = (
+                            event_time
+                            + timedelta(seconds=cadence_offsets[i])
+                            + cumulative_rdp_shift
+                        )
                         event_t = self._apply_storyline_shell_availability(
                             actor=actor,
                             system=system,
                             time=event_t,
                             rng=rng,
                         )
+                        event_t, cumulative_rdp_shift = (
+                            self._shift_authored_rdp_child_after_frontier(
+                                actor=actor,
+                                spec=spec,
+                                system=system,
+                                child_time=event_t,
+                                cumulative_shift=cumulative_rdp_shift,
+                            )
+                        )
                         self.state_manager.set_current_time(event_t)
+                        session_required_until = (
+                            _storyline_session_required_until(
+                                event_t,
+                                cadence_offsets,
+                                i,
+                                storyline_event.events[i + 1 :],
+                            )
+                            if spec.type == "ssh_session"
+                            else None
+                        )
                         malicious_event = self._execute_typed_event(
                             spec=spec,
                             actor=actor,
@@ -3188,22 +4153,37 @@ class StorylineMixin:
                             time=event_t,
                             activity=storyline_event.activity,
                             explicit_types=explicit_types,
-                            future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                            future_specs=itertools.islice(
+                                storyline_event.events,
+                                i + 1,
+                                None,
+                            ),
+                            authored_time_shift=cumulative_rdp_shift,
+                            session_required_until=session_required_until,
                         )
                         if malicious_event:
                             malicious_event["intent_id"] = intent.intent_id
                             self.malicious_events.append(malicious_event)
+                            materialized_time = malicious_event.get("time")
+                            if isinstance(materialized_time, datetime):
+                                event_t = max(event_t, materialized_time)
+                        group_completion_time = max(group_completion_time, event_t)
                     finally:
                         self._current_storyline_spec_id = previous_spec_id
                         self.dispatcher.authored_intent_id = previous_intent_id
-                self._flush_story_process_terminations()
+                self._record_storyline_group_completion(
+                    actor=actor,
+                    system=system,
+                    time=group_completion_time,
+                )
+                self._flush_story_process_terminations(
+                    completed_storyline_index=event_num - 1,
+                    release_time=group_completion_time,
+                )
             finally:
                 self.dispatcher.storyline_cluster_id = previous_cluster
 
-            if cadence_offsets:
-                _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
-            else:
-                _prev_event_time = event_time
+            _prev_event_time = group_completion_time
 
             self._barrier_flush_all_emitters()
 
@@ -3242,6 +4222,8 @@ class StorylineMixin:
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = storyline_event.id
+        cumulative_rdp_shift = timedelta(0)
+        group_completion_time = event_time
         try:
             for i, spec in enumerate(storyline_event.events):
                 intent = self.authored_intent_ledger.intent_at(
@@ -3255,14 +4237,33 @@ class StorylineMixin:
                 self.dispatcher.authored_intent_id = intent.intent_id
                 self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = (
+                        event_time + timedelta(seconds=cadence_offsets[i]) + cumulative_rdp_shift
+                    )
                     event_t = self._apply_storyline_shell_availability(
                         actor=actor,
                         system=system,
                         time=event_t,
                         rng=rng,
                     )
+                    event_t, cumulative_rdp_shift = self._shift_authored_rdp_child_after_frontier(
+                        actor=actor,
+                        spec=spec,
+                        system=system,
+                        child_time=event_t,
+                        cumulative_shift=cumulative_rdp_shift,
+                    )
                     self.state_manager.set_current_time(event_t)
+                    session_required_until = (
+                        _storyline_session_required_until(
+                            event_t,
+                            cadence_offsets,
+                            i,
+                            storyline_event.events[i + 1 :],
+                        )
+                        if spec.type == "ssh_session"
+                        else None
+                    )
                     malicious_event = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -3270,15 +4271,33 @@ class StorylineMixin:
                         time=event_t,
                         activity=storyline_event.activity,
                         explicit_types=explicit_types,
-                        future_specs=itertools.islice(storyline_event.events, i + 1, None),
+                        future_specs=itertools.islice(
+                            storyline_event.events,
+                            i + 1,
+                            None,
+                        ),
+                        authored_time_shift=cumulative_rdp_shift,
+                        session_required_until=session_required_until,
                     )
                     if malicious_event:
                         malicious_event["intent_id"] = intent.intent_id
                         self.malicious_events.append(malicious_event)
+                        materialized_time = malicious_event.get("time")
+                        if isinstance(materialized_time, datetime):
+                            event_t = max(event_t, materialized_time)
+                    group_completion_time = max(group_completion_time, event_t)
                 finally:
                     self._current_storyline_spec_id = previous_spec_id
                     self.dispatcher.authored_intent_id = previous_intent_id
-            self._flush_story_process_terminations()
+            self._record_storyline_group_completion(
+                actor=actor,
+                system=system,
+                time=group_completion_time,
+            )
+            self._flush_story_process_terminations(
+                completed_storyline_index=event_idx,
+                release_time=group_completion_time,
+            )
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
 
@@ -3320,6 +4339,7 @@ class StorylineMixin:
 
         previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
         self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
+        cumulative_rdp_shift = timedelta(0)
         try:
             for i, spec in enumerate(rh_event.events):
                 intent = self.authored_intent_ledger.intent_at(
@@ -3331,14 +4351,33 @@ class StorylineMixin:
                 self.dispatcher.authored_intent_id = intent.intent_id
                 self.intent_execution_ledger.mark_planned(intent.intent_id)
                 try:
-                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = (
+                        event_time + timedelta(seconds=cadence_offsets[i]) + cumulative_rdp_shift
+                    )
                     event_t = self._apply_storyline_shell_availability(
                         actor=actor,
                         system=system,
                         time=event_t,
                         rng=rng,
                     )
+                    event_t, cumulative_rdp_shift = self._shift_authored_rdp_child_after_frontier(
+                        actor=actor,
+                        spec=spec,
+                        system=system,
+                        child_time=event_t,
+                        cumulative_shift=cumulative_rdp_shift,
+                    )
                     self.state_manager.set_current_time(event_t)
+                    session_required_until = (
+                        _storyline_session_required_until(
+                            event_t,
+                            cadence_offsets,
+                            i,
+                            rh_event.events[i + 1 :],
+                        )
+                        if spec.type == "ssh_session"
+                        else None
+                    )
                     result = self._execute_typed_event(
                         spec=spec,
                         actor=actor,
@@ -3347,6 +4386,8 @@ class StorylineMixin:
                         activity=rh_event.activity,
                         explicit_types=explicit_types,
                         future_specs=itertools.islice(rh_event.events, i + 1, None),
+                        authored_time_shift=cumulative_rdp_shift,
+                        session_required_until=session_required_until,
                     )
                     if result:
                         # Track as red herring, not malicious
@@ -3355,7 +4396,10 @@ class StorylineMixin:
                         self.red_herring_events.append(result)
                 finally:
                     self.dispatcher.authored_intent_id = previous_intent_id
-            self._flush_story_process_terminations()
+            self._flush_story_process_terminations(
+                completed_storyline_index=-1,
+                release_time=event_t if cadence_offsets else event_time,
+            )
         finally:
             self.dispatcher.storyline_cluster_id = previous_cluster
 
@@ -3368,12 +4412,15 @@ class StorylineMixin:
         activity: str,
         explicit_types: set[str],
         future_specs: Sequence[Any] = (),
+        authored_time_shift: timedelta = timedelta(0),
+        session_required_until: datetime | None = None,
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
         Each event spec type maps to a specific generate_* method on ActivityGenerator.
         Returns a malicious_event dict for GROUND_TRUTH.md.
         """
+        future_specs = tuple(future_specs)
         rng = _get_rng()
         dispatcher = getattr(self, "dispatcher", None)
         malicious_event = {
@@ -3404,28 +4451,74 @@ class StorylineMixin:
             return "(filtered by sensor placement)"
 
         if spec.type == "logon":
-            source_ip = spec.source_ip or pick_external_actor_ip("logon_source_ips", rng)
             session_end_plan = self._session_end_plan_for_current_start()
-            logon_id = self.activity_generator.generate_logon(
-                user=actor,
-                system=system,
-                time=time,
-                logon_type=spec.logon_type,
-                source_ip=source_ip,
-                session_end_plan=session_end_plan,
-            )
+            if (
+                spec.logon_type == 10
+                and _get_os_category(system.os) == "windows"
+                and spec.source_ip not in {"-", system.ip}
+            ):
+                session_end_plan = self._authored_rdp_session_end_plan()
+            if spec.logon_type == 9:
+                caller, caller_logon_id = self._storyline_new_credentials_caller(
+                    actor,
+                    system,
+                    time,
+                )
+                outbound_domain = self.activity_generator._explicit_credentials_target_domain(
+                    actor.username,
+                    system.hostname,
+                    system,
+                )
+                logon_id = self.activity_generator._emit_new_credentials_logon(
+                    user=caller,
+                    system=system,
+                    time=time,
+                    caller_logon_id=caller_logon_id,
+                    outbound_username=actor.username,
+                    outbound_domain=outbound_domain,
+                    lifecycle_group_id=(
+                        f"storyline:{getattr(self, '_current_storyline_spec_id', 'logon')}"
+                    ),
+                )
+                source_ip = "-"
+            else:
+                source_ip = (
+                    spec.source_ip
+                    or self.public_identity_registry.bind(
+                        "external_logon",
+                        f"storyline-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
+                    ).ip
+                )
+                logon_id = self.activity_generator.generate_logon(
+                    user=actor,
+                    system=system,
+                    time=time,
+                    logon_type=spec.logon_type,
+                    source_ip=source_ip,
+                    session_end_plan=session_end_plan,
+                )
             # Protect storyline-created sessions from baseline logoff
             session = self.state_manager.get_session(logon_id)
             if session:
                 session.storyline_protected = True
+                if getattr(session, "session_kind", "") in {"rdp", "ssh"}:
+                    self._record_storyline_session_ready(
+                        system=system,
+                        actor=actor,
+                        session=session,
+                        rng=rng,
+                    )
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
             self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)
 
         elif spec.type == "failed_logon":
-            source_ip = spec.source_ip or pick_external_actor_ip(
-                "failed_logon_source_ips",
-                rng,
+            source_ip = (
+                spec.source_ip
+                or self.public_identity_registry.bind(
+                    "failed_logon",
+                    f"storyline-failed-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
+                ).ip
             )
             dc = next(
                 (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
@@ -3557,19 +4650,13 @@ class StorylineMixin:
                             system,
                             time,
                         )
-                        # Pre-compute the session kind via the planner so reuse
-                        # filtering matches the correct transport type.
-                        plan = self.world_model.plan_session(
-                            user=actor,
-                            target_system=system,
-                            rng=rng,
-                        )
+                        session_kind = self._storyline_non_session_kind(actor, system, rng)
                         target_session = self.world_planner.ensure_user_session(
                             actor,
                             system,
                             time,
                             rng,
-                            session_kind=plan.session_kind,
+                            session_kind=session_kind,
                             storyline_protected=True,
                             required_until=required_until,
                         )
@@ -3595,6 +4682,11 @@ class StorylineMixin:
                 actor,
                 system,
                 time,
+            )
+            process_actor = self._storyline_local_process_actor_for_logon(
+                process_actor,
+                system,
+                logon_id,
             )
             process_name = _normalize_storyline_process_image(
                 spec.process_name,
@@ -3647,13 +4739,40 @@ class StorylineMixin:
 
             output_file = self._extract_output_file(command_line, os_category)
             process_logon_id = logon_id
+            service_lifecycle_group_id = ""
+            service_process_identity = self._storyline_service_process_identity(
+                system=system,
+                time=time,
+                process_name=process_name,
+                future_specs=future_specs,
+            )
+            parent_ref = getattr(spec, "parent_ref", None)
+            if not isinstance(parent_ref, str) or not parent_ref:
+                parent_ref = None
             explicit_parent = self._storyline_process_ref_for_parent(
                 actor=process_actor,
                 system=system,
-                parent_ref=getattr(spec, "parent_ref", None),
+                parent_ref=parent_ref,
             )
+            if parent_ref is not None and explicit_parent is None:
+                malicious_event["process_name"] = process_name
+                malicious_event["command_line"] = command_line
+                malicious_event["skipped_reason"] = "no_live_parent_ref"
+                return malicious_event
             if explicit_parent is not None:
                 parent_pid, _parent_image = explicit_parent
+            elif service_process_identity is not None:
+                process_actor, _service_name, service_lifecycle_group_id = service_process_identity
+                process_logon_id = {
+                    "SYSTEM": "0x3e7",
+                    "LOCAL SERVICE": "0x3e5",
+                    "NETWORK SERVICE": "0x3e4",
+                }[process_actor.username]
+                parent_pid = self.activity_generator._get_system_pid(
+                    system.hostname,
+                    "services",
+                    0x1F4,
+                )
             else:
                 service_context = self._storyline_service_context_for_process(
                     actor=process_actor,
@@ -3662,7 +4781,12 @@ class StorylineMixin:
                     process_name=process_name,
                 )
                 if service_context is not None:
-                    process_actor, process_logon_id, parent_pid = service_context
+                    (
+                        process_actor,
+                        process_logon_id,
+                        parent_pid,
+                        service_lifecycle_group_id,
+                    ) = service_context
                 else:
                     parent_pid = self.activity_generator._resolve_parent(
                         system,
@@ -3691,24 +4815,76 @@ class StorylineMixin:
                         requested_time=time,
                         process_name=process_name,
                         command_line=process_command_line,
+                        authoritative_time=True,
                     )
                 )
                 if isinstance(reserved_start_time, datetime):
                     time = reserved_start_time
-                scheduled_bash_time = self.activity_generator.generate_bash_command(
+                prepared_shell_command = self.activity_generator._prepare_bash_history_command(
+                    system,
+                    command_line,
+                )
+                self.activity_generator._emit_bash_command_event(
                     process_actor,
                     system,
                     time,
-                    command_line,
-                    emit_process_telemetry=False,
+                    prepared_shell_command,
                 )
-                if isinstance(scheduled_bash_time, datetime):
-                    time = scheduled_bash_time
+                malicious_event["time"] = time
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            service_backed_process = "service_installed" in explicit_types and exe_name in {
+            service_backed_process = service_process_identity is not None or (
+                "service_installed" in explicit_types
+                and exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"}
+            )
+            if service_backed_process and not service_lifecycle_group_id:
+                matching_service_spec = next(
+                    (
+                        candidate
+                        for candidate in future_specs
+                        if getattr(candidate, "type", "") == "service_installed"
+                        and self._normalize_storyline_service_file_name(
+                            str(getattr(candidate, "service_file_name", "") or "")
+                        )
+                        .rsplit("\\", 1)[-1]
+                        .casefold()
+                        == exe_name
+                    ),
+                    None,
+                )
+                if matching_service_spec is not None:
+                    service_name = str(
+                        getattr(matching_service_spec, "service_name", "") or exe_name
+                    )
+                else:
+                    service_name = exe_name.removesuffix(".exe")
+                service_lifecycle_group_id = self._storyline_remote_service_lifecycle_id(
+                    system,
+                    service_name,
+                )
+            if not service_lifecycle_group_id and exe_name in {
                 "psexesvc.exe",
                 "healthmonitorsvc.exe",
-            }
+            }:
+                recent_service = getattr(self, "_last_storyline_service_by_system", {}).get(
+                    system.hostname,
+                    {},
+                )
+                installed_image = self._normalize_storyline_service_file_name(
+                    str(recent_service.get("service_file_name") or "")
+                )
+                installed_at = recent_service.get("installed_at")
+                if (
+                    installed_image.rsplit("\\", 1)[-1].casefold() == exe_name
+                    and isinstance(installed_at, datetime)
+                    and installed_at <= time
+                    and time - installed_at
+                    <= (
+                        timedelta(minutes=2)
+                        if exe_name == "psexesvc.exe"
+                        else timedelta(minutes=30)
+                    )
+                ):
+                    service_lifecycle_group_id = str(recent_service.get("lifecycle_group_id") or "")
             pid = self.activity_generator.generate_process(
                 user=process_actor,
                 system=system,
@@ -3717,13 +4893,21 @@ class StorylineMixin:
                 process_name=process_name,
                 command_line=process_command_line,
                 parent_pid=parent_pid,
+                require_exact_parent=explicit_parent is not None,
                 ensure_file_event=not service_backed_process,
                 from_storyline=True,
                 suppress_command_file_effect=output_file is not None,
+                lifecycle_group_id=service_lifecycle_group_id,
             )
+            running_process = self.state_manager.get_process(system.hostname, pid)
+            if running_process is not None:
+                time = max(ensure_utc(time), ensure_utc(running_process.start_time))
+                malicious_event["time"] = time
             self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name, process_command_line)
             process_ref = getattr(spec, "process_ref", None)
+            if not isinstance(process_ref, str) or not process_ref:
+                process_ref = None
             if process_ref is not None:
                 self._record_storyline_process_ref(
                     actor=process_actor,
@@ -3979,28 +5163,92 @@ class StorylineMixin:
                         network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
                         rng=rng,
                     )
-                    source_port = self.activity_generator.reserve_ssh_source_port(
-                        system.ip,
-                        dst_ip,
-                        None,
-                        rng,
-                        _get_os_category(system.os),
-                        time=transfer_time,
-                    )
-                    transfer_duration = rng.uniform(2.0, 30.0)
-                    orig_bytes = rng.randint(20_000, 250_000)
-                    resp_bytes = rng.randint(4_000, 40_000)
                     target_system = self._system_for_ip(dst_ip)
+                    modeled_linux_receiver = bool(
+                        target_system is not None and _get_os_category(target_system.os) == "linux"
+                    )
+                    source_port = (
+                        self.activity_generator.preview_ssh_source_port(
+                            system.ip,
+                            dst_ip,
+                            None,
+                            rng,
+                            _get_os_category(system.os),
+                            transfer_time,
+                        )
+                        if modeled_linux_receiver
+                        else self.activity_generator.reserve_ssh_source_port(
+                            system.ip,
+                            dst_ip,
+                            None,
+                            rng,
+                            _get_os_category(system.os),
+                            time=transfer_time,
+                        )
+                    )
+                    transfer_duration = (
+                        # Leave a real authentication window before exact SCP close.
+                        rng.uniform(12.0, 40.0)
+                        if modeled_linux_receiver
+                        else rng.uniform(2.0, 30.0)
+                    )
+                    source_path = self._extract_scp_source_path(command_line, os_category) or ""
+                    source_content = None
+                    runtime_manager = getattr(
+                        self.activity_generator,
+                        "_runtime_content_manager",
+                        None,
+                    )
+                    if runtime_manager is not None and source_path:
+                        source_record = runtime_manager.resolve_record(
+                            system.hostname,
+                            process_actor.username,
+                            source_path,
+                            "linux",
+                        )
+                        if source_record is not None:
+                            source_content = source_record.content
+                    if source_content is None and source_path:
+                        content_rng = random.Random(
+                            _stable_seed(
+                                "storyline_scp_source_content:"
+                                f"{system.hostname}:{source_path}:{transfer_time.isoformat()}"
+                            )
+                        )
+                        source_content = FileContentIdentity(
+                            file_object_id=stable_uuid(
+                                "file-identity",
+                                f"{system.hostname}:{source_path.casefold()}",
+                            ),
+                            version=1,
+                            size_bytes=content_rng.randint(600_000, 1_800_000),
+                            mime_type=(
+                                "application/gzip"
+                                if source_path.casefold().endswith((".gz", ".tgz"))
+                                else "application/octet-stream"
+                            ),
+                            seed_ref=stable_uuid(
+                                "storyline-scp-content",
+                                system.hostname,
+                                source_path,
+                            ),
+                        )
+                    orig_bytes = (
+                        source_content.size_bytes + rng.randint(8_192, 32_768)
+                        if source_content is not None
+                        else rng.randint(20_000, 250_000)
+                    )
+                    resp_bytes = rng.randint(4_000, 40_000)
                     if (
-                        target_system is not None
-                        and _get_os_category(target_system.os) == "linux"
+                        modeled_linux_receiver
+                        and target_system is not None
                         and scp_destination is not None
                     ):
                         target_user = self._resolve_scp_target_user(
                             extracted_username=scp_destination[2],
                             fallback_username=process_actor.username,
                         )
-                        self.activity_generator.generate_ssh_session(
+                        transport_uid = self.activity_generator.generate_ssh_session(
                             user=self.activity_generator._user_model_for_username(target_user),
                             target_system=target_system,
                             time=transfer_time,
@@ -4017,6 +5265,21 @@ class StorylineMixin:
                             defer_session_close=True,
                             source="storyline_scp",
                         )
+                        network_plan_getter = getattr(
+                            self.dispatcher,
+                            "network_plan_for",
+                            None,
+                        )
+                        transport_plan = (
+                            network_plan_getter(transport_uid)
+                            if callable(network_plan_getter)
+                            else None
+                        )
+                        transfer_completed_at = (
+                            transport_plan.closed_at
+                            if transport_plan is not None
+                            else transfer_time + timedelta(seconds=transfer_duration)
+                        )
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
@@ -4024,15 +5287,13 @@ class StorylineMixin:
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            source_path=self._extract_scp_source_path(
-                                command_line,
-                                os_category,
-                            )
-                            or "",
+                            source_path=source_path,
                             target_user=target_user,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
                             source_port=source_port,
+                            transfer_completed_at=transfer_completed_at,
+                            source_content=source_content,
                             rng=rng,
                         )
                     else:
@@ -4106,6 +5367,8 @@ class StorylineMixin:
                     terminate_immediately = (
                         _linux_foreground_lifetime(process_name, process_command_line) is not None
                     )
+                    if process_ref is not None:
+                        terminate_immediately = False
                     if terminate_immediately and self._process_has_following_same_host_connection(
                         system,
                         future_specs,
@@ -4121,16 +5384,16 @@ class StorylineMixin:
                         logon_id=process_logon_id,
                         from_storyline=True,
                     )
-                    source_term_getter = getattr(
-                        self.activity_generator,
-                        "process_source_terminate_time",
-                        None,
-                    )
-                    if callable(source_term_getter):
-                        source_term_time = source_term_getter(system.hostname, pid)
-                        if isinstance(source_term_time, datetime):
-                            shell_release_time = max(shell_release_time, source_term_time)
                 else:
+                    release_storyline_index = (
+                        self._storyline_process_ref_release_index(
+                            actor=process_actor,
+                            system=system,
+                            process_ref=process_ref,
+                        )
+                        if process_ref is not None
+                        else None
+                    )
                     self._queue_story_process_termination(
                         actor=process_actor,
                         system=system,
@@ -4138,6 +5401,7 @@ class StorylineMixin:
                         pid=pid,
                         process_name=process_name,
                         logon_id=process_logon_id,
+                        release_storyline_index=release_storyline_index,
                     )
                 if os_category == "linux":
                     self.activity_generator.remember_linux_foreground_process_completion(
@@ -4153,6 +5417,45 @@ class StorylineMixin:
                     process_shell_key = (system.hostname, process_actor.username)
                     self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
+        elif spec.type == "smb_activity":
+            time = self._storyline_smb_file_ready_time(
+                system=system,
+                spec=spec,
+                requested_at=time,
+                rng=rng,
+            )
+            malicious_event["time"] = time
+            smb_actor, smb_spec = self._storyline_smb_actor_and_spec(
+                actor,
+                system,
+                time,
+                spec,
+            )
+            result = self.activity_generator.generate_smb_activity(
+                spec=smb_spec,
+                actor=smb_actor,
+                parent_system=system,
+                time=time,
+                client_source_override=self._storyline_smb_source_override(
+                    system=system,
+                    spec=smb_spec,
+                ),
+            )
+            malicious_event.update(
+                {
+                    "session_id": result.session_id,
+                    "tree_ids": list(result.tree_ids),
+                    "transport_uids": list(result.transport_uids),
+                    "operations": list(result.operations),
+                    "batch_summary": {
+                        "selected": len(result.operations),
+                        "outcomes": sorted(
+                            {operation["outcome"] for operation in result.operations}
+                        ),
+                    },
+                }
+            )
+
         elif spec.type == "connection":
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
@@ -4165,7 +5468,11 @@ class StorylineMixin:
                 if resolved_dst_ip:
                     effective_dst_ip = resolved_dst_ip
             if not effective_dst_ip:
-                effective_dst_ip = pick_external_actor_ip("connection_c2_ips", rng)
+                effective_dst_ip = self.public_identity_registry.bind(
+                    "c2",
+                    f"storyline-connection:{system.hostname}:{time.isoformat()}:{spec.dst_port}",
+                    forward_hostname=spec.hostname,
+                ).ip
             if (
                 not _is_private_ip(source_ip)
                 and hasattr(self, "dispatcher")
@@ -4643,41 +5950,6 @@ class StorylineMixin:
                     getattr(spec, "ids_alerts", [])
                 )
 
-            # Causal expansion: SMB to file server emits type 3 logon pair
-            if dst_port == 445:
-                dst_sys = next(
-                    (s for s in self.scenario.environment.systems if s.ip == logged_dst_ip),
-                    None,
-                )
-                if (
-                    dst_sys
-                    and dst_sys.roles
-                    and "file_server" in [r.lower() for r in dst_sys.roles]
-                ):
-                    if hasattr(self, "_emit_smb_logon_pair"):
-                        smb_source_port = None
-                        matcher = getattr(
-                            self.activity_generator,
-                            "_last_effective_connection_source_port",
-                            None,
-                        )
-                        if matcher is not None:
-                            smb_source_port = matcher(
-                                src_ip=source_ip,
-                                dst_ip=logged_dst_ip,
-                                dst_port=445,
-                                proto="tcp",
-                            )
-                        self._emit_smb_logon_pair(
-                            actor,
-                            dst_sys,
-                            source_ip,
-                            connection_time,
-                            rng,
-                            source_port=smb_source_port,
-                            emit_network_evidence=smb_source_port is None,
-                        )
-
         elif spec.type == "ssh_session":
             target = next(
                 (s for s in self.scenario.environment.systems if s.ip == system.ip), system
@@ -4692,6 +5964,7 @@ class StorylineMixin:
                 rng=rng,
                 source="storyline_ssh_session",
             )
+            session_end_plan = self._session_end_plan_for_current_start()
             if hasattr(self, "world_planner"):
                 source_system = (
                     self.world_model.system_for_ip(spec.source_ip)
@@ -4708,7 +5981,8 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
-                    session_end_plan=self._session_end_plan_for_current_start(),
+                    required_until=session_required_until,
+                    session_end_plan=session_end_plan,
                     ids_alerts=authored_ids_alerts,
                 )
             else:
@@ -4718,7 +5992,16 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    min_duration=(
+                        max(
+                            30.0,
+                            (session_required_until - time).total_seconds() + 30.0,
+                        )
+                        if session_required_until is not None
+                        else None
+                    ),
                     emit_session_close=True,
+                    session_end_plan=session_end_plan,
                     ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)
@@ -4780,7 +6063,7 @@ class StorylineMixin:
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
                     storyline_protected=True,
-                    session_end_plan=self._session_end_plan_for_current_start(),
+                    session_end_plan=self._authored_rdp_session_end_plan(),
                     ids_alerts=authored_ids_alerts,
                 )
             else:
@@ -4790,6 +6073,7 @@ class StorylineMixin:
                     target_system=target,
                     time=time,
                     source_ip=source_ip,
+                    session_end_plan=self._authored_rdp_session_end_plan(),
                     ids_alerts=authored_ids_alerts,
                 )
                 result = SimpleNamespace(network_uid=uid)
@@ -4843,7 +6127,6 @@ class StorylineMixin:
             # Store SID for later reuse by group_member_added, account_deleted,
             # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
-            self.activity_generator.sid_registry[spec.target_username] = target_sid
             self._created_account_effect_times[
                 self._account_create_lookup_key(dc, spec.target_username)
             ] = effect_time
@@ -4937,6 +6220,12 @@ class StorylineMixin:
                 event_time=time,
                 rng=rng,
             )
+            source_ip = getattr(spec, "source_ip", None)
+            remote_source_system = self.world_model.system_for_ip(source_ip) if source_ip else None
+            service_lifecycle_group_id = self._storyline_remote_service_lifecycle_id(
+                system,
+                spec.service_name,
+            )
             self.activity_generator.generate_service_installed(
                 user=actor,
                 system=system,
@@ -4948,6 +6237,8 @@ class StorylineMixin:
                     spec.service_name,
                 ),
                 service_account=spec.service_account,
+                lifecycle_group_id=service_lifecycle_group_id,
+                remote_source_system=remote_source_system,
             )
             self._record_storyline_service_install(
                 system=system,
@@ -4955,6 +6246,7 @@ class StorylineMixin:
                 service_file_name=spec.service_file_name,
                 service_account=spec.service_account,
                 time=effect_time,
+                lifecycle_group_id=service_lifecycle_group_id,
             )
             malicious_event["service_name"] = spec.service_name
             if spec.service_file_name:
@@ -5027,7 +6319,10 @@ class StorylineMixin:
             )
 
         elif spec.type == "create_remote_thread":
-            source_pid, source_image = self._last_storyline_process_for_system(system)
+            source_pid, source_image = self._last_storyline_process_for_system(
+                system,
+                actor=actor,
+            )
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
             target_image = _normalize_storyline_process_image(
@@ -5068,7 +6363,10 @@ class StorylineMixin:
                     malicious_event["skipped_reason"] = "no_live_target_process"
 
         elif spec.type == "process_access":
-            source_pid, source_image = self._last_storyline_process_for_system(system)
+            source_pid, source_image = self._last_storyline_process_for_system(
+                system,
+                actor=actor,
+            )
             os_category = _get_os_category(system.os)
             target_image = _normalize_storyline_process_image(
                 spec.target_process,
@@ -5144,6 +6442,7 @@ class StorylineMixin:
             )
             if existing_lease:
                 legacy_timer_state = "renewal_rng" not in existing_lease
+                renewal_sequence = int(existing_lease.get("renewal_sequence", 0))
                 renewal_rng = existing_lease.get("renewal_rng")
                 if renewal_rng is None:
                     renewal_rng = random.Random(
@@ -5155,6 +6454,7 @@ class StorylineMixin:
                     timer_granularity = renewal_rng.choice([0.25, 1.0, 1.0, 5.0])
             else:
                 legacy_timer_state = False
+                renewal_sequence = 0
                 renewal_rng = random.Random(
                     _stable_seed(f"dhcp_renewal_timer:{system.hostname}:{mac}")
                 )
@@ -5164,9 +6464,13 @@ class StorylineMixin:
             else:
                 renewal_interval = dhcp_renewal_interval_seconds(
                     lease_time,
-                    renewal_rng,
+                    timing_runtime=self.timing_runtime,
+                    stable_id=f"{system.hostname}|{mac}",
+                    host=system.hostname,
+                    renewal_sequence=renewal_sequence,
                     timer_granularity=timer_granularity,
                 )
+                renewal_sequence += 1
             msg_types = ["REQUEST", "ACK"] if existing_lease else None
             authored_ids_alerts = _build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
@@ -5197,6 +6501,7 @@ class StorylineMixin:
                     "next_renewal": time.timestamp() + renewal_interval,
                     "renewal_interval": renewal_interval,
                     "renewal_rng": renewal_rng,
+                    "renewal_sequence": renewal_sequence,
                     "timer_granularity": timer_granularity,
                     "server_addr": dhcp_server,
                     "system": system,
@@ -5457,7 +6762,13 @@ class StorylineMixin:
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
                 tick_sequence_entry: BeaconHttpSequenceEntry | dict[str, Any] | None = None
@@ -5904,14 +7215,18 @@ class StorylineMixin:
 
         elif spec.type == "credential_spray":
             # Timing
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            start = (
+                self._parse_storyline_time(spec.start_time) + authored_time_shift
+                if spec.start_time
+                else time
+            )
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
             if spec.duration is not None:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
-                end_dt = self._parse_storyline_time(spec.end_time)
+                end_dt = self._parse_storyline_time(spec.end_time) + authored_time_shift
                 duration_sec = (end_dt - start).total_seconds()
 
             spray_src_ip = spec.source_ip or system.ip
@@ -5919,6 +7234,14 @@ class StorylineMixin:
             success_spec = spec.success
             success_account = success_spec.get("account") if success_spec else None
             success_after = success_spec.get("after", 0) if success_spec else 0
+            success_session_end_plan = (
+                self._authored_rdp_session_end_plan()
+                if success_account
+                and spec.logon_type == 10
+                and _get_os_category(system.os) == "windows"
+                and spray_src_ip not in {"-", system.ip}
+                else None
+            )
 
             # Resolve target accounts — include service accounts as synthetic User
             # objects so credential_spray targets resolve for both failed and success logons
@@ -5950,7 +7273,13 @@ class StorylineMixin:
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
 
@@ -5964,6 +7293,7 @@ class StorylineMixin:
                         time=tick_time,
                         logon_type=spec.logon_type,
                         source_ip=spray_src_ip,
+                        session_end_plan=success_session_end_plan,
                     )
                     attempt_count += 1
                     malicious_event["success_account"] = success_account
@@ -6038,7 +7368,13 @@ class StorylineMixin:
             nxdomain_count = 0
             domain_sample = []
             for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=getattr(self, "end_time", None),
             ):
                 self.state_manager.set_current_time(tick_time)
 
@@ -6143,6 +7479,43 @@ class StorylineMixin:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
 
+            exclusive_end_time = getattr(self, "end_time", None)
+            min_rtt, max_rtt = dns_tunnel_rtt_range()
+            scenario_start_time = getattr(self, "start_time", None)
+            dns_window_start = (
+                max(ensure_utc(start), ensure_utc(scenario_start_time))
+                if scenario_start_time is not None
+                else ensure_utc(start)
+            )
+            dns_start_fence = _dns_periodic_exclusive_start_fence(
+                self.activity_generator,
+                window_start=dns_window_start,
+                exclusive_end_time=exclusive_end_time,
+                maximum_rtt_seconds=max_rtt,
+            )
+            tunnel_ticks = _iter_dns_tunnel_ticks(
+                start,
+                interval_sec,
+                duration_sec,
+                count,
+                spec.jitter,
+                rng,
+                exclusive_end_time=dns_start_fence,
+            )
+            # Freeze one real cadence tick before any background publication. This
+            # intentionally moves cadence RNG ahead of payload/background RNG so the
+            # owner cannot emit cover traffic for a campaign with no admitted query.
+            first_tick = next(tunnel_ticks, None)
+            if first_tick is None:
+                malicious_event["base_domain"] = spec.base_domain
+                malicious_event["encoding"] = spec.encoding
+                malicious_event["qtype"] = spec.qtype
+                malicious_event["total_queries"] = 0
+                malicious_event["bytes_exfiltrated"] = 0
+                if getattr(spec, "ids_alerts", []):
+                    malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
+                return malicious_event
+
             query_src_ip = spec.source_ip or system.ip
             dns_server_ips = activity_dns_resolver_ips(
                 self.activity_generator,
@@ -6183,7 +7556,6 @@ class StorylineMixin:
                 chunks = [b""]
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
-            min_rtt, max_rtt = dns_tunnel_rtt_range()
             response_templates = dns_tunnel_response_templates() or ["status={token}"]
             response_primary_template = rng.choice(response_templates)
             response_secondary_templates = [
@@ -6216,7 +7588,29 @@ class StorylineMixin:
                 if duration_sec is not None
                 else interval_sec * float(count if count is not None else 120)
             )
-            if background_systems and background_window_sec > 0:
+            background_earliest = start - timedelta(seconds=240.0)
+            background_latest = start + timedelta(seconds=background_window_sec + 240.0)
+            if scenario_start_time is not None:
+                background_earliest = max(
+                    ensure_utc(background_earliest),
+                    ensure_utc(scenario_start_time),
+                )
+            if dns_start_fence is not None:
+                # Sample once from the valid intersection instead of retrying
+                # post-fence candidates and drifting the owner RNG.
+                background_latest = min(
+                    ensure_utc(background_latest),
+                    dns_start_fence - timedelta(microseconds=1),
+                )
+            background_span_sec = max(
+                0.0,
+                (ensure_utc(background_latest) - ensure_utc(background_earliest)).total_seconds(),
+            )
+            if (
+                background_systems
+                and background_window_sec > 0
+                and ensure_utc(background_earliest) <= ensure_utc(background_latest)
+            ):
                 background_count = min(36, max(12, len(background_systems) * 2 + rng.randint(3, 9)))
                 for _ in range(background_count):
                     bg_system = rng.choice(background_systems)
@@ -6237,8 +7631,9 @@ class StorylineMixin:
                         rejected=False,
                         rtt=bg_rtt,
                     )
-                    bg_offset = rng.uniform(-240.0, background_window_sec + 240.0)
-                    bg_time = start + timedelta(seconds=bg_offset)
+                    bg_time = background_earliest + timedelta(
+                        seconds=rng.uniform(0.0, background_span_sec)
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=bg_system.ip,
                         dst_ip=rng.choice(dns_server_ips),
@@ -6253,9 +7648,7 @@ class StorylineMixin:
                         source_system=bg_system,
                     )
 
-            for tick_time in _iter_dns_tunnel_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
-            ):
+            for tick_time in itertools.chain((first_tick,), tunnel_ticks):
                 self.state_manager.set_current_time(tick_time)
 
                 if spec.label_length >= 24:
@@ -6956,7 +8349,13 @@ class StorylineMixin:
 
         pause_until: datetime | None = None
         for tick_time in _iter_periodic_ticks(
-            start, interval_sec, duration_sec, count, spec.jitter, rng
+            start,
+            interval_sec,
+            duration_sec,
+            count,
+            spec.jitter,
+            rng,
+            exclusive_end_time=getattr(self, "end_time", None),
         ):
             if pause_until is not None and tick_time < pause_until:
                 continue
@@ -7390,10 +8789,12 @@ class StorylineMixin:
         target_path: str,
         transfer_time: datetime,
         source_port: int,
+        transfer_completed_at: datetime | None = None,
+        source_content: FileContentIdentity | None = None,
         rng: random.Random,
-    ) -> None:
+    ) -> datetime | None:
         """Emit target-side file evidence after the SSH bundle models the transfer session."""
-        ScpReceiverFileActionBundle(
+        bundle = ScpReceiverFileActionBundle(
             self,
             ScpReceiverFileRequest(
                 source_system=source_system,
@@ -7407,9 +8808,27 @@ class StorylineMixin:
                 target_path=target_path,
                 transfer_time=transfer_time,
                 source_port=source_port,
+                transfer_completed_at=transfer_completed_at,
+                source_content=source_content,
             ),
             rng,
-        ).execute()
+        )
+        plan = bundle.plan_execution()
+        if plan is None or not bundle.execute():
+            return None
+        available_at = max(
+            plan.receiver_create.timestamp,
+            ensure_utc(transfer_completed_at)
+            if transfer_completed_at is not None
+            else plan.receiver_create.timestamp,
+        )
+        self._remember_storyline_file_available(
+            system=target_system,
+            path=target_path,
+            available_at=available_at,
+            source_file=bundle.receiver_source_file,
+        )
+        return available_at
 
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:

@@ -24,41 +24,153 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from datetime import datetime
-from random import Random
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from evidenceforge.events.contexts import IdsAlertPlan
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.source_timing import (
+    SourceTimingPlanningRuntime,
+    active_source_timing_planning_runtime,
+)
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
+    TimingRuntime,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
+)
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
 
+def _uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
+    """Return a continuous-uniform law using supported timing primitives."""
+
+    if minimum == maximum:
+        return ConstantDistribution(minimum)
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
+            ),
+        )
+    )
+
+
+def _planning_timing_runtime(
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+) -> TimingRuntime | SourceTimingPlanningRuntime:
+    """Return an exact canonical or active staged timing runtime."""
+
+    # Direct engine-mixin fixtures may run before GenerationEngine._initialize.
+    # Production initialization always injects its exact engine-owned runtime.
+    if timing_runtime is None:
+        return TimingRuntime.compatibility_default()
+    if type(timing_runtime) is SourceTimingPlanningRuntime:
+        return timing_runtime
+    if type(timing_runtime) is not TimingRuntime:
+        raise StateError("DHCP renewal timing requires an exact engine TimingRuntime")
+    return active_source_timing_planning_runtime(timing_runtime) or timing_runtime
+
+
 def dhcp_renewal_interval_seconds(
     lease_time: float,
-    rng: Random,
     *,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+    stable_id: str,
+    host: str,
+    renewal_sequence: int,
     timer_granularity: float = 1.0,
 ) -> float:
     """Return one client-timer realization around the lease's T1 boundary.
 
     DHCP clients normally target T1, but wakeups, scheduler latency, timer
     granularity, and occasional retry/backoff alter the observed interval after
-    each ACK.  The caller owns a client-scoped RNG so successive lease cycles
-    retain one implementation character without repeating one fixed interval.
+    each ACK. A stable lease identity plus monotonic sequence gives successive
+    cycles implementation texture without a mutable RNG cursor.
     """
 
+    runtime = _planning_timing_runtime(timing_runtime)
+    if type(stable_id) is not str or not stable_id:
+        raise StateError("DHCP renewal timing requires a stable lease identity")
+    if type(host) is not str:
+        raise StateError("DHCP renewal timing requires an exact host identity")
+    if type(renewal_sequence) is not int or renewal_sequence < 0:
+        raise StateError("DHCP renewal timing requires a non-negative renewal sequence")
+    if type(lease_time) not in {int, float} or not math.isfinite(lease_time) or lease_time <= 0:
+        raise StateError("DHCP renewal timing requires a finite positive lease time")
+    if (
+        type(timer_granularity) not in {int, float}
+        or not math.isfinite(timer_granularity)
+        or timer_granularity <= 0
+    ):
+        raise StateError("DHCP renewal timing requires finite positive timer granularity")
+
+    scope = TimingScope(
+        stable_id=stable_id,
+        host=host,
+        source="dhcp",
+        lifecycle_id="lease_renewal",
+        ordinal=renewal_sequence,
+    )
     base_renewal = max(60.0, lease_time / 2)
-    scheduling_drift = lease_time * rng.triangular(-0.015, 0.025, 0.002)
-    if rng.random() < 0.08:
-        scheduling_drift += lease_time * rng.uniform(0.02, 0.08)
-    if rng.random() < 0.05:
-        scheduling_drift += rng.uniform(1.0, 8.0)
+    scheduling_drift = runtime.sampler.sample_value(
+        TriangularDistribution(
+            minimum=lease_time * -0.015,
+            mode=lease_time * 0.002,
+            maximum=lease_time * 0.025,
+        ),
+        relationship_key="dhcp.lease.renewal.scheduling_drift_seconds",
+        scope=scope,
+        sample_key="scheduling_drift",
+    )
+    wakeup_backoff = runtime.sampler.sample_value(
+        MixtureDistribution(
+            (
+                WeightedDistribution(0.92, ConstantDistribution(0.0)),
+                WeightedDistribution(
+                    0.08,
+                    _uniform_distribution(lease_time * 0.02, lease_time * 0.08),
+                ),
+            )
+        ),
+        relationship_key="dhcp.lease.renewal.wakeup_backoff_seconds",
+        scope=scope,
+        sample_key="wakeup_backoff",
+    )
+    scheduler_latency = runtime.sampler.sample_value(
+        MixtureDistribution(
+            (
+                WeightedDistribution(0.95, ConstantDistribution(0.0)),
+                WeightedDistribution(0.05, _uniform_distribution(1.0, 8.0)),
+            )
+        ),
+        relationship_key="dhcp.lease.renewal.scheduler_latency_seconds",
+        scope=scope,
+        sample_key="scheduler_latency",
+    )
+    scheduling_drift += wakeup_backoff + scheduler_latency
     interval = max(60.0, base_renewal + scheduling_drift)
     granularity = max(0.05, timer_granularity)
     quantized = round(interval / granularity) * granularity
-    return max(60.0, quantized + rng.uniform(0.0, min(1.0, granularity)))
+    quantization_jitter = runtime.sampler.sample_value(
+        _uniform_distribution(0.0, min(1.0, granularity)),
+        relationship_key="dhcp.lease.renewal.timer_quantization_jitter_seconds",
+        scope=scope,
+        sample_key="timer_quantization_jitter",
+    )
+    return max(60.0, quantized + quantization_jitter)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +202,89 @@ class DhcpLeaseRequest:
             f"{self.ids_alerts}:{self.source}"
         )
         return f"dhcp-lease-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class DhcpSourceTimeline:
+    """Canonical transport interval and source-local endpoint phase times."""
+
+    transport_start: datetime
+    transport_close: datetime
+    endpoint_phase_times: tuple[datetime, ...]
+
+
+def plan_dhcp_source_timeline(
+    request: DhcpLeaseRequest,
+    *,
+    transaction_duration: float,
+    message_count: int,
+    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None,
+) -> DhcpSourceTimeline:
+    """Plan one causally ordered DHCP transaction across wire and endpoint sources."""
+
+    if not math.isfinite(transaction_duration) or transaction_duration <= 0:
+        raise StateError("DHCP source timing requires a finite positive transaction duration")
+    if message_count not in {3, 5}:
+        raise StateError("DHCP source timing requires a renewal or acquisition phase count")
+
+    runtime = _planning_timing_runtime(timing_runtime)
+    transport_start = request.time
+    transport_close = transport_start + timedelta(seconds=transaction_duration)
+    fractions = (0.0, 1.0, 1.0) if message_count == 3 else (0.0, 0.28, 0.58, 1.0, 1.0)
+    scope = TimingScope(
+        stable_id=request.stable_id,
+        host=request.system.hostname,
+        source="dhclient",
+        lifecycle_id="lease_transaction",
+    )
+    observation_delay = TriangularDistribution(
+        minimum=2_000.0,
+        mode=18_000.0,
+        maximum=95_000.0,
+    )
+    ordering_gap = TriangularDistribution(
+        minimum=2_000.0,
+        mode=15_000.0,
+        maximum=70_000.0,
+    )
+
+    endpoint_times: list[datetime] = []
+    for ordinal, fraction in enumerate(fractions):
+        canonical_phase = transport_start + timedelta(seconds=transaction_duration * fraction)
+        if ordinal == message_count - 1:
+            canonical_phase = transport_close + timedelta(milliseconds=5)
+        candidate = canonical_phase + runtime.sampler.sample_timedelta(
+            observation_delay,
+            relationship_key="dhcp.lease.endpoint_observation_delay",
+            scope=TimingScope(
+                stable_id=scope.stable_id,
+                host=scope.host,
+                source=scope.source,
+                lifecycle_id=scope.lifecycle_id,
+                ordinal=ordinal,
+            ),
+            sample_key="phase_delay",
+        )
+        if endpoint_times and candidate <= endpoint_times[-1]:
+            candidate = endpoint_times[-1] + runtime.sampler.sample_timedelta(
+                ordering_gap,
+                relationship_key="dhcp.lease.endpoint_phase_gap",
+                scope=TimingScope(
+                    stable_id=scope.stable_id,
+                    host=scope.host,
+                    source=scope.source,
+                    lifecycle_id=scope.lifecycle_id,
+                    ordinal=ordinal,
+                ),
+                sample_key="phase_gap",
+            )
+        endpoint_times.append(candidate)
+
+    return DhcpSourceTimeline(
+        transport_start=transport_start,
+        transport_close=transport_close,
+        endpoint_phase_times=tuple(endpoint_times),
+    )
 
 
 class DhcpLeaseExecutor(Protocol):

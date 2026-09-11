@@ -22,20 +22,15 @@
 
 """Zeek http.log emitter."""
 
-from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
-    planned_zeek_connection_interval,
+    direct_zeek_source_time,
     zeek_format_observed,
 )
-from evidenceforge.generation.source_timing import SourceTimingPlanner
-
-_MIN_HTTP_TRANSACTION_TIMESTAMP_GAP = timedelta(milliseconds=1)
-_MIN_HTTP_FILE_TIMESTAMP_GAP = timedelta(milliseconds=2)
-_SOURCE_TIMING = SourceTimingPlanner()
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 def _file_vectors(
@@ -66,13 +61,6 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_http.json"
     _supported_types: set[str] = {"connection"}
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._last_http_ts_by_uid: dict[tuple[str, str, int, str, int], datetime] = {}
-        self._conn_bounds_by_uid: dict[
-            tuple[str, str, int, str, int], tuple[datetime, datetime | None]
-        ] = {}
-
     def can_handle(self, event: CanonicalOccurrence) -> bool:
         if event.event_type not in self._supported_types:
             return False
@@ -89,94 +77,14 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     def emit(self, event: CanonicalOccurrence) -> None:
         net = event.network
         http = event.protocol.http
-        uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
-        planned_interval = planned_zeek_connection_interval(event)
-        if http.canonical_request_time is not None:
-            conn_ts = net.started_at
-            planned_close = net.closed_at
-        elif planned_interval is not None:
-            conn_ts, planned_close = planned_interval
-        else:
-            planned_close = None
-            conn_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_conn_start",
-                seed_parts=(
-                    net.zeek_uid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
-                not_before=event.timestamp,
-            )
-        within = None
-        latest_ts = None
         orig_fuids, orig_filenames, orig_mime_types = _file_vectors(http, "orig")
         resp_fuids, resp_filenames, resp_mime_types = _file_vectors(http, "resp")
         any_fuids = bool(orig_fuids or resp_fuids)
-        if planned_close is not None:
-            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if any_fuids else timedelta(microseconds=1)
-            latest_ts = max(conn_ts, planned_close - tail_gap)
-            within = (conn_ts, latest_ts)
-        elif net.duration is not None and net.duration > 0:
-            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if any_fuids else timedelta(microseconds=1)
-            latest_ts = conn_ts + timedelta(seconds=max(0.0, net.duration)) - tail_gap
-            if latest_ts < conn_ts:
-                latest_ts = conn_ts
-            within = (conn_ts, latest_ts)
-        cached_bounds = self._conn_bounds_by_uid.get(uid_key)
-        if cached_bounds is not None:
-            conn_ts, latest_ts = cached_bounds
-            if any_fuids and latest_ts is not None:
-                reserve = _MIN_HTTP_FILE_TIMESTAMP_GAP - timedelta(microseconds=1)
-                latest_ts = max(conn_ts, latest_ts - reserve)
-            within = (conn_ts, latest_ts) if latest_ts is not None else None
-        else:
-            self._conn_bounds_by_uid[uid_key] = (conn_ts, latest_ts)
-        http_seed_parts = (
-            net.zeek_uid,
-            net.src_ip,
-            net.src_port,
-            net.dst_ip,
-            net.dst_port,
-            event.timestamp,
-        )
-        canonical_request_time = http.canonical_request_time
-        request_not_before = max(conn_ts, canonical_request_time or conn_ts)
-        if canonical_request_time is not None:
-            event_ts = max(conn_ts, canonical_request_time)
-            if latest_ts is not None:
-                event_ts = min(event_ts, latest_ts)
-        else:
-            event_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_http_request",
-                seed_parts=http_seed_parts,
-                not_before=request_not_before,
-                within=within,
-            )
-        previous_ts = self._last_http_ts_by_uid.get(uid_key)
-        if canonical_request_time is None and previous_ts is not None and event_ts <= previous_ts:
-            event_ts = previous_ts + _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP
-        if latest_ts is not None and event_ts > latest_ts:
-            event_ts = latest_ts
-        if previous_ts is None or event_ts > previous_ts:
-            self._last_http_ts_by_uid[uid_key] = event_ts
-        event_ts = _SOURCE_TIMING.packet_child_time(
-            event,
-            "source.zeek_http_request",
-            seed_parts=http_seed_parts,
-            preferred_time=event_ts,
-            not_before=request_not_before,
-            within=within,
-        )
-        _SOURCE_TIMING.record_source_time(
-            event,
-            "source.zeek_http_request",
-            event_ts,
-            seed_parts=http_seed_parts,
+        timing_key = network_source_timing_key("zeek_http")
+        event_ts = (
+            http.canonical_request_time or net.started_at
+            if event.network_observations_planned
+            else direct_zeek_source_time(event, timing_key)
         )
         if any_fuids and not zeek_format_observed(event, "zeek_files"):
             orig_fuids = None
@@ -210,6 +118,7 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             "resp_fuids": resp_fuids,
             "resp_filenames": resp_filenames,
             "resp_mime_types": resp_mime_types,
+            "_source_timing_key": timing_key,
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(event_data)

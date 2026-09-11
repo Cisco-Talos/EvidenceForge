@@ -63,23 +63,34 @@ from evidenceforge.events.contexts import (
     ScheduledTaskContext,
     ServiceContext,
     ShellContext,
+    SmbContext,
     SmtpContext,
     SslContext,
     SyslogContext,
     WeirdContext,
     X509Context,
 )
-from evidenceforge.events.contracts import EventKind, SemanticOccurrenceKey, ShadowSealResult
+from evidenceforge.events.contracts import (
+    EffectOccurrenceProvenance,
+    EventKind,
+    SemanticOccurrenceKey,
+    ShadowSealResult,
+)
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
 )
 from evidenceforge.events.identity import EventIdentityPlan
 from evidenceforge.events.lifecycle import ActionLifecycleContext
-from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
+from evidenceforge.events.network import (
+    NetworkEndpointObservationPlan,
+    NetworkSensorObservation,
+    NetworkTransactionPlan,
+)
 from evidenceforge.events.protocol import ProtocolTransactionPlan
 
 if TYPE_CHECKING:
+    from evidenceforge.events.collection_policy import ProjectionEnvelope
     from evidenceforge.generation.source_timing import SourceTimingPlan
 
 
@@ -107,9 +118,11 @@ class OccurrenceBuilder:
     remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkTransactionPlan | None = None
+    network_endpoint: NetworkEndpointObservationPlan | None = None
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
+    smb: SmbContext | None = None
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None
@@ -171,6 +184,7 @@ class OccurrenceBuilder:
     contract_seal: ShadowSealResult | None = None
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
+    effect_provenance: EffectOccurrenceProvenance | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()
     network_observations_planned: bool = False
 
@@ -183,6 +197,8 @@ class OccurrenceBuilder:
     # rows that the same observation profile intentionally dropped.
     _observed_formats: set[str] = field(default_factory=set)
     _source_observation_status: str = "visible"
+    # Frozen source identity and policy decision supplied to one emitter call.
+    _projection_envelope: ProjectionEnvelope | None = None
 
     @property
     def occurrence_id(self) -> str:
@@ -254,9 +270,11 @@ class CanonicalOccurrence:
     remote_auth: RemoteAuthenticationPlan | None = None
     process: ProcessContext | None = None
     network: NetworkTransactionPlan | None = None
+    network_endpoint: NetworkEndpointObservationPlan | None = None
     dns: DnsContext | None = None
     email: EmailContext | None = None
     smtp: SmtpContext | None = None
+    smb: SmbContext | None = None
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None
@@ -284,6 +302,7 @@ class CanonicalOccurrence:
     contract_seal: ShadowSealResult | None = None
     lifecycle: ActionLifecycleContext | None = None
     identity_plan: EventIdentityPlan | None = None
+    effect_provenance: EffectOccurrenceProvenance | None = None
     network_observations: tuple[NetworkSensorObservation, ...] = ()
     network_observations_planned: bool = False
     _sensor_hostnames_by_format: Mapping[str, tuple[str, ...]] = field(
@@ -292,6 +311,7 @@ class CanonicalOccurrence:
     _visible_network_formats: frozenset[str] = frozenset()
     _observed_formats: frozenset[str] = frozenset()
     _source_observation_status: str = "visible"
+    _projection_envelope: ProjectionEnvelope | None = None
 
     def __post_init__(self) -> None:
         """Reject construction that bypassed the validated builder boundary."""

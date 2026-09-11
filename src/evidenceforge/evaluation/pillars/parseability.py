@@ -53,6 +53,9 @@ WINDOWS_VARIANT_MAP = {
     4625: "failed_logon",
     4634: "logoff",
     4648: "explicit_credentials",
+    4656: "object_handle_requested",
+    4658: "object_handle_closed",
+    4663: "object_access",
     4672: "special_privileges",
     4688: "process_creation",
     4689: "process_termination",
@@ -76,6 +79,8 @@ WINDOWS_VARIANT_MAP = {
     4770: "kerberos_service_ticket",
     4771: "kerberos_preauth_failed",
     4776: "ntlm_validation",
+    5140: "network_share_access",
+    5145: "network_share_access_check",
     5156: "wfp_connection",
 }
 
@@ -371,6 +376,9 @@ def _normalize_for_validation(
         for port_field in ("IpPort", "NetworkPort"):
             if normalized.get(port_field) == "-":
                 normalized[port_field] = 0
+        restricted_sid_count = normalized.get("RestrictedSidCount")
+        if isinstance(restricted_sid_count, str) and restricted_sid_count.isdigit():
+            normalized["RestrictedSidCount"] = int(restricted_sid_count)
     return normalized
 
 

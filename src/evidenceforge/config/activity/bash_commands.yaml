@@ -10,7 +10,7 @@
 # Role keys (sysadmin, developer, etc.) must match persona filenames
 # in config/personas/.
 #
-# Full schema: see commands/eforge/references/config-bash-commands.md
+# Authoring reference: commands/eforge/references/config-host-activity.md
 
 common:
   - "pwd"

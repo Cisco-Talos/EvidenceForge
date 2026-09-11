@@ -1,0 +1,220 @@
+{
+  "schema_version": 4,
+  "python": "3.12.12 (main, Oct 28 2025, 11:52:25) [Clang 20.1.4 ]",
+  "platform": "darwin",
+  "measurements": [
+    {
+      "scenario": "smb-linux-resource-calibration",
+      "profile": "zeek",
+      "formats": "zeek",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 2.766,
+      "peak_rss_bytes": 103366656,
+      "output_bytes": 124895,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3927,
+        "GENERATION_MANIFEST.json": 2492,
+        "GROUND_TRUTH.json": 703,
+        "GROUND_TRUTH.md": 358,
+        "OBSERVATION_MANIFEST.json": 295,
+        "OUTPUT_TARGET.txt": 8,
+        "RESOLVED_SCENARIO.yaml": 18807,
+        "STORAGE_MANIFEST.json": 2980,
+        "conn.json": 52545,
+        "dns.json": 20475,
+        "files.json": 5491,
+        "http.json": 1174,
+        "ocsp.json": 623,
+        "smb_files.json": 520,
+        "smb_mapping.json": 1666,
+        "ssl.json": 7206,
+        "x509.json": 5625
+      },
+      "peak_working_disk_bytes": 184320,
+      "output_sha256": "34442af41076d40771141e794a4b9228c37a6001d5b293fe4ca2d7c6f5bcec9a",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 80000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 16,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "calibration_version": 4,
+      "calibration_label": "Cross-platform SMB and Samba empirical working-set model",
+      "forecast_memory": {
+        "lower_bytes": 77885487,
+        "expected_bytes": 106692448,
+        "upper_bytes": 224054140
+      },
+      "forecast_final_output": {
+        "lower_bytes": 55604,
+        "expected_bytes": 397177,
+        "upper_bytes": 595765
+      },
+      "forecast_disk": {
+        "lower_bytes": 70411,
+        "expected_bytes": 704113,
+        "upper_bytes": 1056169
+      }
+    },
+    {
+      "scenario": "smb-linux-resource-calibration",
+      "profile": "ecar",
+      "formats": "ecar",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 1.675,
+      "peak_rss_bytes": 103170048,
+      "output_bytes": 211476,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3925,
+        "GENERATION_MANIFEST.json": 1528,
+        "GROUND_TRUTH.json": 703,
+        "GROUND_TRUTH.md": 358,
+        "OBSERVATION_MANIFEST.json": 295,
+        "OUTPUT_TARGET.txt": 8,
+        "RESOLVED_SCENARIO.yaml": 18420,
+        "STORAGE_MANIFEST.json": 2980,
+        "ecar.json": 183259
+      },
+      "peak_working_disk_bytes": 237568,
+      "output_sha256": "5431062011b9e839493864f5ef64c409233c64fde82297870dc15e5596e3b854",
+      "pid_lifecycles": {
+        "creates": 101,
+        "terminations": 76,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 5000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "calibration_version": 4,
+      "calibration_label": "Cross-platform SMB and Samba empirical working-set model",
+      "forecast_memory": {
+        "lower_bytes": 72144533,
+        "expected_bytes": 98828128,
+        "upper_bytes": 207539068
+      },
+      "forecast_final_output": {
+        "lower_bytes": 75159,
+        "expected_bytes": 536857,
+        "upper_bytes": 805285
+      },
+      "forecast_disk": {
+        "lower_bytes": 75159,
+        "expected_bytes": 536857,
+        "upper_bytes": 805285
+      }
+    },
+    {
+      "scenario": "smb-linux-resource-calibration",
+      "profile": "syslog",
+      "formats": "syslog",
+      "duration_scale": 1.0,
+      "effective_duration_seconds": 7200,
+      "baseline_only": true,
+      "elapsed_seconds": 1.551,
+      "peak_rss_bytes": 102793216,
+      "output_bytes": 64089,
+      "output_bytes_by_name": {
+        "COLLECTION_PROFILE.json": 3925,
+        "GENERATION_MANIFEST.json": 1532,
+        "GROUND_TRUTH.json": 703,
+        "GROUND_TRUTH.md": 358,
+        "OBSERVATION_MANIFEST.json": 295,
+        "OUTPUT_TARGET.txt": 8,
+        "RESOLVED_SCENARIO.yaml": 18422,
+        "STORAGE_MANIFEST.json": 2980,
+        "syslog.log": 35866
+      },
+      "peak_working_disk_bytes": 90112,
+      "output_sha256": "07b1430d8237bfe60c5b1cda5332eb476688f3c5cd5dce1951539348ec6a32ee",
+      "pid_lifecycles": {
+        "creates": 0,
+        "terminations": 0,
+        "reused_pids": 0,
+        "overlaps": 0,
+        "stale_terminations": 0,
+        "linux_wraps": 0,
+        "unexplained_linux_reversals": 0
+      },
+      "workload_estimate": {
+        "primary_duration_seconds": 7200,
+        "warmup_seconds": 28800,
+        "baseline_occurrences": 5000,
+        "explicit_occurrences": 0,
+        "periodic_event_max": 0,
+        "canonical_occurrences": 5000,
+        "rendered_records": 5000,
+        "attachment_payload_bytes": 0,
+        "email_artifact_bytes": 0,
+        "enabled_formats": 1,
+        "smb_activity_events": 0,
+        "smb_catalog_files": 480,
+        "smb_selector_candidates": 0,
+        "smb_batch_operations": 0,
+        "smb_retained_mutations": 0,
+        "limit_violations": []
+      },
+      "calibration_version": 4,
+      "calibration_label": "Cross-platform SMB and Samba empirical working-set model",
+      "forecast_memory": {
+        "lower_bytes": 72144533,
+        "expected_bytes": 98828128,
+        "upper_bytes": 207539068
+      },
+      "forecast_final_output": {
+        "lower_bytes": 34839,
+        "expected_bytes": 248857,
+        "upper_bytes": 373285
+      },
+      "forecast_disk": {
+        "lower_bytes": 34839,
+        "expected_bytes": 248857,
+        "upper_bytes": 373285
+      }
+    }
+  ],
+  "failures": []
+}

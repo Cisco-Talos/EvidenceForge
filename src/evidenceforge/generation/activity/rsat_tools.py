@@ -25,7 +25,7 @@ def _merge_rsat(default: dict, overlay: dict) -> dict:
         result["tools"] = merge_keyed_list(
             default.get("tools", []),
             overlay["tools"],
-            key="id",
+            key_field="id",
         )
     return result
 

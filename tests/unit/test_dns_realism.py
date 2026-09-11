@@ -28,6 +28,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 from tests.network_factories import network_plan
 
@@ -73,6 +74,7 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.slow
 class TestHostnameConsistency:
     """DNS query domain, SSL SNI, and proxy hostname must be identical."""
 
@@ -172,7 +174,14 @@ class TestHostnameConsistency:
             conn_state="SF",
         )
 
-        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        conn_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.dst_port == 443
+            and call.args[0].network.hostname == hostname
+            and call.args[0].protocol.ssl is not None
+            and call.args[0].protocol.ssl.server_name == hostname
+        )
         assert conn_event.network.dst_ip in get_domain_ips(hostname)
         assert conn_event.protocol.ssl is not None
         assert conn_event.protocol.ssl.server_name == hostname
@@ -491,7 +500,9 @@ class TestHostnameConsistency:
         dns_events = [
             call.args[0]
             for call in mock_emitters["zeek_dns"].emit.call_args_list
-            if call.args[0].dns and call.args[0].dns.query == "cdn.example.net"
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
         ]
         assert len(dns_events) == 2
         assert {event.network.dst_ip for event in dns_events} == {"10.0.0.1"}
@@ -536,6 +547,58 @@ class TestHostnameConsistency:
 
         assert len(address_events) == 1
         assert address_events[0].dns.TTLs == [30.0]
+
+    def test_prerequisite_address_cache_waits_for_transport_publication(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """A rejected DNS transport must not poison the client-visible cache."""
+
+        state_manager.set_current_time(timestamp)
+        original_generate_connection = activity_gen.generate_connection
+        attempts = 0
+
+        def reject_first_transports(*args: object, **kwargs: object) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise StateError("injected DNS transport rejection")
+            if attempts == 2:
+                return ""
+            return original_generate_connection(*args, **kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", reject_first_transports)
+
+        lookup = {
+            "src_ip": "10.0.1.50",
+            "dst_ip": "93.184.216.34",
+            "time": timestamp,
+            "hostname": "cdn.example.net",
+            "force_address": True,
+        }
+        with pytest.raises(StateError, match="injected DNS transport rejection"):
+            activity_gen._emit_dns_lookup(**lookup)
+
+        assert len(activity_gen._dns_cache) == 0
+        assert mock_emitters["zeek_dns"].emit.call_count == 0
+
+        activity_gen._emit_dns_lookup(**lookup)
+
+        assert attempts == 2
+        assert len(activity_gen._dns_cache) == 0
+        assert mock_emitters["zeek_dns"].emit.call_count == 0
+
+        activity_gen._emit_dns_lookup(**lookup)
+
+        assert attempts >= 3
+        assert len(activity_gen._dns_cache) == 1
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "cdn.example.net"
+            and call.args[0].dns.query_type == "A"
+        ]
+        assert len(address_events) == 1
 
     def test_prerequisite_address_lookup_refreshes_after_visible_ttl(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
@@ -753,23 +816,11 @@ class TestHostnameConsistency:
         state_manager.set_current_time(timestamp)
         delegate_rng = random.Random(7)
 
-        class AlwaysFailureRollRng:
-            def random(self) -> float:
-                return 0.0
+        def always_failure_roll() -> float:
+            return 0.0
 
-            def randint(self, start: int, stop: int) -> int:
-                return delegate_rng.randint(start, stop)
-
-            def uniform(self, start: float, stop: float) -> float:
-                return delegate_rng.uniform(start, stop)
-
-            def choice(self, values):
-                return delegate_rng.choice(values)
-
-            def choices(self, *args, **kwargs):
-                return delegate_rng.choices(*args, **kwargs)
-
-        monkeypatch.setattr(generator_module, "_get_rng", lambda: AlwaysFailureRollRng())
+        delegate_rng.random = always_failure_roll
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: delegate_rng)
 
         activity_gen._emit_dns_lookup(
             src_ip="10.0.1.50",
@@ -1104,6 +1155,7 @@ class TestNoSinkhole:
         )
 
 
+@pytest.mark.slow
 class TestWeirdProtocolConstraint:
     """Zeek weird.log anomaly types must match the connection protocol."""
 
@@ -1197,6 +1249,7 @@ class TestWeirdProtocolConstraint:
         assert any(char.islower() for char in event.network.history)
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes is not None
+        assert event.network.closed_at is not None
 
     def test_dns_txt_response_has_originator_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1314,6 +1367,7 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rtt == 0.35
         assert event.network.duration == 0.35
 
     def test_dns_conn_duration_exact_anchor_still_uses_rtt(
@@ -1342,6 +1396,7 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rtt == 0.02
         assert event.network.duration == 0.02
 
     def test_explicit_dns_response_state_keeps_responder_accounting(
@@ -1375,6 +1430,7 @@ class TestWeirdProtocolConstraint:
         assert event.network.history == "Dd"
         assert event.network.resp_pkts > 0
         assert event.network.resp_bytes > 0
+        assert event.dns.rtt == 0.08
         assert event.network.duration == 0.08
 
     def test_servfail_dns_response_keeps_responder_accounting(
@@ -1447,19 +1503,16 @@ class TestWeirdProtocolConstraint:
         """TCP fallback DNS SERVFAIL accounting should retain TCP header overhead."""
         from evidenceforge.generation.activity import generator as generator_module
 
-        class TcpOnlyOverheadRng:
-            def __init__(self) -> None:
-                self._rng = random.Random(42)
-
-            def choices(self, population, weights=None, *, cum_weights=None, k=1):
-                assert population != generator_module._UDP_OVERHEAD_VALUES
-                return self._rng.choices(population, weights=weights, cum_weights=cum_weights, k=k)
-
-            def __getattr__(self, name: str):
-                return getattr(self._rng, name)
-
         state_manager.set_current_time(timestamp)
-        monkeypatch.setattr(generator_module, "_get_rng", TcpOnlyOverheadRng)
+        rng = random.Random(42)
+        original_choices = rng.choices
+
+        def tcp_only_choices(population, weights=None, *, cum_weights=None, k=1):
+            assert population != generator_module._UDP_OVERHEAD_VALUES
+            return original_choices(population, weights=weights, cum_weights=cum_weights, k=k)
+
+        rng.choices = tcp_only_choices
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -1506,6 +1559,7 @@ class TestWeirdProtocolConstraint:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rtt == 0.08
         assert event.network.duration == 0.08
 
     def test_dns_a_query_accounting_is_clamped_to_dns_transaction(
@@ -1538,6 +1592,7 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.orig_bytes <= 260
         assert event.network.resp_bytes <= 512
+        assert event.dns.rtt == 0.019
         assert event.network.duration == 0.019
 
     def test_dns_authoritative_flag_is_consistent_for_internal_names(
@@ -1742,6 +1797,10 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_bytes != 512
         assert event.network.orig_bytes < 80
         assert event.network.resp_bytes < 140
+        assert event.network.history == "Dd"
+        assert event.network.orig_pkts == 1
+        assert event.network.resp_pkts == 1
+        assert event.network.duration == event.dns.rtt
 
     def test_udp_dns_with_explicit_conn_state_uses_udp_history(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1865,7 +1924,7 @@ class TestWeirdProtocolConstraint:
             udp_on_tcp = weird_names & self._UDP_NAMES
             assert len(udp_on_tcp) == 0, f"UDP weird names on TCP connections: {udp_on_tcp}"
 
-    def test_udp_connections_get_udp_weird_names(
+    def _assert_udp_connections_get_udp_weird_names(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
         """UDP connections should only get UDP-specific weird names."""
@@ -1892,6 +1951,18 @@ class TestWeirdProtocolConstraint:
         if weird_names:
             tcp_on_udp = weird_names & self._TCP_NAMES
             assert len(tcp_on_udp) == 0, f"TCP weird names on UDP connections: {tcp_on_udp}"
+
+
+@pytest.mark.soak
+def test_udp_connections_get_udp_weird_names(activity_gen, timestamp, state_manager, mock_emitters):
+    """A high-volume UDP sample must not acquire TCP-specific weird names."""
+
+    TestWeirdProtocolConstraint()._assert_udp_connections_get_udp_weird_names(
+        activity_gen,
+        timestamp,
+        state_manager,
+        mock_emitters,
+    )
 
 
 class TestSuspiciousNoiseHostname:

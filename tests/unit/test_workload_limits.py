@@ -4,13 +4,24 @@
 """Tests for generation workload estimation without hard capacity rejection."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.engine import GenerationEngine
-from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
-from evidenceforge.models.scenario import BeaconEventSpec, Scenario
+from evidenceforge.generation.workload import (
+    WorkloadLimits,
+    build_registry_workload_inputs,
+    estimate_workload,
+)
+from evidenceforge.models.scenario import (
+    BeaconEventSpec,
+    ProcessEventSpec,
+    Scenario,
+    StorylineEvent,
+)
 from evidenceforge.utils.files import load_yaml
 from evidenceforge.validation import ScenarioValidator
 
@@ -78,3 +89,74 @@ def test_periodic_rate_must_be_finite() -> None:
 
     with pytest.raises(ValidationError, match="rate must be finite"):
         BeaconEventSpec(dst_ip="198.51.100.10", rate=float("inf"), count=1)
+
+
+def test_registry_inputs_tolerate_environment_before_observation_overrides() -> None:
+    """The forecast can land before the optional observation schema boundary."""
+
+    legacy_scenario = cast(
+        Scenario,
+        SimpleNamespace(
+            environment=SimpleNamespace(
+                network=None,
+                systems=[],
+                users=[],
+                deployment_overrides=[],
+            )
+        ),
+    )
+
+    inputs = build_registry_workload_inputs(
+        legacy_scenario,
+        primary_seconds=3_600,
+        warmup_seconds=0,
+        baseline_occurrences=0,
+        explicit_occurrences=0,
+        canonical_occurrences=0,
+        rendered_records=0,
+        enabled_formats=1,
+    )
+
+    collection = next(item for item in inputs if item.registry == "collection_deployment")
+    assert collection.scenario_override_entries == 0
+
+
+def test_workload_estimate_counts_full_small_cidr_nmap_expansion() -> None:
+    """A five-port /24 process command must reserve all 1,270 canonical probes."""
+
+    base = _minimal_scenario()
+    scenario = base.model_copy(
+        update={
+            "storyline": [
+                StorylineEvent(
+                    id="scan",
+                    time="+10m",
+                    actor="test_user",
+                    system="TEST-01",
+                    activity="Inventory scan",
+                    events=[
+                        ProcessEventSpec(
+                            process_name="nmap",
+                            command_line="nmap -sT -p 22,80,443,445,3306 10.10.2.0/24",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    estimate = estimate_workload(scenario)
+
+    assert estimate.explicit_occurrences == 254 * 5
+    assert estimate.canonical_occurrences >= estimate.explicit_occurrences * 8
+    assert all(
+        item.effect_occurrences == estimate.canonical_occurrences
+        for item in estimate.registry_inputs
+    )
+    assert (
+        next(
+            item for item in estimate.registry_inputs if item.registry == "lifecycle"
+        ).effect_fanout
+        > 1
+    )
+    assert estimate.limit_violations == ()

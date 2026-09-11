@@ -23,13 +23,92 @@
 """Log generation components for EvidenceForge."""
 
 from .activity import ActivityGenerator
+from .application_channels import ApplicationChannelRegistry, ApplicationChannelRetirementProof
+from .collection_deployment import (
+    CollectionDeploymentCensus,
+    CompiledCollectionDeployment,
+    SourceInstanceDeployment,
+)
+from .deployment_registry import (
+    AssignmentCategoryIndexCensus,
+    BinaryPathIndexCensus,
+    CompiledApplicationDescriptor,
+    DeploymentCompilationCensus,
+    DeploymentContentRegistry,
+    DeploymentContentScaleCensus,
+    DeploymentGroupPageCursor,
+    DeploymentRegistryCensus,
+    HostDeployment,
+    HostDeploymentSpec,
+    LocalArtifactCapacityError,
+    LocalArtifactPreparedCommit,
+    LocalArtifactPublishToken,
+    LocalArtifactRegistryCensus,
+    LocalArtifactVersionPageCursor,
+    LocalArtifactVersionRegistry,
+    UserApplicationAssignment,
+    UserApplicationAssignmentSpec,
+)
 from .engine import GenerationEngine
 from .ground_truth import GroundTruthGenerator
+from .lifecycle_registry import LifecycleRegistry
+from .rdp_sessions import RdpReconnectStateManager
+from .ssh_channels import (
+    SshApplicationChannelManager,
+    SshChannelAffinity,
+    SshChannelCensus,
+    SshChannelClosure,
+    SshOperationKind,
+    SshOperationLease,
+    SshProcessHold,
+    SshSessionAdmissionError,
+    SshSessionBinding,
+    SshSessionView,
+    SshTransportPlan,
+    SshWatermarkResult,
+)
 from .state_manager import StateManager
 
 __all__ = [
     "ActivityGenerator",
+    "ApplicationChannelRegistry",
+    "ApplicationChannelRetirementProof",
+    "AssignmentCategoryIndexCensus",
+    "BinaryPathIndexCensus",
+    "CollectionDeploymentCensus",
+    "CompiledApplicationDescriptor",
+    "CompiledCollectionDeployment",
+    "DeploymentCompilationCensus",
+    "DeploymentContentRegistry",
+    "DeploymentContentScaleCensus",
+    "DeploymentGroupPageCursor",
+    "DeploymentRegistryCensus",
     "GenerationEngine",
     "GroundTruthGenerator",
+    "HostDeployment",
+    "HostDeploymentSpec",
+    "LifecycleRegistry",
+    "RdpReconnectStateManager",
+    "LocalArtifactCapacityError",
+    "LocalArtifactPreparedCommit",
+    "LocalArtifactPublishToken",
+    "LocalArtifactRegistryCensus",
+    "LocalArtifactVersionRegistry",
+    "LocalArtifactVersionPageCursor",
+    "SourceInstanceDeployment",
+    "SshApplicationChannelManager",
+    "SshChannelAffinity",
+    "SshChannelCensus",
+    "SshChannelClosure",
+    "SshOperationKind",
+    "SshOperationLease",
+    "SshProcessHold",
+    "SshSessionAdmissionError",
+    "SshSessionBinding",
+    "SshSessionView",
+    "SshTransportPlan",
+    "SshWatermarkResult",
     "StateManager",
+    "UserApplicationAssignment",
+    "UserApplicationAssignmentSpec",
 ]

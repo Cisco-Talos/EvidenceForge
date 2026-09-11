@@ -1,0 +1,217 @@
+---
+name: eforge-organization-pack
+description: >
+  Create, extend, tailor, or repair reusable EvidenceForge organization packs through chat. Use
+  this skill when the user wants a fictional or modeled organization's exact industry dependencies,
+  organization-specific catalogs, reusable users, systems, groups, topology, services, email
+  environment, SMB environment, or baseline activity; wants to fork a sample organization; or
+  wants to author, validate, or version organization-pack content. Do not use it for storylines,
+  time windows, output settings, OOB policy, evaluation policy, or project config overlays.
+---
+
+# EvidenceForge Organization Pack Author
+
+Author reusable organization context on top of exact locked industry packs. Default to a
+self-contained environment and baseline that a small Scenario 2.0 wrapper can consume directly.
+
+## Establish context
+
+1. Read `/eforge:references:project-context`. Use the current working directory and omit
+   `--project-root` unless the user explicitly selects another root.
+2. Use `eforge` directly; in a source checkout where it is unavailable, retry with
+   `uv run eforge`.
+3. Read `/eforge:references:pack-reference` completely for pack fields and lifecycle rules.
+4. Read `/eforge:references:scenario-environment`,
+   `/eforge:references:scenario-environment-identities`,
+   `/eforge:references:scenario-environment-network`, and
+   `/eforge:references:scenario-baseline-output` for the exact environment and baseline fields
+   needed by this organization. Add `/eforge:references:scenario-smb`,
+   `/eforge:references:scenario-email`, or `/eforge:references:scenario-http` only when the model
+   contains those structures.
+5. Discover candidate dependencies and bases:
+
+```bash
+eforge pack list --json
+eforge pack show <exact-industry-or-organization-ref> --json
+eforge info pack_builtin_application_ids
+eforge info pack_builtin_dns_tags
+```
+
+Do not infer an implicit latest version or inspect package directories as a substitute for the CLI.
+Require `eforge pack publisher show --json` before init/copy; if no identity is configured, ask for
+an explicit publisher ID/display name and scope. Never derive one.
+
+## Interview one decision at a time
+
+Determine:
+
+1. The organization boundary and whether all names must be newly fictionalized.
+2. The exact industry source/publisher/name and compatible version constraints.
+3. Whether to initialize a blank pack or fork the closest organization sample.
+4. Whether the pack must stand alone or intentionally depends on a named consumer scenario.
+5. Which reusable users, systems, groups, services, network segments, sensors, email topology,
+   storage topology, SMB client/server platforms and services, mapping/credential modes, Samba
+   audit depth, stable exact-host deployment, stable exact-source collection policy, and baseline
+   activity belong to the organization.
+6. Which organization-specific personas, processes, applications, destinations, traffic, or
+   storage vocabulary cannot be reused from an industry dependency.
+
+Ask only questions whose answers change the model. Prefer qualified dependency exports over
+duplicating them.
+
+## Initialize or fork
+
+Use `0.1.0` for an explicitly identified draft and `1.0.0` for the first complete pack when the
+user supplies no version. Edit only a confirmed unshared draft in place. Fork any shared,
+referenced, or complete pack: patch for compatible corrections, minor for compatible additions,
+major for incompatible changes.
+
+```bash
+eforge pack init organization <name> --version <version> --json
+
+eforge pack copy <exact-organization-ref-or-path> --name <name> --version <version> --json
+```
+
+Never edit a packaged pack or overwrite an existing project version. After a renamed copy, confirm
+that local self-references use the new namespace while dependency references are unchanged.
+`pack copy` performs a technical namespace fork, not an organization rebrand: prose, domains,
+hostnames, usernames, email addresses, share names, and other modeled identity remain unchanged.
+Ask whether the user wants a namespace-only tailored copy or a full fictional rebrand. For a full
+rebrand, inventory and deliberately update every organization-facing identity while preserving
+dependency namespaces; never apply an unreviewed global string replacement.
+
+## Constrain and lock dependencies first
+
+Declare every industry dependency with `source`, `publisher`, `type: industry`, `name`, and required
+`version_constraint`; add `path` only for `source: path`. Preview `eforge pack lock <project-ref>
+--json`, review exact changes, then use `--apply` when authorized. `pack.lock.yaml` alone owns exact
+versions and digests, with a one-to-one manifest/lock mapping. Validate and inspect each locked
+dependency before referencing its exports. An organization may depend on industries; an industry
+may not depend on another industry.
+
+Use qualified references such as `evidenceforge/healthcare:clinical-coordinator`. Never copy a dependency export
+into the organization merely to avoid qualification.
+
+## Author organization content
+
+Keep all six fixed catalog files and both model files, including empty root mappings. Work in this
+order:
+
+1. Constrain, lock, and validate dependencies.
+2. Add only organization-specific catalog exports.
+3. Author the partial or complete `environment` fragment.
+4. Author the partial or complete `baseline_activity` fragment.
+5. Reconcile users, personas, systems, groups, roles, services, segments, sensors, email routes,
+   storage shares/mappings, and catalog references across the effective composed model.
+
+Pack custom applications use the public pack process shape: exact native path and commands plus
+complete Windows PE/module metadata where applicable. Compilation adapts that shape into the typed
+deployment runtime; do not add project-config-only deployment/release-policy fields to pack YAML.
+In the organization environment, add `os_build` and `architecture` when exact binary identity
+matters. Stable `deployment_overrides` may target only systems owned by the organization; stable
+`observation_overrides` may target only exact compiled source instances owned by its hosts or
+sensors. Omitted patch fields inherit, while explicit empty replacements intentionally remove the
+lower-layer value.
+
+For SMB, use bounded host file sets for persistent client-side files without declaring an SMB
+server. Use OS-native volume and client paths, keep backing filesystem separate from the
+SMB-advertised label, and keep local actor, SMB principal, and server effective identity distinct.
+Linux servers need a Samba service marker or explicit storage topology; a generic `file_server`
+role is insufficient. Linux clients need explicit `cifs-utils`, `cifs-client`, or `smbclient`
+markers for baseline file activity. GVFS is background
+transport/process texture only and does not prove canonical file semantics. Organization packs may
+own canonical file-set/share bindings and storage/mapping/audit/client-mode fields, but must not
+embed project-internal
+`smb_profiles.yaml` overrides.
+
+Apply the same generation-effective catalog chain as an industry pack: applications own persona
+audiences, process references, and named destination/service connections; traffic references those
+connections and uses structured cadence; low-level outbound remains only for processless/system
+activity.
+
+Default to self-contained content. If the user explicitly requests a partial organization pack:
+
+- Identify the representative consumer scenario by path or create a temporary one.
+- Document which required model pieces the consumer supplies.
+- Resolve and validate that exact consumer before claiming the pack is usable.
+- Report the pack as partial, not standalone.
+
+Do not add storyline events, red herrings, time windows, output targets, exercise-specific
+collection windows/missingness, credentials, safety, OOB authorization, resource policy,
+evaluation rules, or runtime policy. A reusable organization collector default is distinct from an
+exercise-specific source override; the consumer scenario owns the latter and takes precedence.
+Never author internal lifecycle/effect plans, registry handles, channel IDs, content IDs, or
+projection envelopes.
+Do not place `ENVIRONMENT.md` in a pack. A temporary harness does not need one. If a consumer
+scenario will be retained, hand it to the scenario skill after resolution; that skill must use its
+`ENVIRONMENT.md` template to create the attack-free analyst briefing from the effective resolved
+environment.
+
+Do not set `environment.email.corpus` in an organization pack. Pack-owned corpus-path provenance is
+not part of the current public contract. Keep any corpus path scenario-owned until that asset model
+is explicitly added.
+
+Use fictional entities, reserved domains, and reserved public/private address ranges. Add no
+executable hooks or arbitrary assets.
+
+## Validate continuously
+
+After each coherent edit:
+
+```bash
+eforge pack validate <project:evidenceforge:organization:name@version> --json
+```
+
+Treat structural validation as necessary but not sufficient: partial model fragments can be valid
+only in a consumer context. Fix every schema, dependency, reference, collision, containment, or
+runtime-semantic error before continuing.
+
+At handoff, inspect identity, dependencies, and exports:
+
+```bash
+eforge pack show <project:evidenceforge:organization:name@version> --json
+```
+
+## Prove the effective organization
+
+Create or select a Scenario 2.0 consumer outside the pack root. A self-contained organization
+harness normally needs only the exact composition reference, scenario name/description, fixed seed,
+time window, and output. A partial organization harness must supply every deliberately omitted
+environment or baseline requirement.
+
+Use a fresh temporary resolved filename for each proof attempt because authoritative resolved
+documents are never silently overwritten. Choose each cadence proof window after expected
+interactive-session bootstrap—normally at least ten local minutes after login—and keep it open
+long enough for startup pacing and the authored pattern.
+
+Run:
+
+```bash
+eforge resolve <consumer-scenario.yaml> --output <temporary-resolved.yaml> \
+  --explain-composition --json
+eforge validate <consumer-scenario.yaml> --show-storage
+eforge generate <consumer-scenario.yaml> --output <absolute-temporary-output> \
+  --seed 42 --force
+```
+
+Inspect the composition explanation for exact dependencies, origins, replacements, and qualified
+references. Inspect generated records for representative users, systems, applications,
+destinations, cadence, email behavior, and SMB behavior that the pack claims to provide.
+For SMB, also inspect `STORAGE_MANIFEST.json` schema v3 for host file sets, share bindings, platform, backing/advertised
+filesystem, drive/mount, credential mode, and resolved path views. Confirm Windows audit appears
+only for Windows servers, Samba syslog only for Linux servers, and any requested Zeek evidence has
+an observing sensor.
+Always pass an absolute temporary `--output`. If the claimed proof requires Zeek, IDS, or firewall
+records, confirm the effective organization has a compatible observing sensor before generation.
+Selecting a format enables its emitter but does not guarantee a file in a short probabilistic run.
+To prove SMTP or bash output, use a calibrated longer window or a deterministic scenario-local
+email or Linux process event.
+
+Do not leave temporary resolved or generated output inside the pack. Preserve a consumer scenario
+only when the user requests an example or regression fixture.
+
+## Report
+
+Return the exact organization reference, exact industry dependencies, version rationale, standalone
+or partial status, files and exports authored, final digest, validation result, consumer-harness
+result, and representative runtime evidence observed. State what remains scenario-owned.

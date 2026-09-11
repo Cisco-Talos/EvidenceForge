@@ -16,6 +16,7 @@ from evidenceforge.generation.activity.traffic_profiles import (
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
     _baseline_database_service_supported,
+    _profile_connection_payload_bytes,
 )
 from evidenceforge.models.scenario import System
 
@@ -221,3 +222,84 @@ class TestInboundGenerationRegression:
         )
 
         assert engine.activity_generator.calls > 0
+
+    def test_udp_syslog_profile_is_originator_only(self, monkeypatch):
+        """UDP syslog deliveries must not inherit generic responder payload."""
+
+        class _FakeActivityGenerator:
+            def __init__(self) -> None:
+                self._ip_to_system = {}
+                self.calls: list[dict[str, object]] = []
+
+            def generate_connection(self, **kwargs: object) -> None:
+                self.calls.append(kwargs)
+
+        class _FakeStateManager:
+            def set_current_time(self, _time: datetime) -> None:
+                return None
+
+            def get_sessions_on_system(self, _hostname: str) -> list[object]:
+                return []
+
+        class _FakeBaseline(BaselineMixin):
+            def _resolve_role(self, *args: object, **kwargs: object) -> tuple[str, str]:
+                return ("10.10.1.20", "sender.example")
+
+            def _get_system_exposure(self, _system: object) -> str:
+                return "internal"
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_role_connections",
+            lambda _roles, _os_cat: [],
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_role_inbound_connections",
+            lambda _roles, _os_cat: [
+                {"role": "_any", "port": 514, "proto": "udp", "service": "syslog"}
+            ],
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_persona_connections",
+            lambda _persona, _os_cat: [],
+        )
+
+        engine = object.__new__(_FakeBaseline)
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.state_manager = _FakeStateManager()
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(users=[], network=None),
+        )
+        system = SimpleNamespace(
+            hostname="LOG-01",
+            ip="10.10.2.40",
+            roles=["log_server"],
+            type="server",
+            public_hostnames=[],
+            assigned_user=None,
+        )
+
+        engine._generate_profile_traffic(
+            current_hour=datetime(2026, 4, 13, 13, tzinfo=UTC),
+            system=system,
+            rng=Random(7),
+            os_cat="linux",
+            local_dt=datetime(2026, 4, 13, 13, tzinfo=UTC),
+        )
+
+        assert engine.activity_generator.calls
+        assert all(call["orig_bytes"] > 0 for call in engine.activity_generator.calls)
+        assert all(call["resp_bytes"] == 0 for call in engine.activity_generator.calls)
+
+    def test_udp_syslog_payload_override_preserves_rng_scope(self):
+        """Protocol overrides must not reshape unrelated deterministic activity."""
+        actual_rng = Random(19)
+        control_rng = Random(19)
+
+        _profile_connection_payload_bytes(
+            {"proto": "udp", "service": "syslog"},
+            actual_rng,
+        )
+        control_rng.randint(200, 5000)
+        control_rng.randint(500, 50000)
+
+        assert actual_rng.random() == control_rng.random()

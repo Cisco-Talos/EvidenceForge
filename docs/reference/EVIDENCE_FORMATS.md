@@ -6,6 +6,16 @@ description: "Evidence Formats Reference"
 
 This document lists every evidence type EvidenceForge can generate, where to find it in the output, and any known limitations.
 
+## Contents
+
+[Output layout](#output-directory-structure) · [targets](#output-targets) ·
+[email](#email-artifacts-and-zeek-smtp) · [Windows Security](#windows-security-events) ·
+[Sysmon](#windows-sysmon-events) · [Zeek](#zeek-network-logs) ·
+[eCAR](#ecar-format-simulated-edr-telemetry) · [Linux syslog](#linux-syslog) ·
+[bash](#bash-history) · [IDS](#snortsuricata-ids-alerts) ·
+[Cisco ASA](#cisco-asa-firewall-syslog) · [web](#web-access-log) ·
+[proxy](#http-proxy-log)
+
 ## Output Directory Structure
 
 One generation run emits one output target. The tree below shows default,
@@ -19,8 +29,11 @@ output/
   OBSERVATION_MANIFEST.json                # Source-observation manifest for eval
   ARTIFACTS_MANIFEST.json                  # Generated artifact manifest, when artifacts exist
   COLLECTION_PROFILE.json                 # Blind-safe collection/export semantics
+  STORAGE_MANIFEST.json                    # Compiled host-file/SMB storage model, schema v3
   OUTPUT_TARGET.txt                        # "default", "sof-elk", or "splunk"; missing legacy marker means default
-  ENVIRONMENT.md                           # Optional student-facing environment description
+  RESOLVED_SCENARIO.yaml                   # Authoritative self-contained generation input
+  GENERATION_MANIFEST.json                 # Run identity and hashes; written last
+  ENVIRONMENT.md                           # Optional authored collateral; generation does not create it
   artifacts/
     email/
       <artifact-id>.eml                    # Optional RFC 5322 message artifacts
@@ -60,15 +73,33 @@ formats. Scenario YAML and `--formats` remain canonical: request
 on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
-For practical ingestion and validation guidance by target, see
-[Output Target Ingest Guides](../output-targets/README.md).
+For practical ingestion and validation guidance by target, see the
+[Output Target Ingest Guides](https://github.com/Cisco-Talos/EvidenceForge/blob/main/docs/output-targets/README.md).
 
 `COLLECTION_PROFILE.json` at the output root is a blind-safe source collection
 sidecar. It records the primary collection window, selected observation profile,
 source-family tail policies, and export ordering semantics without storyline
 identifiers, exercise labels, ground-truth events, or scenario narrative details.
 
-Target-specific behavior in V1:
+`STORAGE_MANIFEST.json` is emitted when storage is configured. Schema version 3 records bounded
+host file sets once, optional share bindings, and each
+volume's server platform and backing filesystem from each share's `provider`, `platform`,
+`network_root`, `server_native_root`, `backing_filesystem`, `advertised_filesystem`,
+`case_policy`, and `audit_profile`. Mappings retain `drive` and `mount` fields and add explicit
+platform/type/root `presentations`, credential mode, and non-secret principal identity. The file
+also carries deterministic catalog summaries and resolved storyline targets. A share backed by a
+file set is an alias and is not counted as a second population. Canonical
+share-relative paths remain SMB paths; server-local and client-presented paths are OS-native. The
+manifest contains metadata only—never credentials or file payloads.
+
+For client-file-set uploads, endpoint evidence identifies each exact local source object and a
+distinct server destination object while their content identity and deterministic hashes remain
+equal. The existing authenticated SMB lifecycle owns one bounded batch: client reads, per-file SMB
+writes and Zeek SMB/files observations, server writes, and one terminal session/tree/transport
+sequence. Moves publish the destination before retiring the local source. Retried or recovered
+publication cannot duplicate operations or terminal evidence.
+
+Current target-specific behavior:
 
 | Canonical format | `default` target | `sof-elk` target | `splunk` target |
 | --- | --- | --- | --- |
@@ -77,7 +108,9 @@ Target-specific behavior in V1:
 | `syslog` | `<host>/syslog.log` as RFC5424 | `<host>/<year>/syslog.log` as RFC3164/BSD | `<host>/syslog.log` as RFC5424 |
 | `cisco_asa` | `<firewall>/cisco_asa.log` | `<firewall>/<year>/cisco_asa.log` | `<firewall>/cisco_asa.log` |
 | Zeek | `<sensor>/<logtype>.json` only when Zeek sensors are configured | Unchanged | Unchanged |
-| Proxy, web access, IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
+| `web_access` | `<host>/web_access.log` as combined text | Combined text | `<host>/web_access.log` as Apache TA-compatible JSON |
+| `proxy_access` | `<host>/proxy_access.log` as extended combined text | Plain combined text | `<host>/proxy_access.log` as Apache TA-compatible proxy JSON with CIM tagging |
+| IDS, eCAR, bash history | Unchanged | Unchanged | Unchanged |
 
 ---
 
@@ -106,11 +139,11 @@ top-level `ARTIFACTS_MANIFEST.json`; materialized email messages live outside
   SMTP hops, including the text body and attachments.
 
 Zeek SMTP rows share UIDs with `conn.json`, include envelope/header metadata for
-plaintext transfer, and honor STARTTLS visibility. If a server-to-server hop
-uses STARTTLS before message transfer, protected fields such as `subject`,
+plaintext transfer, and honor STARTTLS visibility. If a client-submission or
+server-to-server hop uses STARTTLS before message transfer, protected fields such as `subject`,
 `msg_id`, `from`, `to`, `user_agent`, and attachment `fuids` are omitted from
-the `smtp.json` row. Client submission is plaintext on port 587 in V1; server
-relay uses port 25. Every SMTP server hop contributes a `Received` header in the
+the `smtp.json` row. Client submission uses port 587 and may upgrade to STARTTLS;
+server relay uses port 25. Every SMTP server hop contributes a `Received` header in the
 materialized `.eml` artifact.
 
 Mailbox reads from `email_read` and automatic recipient-read behavior are opaque
@@ -120,7 +153,7 @@ content.
 
 Exchange is modeled as a behavioral flavor for SMTP and HTTPS/OWA-style mailbox
 access only. Native Exchange message-tracking or IIS/Exchange logs are not
-emitted in V1.
+currently emitted.
 
 ## Windows Security Events
 
@@ -236,7 +269,9 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, MX, NS, and SOA query types. Automatic connection-prerequisite lookups route through the internal DNS lookup bundle so resolver choice, cache behavior, TTL observations, Zeek DNS/conn fan-out, Sysmon DNS visibility, and companion resolver questions stay consistent with connection hostnames. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, request/response body lengths, and Zeek `trans_depth`. Only for plaintext/decrypted HTTP. Browser/page-load sessions can reuse one UID for multiple same-flow transactions. File-analyzed requests use `orig_fuids`/`orig_filenames`/`orig_mime_types`; responses use the corresponding `resp_*` vectors, all linked to `files.log`. Filename vectors are absent unless the message exposes a filename. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. Certificate-chain depth is driven by `tls_realism.yaml`. |
-| files.log | `files.json` | File transfers | Extracted from visible HTTP request and response entities, OCSP responses, substantial SMB transfers, and plaintext SMTP MIME parts. Every successfully transmitted visible nonempty HTTP request body is represented with `is_orig: true`, and every visible nonempty response entity is represented with `is_orig: false`, including tiny, redirect, authentication-failure, and other error bodies. HEAD, 1xx, 204, 205, 304, successful CONNECT, zero-byte, failed-transport, and opaque HTTPS responses are fileless. Filename absence is normal; response URLs never invent filenames. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional filename, MIME type, byte counts, and hashes when analyzers ran. A plaintext proxy MISS creates origin→proxy and proxy→client files with different leg-local FUIDs but matching content metadata and hashes; HITs and proxy-generated errors create only client-leg files. Coherent observation loss can hide or truncate the file and suppress its matching HTTP vector. MIME/extension behavior is driven by `http_file_profiles.yaml`, and SMB behavior by `smb_file_transfers.yaml`. |
+| files.log | `files.json` | File transfers | Extracted from visible HTTP request and response entities, OCSP responses, canonical plaintext SMB reads/writes, and plaintext SMTP MIME parts. Every successfully transmitted visible nonempty HTTP request body is represented with `is_orig: true`, and every visible nonempty response entity is represented with `is_orig: false`, including tiny, redirect, authentication-failure, and other error bodies. HEAD, 1xx, 204, 205, 304, successful CONNECT, zero-byte, failed-transport, and opaque HTTPS responses are fileless. Filename absence is normal; response URLs never invent filenames. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional filename, MIME type, byte counts, and hashes when analyzers ran. A plaintext proxy MISS creates origin→proxy and proxy→client files with different leg-local FUIDs but matching content metadata and hashes; HITs and proxy-generated errors create only client-leg files. Coherent observation loss can hide or truncate the file and suppress its matching HTTP vector. SMB reads are responder-to-originator and writes are originator-to-responder; each visible nonempty logical operation/content-version/direction gets a sensor-local FUID. Encrypted-share operations remain opaque. MIME is present only when leading content is observed and hashes require complete ordered analyzer observations. HTTP MIME/extension behavior is driven by `http_file_profiles.yaml`. |
+| smb_mapping.log | `smb_mapping.json` | SMB tree connections | One sparse visible mapping row per successful canonical share tree. `native_file_system` is the server's wire-advertised value, not necessarily its backing filesystem; Samba commonly advertises NTFS over ext4/XFS. Mapping may remain visible when encrypted operations are opaque. |
+| smb_files.log | `smb_files.json` | SMB file actions | Sparse successful OPEN/READ/WRITE/RENAME/DELETE observations. FUID is optional and appears only when the matching operation produced visible file analysis. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Acquisition and renewal route through the internal DHCP lease bundle so Zeek DHCP/conn rows and Linux `dhclient` syslog companions share one lease identity. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
 | ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. NTP rows are emitted only when the matching UDP/123 conn row is response-bearing, so Zeek UID, conn_state/history, bytes, packets, duration, and parser timing agree. Version and poll are stable per client/server association, while stratum, ref-id, precision, root delay, and root dispersion are owned by the responding server. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |
@@ -246,10 +281,14 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
+The SMB field and visibility semantics follow the upstream
+[Zeek SMB log contract](https://docs.zeek.org/en/lts/logs/smb.html); exact fields remain
+version-sensitive.
+
 **Known Limitations:**
-- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log, substantial transfers can appear in files.log, and file-server activity can also produce host-side eCAR FILE records
-- No SMTP log — email traffic appears in conn.log only
-- http.log only for port 80; HTTPS content is not decrypted (as expected)
+- Native Zeek `kerberos.log` and `ntlm.log` authentication projections are deferred; SMB authentication can still have platform-eligible Windows, Samba syslog, and eCAR evidence
+- Encrypted SMB share operations are intentionally opaque to `smb_files.log` and `files.log`; eligible endpoint evidence is independent. A visible SMB3 transform header does not imply payload decryption, and tree details are only present when negotiation was visible before encryption took effect
+- Ordinary TLS (`service: ssl`) remains opaque, so its HTTPS content does not produce `http.log`; `http.log` is not limited to port 80 and can represent cleartext or proxy-inspected HTTP on other ports
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
 
@@ -262,7 +301,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
-**Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
+**Record structure:** `pid`, `tid`, and `ppid` are optional top-level integers, emitted only when a source-native nonnegative value is known. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
 
 **Entity correlation (objectID/actorID graph):** Each record carries a persistent `objectID` (UUID) that identifies the entity being acted upon. Entity lifecycle events share the same objectID — e.g., a PROCESS/CREATE and PROCESS/TERMINATE for the same process, or a USER_SESSION/LOGIN and USER_SESSION/LOGOUT for the same session. The optional `actorID` field links to the objectID of the entity that performed the action — e.g., a PROCESS/CREATE's actorID points to its parent process's objectID, and a FILE/CREATE's actorID points to the process that created it.
 
@@ -270,18 +309,22 @@ Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access, target_pid, target_image_path, and target_process_uuid in properties. |
 | THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, target_pid, target_process_uuid, start_address, and stack addresses matching OpTC eCAR format. Thread ID, target PID, and start address are generated once in `RemoteThreadContext` and rendered consistently across Sysmon and eCAR. |
-| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity, baseline SMB file-server access, and modeled transfer receiver evidence such as SCP target-side file creation. |
+| FILE | READ, CREATE, WRITE, RENAME, DELETE | Generated alongside process activity, canonical SMB server operations and required client-local copy/move effects, and modeled transfer receiver evidence such as SCP target-side file creation. Windows server objects use Windows paths; Samba server objects use POSIX backing paths and live `smbd` worker provenance. Linux client-local effects use POSIX paths and the initiating client process when attributable. Remote share objects never fabricate a client Sysmon Event 11. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
-| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `remote`, `local`, or `service`. Failed attempts include failure_reason/status fields and do not imply an established session. |
+| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `smb`, `remote`, `local`, or `service`. Samba sessions use neutral `auth_session_ref`/`session_id`, protocol/scope, and optional effective UID/GID; they do not invent Windows logon ID/type/GUID fields. Failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
+
+Modeled successful SSH and RDP sessions have complete terminal ownership: their source client and target receiver/session processes terminate, and the target `USER_SESSION/LOGOUT` is emitted exactly once even when initial source publication loses its return or an SSH channel is retired by a long watermark. Watermark retirement transfers authenticated ownership only; it does not itself render endpoint or session close rows.
+
+For bounded Linux foreground commands, PROCESS/TERMINATE reflects the modeled command lifetime. Exact numeric `sleep <duration>` commands use the requested seconds up to 86,400, while unsupported sleep syntax keeps the short fallback. When a session has an owning close deadline, foreground termination plus shell-release jitter remains before that owner closes.
 
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
-- FLOW events carry the initiating system process pid when endpoint attribution is available (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP); pid/tid fields are omitted when unavailable instead of rendering placeholder IDs
-- Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
-- File paths cycle through a small set of templates
+- FLOW events carry endpoint process attribution only when the platform owns one. Examples include svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for Windows-native SMB, mstsc.exe for RDP, a direct `smbclient` operation process, or the active Samba `smbd` worker. Mounted CIFS transport is kernel-owned and must not be attributed to `mount.cifs` for every operation. GVFS remains opaque background TCP/445/process texture and does not produce typed SMB file/auth/session semantics. Unavailable pid/tid identity is omitted rather than rendered as a placeholder
+- Linux coverage focuses on PROCESS, USER_SESSION, FLOW, and FILE evidence rather than every endpoint object family
+- File paths come from curated, OS-aware profiles rather than a complete endpoint inventory
 
 ---
 
@@ -307,23 +350,43 @@ coordinated by action-bundle semantics above individual canonical occurrences: t
 bundle owns lifecycle, ordering, source timing, and shared identities, while each
 syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
 failed-password rows reuse the same source port as the companion Zeek SSH
-connection tuple.
+connection tuple. SSH terminal syslog and endpoint evidence remains complete after application
+channel tombstone eviction because the lifecycle owner retains an authenticated retirement proof;
+watermark advancement does not render PAM/logind or session termination rows itself.
 
-| Program | Description | Notes |
+Samba server evidence is rendered through this existing syslog family; there is no separate
+journal or audit-log output format. `smbd` records authentication and share connection lifecycle.
+`smbd_audit` records modeled VFS operations using
+`smbd_audit: PRINCIPAL|SOURCE|SHARE|OPERATION|RESULT|POSIX-PATH`. The storage server's `audit`
+level controls eligibility: `minimal` keeps lifecycle, `standard` adds selected open/close,
+directory, rename/unlink, and failure evidence, and `high` emits full-audit rows for modeled
+operations. These are target-version profiles derived from Samba's
+[`smb.conf`](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html) and
+[`vfs_full_audit`](https://www.samba.org/samba/docs/current/man-html/vfs_full_audit.8.html)
+contracts; exact upstream operation names vary by Samba release.
+
+Routine successful Linux client operations do not produce client syslog. Kernel CIFS debug output
+and optional Linux Audit policy are not implied by mounting a share and are not currently rendered
+as SMB evidence. Client-side endpoint rows, when requested, come from eCAR and retain the selected
+kernel-mounted or one-shot `smbclient` ownership model. GVFS remains background transport texture,
+not canonical typed file activity.
+
+| Activity/program family | Description | Notes |
 |---------|-------------|-------|
-| sshd | SSH authentication | Accepted/Failed password, session opened/closed, pam_unix messages. |
-| systemd | Service management | Started/stopped service units. |
-| systemd-logind | Login sessions | New session, removed session. |
-| CRON | Scheduled tasks | cron job execution. |
-| kernel | Kernel messages | UFW firewall blocks, uptime, hardware. |
-| sudo | Privilege escalation | Command execution via sudo. |
-| su | User switching | Switch user events. |
-| systemd-timesyncd | NTP sync | Time synchronization status. |
-| snapd | Snap packages | Ubuntu snap daemon messages. |
+| `sshd` and PAM | SSH authentication | Public-key/password authentication, accepted/failed auth, and session lifecycle. |
+| `systemd`, `systemd-logind`, `systemd-journald`, `systemd-timesyncd` | Service, session, journal, and time lifecycle | Includes timer activity and sparse journald housekeeping. |
+| `CRON`, `cron`, `anacron` | Scheduled work | Distro-aware scheduled jobs and coherent anacron runs. |
+| Package maintenance | Package management | Distro-aware systemd lifecycle and `unattended-upgr`/PackageKit detail for apt/dnf activity. |
+| `logrotate` and related service/timer rows | Log maintenance | Start/finish and per-file rotation detail. |
+| `kernel` and UFW | Kernel and firewall | Boot/uptime, audit, and blocked-network evidence. |
+| `sudo`, `su`, `polkitd` | Privilege and authorization | Command, user-switch, and host-appropriate policy events. |
+| Host/role-specific daemons | Workstation and server background activity | Includes network, resolver, logging, snap, firmware, desktop, storage, and service-aware programs. |
+| `smbd` | Samba authentication and connection lifecycle | Authentication result, effective Unix identity, share connect, and disconnect on modeled Samba servers. |
+| `smbd_audit` | Samba VFS audit | Audit-level-dependent operation/result rows with the POSIX server path. |
 
 **Known Limitations:**
-- Limited program variety (~9 programs vs 30+ on real servers)
-- No application-specific logs (nginx, postfix, mysql, etc.) even when services are declared
+- Program and message coverage is curated and role/distro-aware, not a complete operating-system journal
+- Apart from modeled Samba evidence, most application-specific logs (nginx, postfix, mysql, etc.) remain separate or unavailable even when services are declared
 - No SSH protocol negotiation messages (key exchange, cipher selection) before auth
 - Bash history may be sparse relative to SSH session duration
 
@@ -335,6 +398,8 @@ connection tuple.
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
 Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving. Bash-history timing and optional foreground process telemetry are coordinated by the internal Linux shell-command bundle so command text, source-visible timing, and endpoint process evidence stay aligned.
+
+An exact two-token numeric `sleep` command (for example, `sleep 30`, `sleep 30.5`, or `sleep .5`) models that process lifetime, capped at 86,400 seconds. Suffixes, signs, exponents, extra arguments, non-finite values, and malformed quoting use the existing short fallback. A bounded session clamps independent termination at least 1,425 ms before its owner closes so the full shell-release jitter fits.
 
 **Known Limitations:**
 - No command typos, tab-completion artifacts, or repeated commands
@@ -451,11 +516,12 @@ without a matching firewall entry is a validation error.
 ## Web Access Log
 
 **File:** `web_access.log`
-**Format:** Apache/Nginx combined log format
+**Default/SOF-ELK format:** Apache/Nginx combined log text
+**Splunk format:** NDJSON records compatible with the Apache TA `apache:access:json` sourcetype
 
 HTTP access logs for web server systems.
 
-Entries use Apache/Nginx combined syntax:
+Default and SOF-ELK entries use Apache/Nginx combined syntax:
 
 ```text
 client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" status bytes "Referer" "User-Agent"
@@ -471,7 +537,9 @@ client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" stat
 ## HTTP Proxy Log
 
 **File:** `<proxy-hostname.domain>/proxy_access.log`
-**Format:** Apache/Nginx combined log format
+**Default format:** Extended Apache/Nginx combined text with optional proxy metadata
+**SOF-ELK format:** Plain Apache/Nginx combined text
+**Splunk format:** Apache TA-compatible NDJSON with EvidenceForge proxy fields and CIM tagging
 
 Forward proxy access logs for systems with the `forward_proxy` role. This is a
 host/proxy log, not a network sensor log, so proxy-only labs do not need
@@ -485,8 +553,8 @@ at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted.
 HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy
 routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
-The proxy log uses the same Apache/Nginx combined syntax as `web_access.log`,
-with proxy request targets in the quoted request field:
+Default and SOF-ELK proxy logs use the same Apache/Nginx combined syntax as
+`web_access.log`, with proxy request targets in the quoted request field:
 
 ```text
 client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD request-target HTTP/version" status bytes "Referer" "User-Agent"
@@ -502,7 +570,8 @@ browser/SaaS traffic to the assigned human user, while allowlisted
 infrastructure classes such as software updates, telemetry, CRL, and OCSP can
 render unauthenticated (`-`) rows. Machine/service-account proxy usernames are
 opt-in through `environment.proxy.auth_policy`; `mode: legacy` preserves the
-older machine-context User-Agent behavior. Default combined text output
+older machine-context User-Agent behavior while emitting a migration warning.
+Default combined text output
 preserves the full username value when one is present. The SOF-ELK target
 strips the domain prefix from identities such as `DOMAIN\user` and the trailing
 `$` from machine accounts such as `DOMAIN\HOST$` so SOF-ELK's HTTPD parser can

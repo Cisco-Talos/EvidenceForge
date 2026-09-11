@@ -7,7 +7,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from evidenceforge.generation.timing import TemporalConstraintError, TemporalConstraintGraph
+from evidenceforge.generation.timing import (
+    TemporalConstraintError,
+    TemporalConstraintGraph,
+    TimingRuntime,
+    TimingScope,
+)
 
 
 def _base_time() -> datetime:
@@ -38,14 +43,20 @@ def test_graph_orders_cross_event_lifecycle_chain() -> None:
     resolved = graph.resolve()
 
     assert resolved["connection"] == base + timedelta(milliseconds=50)
-    assert resolved["auth"] == base + timedelta(milliseconds=150)
-    assert resolved["shell"] == base + timedelta(milliseconds=175)
+    assert resolved["auth"] > base + timedelta(milliseconds=150)
+    assert resolved["shell"] > resolved["auth"] + timedelta(milliseconds=25)
+    assert resolved["auth"] != base + timedelta(milliseconds=150)
+    assert resolved["shell"] != resolved["auth"] + timedelta(milliseconds=25)
 
 
-def test_graph_lower_bound_wins_when_upper_conflicts_with_causality() -> None:
-    """Impossible upper bounds should not invert a required causal edge."""
+def test_graph_rejects_upper_bound_that_conflicts_with_causality() -> None:
+    """Impossible upper bounds should fail instead of silently violating a contract."""
     base = _base_time()
-    graph = TemporalConstraintGraph()
+    runtime = TimingRuntime(reference_time=base)
+    graph = TemporalConstraintGraph(
+        timing_runtime=runtime,
+        scope=TimingScope(stable_id="impossible-constraint"),
+    )
     graph.add_node("before", base)
     graph.add_node(
         "after",
@@ -54,7 +65,30 @@ def test_graph_lower_bound_wins_when_upper_conflicts_with_causality() -> None:
     )
     graph.constrain_after("after", "before", min_gap=timedelta(milliseconds=25))
 
-    assert graph.resolved_time("after") == base + timedelta(milliseconds=25)
+    with pytest.raises(TemporalConstraintError, match="impossible window"):
+        graph.resolved_time("after")
+
+    assert runtime.audit.snapshot().total_saturations == 1
+
+
+def test_graph_samples_inside_a_tight_repair_window() -> None:
+    """A repaired timestamp should retain positive slack from both hard bounds."""
+    base = _base_time()
+    runtime = TimingRuntime(reference_time=base)
+    graph = TemporalConstraintGraph(
+        timing_runtime=runtime,
+        scope=TimingScope(stable_id="tight-constraint"),
+    )
+    lower = base + timedelta(milliseconds=10)
+    upper = base + timedelta(milliseconds=12)
+    graph.add_node("event", base, not_before=lower, not_after=upper)
+
+    resolved = graph.resolved_time("event")
+
+    assert lower < resolved < upper
+    audit = runtime.audit.snapshot()
+    assert audit.total_repairs == 1
+    assert audit.total_saturations == 0
 
 
 def test_graph_resolves_deterministically_regardless_of_insertion_order() -> None:

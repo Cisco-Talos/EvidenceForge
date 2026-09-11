@@ -87,6 +87,7 @@ def test_registry_matches_reviewed_constructor_context_and_format_inventory() ->
     context_fields = set(inventory["occurrence_builder"]["payload_field_names"]) - {
         "identity_plan",
         "network_observations",
+        "pe_analyses",
         "source_timing",
     }
 

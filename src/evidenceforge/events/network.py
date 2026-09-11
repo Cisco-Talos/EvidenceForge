@@ -28,7 +28,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
+from evidenceforge.events.identity import ProcessIdentity
+
 NetworkTransactionOutcome = Literal["success", "failure", "denied"]
+NetworkEndpointRole = Literal["initiator", "responder"]
 PayloadDirection = Literal["none", "orig", "resp", "either"]
 TransportPhase = Literal["attempt", "established", "application", "response"]
 InspectionCapability = Literal["metadata", "payload_cleartext", "payload_decrypted"]
@@ -43,6 +46,29 @@ SemanticClaim = Literal[
     "dns_response",
     "file_content",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkEndpointObservationPlan:
+    """Host-local process observation of one canonical network transaction."""
+
+    role: NetworkEndpointRole
+    local_hostname: str
+    local_ip: str
+    process: ProcessIdentity
+    initiated: bool
+    observed_at: datetime
+    transaction_id: str
+
+    def __post_init__(self) -> None:
+        """Reject endpoint observations that disagree with their declared role."""
+
+        if not self.local_hostname or not self.local_ip or not self.transaction_id:
+            raise ValueError("Network endpoint observations require host, IP, and transaction ID")
+        if self.process.hostname.casefold() != self.local_hostname.casefold():
+            raise ValueError("Network endpoint process identity must belong to the local host")
+        if self.initiated != (self.role == "initiator"):
+            raise ValueError("Network endpoint initiation flag must match the endpoint role")
 
 
 def normalize_zeek_history(conn_state: str, history: str) -> str:
@@ -71,6 +97,7 @@ class SignaturePredicate:
     inspection: InspectionCapability = "metadata"
     http_methods: tuple[str, ...] = ()
     http_statuses: tuple[int, ...] = ()
+    http_user_agents: tuple[str, ...] = ()
     requires_http_body: bool = False
     tls_server_names: tuple[str, ...] = ()
     file_mime_types: tuple[str, ...] = ()
@@ -87,9 +114,12 @@ class SignaturePredicate:
             raise ValueError("IDS predicate minimum_payload_bytes cannot be negative")
         if self.minimum_payload_bytes and self.payload_direction == "none":
             raise ValueError("IDS payload thresholds require a payload direction")
-        if (self.http_methods or self.http_statuses or self.requires_http_body) and (
-            self.application_protocol != "http"
-        ):
+        if (
+            self.http_methods
+            or self.http_statuses
+            or self.http_user_agents
+            or self.requires_http_body
+        ) and (self.application_protocol != "http"):
             raise ValueError("HTTP-specific IDS predicates require application_protocol='http'")
         if self.requires_http_body and self.payload_direction not in {"orig", "either"}:
             raise ValueError("HTTP request bodies require orig/either payload direction")
@@ -249,6 +279,8 @@ class NetworkSensorObservation:
     firewall_teardown_time: datetime | None = None
     firewall_teardown_observed: bool = True
     nat: NatSensorObservation | None = None
+    source_times: tuple[tuple[str, datetime], ...] = ()
+    source_durations: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         """Validate source-local interval and identifier invariants."""
@@ -285,6 +317,21 @@ class NetworkSensorObservation:
             raise ValueError("Observed HTTP request bodies must be non-negative")
         if self.http_response_body_len is not None and self.http_response_body_len < 0:
             raise ValueError("Observed HTTP response bodies must be non-negative")
+        time_keys = [key for key, _timestamp in self.source_times]
+        if len(time_keys) != len(set(time_keys)):
+            raise ValueError("Source-native network timing keys must be unique")
+        duration_keys = [key for key, _duration in self.source_durations]
+        if len(duration_keys) != len(set(duration_keys)):
+            raise ValueError("Source-native network duration keys must be unique")
+        if any(duration < 0 for _key, duration in self.source_durations):
+            raise ValueError("Source-native network durations must be non-negative")
+        for key, timestamp in self.source_times:
+            if not key:
+                raise ValueError("Source-native network timing keys must not be empty")
+            if timestamp < self.observed_start_time:
+                raise ValueError("Source-native network times cannot precede the observed start")
+            if self.observed_close_time is not None and timestamp > self.observed_close_time:
+                raise ValueError("Source-native network times cannot follow the observed close")
 
     @property
     def observed_duration(self) -> float | None:
@@ -317,6 +364,22 @@ class NetworkSensorObservation:
             if candidate == canonical_id:
                 return observed
         return canonical_id
+
+    def source_time(self, key: str) -> datetime | None:
+        """Return one frozen source-native row timestamp."""
+
+        for candidate, timestamp in self.source_times:
+            if candidate == key:
+                return timestamp
+        return None
+
+    def source_duration(self, key: str) -> float | None:
+        """Return one frozen source-native row duration in seconds."""
+
+        for candidate, duration in self.source_durations:
+            if candidate == key:
+                return duration
+        return None
 
 
 @dataclass(frozen=True, slots=True)

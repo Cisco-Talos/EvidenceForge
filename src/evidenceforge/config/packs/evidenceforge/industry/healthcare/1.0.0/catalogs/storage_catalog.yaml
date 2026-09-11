@@ -1,0 +1,9 @@
+storage_catalog:
+  clinical-department:
+    description: "Clinical operations share vocabulary and bounded file subjects."
+    data:
+      directories: ["Care Coordination", "Scheduling", "Policies", "Referrals"]
+      subjects: ["care-plan", "shift-roster", "referral-summary"]
+      files:
+        - {extension: .docx, mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, weight: 4}
+        - {extension: .pdf, mime: application/pdf, weight: 3}

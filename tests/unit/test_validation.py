@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.composition import compile_scenario
+from evidenceforge.config.provider import effective_config_scope
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -46,9 +48,224 @@ from evidenceforge.models import (
     User,
 )
 from evidenceforge.utils import load_yaml
-from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.validation import ScenarioValidator
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
+
+
+def _scenario_with_smb_reference(
+    scenarios_dir: Path,
+    share_ref: str,
+    *,
+    location_name: str = "target",
+    duplicate_share_id: bool = False,
+) -> Scenario:
+    """Return a valid base scenario with one intentionally unresolved SMB reference."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    systems = scenario_data["environment"]["systems"]
+    systems.extend(
+        [
+            {
+                "hostname": "FS-01",
+                "ip": "10.0.0.20",
+                "os": "Windows Server 2022",
+                "type": "server",
+                "roles": ["file_server"],
+                "services": ["smb"],
+            }
+        ]
+    )
+    servers = [
+        {
+            "system": "FS-01",
+            "default_volume": "data",
+            "volumes": [{"id": "data", "mount": "D:\\", "filesystem": "ntfs"}],
+            "shares": [
+                {
+                    "id": "staging",
+                    "name": "Staging",
+                    "volume": "data",
+                    "root": "Departments\\Staging",
+                }
+            ],
+        }
+    ]
+    if duplicate_share_id:
+        systems.append(
+            {
+                "hostname": "FS-02",
+                "ip": "10.0.0.21",
+                "os": "Windows Server 2022",
+                "type": "server",
+                "roles": ["file_server"],
+                "services": ["smb"],
+            }
+        )
+        servers.append(
+            {
+                "system": "FS-02",
+                "default_volume": "data",
+                "volumes": [{"id": "data", "mount": "E:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "staging",
+                        "name": "Staging",
+                        "volume": "data",
+                        "root": "Departments\\Staging",
+                    }
+                ],
+            }
+        )
+    scenario_data["environment"]["storage"] = {
+        "population": "auto",
+        "activity": "normal",
+        "servers": servers,
+    }
+
+    share_location = {"type": "share", "share": share_ref, "path": "test.txt"}
+    if location_name == "target":
+        smb_event = {"type": "smb_activity", "operation": "read", "target": share_location}
+    elif location_name == "source":
+        smb_event = {
+            "type": "smb_activity",
+            "operation": "copy",
+            "source": share_location,
+            "destination": {"type": "client", "path": "C:\\Temp\\test.txt"},
+        }
+    else:
+        smb_event = {
+            "type": "smb_activity",
+            "operation": "copy",
+            "source": {"type": "client", "path": "C:\\Temp\\test.txt"},
+            "destination": share_location,
+        }
+    scenario_data["storyline"] = [
+        {
+            "id": "smb-reference",
+            "time": "+20m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Exercise SMB reference validation",
+            "events": [smb_event],
+        }
+    ]
+    return Scenario.model_validate(scenario_data)
+
+
+def _unknown_smb_share_issue(scenario: Scenario) -> object:
+    """Return the one unknown-share issue from a scenario validation result."""
+
+    return next(
+        issue
+        for issue in ScenarioValidator(scenario).validate()
+        if issue.message.startswith("Unknown SMB share")
+    )
+
+
+@pytest.mark.parametrize("location_name", ["target", "source", "destination"])
+def test_smb_share_alias_suggests_exact_compiled_reference_at_location_field(
+    scenarios_dir: Path,
+    location_name: str,
+) -> None:
+    """A unique bare alias points to the exact ref at the exact declaring location."""
+
+    issue = _unknown_smb_share_issue(
+        _scenario_with_smb_reference(scenarios_dir, "staging", location_name=location_name)
+    )
+
+    assert issue.field_path == f"storyline.0.events.0.{location_name}.share"
+    assert issue.message == "Unknown SMB share 'staging'"
+    assert "exact compiled share reference 'FS-01.staging'" in issue.suggestion
+    assert "bare share IDs and display names are not valid" in issue.suggestion
+
+
+def test_smb_ambiguous_alias_suggests_every_exact_candidate(scenarios_dir: Path) -> None:
+    """An ambiguous local share ID reports exact qualified alternatives."""
+
+    issue = _unknown_smb_share_issue(
+        _scenario_with_smb_reference(scenarios_dir, "staging", duplicate_share_id=True)
+    )
+
+    assert "one exact compiled <system>.<share-id> reference" in issue.suggestion
+    assert "'FS-01.staging'" in issue.suggestion
+    assert "'FS-02.staging'" in issue.suggestion
+
+
+def test_smb_unknown_reference_requires_exact_compiled_shape(scenarios_dir: Path) -> None:
+    """A reference with no alias match still explains the qualified shape."""
+
+    issue = _unknown_smb_share_issue(_scenario_with_smb_reference(scenarios_dir, "not-a-share"))
+
+    assert issue.field_path == "storyline.0.events.0.target.share"
+    assert issue.suggestion == "Use an exact compiled <system>.<share-id> reference."
+
+
+def test_generated_storage_collision_suggests_share_override(scenarios_dir: Path) -> None:
+    """A generated preset collision points authors to the supported override shape."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    scenario_data["environment"]["systems"].append(
+        {
+            "hostname": "FS-01",
+            "ip": "10.0.0.20",
+            "os": "Windows Server 2022",
+            "type": "server",
+            "roles": ["file_server"],
+            "services": ["smb"],
+        }
+    )
+    scenario_data["environment"]["storage"] = {
+        "servers": [
+            {
+                "system": "FS-01",
+                "presets": ["homes"],
+                "default_volume": "data",
+                "volumes": [{"id": "data", "mount": "D:\\", "filesystem": "ntfs"}],
+                "shares": [
+                    {
+                        "id": "homes",
+                        "name": "Homes",
+                        "volume": "data",
+                    }
+                ],
+            }
+        ]
+    }
+
+    issue = next(
+        issue
+        for issue in ScenarioValidator(Scenario.model_validate(scenario_data)).validate()
+        if issue.message.startswith("Storage topology cannot be compiled")
+    )
+
+    assert issue.field_path == "environment.storage"
+    assert "share_overrides" in issue.suggestion
+    assert "<system>.<share-id>" in issue.suggestion
+
+
+def test_rdp_receiver_diagnostic_lists_accepted_capabilities(scenarios_dir: Path) -> None:
+    """RDP validation names both host-type and workstation-service remedies."""
+
+    scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+    scenario_data["storyline"] = [
+        {
+            "id": "unsupported-rdp-target",
+            "time": "+10m",
+            "actor": "test_user",
+            "system": "TEST-01",
+            "activity": "Attempt a modeled RDP session",
+            "events": [{"type": "rdp_session", "source_ip": "10.0.0.50"}],
+        }
+    ]
+
+    issue = next(
+        issue
+        for issue in ScenarioValidator(Scenario.model_validate(scenario_data)).validate()
+        if "lacks capability 'rdp_receiver'" in issue.message
+    )
+
+    assert "Windows server/domain_controller" in issue.suggestion
+    assert "rdp, remote-desktop, remote_desktop, or termservice" in issue.suggestion
 
 
 def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir: Path) -> None:
@@ -56,15 +273,16 @@ def test_all_scenario_fixtures_pass_schema_and_semantic_validation(scenarios_dir
 
     failures: list[str] = []
     for scenario_path in sorted(scenarios_dir.glob("*.yaml")):
-        scenario = Scenario(**merge_builtin_personas(load_yaml(scenario_path)))
-        errors = [
-            issue
-            for issue in ScenarioValidator(
-                scenario,
-                scenario_root=scenario_path.parent,
-            ).validate()
-            if issue.severity == "error"
-        ]
+        compiled = compile_scenario(scenario_path)
+        with effective_config_scope(compiled.effective_config):
+            errors = [
+                issue
+                for issue in ScenarioValidator(
+                    compiled.scenario,
+                    scenario_root=scenario_path.parent,
+                ).validate()
+                if issue.severity == "error"
+            ]
         failures.extend(
             f"{scenario_path.name}: {issue.field_path}: {issue.message}" for issue in errors
         )
@@ -736,6 +954,50 @@ class TestScenarioValidator:
         assert "Duplicate username" in issues[0].message
         assert "testuser" in issues[0].message
 
+    def test_case_variant_usernames_are_duplicates(self):
+        """Logical usernames are unique regardless of authored casing."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User 1",
+                        email="test1@example.com",
+                    ),
+                    User(
+                        username="TestUser",
+                        full_name="Test User 2",
+                        email="test2@example.com",
+                    ),
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        issue = next(
+            issue for issue in issues if issue.field_path == "environment.users.1.username"
+        )
+        assert issue.severity == "error"
+        assert issue.message == (
+            "Duplicate username 'TestUser' conflicts case-insensitively with 'testuser'"
+        )
+        assert "case-insensitive" in (issue.suggestion or "")
+
     def test_duplicate_hostnames(self):
         """Duplicate hostnames should produce error."""
         scenario = Scenario(
@@ -777,6 +1039,50 @@ class TestScenarioValidator:
         assert issues[0].field_path == "environment.systems.1.hostname"
         assert "Duplicate hostname" in issues[0].message
         assert "TEST-01" in issues[0].message
+
+    def test_case_variant_hostnames_are_duplicates(self):
+        """Logical hostnames are unique regardless of authored casing."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
+                systems=[
+                    System(
+                        hostname="TEST-01",
+                        ip="10.0.0.1",
+                        os="Windows 10",
+                        type="workstation",
+                    ),
+                    System(
+                        hostname="test-01",
+                        ip="10.0.0.2",
+                        os="Windows 10",
+                        type="workstation",
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        issue = next(
+            issue for issue in issues if issue.field_path == "environment.systems.1.hostname"
+        )
+        assert issue.severity == "error"
+        assert issue.message == (
+            "Duplicate hostname 'test-01' conflicts case-insensitively with 'TEST-01'"
+        )
+        assert "case-insensitive" in (issue.suggestion or "")
 
     def test_duplicate_ips(self):
         """Duplicate IP addresses should produce error."""
@@ -1485,12 +1791,15 @@ class TestNetworkValidation:
 
         issues = ScenarioValidator(scenario).validate()
 
-        assert any(
-            issue.severity == "error"
+        issue = next(
+            issue
+            for issue in issues
+            if issue.severity == "error"
             and "snort_alert" in issue.message
             and "requires an IDS sensor" in issue.message
-            for issue in issues
         )
+        assert "type: ids" in issue.suggestion
+        assert "snort_alert" in issue.suggestion
 
     def test_cisco_asa_output_without_firewall_sensor_errors(self):
         """cisco_asa output requires a firewall sensor."""
@@ -1518,12 +1827,15 @@ class TestNetworkValidation:
 
         issues = ScenarioValidator(scenario).validate()
 
-        assert any(
-            issue.severity == "error"
+        issue = next(
+            issue
+            for issue in issues
+            if issue.severity == "error"
             and "cisco_asa" in issue.message
             and "requires a firewall sensor" in issue.message
-            for issue in issues
         )
+        assert "type: firewall" in issue.suggestion
+        assert "cisco_asa" in issue.suggestion
 
     def test_sensor_backed_output_without_network_config_errors(self):
         """Sensor-backed output requires sensors even when network config is omitted."""
@@ -1635,19 +1947,20 @@ class TestNetworkSensorDocumentation:
 
     def test_docs_and_skills_document_optional_sensors_and_proxy_logs(self):
         scenario_ref = self._read("docs/reference/scenario-reference.md")
-        skill_ref = self._read("commands/eforge/references/scenario-reference.md")
-        scenario_skill = self._read("commands/eforge/scenario.md")
+        scenario_environment = self._read("commands/eforge/references/scenario-environment.md")
         validate_skill = self._read("commands/eforge/validate.md")
 
-        for text in (scenario_ref, skill_ref):
-            assert "environment.network.sensors` is optional" in text
-            assert "Proxy-only labs do not need placeholder Zeek sensors" in text
-            assert "`proxy_access` is produced" in text
-            assert "not by network sensors" in text
-            assert "Requesting `cisco_asa` without a firewall" in text
+        assert "environment.network.sensors` is optional" in scenario_ref
+        assert "Proxy-only labs do not need placeholder Zeek sensors" in scenario_ref
+        assert "`proxy_access` is produced" in scenario_ref
+        assert "not by network sensors" in scenario_ref
+        assert "Requesting `cisco_asa` without a firewall" in scenario_ref
 
-        assert "sensors:                       # Optional" in scenario_skill
-        assert "proxy-only labs that only request `proxy_access`" in scenario_skill
+        assert "`environment.network.sensors` is optional" in scenario_environment
+        assert "Proxy-only labs do not need placeholder Zeek sensors" in scenario_environment
+        assert "`proxy_access` is produced" in scenario_environment
+        assert "not network sensors" in scenario_environment
+        assert "Requesting `cisco_asa`" in scenario_environment
         assert "topology declared without sensors" in validate_skill
         assert "does not need a placeholder Zeek sensor" in validate_skill
 
@@ -3058,6 +3371,58 @@ class TestStorylineCausalOrder:
 
         warnings = [i for i in issues if "no prior account_created" in i.message.lower()]
         assert len(warnings) >= 1
+
+    def test_account_created_for_existing_service_account_is_error(self):
+        """Creating a predeclared service account should fail before generation."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.1",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
+                ],
+                service_accounts=["svc_mhsync"],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-existing-account",
+                    time="2024-01-15T10:00:00Z",
+                    actor="SYSTEM",
+                    system="DC-01",
+                    activity="create account",
+                    events=[
+                        {
+                            "type": "account_created",
+                            "target_username": "SVC_MHSYNC",
+                        }
+                    ],
+                ),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        errors = [
+            issue
+            for issue in issues
+            if "already exists in the effective identity directory" in issue.message
+        ]
+        assert len(errors) == 1
+        assert errors[0].severity == "error"
+        assert errors[0].field_path == "storyline.0.events.0.target_username"
 
     def test_account_created_then_deleted_no_warning(self):
         """Account creation then deletion should not warn."""

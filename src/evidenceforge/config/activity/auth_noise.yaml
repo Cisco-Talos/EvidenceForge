@@ -46,7 +46,16 @@ scheduled_stale_credentials:
   backoff_seconds_max: 3600
 
 service_account_delegation:
-  hourly_probability: 0.30
+  # Recurring automation belongs to a small stable owner set. It is not an
+  # independent account x host x hour Bernoulli trial.
+  owner_host_count_min: 1
+  owner_host_count_max: 2
+  interval_minutes_min: 150
+  interval_minutes_max: 330
+  first_occurrence_seconds_min: 300
+  first_occurrence_seconds_max: 7200
+  jitter_seconds_min: -240
+  jitter_seconds_max: 540
   caller_profiles:
     - name: backup_agents
       account_terms: ["backup", "sync", "jobs", "batch"]

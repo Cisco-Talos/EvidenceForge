@@ -31,7 +31,7 @@ import pytest
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -95,6 +95,20 @@ def _emitted_pam_close_event(mock_emitters: dict[str, Any]) -> Any:
         for event in _emitted_syslog_events(mock_emitters)
         if event.syslog.message.startswith("pam_unix(sshd:session): session closed")
     )
+
+
+def _assert_profile_gap(timestamp: datetime, anchor: datetime, relationship_key: str) -> None:
+    """Assert one runtime-owned relationship remains inside its configured support."""
+
+    window = get_timing_window(
+        relationship_key,
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    delta = timestamp - anchor
+    assert timedelta(milliseconds=window.min_ms) <= delta
+    assert delta <= timedelta(milliseconds=window.max_ms)
 
 
 def test_baseline_does_not_preempt_bundle_owned_ssh_close(
@@ -217,11 +231,11 @@ class TestLogoffWindows:
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        expected_delta = sample_timing_delta(
+        _assert_profile_gap(
+            event.timestamp,
+            session.last_activity_time,
             "windows.logoff_after_last_activity",
-            seed_parts=(win_system.hostname, logon_id, session.last_activity_time),
         )
-        assert event.timestamp == session.last_activity_time + expected_delta
 
     def test_logoff_emits_ecar_logout(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
@@ -423,6 +437,59 @@ class TestLogoffLinux:
         event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "logoff"
 
+    @pytest.mark.parametrize("system_type", ["workstation", "server"])
+    def test_local_process_lifecycle_keeps_canonical_session_identity(
+        self,
+        activity_gen,
+        test_user,
+        linux_system,
+        timestamp,
+        state_manager,
+        mock_emitters,
+        system_type,
+    ):
+        """GDM and console process endpoints retain their owning logind identity."""
+        linux_system = linux_system.model_copy(update={"type": system_type})
+        logon_id = activity_gen.generate_logon(test_user, linux_system, timestamp)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.session_id > 0
+        expected_session_id = session.session_id
+        mock_emitters["ecar"].reset_mock()
+
+        pid = activity_gen.generate_process(
+            test_user,
+            linux_system,
+            timestamp + timedelta(seconds=10),
+            logon_id,
+            "/usr/bin/id",
+            "id",
+            parent_pid=0,
+            from_storyline=True,
+        )
+        activity_gen.generate_process_termination(
+            test_user,
+            linux_system,
+            timestamp + timedelta(seconds=12),
+            pid,
+            "/usr/bin/id",
+            logon_id,
+            from_storyline=True,
+        )
+
+        lifecycle = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type in {"process_create", "process_terminate"}
+            and call.args[0].process.pid == pid
+        ]
+        assert [event.event_type for event in lifecycle] == [
+            "process_create",
+            "process_terminate",
+        ]
+        assert {event.auth.logon_id for event in lifecycle} == {logon_id}
+        assert {event.auth.session_id for event in lifecycle} == {expected_session_id}
+
     def test_ssh_logoff_waits_for_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
@@ -469,11 +536,11 @@ class TestLogoffLinux:
             for call in mock_emitters["ecar"].emit.call_args_list
             if call.args[0].event_type == "logoff"
         )
-        expected_delta = sample_timing_delta(
+        _assert_profile_gap(
+            event.timestamp,
+            close_time,
             "windows.logoff_after_last_activity",
-            seed_parts=(linux_system.hostname, logon_id, close_time),
         )
-        assert event.timestamp == close_time + expected_delta
         assert event.syslog.message == (
             "pam_unix(sshd:session): session closed for user alice.smith"
         )
@@ -514,11 +581,11 @@ class TestLogoffLinux:
         )
 
         event = _emitted_pam_close_event(mock_emitters)
-        expected_delta = sample_timing_delta(
+        _assert_profile_gap(
+            event.timestamp,
+            close_time,
             "windows.logoff_after_last_activity",
-            seed_parts=(linux_system.hostname, logon_id, close_time),
         )
-        assert event.timestamp == close_time + expected_delta
         assert event.syslog.message == (
             "pam_unix(sshd:session): session closed for user alice.smith"
         )
@@ -551,14 +618,14 @@ class TestLogoffLinux:
             from_storyline=True,
         )
 
-        expected_delta = sample_timing_delta(
-            "windows.logoff_after_last_activity",
-            seed_parts=(linux_system.hostname, logon_id, close_time),
-        )
         syslog_event = _emitted_pam_close_event(mock_emitters)
         ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
-        assert syslog_event.timestamp == close_time + expected_delta
-        assert ecar_event.timestamp == close_time + expected_delta
+        assert syslog_event.timestamp == ecar_event.timestamp
+        _assert_profile_gap(
+            syslog_event.timestamp,
+            close_time,
+            "windows.logoff_after_last_activity",
+        )
 
     def test_storyline_ssh_logoff_waits_for_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
@@ -591,12 +658,12 @@ class TestLogoffLinux:
 
         syslog_event = _emitted_pam_close_event(mock_emitters)
         ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
-        expected_delta = sample_timing_delta(
+        assert syslog_event.timestamp == ecar_event.timestamp
+        _assert_profile_gap(
+            syslog_event.timestamp,
+            close_time,
             "windows.logoff_after_last_activity",
-            seed_parts=(linux_system.hostname, logon_id, close_time),
         )
-        assert syslog_event.timestamp == close_time + expected_delta
-        assert ecar_event.timestamp == close_time + expected_delta
 
     def test_authoritative_ssh_deadline_owns_transport_and_source_closure(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters

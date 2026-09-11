@@ -74,6 +74,8 @@ def ensure_utc(dt: datetime) -> datetime:
     """Return `dt` with UTC tzinfo. Naive datetimes are assumed to be UTC."""
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
+    if dt.tzinfo is UTC:
+        return dt
     return dt.astimezone(UTC)
 
 

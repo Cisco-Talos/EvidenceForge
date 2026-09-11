@@ -22,11 +22,21 @@
 
 """Unit tests for CLI commands."""
 
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import Callable
 from io import StringIO
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+import yaml
 from rich.console import Console
+from rich.progress import BarColumn, Progress
 from typer.testing import CliRunner
 
 from evidenceforge import __version__
@@ -35,16 +45,67 @@ from evidenceforge.cli.commands import (
     EXIT_GENERATION_ERROR,
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
+    EXIT_SIGINT,
     EXIT_SUCCESS,
+    _checkpoint_recovery_guidance,
     _generation_progress,
+    _GenerationProgressTracker,
+    _GenerationSpeedColumn,
     app,
 )
+from evidenceforge.composition import compile_scenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
+from evidenceforge.generation.profiling import GenerationProfiler
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
+
+
+def _configure_mock_generation(
+    mock_engine_class: Mock,
+    *,
+    files: dict[str, str] | None = None,
+    omit: set[str] | None = None,
+    before_write: Callable[[], None] | None = None,
+) -> Mock:
+    """Configure a mocked engine to emit a minimally complete generated bundle."""
+
+    generated_files = {
+        "data/events.log": "event\n",
+        "GROUND_TRUTH.md": "truth\n",
+        "GROUND_TRUTH.json": '{"schema_version": 1, "events": []}',
+        OBSERVATION_MANIFEST_FILENAME: '{"schema_version": 1}',
+    }
+    generated_files.update(files or {})
+    for relative_path in omit or set():
+        generated_files.pop(relative_path, None)
+
+    engine = Mock()
+
+    def fake_generate() -> None:
+        if callable(before_write):
+            before_write()
+        ground_truth_dir: Path = mock_engine_class.call_args.kwargs["ground_truth_dir"]
+        for relative_path, contents in generated_files.items():
+            destination = ground_truth_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(contents, encoding="utf-8")
+
+    engine.generate.side_effect = fake_generate
+    mock_engine_class.return_value = engine
+    return engine
+
+
+def _deterministic_bundle_files(root: Path) -> dict[str, bytes]:
+    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }
 
 
 def test_generation_progress_uses_fifteen_minute_speed_window():
@@ -52,6 +113,177 @@ def test_generation_progress_uses_fifteen_minute_speed_window():
     progress = _generation_progress(Console(file=StringIO()))
 
     assert progress.speed_estimate_period == 15 * 60
+
+
+def test_generation_progress_uses_one_expanding_hour_bar():
+    """The hour bar should use all remaining terminal width."""
+    progress = _generation_progress(Console(file=StringIO()))
+
+    bar_columns = [column for column in progress.columns if isinstance(column, BarColumn)]
+
+    assert progress.expand is True
+    assert len(bar_columns) == 1
+    assert bar_columns[0].bar_width is None
+    assert bar_columns[0].style == "grey50"
+    assert bar_columns[0].get_table_column().min_width == 8
+
+
+def test_generation_progress_keeps_zero_percent_bar_visible_in_narrow_terminal():
+    """The uncompleted track should remain visible in an SSH/screen-sized terminal."""
+    output = StringIO()
+    console = Console(
+        file=output,
+        width=80,
+        force_terminal=True,
+        color_system="standard",
+        no_color=False,
+    )
+    progress = _generation_progress(console)
+    progress.add_task(
+        "Warm-up hour 5/8",
+        total=1000,
+        completed=0,
+        progress_kind="simulated_hours",
+        average_seconds_per_hour=None,
+    )
+
+    console.print(progress.get_renderable())
+
+    assert "━" in output.getvalue()
+
+
+def test_generation_speed_column_renders_average_and_recent_rates():
+    """The speed column should expose both full-run and rolling throughput."""
+    clock = [0.0]
+    progress = Progress(
+        _GenerationSpeedColumn(),
+        get_time=lambda: clock[0],
+        speed_estimate_period=15 * 60,
+    )
+    task_id = progress.add_task(
+        "Hour 1/2",
+        total=2,
+        progress_kind="simulated_hours",
+        average_seconds_per_hour=2.5,
+    )
+
+    clock[0] = 1.0
+    progress.update(task_id, completed=1)
+    clock[0] = 3.0
+    progress.update(task_id, completed=2)
+
+    rendered = _GenerationSpeedColumn().render(progress.tasks[task_id])
+
+    assert rendered.plain == "2.5 s/hr avg · 2.0 s/hr recent"
+
+
+def test_generation_progress_tracker_combines_warmup_and_baseline():
+    """Warmup and baseline updates should share one global hour task."""
+    progress = _generation_progress(Console(file=StringIO()))
+    tracker = _GenerationProgressTracker(progress)
+
+    tracker(
+        "warmup_progress",
+        {
+            "hour": 1,
+            "total_hours": 2,
+            "completed_simulated_hours": 0,
+            "total_simulated_hours": 5,
+        },
+    )
+    assert len(progress.tasks) == 1
+    task_id = tracker.hour_task
+    assert task_id is not None
+    assert progress.tasks[task_id].description == "Warm-up hour 1/2"
+    assert progress.tasks[task_id].completed == 0
+    assert progress.tasks[task_id].total == 5
+
+    tracker("phase_end", {"phase": "warmup"})
+    assert progress.tasks[task_id].completed == 2
+
+    tracker(
+        "hour_progress",
+        {
+            "hour": 1,
+            "total_hours": 3,
+            "completed_simulated_hours": 2,
+            "total_simulated_hours": 5,
+        },
+    )
+
+    assert tracker.hour_task == task_id
+    assert len(progress.tasks) == 1
+    assert progress.tasks[task_id].description == "Hour 1/3"
+    assert progress.tasks[task_id].completed == 2
+
+
+def test_generation_progress_average_excludes_hours_restored_before_resume():
+    """Average throughput should count only hours generated by the current invocation."""
+
+    progress = _generation_progress(Console(file=StringIO()))
+    tracker = _GenerationProgressTracker(progress)
+
+    with patch("evidenceforge.cli.commands.time.monotonic", return_value=100.0):
+        tracker(
+            "hour_progress",
+            {
+                "hour": 550,
+                "total_hours": 1_344,
+                "completed_simulated_hours": 557,
+                "total_simulated_hours": 1_352,
+            },
+        )
+    task_id = tracker.hour_task
+    assert task_id is not None
+    assert progress.tasks[task_id].fields["average_seconds_per_hour"] is None
+
+    with patch("evidenceforge.cli.commands.time.monotonic", return_value=220.0):
+        tracker(
+            "hour_progress",
+            {
+                "hour": 551,
+                "total_hours": 1_344,
+                "completed_simulated_hours": 558,
+                "total_simulated_hours": 1_352,
+            },
+        )
+
+    assert progress.tasks[task_id].fields["average_seconds_per_hour"] == 120.0
+
+
+def test_generation_progress_tracker_completes_combined_task():
+    """Baseline completion should finish the same task created during warmup."""
+    progress = _generation_progress(Console(file=StringIO()))
+    tracker = _GenerationProgressTracker(progress)
+
+    tracker(
+        "warmup_progress",
+        {
+            "hour": 1,
+            "total_hours": 1,
+            "completed_simulated_hours": 0,
+            "total_simulated_hours": 2,
+        },
+    )
+    task_id = tracker.hour_task
+    assert task_id is not None
+
+    tracker("phase_end", {"phase": "warmup"})
+    tracker(
+        "hour_progress",
+        {
+            "hour": 1,
+            "total_hours": 1,
+            "completed_simulated_hours": 1,
+            "total_simulated_hours": 2,
+        },
+    )
+    tracker("phase_end", {"phase": "baseline"})
+
+    task = progress.tasks[task_id]
+    assert task.completed == 2
+    assert task.total == 2
+    assert task.finished is True
 
 
 def _write_included_minimal_scenario(tmp_path, *, name="include-cli-test"):
@@ -156,6 +388,33 @@ class TestVersionCommand:
 class TestValidateCommand:
     """Tests for 'eforge validate' command."""
 
+    def test_validate_rejects_behavior_with_no_possible_evidence_projection(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Validation should reject guaranteed generation-time projection failures."""
+
+        scenario_data = yaml.safe_load(
+            (scenarios_dir / "windows-smb-evidence-reachability.yaml").read_text(encoding="utf-8")
+        )
+        scenario_data["output"]["logs"] = [{"format": "windows_event_sysmon"}]
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        payload = json.loads(result.stdout)
+        issue = next(
+            issue
+            for issue in payload["issues"]
+            if "persistent Windows SMB activity" in issue["message"]
+        )
+        assert issue["severity"] == "error"
+        assert issue["field_path"] == "output.logs"
+        assert "no possible evidence projection" in issue["message"]
+
     def test_validate_accepts_included_environment(self, tmp_path):
         """eforge validate should expand scenario includes before schema validation."""
         scenario_file = _write_included_minimal_scenario(tmp_path)
@@ -167,8 +426,224 @@ class TestValidateCommand:
         assert "Resource forecast" in result.stdout
         assert "Projected peak memory" in result.stdout
         assert "Available memory + swap" in result.stdout
-        assert "Projected output size" in result.stdout
+        assert "Projected final output" in result.stdout
+        assert "Projected peak working disk" in result.stdout
         assert "Available disk" in result.stdout
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected_workspace"),
+        [([], True), (["--checkpoint-hours", "0"], False)],
+        ids=("default-24-hours", "disabled"),
+    )
+    def test_validate_forecast_matches_generation_checkpoint_cadence(
+        self,
+        tmp_path: Path,
+        arguments: list[str],
+        expected_workspace: bool,
+    ) -> None:
+        """Validation should forecast the same checkpoint workspace as generation."""
+
+        scenario_file = _write_included_minimal_scenario(tmp_path)
+        scenario_file.write_text(
+            scenario_file.read_text(encoding="utf-8").replace('duration: "1h"', 'duration: "24h"'),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--json", *arguments],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        payload = json.loads(result.stdout)
+        workspace = payload["resource_forecast"]["checkpoint_workspace"]
+        assert (workspace["expected_bytes"] > 0) is expected_workspace
+
+        text_result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), *arguments],
+        )
+        assert text_result.exit_code == EXIT_SUCCESS, text_result.stdout
+        assert ("Projected checkpoint workspace" in text_result.stdout) is expected_workspace
+
+    @pytest.mark.parametrize("value", ["-1", "1.5"])
+    def test_validate_rejects_invalid_checkpoint_cadence(self, tmp_path: Path, value: str) -> None:
+        """Validation should share generation's nonnegative integer cadence contract."""
+
+        scenario_file = _write_included_minimal_scenario(tmp_path)
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--checkpoint-hours", value],
+        )
+
+        assert result.exit_code != EXIT_SUCCESS
+
+    def test_show_storage_exposes_compiled_authoring_diagnostics(self, tmp_path):
+        """--show-storage should expose topology, policy, scale, and bounded samples."""
+        scenario_file = _write_included_minimal_scenario(tmp_path, name="storage-cli-test")
+        (tmp_path / "environment.yaml").write_text(
+            """
+environment:
+  description: Storage CLI test environment
+  users:
+    - username: test_user
+      full_name: Test User
+      email: test.user@example.com
+      primary_system: TEST-01
+      enabled: true
+  groups:
+    - name: Finance-Users
+      members: [test_user]
+    - name: Finance-Readers
+      members: []
+    - name: Contractors
+      members: []
+  systems:
+    - hostname: TEST-01
+      ip: 10.0.0.1
+      os: Windows 10
+      type: workstation
+    - hostname: FS-01
+      ip: 10.0.0.20
+      os: Windows Server 2022
+      type: server
+      roles: [file_server]
+  storage:
+    population: small
+    activity: low
+    servers:
+      - system: FS-01
+        presets: []
+        audit: high
+        default_volume: data
+        volumes:
+          - id: data
+            mount: 'D:\\'
+            filesystem: ntfs
+            label: SharedData
+          - id: archive
+            mount: 'C:\\Mounts\\Archive\\'
+            filesystem: refs
+            label: ArchiveData
+        shares:
+          - id: finance
+            name: Finance
+            volume: data
+            root: Departments\\Finance
+            preset: department
+            population: medium
+            activity: high
+            encryption: required
+            access:
+              read: [Finance-Readers]
+              modify: [Finance-Users]
+              admin: [Domain Admins]
+              deny: [Contractors]
+            seed_files:
+              - ref: forecast
+                path: Reports\\FY26\\forecast.xlsx
+                size_bytes: 1843200
+                tags: [finance, office]
+    mappings:
+      - id: finance-p
+        share: FS-01.finance
+        audience:
+          groups: [Finance-Users]
+          systems: [TEST-01]
+        drive: 'P:'
+        lifecycle: persistent
+"""
+        )
+
+        result = runner.invoke(
+            app,
+            ["validate", str(scenario_file), "--show-storage"],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "╭" in result.stdout
+        assert "┬" in result.stdout
+        assert "╯" in result.stdout
+        for expected in (
+            "Compiled storage topology",
+            "Volumes",
+            "FS-01.archive",
+            "C:\\Mounts\\Archive\\",
+            "ArchiveData",
+            "Shares",
+            "FS-01.finance",
+            "\\\\FS-01\\Finance",
+            "Population",
+            "medium",
+            "high",
+            "required",
+            "Effective access",
+            "Finance-Readers",
+            "Finance-Users",
+            "Domain Admins",
+            "Contractors",
+            "Bounded catalog samples",
+            "forecast",
+            "Reports\\FY26\\forecast.xlsx",
+            "Mappings",
+            "finance-p",
+            "test_user on TEST-01",
+        ):
+            assert expected in result.stdout
+        assert "Showing up to 3 catalog entries per share" in result.stdout
+
+    def test_show_storage_uses_compiled_pack_catalog(self):
+        """Qualified pack presets remain available to validation diagnostics."""
+
+        result = runner.invoke(
+            app,
+            [
+                "validate",
+                "tests/fixtures/scenarios/northstar-health-pack.yaml",
+                "--show-storage",
+                "--json",
+            ],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        payload = json.loads(result.stdout)
+        assert any(
+            share["preset"] == "evidenceforge/healthcare:clinical-department"
+            for share in payload["storage"]["shares"]
+        )
+        assert "Fatal error" not in result.stdout
+
+    def test_show_storage_renders_linux_platform_mount_and_filesystem_views(self):
+        """Linux storage diagnostics distinguish backing, wire, and client mounts."""
+
+        result = runner.invoke(
+            app,
+            [
+                "validate",
+                "tests/fixtures/scenarios/smb-linux-matrix.yaml",
+                "--show-storage",
+            ],
+            terminal_width=240,
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        for expected in (
+            "SAMBA-01.data",
+            "/srv/samba/data",
+            "linux / xfs",
+            "SMB filesystem views",
+            "Provider",
+            "samba",
+            "SMB native FS",
+            "NTFS",
+            "Mount",
+            "/mnt/windows-documents",
+            "per_user",
+        ):
+            assert expected in result.stdout
 
     def test_large_workload_option_is_hidden_from_public_help(self):
         """The obsolete workload override is not part of the visible CLI contract."""
@@ -177,6 +652,14 @@ class TestValidateCommand:
 
             assert result.exit_code == EXIT_SUCCESS
             assert "--allow-large-workload" not in result.stdout
+
+    def test_profile_option_is_hidden_from_public_help(self):
+        """Developer profiling remains outside the public CLI help contract."""
+
+        result = runner.invoke(app, ["generate", "--help"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "--profile" not in result.stdout
 
     def test_validate_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge validate should treat include conflicts as validation errors."""
@@ -197,6 +680,7 @@ class TestEvalCommand:
         output_dir = tmp_path / "data"
         output_dir.mkdir()
         scenario_file = _write_included_minimal_scenario(tmp_path, name="include-eval-test")
+        expected = compile_scenario(scenario_file)
 
         with (
             patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine_class,
@@ -218,8 +702,34 @@ class TestEvalCommand:
         assert result.exit_code == EXIT_SUCCESS
         assert mock_engine_class.called
         assert mock_engine_class.call_args.kwargs["scenario"].name == "include-eval-test"
+        assert mock_engine_class.call_args.kwargs["effective_config"] == expected.effective_config
         mock_format_text.assert_called_once()
         assert mock_format_text.call_args.args[0] is mock_report
+
+    def test_eval_passes_authoritative_bundle_effective_config(self, tmp_path):
+        """Authoritative evaluation should retain the serialized configuration snapshot."""
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "GENERATION_MANIFEST.json").write_text("{}", encoding="utf-8")
+        compiled = compile_scenario("tests/fixtures/scenarios/minimal.yaml")
+        manifest = {
+            "compiled_sha256": compiled.digests["compiled_sha256"],
+            "generation_seed": compiled.scenario.generation_seed,
+            "formats": ["windows", "zeek"],
+        }
+
+        with (
+            patch("evidenceforge.cli.commands.verify_generation_bundle", return_value=manifest),
+            patch("evidenceforge.cli.commands.compile_scenario", return_value=compiled),
+            patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine_class,
+            patch("evidenceforge.evaluation.report.format_text_report"),
+        ):
+            mock_engine_class.return_value.run.return_value = Mock()
+            result = runner.invoke(app, ["eval", str(bundle)])
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert mock_engine_class.call_args.kwargs["scenario"] is compiled.scenario
+        assert mock_engine_class.call_args.kwargs["effective_config"] is compiled.effective_config
 
     def test_eval_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge eval should treat include conflicts as scenario validation errors."""
@@ -234,13 +744,943 @@ class TestEvalCommand:
         assert "environment.description" in result.stdout
 
 
+class TestGenerateCheckpointOptions:
+    """Routine contracts for checkpoint option defaults and help text."""
+
+    @patch("evidenceforge.cli.commands.SIDECAR_REGISTRY.replace")
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_profile_option_constructs_process_local_profiler(
+        self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
+    ):
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--profile",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert isinstance(mock_engine_class.call_args.kwargs["profiler"], GenerationProfiler)
+
+    @patch("evidenceforge.cli.commands.SIDECAR_REGISTRY.replace")
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_fresh_generation_defaults_to_24_hour_checkpoints(
+        self, mock_engine_class, _mock_replace, scenarios_dir, tmp_path
+    ):
+        def assert_workspace_ready() -> None:
+            assert (tmp_path / ".eforge-generation" / "controller.json").is_file()
+
+        _configure_mock_generation(
+            mock_engine_class,
+            before_write=assert_workspace_ready,
+        )
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        arguments = mock_engine_class.call_args.kwargs
+        assert arguments["checkpoint_hours"] == 24
+        assert arguments["checkpoint_controller"] is not None
+        assert arguments["profiler"] is None
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    def test_generate_help_describes_checkpoint_default(self) -> None:
+        result = runner.invoke(app, ["generate", "--help"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        normalized = " ".join(result.stdout.split())
+        assert "default: 24" in normalized
+        assert "disables checkpoints" in normalized
+
+    def test_checkpoint_recovery_guidance_reports_retained_cursor(self, tmp_path: Path) -> None:
+        controller = Mock(
+            last_committed_cursor=Mock(
+                completed_simulated_hours=24,
+                phase="collection",
+            )
+        )
+
+        message = _checkpoint_recovery_guidance(controller, tmp_path / "bundle")
+
+        assert message is not None
+        assert "simulated hour 24 (collection)" in message
+        assert f"--output {tmp_path / 'bundle'} --resume" in message
+
+    def test_checkpoint_recovery_guidance_explains_missing_first_point(
+        self, tmp_path: Path
+    ) -> None:
+        controller = Mock(last_committed_cursor=None)
+
+        message = _checkpoint_recovery_guidance(controller, tmp_path / "bundle")
+
+        assert message == (
+            "No recovery point has been committed yet; restart this output with --overwrite."
+        )
+
+
+@pytest.mark.slow
+class TestGenerateCheckpointResume:
+    """Fresh-process checkpoint, interruption, and resume tests."""
+
+    def test_planned_suspension_resumes_to_byte_identical_output(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A cooperative off-cadence stop should resume to exact bundle bytes."""
+
+        from evidenceforge.generation.checkpoints.control import request_suspension
+        from evidenceforge.generation.checkpoints.status import inspect_checkpoint
+
+        scenario = tmp_path / "scenario.yaml"
+        scenario.write_text(
+            (scenarios_dir / "minimal.yaml")
+            .read_text(encoding="utf-8")
+            .replace('duration: "1h"', 'duration: "24h"'),
+            encoding="utf-8",
+        )
+        suspended_root = tmp_path / "suspended"
+        control_root = tmp_path / "control"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(suspended_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        controller_marker = suspended_root / ".eforge-generation" / "controller.json"
+        deadline = time.monotonic() + 30
+        while (
+            not controller_marker.exists()
+            and process.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert controller_marker.exists(), f"generation exited as {process.poll()} before control"
+        request_suspension(IncrementalCheckpointStore(suspended_root))
+
+        suspended_output, _ = process.communicate(timeout=60)
+
+        assert process.returncode == EXIT_SUCCESS, suspended_output
+        assert "Generation suspended at simulated hour" in suspended_output
+        status = inspect_checkpoint(suspended_root)
+        assert status.state == "resumable"
+        assert status.suspended
+        assert status.simulated_hour is not None
+        assert status.simulated_hour < 24
+        recovery_index_before_verify = (
+            suspended_root / ".eforge-generation" / "CURRENT.json"
+        ).read_bytes()
+        verified = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "checkpoint",
+                "verify",
+                str(suspended_root),
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert verified.returncode == EXIT_SUCCESS, verified.stdout
+        assert "1/5 Checking checkpoint integrity" in verified.stdout
+        assert "5/5 Verification complete" in verified.stdout
+        assert (
+            suspended_root / ".eforge-generation" / "CURRENT.json"
+        ).read_bytes() == recovery_index_before_verify
+
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(suspended_root),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout
+        assert _deterministic_bundle_files(suspended_root) == _deterministic_bundle_files(
+            control_root
+        )
+        assert not (suspended_root / ".eforge-generation").exists()
+
+    def test_sigint_creates_off_cadence_checkpoint_and_resumes_byte_identically(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """One SIGINT should stop after the hour and preserve exact resumed output."""
+
+        from evidenceforge.generation.checkpoints.status import inspect_checkpoint
+
+        scenario = scenarios_dir / "minimal.yaml"
+        interrupted_root = tmp_path / "interrupted"
+        control_root = tmp_path / "control"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        prefix: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            prefix.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=30)
+        interrupted_output = "".join(prefix) + remainder
+
+        assert process.returncode == EXIT_SIGINT, interrupted_output
+        assert "will stop at the end of the current simulated hour" in interrupted_output
+        assert "after creating a recovery checkpoint" in interrupted_output
+        assert "Generation interrupted after creating a recovery checkpoint" in interrupted_output
+        status = inspect_checkpoint(interrupted_root)
+        assert status.state == "resumable"
+        assert status.suspended
+        assert status.simulated_hour is not None
+        assert status.simulated_hour < 24
+
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted_root),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout
+        assert _deterministic_bundle_files(interrupted_root) == _deterministic_bundle_files(
+            control_root
+        )
+        assert not (interrupted_root / ".eforge-generation").exists()
+
+    def test_second_sigint_forces_immediate_process_exit(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A second terminal interrupt should bypass the end-of-hour wait."""
+
+        output_root = tmp_path / "forced"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(output_root),
+                "--checkpoint-hours",
+                "24",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        observed: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            observed.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        while process.poll() is None:
+            line = process.stdout.readline()
+            observed.append(line)
+            if "Press Ctrl+C again to force exit" in line:
+                break
+        assert process.poll() is None, "generation stopped before the second SIGINT"
+
+        forced_at = time.monotonic()
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=10)
+        output = "".join(observed) + remainder
+
+        assert process.returncode == EXIT_SIGINT, output
+        assert time.monotonic() - forced_at < 5
+        assert "Second interrupt received; forcing immediate exit" in output
+
+    def test_sigint_without_checkpointing_stops_after_hour_without_recovery(
+        self,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The graceful first interrupt should not create disabled checkpoint state."""
+
+        output_root = tmp_path / "disabled"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(output_root),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        prefix: list[str] = []
+        while process.poll() is None:
+            line = process.stdout.readline()
+            prefix.append(line)
+            if "Starting log generation" in line:
+                break
+        assert process.poll() is None, "generation exited before the SIGINT handler was installed"
+
+        process.send_signal(signal.SIGINT)
+        remainder, _ = process.communicate(timeout=30)
+        output = "".join(prefix) + remainder
+
+        assert process.returncode == EXIT_SIGINT, output
+        assert "Checkpoint creation is disabled" in output
+        assert "No recovery point has been committed" not in output
+        assert not (output_root / ".eforge-generation").exists()
+
+    @pytest.mark.parametrize(
+        ("interrupt_signal", "checkpoint_hour", "duration"),
+        [
+            (signal.SIGKILL, 1, "1h"),
+            (signal.SIGINT, 9, "2h"),
+            (signal.SIGKILL, 10, "2h"),
+        ],
+        ids=("sigkill-warmup", "sigint-collection", "sigkill-tail"),
+    )
+    def test_fresh_process_checkpoint_resume_is_byte_identical_after_move(
+        self,
+        interrupt_signal: signal.Signals,
+        checkpoint_hour: int,
+        duration: str,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A post-commit signal should resume portably to exact deterministic bundle bytes."""
+
+        scenario = tmp_path / "scenario.yaml"
+        scenario.write_text(
+            (scenarios_dir / "minimal.yaml")
+            .read_text(encoding="utf-8")
+            .replace('duration: "1h"', f'duration: "{duration}"'),
+            encoding="utf-8",
+        )
+        interrupted = tmp_path / "interrupted"
+        moved = tmp_path / "moved"
+        control = tmp_path / "control"
+        sync_directory = tmp_path / "checkpoint-sync"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = str(checkpoint_hour)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        marker = sync_directory / f"{checkpoint_hour:020d}.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.send_signal(interrupt_signal)
+        interrupted_output, _ = process.communicate(timeout=30)
+        assert process.returncode != 0
+        if interrupt_signal == signal.SIGINT:
+            assert "Recovery point retained at simulated hour" in interrupted_output
+            assert "--resume" in interrupted_output
+        interrupted.rename(moved)
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_HOUR")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(moved),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS
+        assert _deterministic_bundle_files(moved) == _deterministic_bundle_files(control)
+        assert not (moved / ".eforge-generation").exists()
+
+    @pytest.mark.parametrize("target", ("default", "sof-elk", "splunk"))
+    def test_all_format_targets_resume_to_byte_identical_output(
+        self,
+        target: str,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Every output family and rendering target should survive fresh-process resume."""
+
+        scenario = scenarios_dir / "checkpoint-all-formats.yaml"
+        interrupted = tmp_path / f"interrupted-{target}"
+        control = tmp_path / f"control-{target}"
+        sync_directory = tmp_path / f"checkpoint-sync-{target}"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = "1"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--target",
+                target,
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        marker = sync_directory / "00000000000000000001.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.kill()
+        assert process.wait(timeout=30) != 0
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_SYNC_HOUR")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        assert "Resuming from simulated hour 1 (collection)" in resumed.stdout
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--target",
+                target,
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        emitted_names = {path.name for path in (interrupted / "data").rglob("*") if path.is_file()}
+        assert {
+            "bob.bash_history",
+            "cisco_asa.log",
+            "conn.json",
+            "ecar.json",
+            "proxy_access.log",
+            "snort_alert.log",
+            "syslog.log",
+            "web_access.log",
+        } <= emitted_names
+        assert {
+            "windows_event_security.xml",
+            "windows_event_security_snare.log",
+        } & emitted_names
+        assert {
+            "windows_event_sysmon.xml",
+            "windows_event_sysmon_snare.log",
+        } & emitted_names
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
+
+    def test_iteration_scenario_sigint_resume_is_byte_identical(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The representative iteration scenario must survive a fresh-process resume."""
+
+        scenario = Path("scenarios/iteration-test/scenario.yaml")
+        interrupted = tmp_path / "interrupted"
+        control = tmp_path / "control"
+        sync_directory = tmp_path / "checkpoint-sync"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_HOUR"] = "4"
+        environment["EFORGE_TEST_CHECKPOINT_SYNC_TIMEOUT"] = "300"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "4",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        marker = sync_directory / "00000000000000000004.ready"
+        deadline = time.monotonic() + 600
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.send_signal(signal.SIGINT)
+        interrupted_output, _ = process.communicate(timeout=60)
+        assert process.returncode == EXIT_SIGINT, interrupted_output
+
+        resumed_environment = environment.copy()
+        for name in (
+            "EFORGE_TEST_CHECKPOINT_SYNC_DIR",
+            "EFORGE_TEST_CHECKPOINT_SYNC_HOUR",
+            "EFORGE_TEST_CHECKPOINT_SYNC_TIMEOUT",
+        ):
+            resumed_environment.pop(name)
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
+
+    @pytest.mark.parametrize(
+        ("stage", "expected_hour"),
+        [
+            ("heads_durable", 1),
+            ("recovery_published", 1),
+            ("index_published", 2),
+        ],
+    )
+    def test_sigkill_during_checkpoint_publication_recovers_atomic_point(
+        self,
+        stage: str,
+        expected_hour: int,
+        scenarios_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """SIGKILL around the manifest commit point should recover exact output."""
+
+        scenario = scenarios_dir / "minimal.yaml"
+        interrupted = tmp_path / f"interrupted-{stage}"
+        control = tmp_path / f"control-{stage}"
+        sync_directory = tmp_path / f"publication-sync-{stage}"
+        sync_directory.mkdir()
+        environment = os.environ.copy()
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_DIR"] = str(sync_directory)
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_SEQUENCE"] = "1"
+        environment["EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE"] = stage
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(interrupted),
+                "--checkpoint-hours",
+                "1",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        marker = sync_directory / f"{1:020d}.{stage}.ready"
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), f"checkpoint subprocess exited as {process.poll()} before sync"
+        process.kill()
+        assert process.wait(timeout=30) != 0
+        recovery = IncrementalCheckpointStore(interrupted).recover()
+        assert recovery.manifest.cursor.completed_simulated_hours == expected_hour
+
+        resumed_environment = environment.copy()
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_DIR")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_SEQUENCE")
+        resumed_environment.pop("EFORGE_TEST_CHECKPOINT_PUBLICATION_SYNC_STAGE")
+        resumed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                "--output",
+                str(interrupted),
+                "--resume",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert resumed.returncode == EXIT_SUCCESS, resumed.stdout + resumed.stderr
+        assert f"Resuming from simulated hour {expected_hour}" in resumed.stdout
+        uninterrupted = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "evidenceforge",
+                "generate",
+                str(scenario),
+                "--output",
+                str(control),
+                "--checkpoint-hours",
+                "0",
+                "--overwrite",
+            ],
+            cwd=Path.cwd(),
+            env=resumed_environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert uninterrupted.returncode == EXIT_SUCCESS, uninterrupted.stdout + uninterrupted.stderr
+        assert _deterministic_bundle_files(interrupted) == _deterministic_bundle_files(control)
+        assert not (interrupted / ".eforge-generation").exists()
+
+
 class TestGenerateCommand:
-    """Tests for 'eforge generate' command."""
+    """Routine tests for 'eforge generate' command."""
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_checkpoint_hours_zero_disables_controller(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.call_args.kwargs["checkpoint_hours"] == 0
+        assert mock_engine_class.call_args.kwargs["checkpoint_controller"] is None
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_checkpoint_hours_zero_rejects_incomplete_generated_bundle(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """Direct generation must not report success without its required bundle."""
+        mock_engine_class.return_value = Mock()
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "0",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated data missing after generation" in result.stdout
+        assert not (tmp_path / ".eforge-generation").exists()
+
+    def test_resume_conflicts_with_overwrite(self, scenarios_dir, tmp_path):
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--resume",
+                "--overwrite",
+            ],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "conflicts" in result.stdout
+
+    def test_checkpoint_only_resume_requires_output(self):
+        result = runner.invoke(app, ["generate", "--resume"])
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "--output is required" in result.stdout
+
+    def test_checkpoint_hours_rejects_negative_and_noninteger(self, scenarios_dir):
+        for value in ("-1", "1.5"):
+            result = runner.invoke(
+                app,
+                ["generate", str(scenarios_dir / "minimal.yaml"), "--checkpoint-hours", value],
+            )
+            assert result.exit_code != EXIT_SUCCESS
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_positive_checkpoint_cadence_uses_hidden_staging_and_cleans_success(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "6",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        arguments = mock_engine_class.call_args.kwargs
+        assert arguments["checkpoint_hours"] == 6
+        assert arguments["checkpoint_controller"] is not None
+        assert ".eforge-generation/staged" in arguments["ground_truth_dir"].as_posix()
+        assert (tmp_path / "data" / "events.log").read_bytes() == b"event\n"
+        assert not (tmp_path / ".eforge-generation").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_included_environment(self, mock_engine_class, tmp_path):
         """eforge generate should expand scenario includes before constructing the engine."""
         scenario_file = _write_included_minimal_scenario(tmp_path, name="include-generate-test")
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -302,24 +1742,23 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_with_custom_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """--output flag should use custom output directory."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         custom_output = tmp_path / "custom"
 
-        runner.invoke(
+        result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(custom_output)]
         )
 
         # Should create engine and call generate
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.called
         assert mock_engine.generate.called
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_success_minimal(self, mock_engine_class, scenarios_dir, tmp_path):
         """eforge generate with valid minimal scenario should succeed."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
@@ -328,16 +1767,40 @@ name: test
         assert result.exit_code == EXIT_SUCCESS
         assert "✓" in result.stdout or "complete" in result.stdout.lower()
         assert "Resource forecast" in result.stdout
-        assert "Projected output size" in result.stdout
+        assert "Projected final output" in result.stdout
+        assert "Projected peak working disk" in result.stdout
         assert mock_engine.generate.called
         assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.DEFAULT
         assert mock_engine_class.call_args.kwargs["resource_forecast"].disk.expected_bytes > 0
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_lists_checkpoint_workspace_inside_peak_disk(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """A cadence capable of firing exposes its separate workspace projection."""
+        _configure_mock_generation(mock_engine_class)
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--checkpoint-hours",
+                "1",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Projected checkpoint workspace" in result.stdout
+        resource_forecast = mock_engine_class.call_args.kwargs["resource_forecast"]
+        assert resource_forecast.checkpoint_workspace.expected_bytes > 0
+        assert resource_forecast.disk.expected_bytes > resource_forecast.final_output.expected_bytes
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_sof_elk_target(self, mock_engine_class, scenarios_dir, tmp_path):
         """--target sof-elk is passed to the generation engine."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -358,8 +1821,7 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_accepts_splunk_target(self, mock_engine_class, scenarios_dir, tmp_path):
         """--target splunk is passed to the generation engine."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -397,8 +1859,7 @@ name: test
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_verbose_mode(self, mock_engine_class, scenarios_dir, tmp_path):
         """--verbose flag should enable verbose logging."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -461,18 +1922,33 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_with_progress_callback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Generate should invoke progress callback during generation."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
-        runner.invoke(
+        result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
         )
 
         # Verify engine was created with progress callback
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.called
         call_kwargs = mock_engine_class.call_args.kwargs
         assert "progress_callback" in call_kwargs
         assert callable(call_kwargs["progress_callback"])
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_reports_storage_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
+        """Successful generation lists the storage sidecar when the engine emitted it."""
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"STORAGE_MANIFEST.json": "{}\n"},
+        )
+
+        result = runner.invoke(
+            app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "STORAGE_MANIFEST.json" in result.stdout
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_rejects_dangling_generated_report_symlink(
@@ -515,24 +1991,18 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """Existing output should prompt for confirmation; 'y' proceeds."""
-
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
-                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+        mock_engine = _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+                COLLECTION_PROFILE_FILENAME: '{"profile": "new"}',
+                ARTIFACTS_MANIFEST_FILENAME: (
                     '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
-                )
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+                ),
+            },
+            omit={"data/events.log"},
+        )
 
         # Create existing output files
         (tmp_path / "data").mkdir()
@@ -579,6 +2049,98 @@ output:
         assert (tmp_path / "GROUND_TRUTH.md").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands._generation_prompt_available", return_value=False)
+    def test_generate_noninteractive_existing_output_requires_overwrite(
+        self,
+        _mock_prompt_available,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "GROUND_TRUTH.md").write_text("old")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "requires explicit --overwrite" in result.stdout
+        assert not mock_engine_class.called
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_invalid_checkpoint_prompts_for_overwrite(
+        self,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        (workspace / "orphan").write_text("incomplete")
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="y\n",
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "Invalid generation checkpoint" in result.stdout
+        assert "Overwrite the incomplete workspace?" in result.stdout
+        assert mock_engine_class.called
+        assert not workspace.exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands._generation_prompt_available", return_value=False)
+    def test_generate_noninteractive_incomplete_workspace_requires_explicit_action(
+        self,
+        _mock_prompt_available,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        (workspace / "orphan").write_text("incomplete")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "explicit --resume or --overwrite" in result.stdout
+        assert not mock_engine_class.called
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    @patch("evidenceforge.cli.commands.IncrementalCheckpointStore.recover")
+    def test_generate_valid_incomplete_workspace_offers_three_actions(
+        self,
+        mock_recover,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        workspace = tmp_path / ".eforge-generation"
+        workspace.mkdir(mode=0o700)
+        mock_recover.return_value = Mock()
+        _configure_mock_generation(mock_engine_class)
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="overwrite\n",
+        )
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        assert "resume, overwrite, abort" in result.stdout
+        assert mock_engine_class.called
+        assert not workspace.exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_artifacts_manifest(
         self, mock_engine_class, scenarios_dir, tmp_path
     ):
@@ -603,22 +2165,15 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_skips_prompt(self, mock_engine_class, scenarios_dir, tmp_path):
         """--force should skip the prompt and overwrite."""
-
-        def _fake_generate():
-            # Simulate engine creating staged output in the staging dir
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-                (sd / COLLECTION_PROFILE_FILENAME).write_text('{"profile": "new"}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+                COLLECTION_PROFILE_FILENAME: '{"profile": "new"}',
+            },
+            omit={"data/events.log"},
+        )
 
         # Create existing output files
         (tmp_path / "data").mkdir()
@@ -660,17 +2215,14 @@ output:
         matched set (here: old data/, still no GT.md)."""
         from pathlib import Path
 
-        def _fake_generate():
-            sd = next(iter(tmp_path.glob(".eforge_staging_*")))
-            (sd / "data").mkdir(exist_ok=True)
-            (sd / "data" / "new.xml").write_text("new data")
-            (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-            (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-            (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/new.xml": "new data",
+                "GROUND_TRUTH.md": "new ground truth",
+            },
+            omit={"data/events.log"},
+        )
 
         # PARTIAL prior state: data/ exists, but GROUND_TRUTH.md does NOT.
         (tmp_path / "data").mkdir()
@@ -680,8 +2232,12 @@ output:
         # swap fails AFTER new data/ + new GROUND_TRUTH.md were already installed.
         real_rename = Path.rename
 
+        fault_reached = False
+
         def boom_rename(self, target):
-            if self.name == OUTPUT_TARGET_FILENAME and ".eforge_staging_" in str(self):
+            nonlocal fault_reached
+            if self.name == OUTPUT_TARGET_FILENAME and ".eforge-generation/staged" in str(self):
+                fault_reached = True
                 raise RuntimeError("injected swap failure")
             return real_rename(self, target)
 
@@ -692,7 +2248,9 @@ output:
             ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path), "--force"],
         )
 
-        assert result.exit_code != EXIT_SUCCESS  # the run failed
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert "injected swap failure" in result.stdout
         # No orphaned NEW ground truth, and the OLD data/ is restored intact.
         assert not (tmp_path / "GROUND_TRUTH.md").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
@@ -704,30 +2262,26 @@ output:
     ):
         """--force should swap baseline-only outputs with data, reports, and manifest."""
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "baseline.log").write_text("new baseline data")
-                (sd / "GROUND_TRUTH.json").write_text(
+        _configure_mock_generation(
+            mock_engine_class,
+            files={
+                "data/baseline.log": "new baseline data",
+                "GROUND_TRUTH.json": (
                     '{"schema_version": 1, "scenario_name": "baseline-only", "events": []}'
-                )
-                (sd / "GROUND_TRUTH.md").write_text(
+                ),
+                "GROUND_TRUTH.md": (
                     "# Ground Truth: baseline-only\n\n*No malicious activities in this scenario.*\n"
-                )
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text(
+                ),
+                OBSERVATION_MANIFEST_FILENAME: (
                     '{"schema_version": 1, "scenario_name": "baseline-only"}'
-                )
-                (sd / ARTIFACTS_MANIFEST_FILENAME).write_text(
+                ),
+                ARTIFACTS_MANIFEST_FILENAME: (
                     '{"schema_version": "1.0", "email": {"messages": [{"message_id": "new"}]}}'
-                )
-                (sd / "artifacts" / "email").mkdir(parents=True)
-                (sd / "artifacts" / "email" / "new.eml").write_text("new artifact")
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+                ),
+                "artifacts/email/new.eml": "new artifact",
+            },
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.log").write_text("old data")
@@ -803,31 +2357,26 @@ output:
         from pathlib import Path
 
         original_rename = Path.rename
+        fault_reached = False
 
         def _fail_on_data_install(self_path, target):
+            nonlocal fault_reached
             if (
                 self_path.name == "data"
                 and target.name == "data"
                 and "rollback" not in str(self_path)
+                and ".eforge-generation/staged" in str(self_path)
             ):
                 # Fail when installing staged data/ → live data/
-                if ".eforge_staging_" in str(self_path):
-                    raise OSError("Simulated disk error during data install")
+                fault_reached = True
+                raise OSError("Simulated disk error during data install")
             return original_rename(self_path, target)
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -847,6 +2396,8 @@ output:
             )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert "Simulated disk error during data install" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -861,28 +2412,25 @@ output:
 
         original_rename = Path.rename
         data_installed = []
+        fault_reached = False
 
         def _fail_on_gt_install(self_path, target):
-            if self_path.name == "GROUND_TRUTH.md" and "staging" in str(self_path):
+            nonlocal fault_reached
+            if self_path.name == "GROUND_TRUTH.md" and ".eforge-generation/staged" in str(
+                self_path
+            ):
+                fault_reached = True
                 raise OSError("Simulated disk error during GT install")
             result = original_rename(self_path, target)
-            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
                 data_installed.append(True)
             return result
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -901,6 +2449,9 @@ output:
             )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert fault_reached
+        assert data_installed
+        assert "Simulated disk error during GT install" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -924,6 +2475,7 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated data missing after generation" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -936,25 +2488,20 @@ output:
         from pathlib import Path
 
         original_rename = Path.rename
+        fault_reached = False
 
         def _interrupt_on_data_install(self_path, target):
-            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+            nonlocal fault_reached
+            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+                fault_reached = True
                 raise KeyboardInterrupt()
             return original_rename(self_path, target)
 
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -973,7 +2520,8 @@ output:
             )
 
         # KeyboardInterrupt → exit code for SIGINT
-        assert result.exit_code != EXIT_SUCCESS
+        assert result.exit_code == EXIT_SIGINT
+        assert fault_reached
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -981,18 +2529,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_requires_staged_gt(self, mock_engine_class, scenarios_dir, tmp_path):
         """If engine succeeds but staged GROUND_TRUTH.md is missing, old output preserved."""
-
-        def _fake_generate_no_gt():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                # Deliberately skip creating GROUND_TRUTH.md
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate_no_gt
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data"},
+            omit={"data/events.log", "GROUND_TRUTH.md"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -1010,6 +2551,7 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        assert "Generated GROUND_TRUTH.md missing after generation" in result.stdout
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -1017,19 +2559,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_requires_staged_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
         """If engine succeeds but staged observation manifest is missing, old output preserved."""
-
-        def _fake_generate_no_manifest():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                # Deliberately skip creating OBSERVATION_MANIFEST.json
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate_no_manifest
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log", OBSERVATION_MANIFEST_FILENAME},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -1048,6 +2582,11 @@ output:
         )
 
         assert result.exit_code == EXIT_GENERATION_ERROR
+        normalized_output = " ".join(result.stdout.split())
+        assert (
+            f"Generated {OBSERVATION_MANIFEST_FILENAME} missing after generation"
+            in normalized_output
+        )
         assert (tmp_path / "data" / "old.xml").exists()
         assert (tmp_path / "data" / "old.xml").read_text() == "old data"
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
@@ -1056,20 +2595,11 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_cleans_stale_rollback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Stale rollback dirs from prior killed runs are cleaned up."""
-
-        def _fake_generate():
-            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
-            if staging_dirs:
-                sd = staging_dirs[0]
-                (sd / "data").mkdir(exist_ok=True)
-                (sd / "data" / "new.xml").write_text("new data")
-                (sd / "GROUND_TRUTH.json").write_text('{"schema_version": 1, "events": []}')
-                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
-                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
-
-        mock_engine = Mock()
-        mock_engine.generate.side_effect = _fake_generate
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(
+            mock_engine_class,
+            files={"data/new.xml": "new data", "GROUND_TRUTH.md": "new ground truth"},
+            omit={"data/events.log"},
+        )
 
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "old.xml").write_text("old data")
@@ -1103,8 +2633,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
         """Clean output directory should not trigger any prompt."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        mock_engine = _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
@@ -1117,8 +2646,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_filters_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats should narrow scenario output.logs to the intersection."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1142,8 +2670,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_supports_groups(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats should expand group names before intersecting."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1169,8 +2696,7 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_formats_flag_warns_on_mismatch(self, mock_engine_class, scenarios_dir, tmp_path):
         """--formats with formats not in scenario should warn."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
+        _configure_mock_generation(mock_engine_class)
 
         result = runner.invoke(
             app,
@@ -1204,3 +2730,36 @@ output:
 
         assert result.exit_code == EXIT_INPUT_ERROR
         assert "No formats match" in result.stdout
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_formats_filter_rechecks_blocking_evidence_reachability(
+        self,
+        mock_engine_class,
+        scenarios_dir,
+        tmp_path,
+    ):
+        """A runtime format intersection cannot remove a required projection route."""
+
+        scenario_data = yaml.safe_load(
+            (scenarios_dir / "windows-smb-evidence-reachability.yaml").read_text(encoding="utf-8")
+        )
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenario_file),
+                "--output",
+                str(tmp_path / "bundle"),
+                "--formats",
+                "windows_event_sysmon",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SCHEMA_VALIDATION
+        assert "Format filter changed evidence reachability" in result.stdout
+        assert "persistent Windows SMB activity" in result.stdout
+        assert "Cannot proceed with generation" in " ".join(result.stdout.split())
+        mock_engine_class.assert_not_called()

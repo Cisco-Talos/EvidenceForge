@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, Mock
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.contexts import HttpContext, ProxyContext
+from evidenceforge.events.contexts import HttpContext, NetworkTransactionDraft, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.generation.actions.proxy_phase_planner import ProxyPhasePlanner
@@ -20,9 +21,13 @@ from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
 )
-from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.generator import (
+    ActivityGenerator,
+    _attach_http_file_transfers,
+)
 from evidenceforge.generation.activity.proxy_phase_profiles import proxy_resolver_profiles
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.scenario import System
 from tests.network_factories import network_plan
 
@@ -103,6 +108,57 @@ def _proxy_context(
     )
 
 
+def test_proxy_timing_scope_accepts_connection_planning_rng() -> None:
+    """Large proxy transfers must use their exact scope with a revocable RNG."""
+
+    owner = random.Random(42)
+    owner_state = owner.getstate()
+    manager = StateManager()
+    cursor = manager.begin_connection_planning(owner)
+    event = OccurrenceBuilder(
+        timestamp=_BASE_TIME,
+        event_type="connection",
+        network=NetworkTransactionDraft(
+            src_ip="10.0.1.10",
+            src_port=51_000,
+            dst_ip="10.0.3.10",
+            dst_port=3128,
+            protocol="tcp",
+            service="http",
+            conn_state="SF",
+            duration=0.12,
+            orig_bytes=1_573_500,
+            resp_bytes=500,
+        ),
+        http=HttpContext(
+            method="POST",
+            host="support.example.test",
+            uri="/upload",
+            request_body_len=1_572_864,
+            request_content_type="application/octet-stream",
+        ),
+        proxy=_proxy_context(),
+    )
+
+    _attach_http_file_transfers(
+        event,
+        dst_ip="10.0.3.10",
+        rng=cursor.rng,
+        timing_runtime=TimingRuntime(reference_time=_BASE_TIME, namespace="proxy-upload"),
+        timing_scope=TimingScope(
+            stable_id="proxy-upload",
+            host="PROXY-01",
+            source="network",
+            lifecycle_id="proxy-upload",
+        ),
+    )
+
+    assert event.network.duration > 0.12
+    assert event.proxy.time_taken > 0
+    assert owner.getstate() == owner_state
+    cursor.cancel()
+
+
 def test_proxy_phase_plan_is_deterministic_ordered_and_immutable() -> None:
     request = _request(7)
     proxy = _proxy_context()
@@ -121,6 +177,36 @@ def test_proxy_phase_plan_is_deterministic_ordered_and_immutable() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         first.request_at = request.time  # type: ignore[misc]
+
+
+def test_proxy_http_legs_share_canonical_authority_and_referrer() -> None:
+    """Sibling HTTP legs must consume the normalized proxy transaction truth."""
+
+    request = _request()
+    assert request.http is not None
+    request = replace(
+        request,
+        hostname="20-205-68-81.microsoft.com",
+        http=replace(
+            request.http,
+            host="20.205.68.81",
+            referrer="https://www.reddit.com/",
+        ),
+    )
+    proxy_context = replace(
+        _proxy_context(),
+        host="20-205-68-81.microsoft.com",
+        url="http://20-205-68-81.microsoft.com/api/v1/data",
+        referrer="",
+    )
+    bundle = ProxyTransactionActionBundle(request=request, executor=MagicMock())
+
+    client_http = bundle._build_client_http(proxy_context)
+    egress_http = bundle._build_egress_http(proxy_context, client_http)
+
+    assert egress_http is not None
+    assert client_http.host == egress_http.host == proxy_context.host
+    assert client_http.referrer == egress_http.referrer == proxy_context.referrer
 
 
 def test_proxy_transaction_can_preserve_unknown_client_process_ownership() -> None:
@@ -224,6 +310,46 @@ def test_resolver_mixture_matches_configured_contract_and_has_retry_tail() -> No
     )
     assert any(gap > 500 for gap in lookup_to_connect_gaps_ms)
     assert any(gap < 1000 for gap in lookup_to_connect_gaps_ms)
+
+
+def test_proxy_origin_dns_uses_order_independent_microsecond_timing() -> None:
+    """Resolver phases use shared typed draws without exact-millisecond texture."""
+
+    runtime = TimingRuntime(reference_time=_BASE_TIME)
+    planner = ProxyPhasePlanner(runtime)
+    indices = tuple(range(1600))
+
+    forward = {
+        index: planner.plan(_request(index, duration=0.2), _proxy_context(), _request(index).time)
+        for index in indices
+    }
+    reverse = {
+        index: planner.plan(_request(index, duration=0.2), _proxy_context(), _request(index).time)
+        for index in reversed(indices)
+    }
+
+    assert forward == reverse
+    lookup_plans = [plan for plan in forward.values() if plan.dns_query_at is not None]
+    assert len(lookup_plans) > 400
+    residues: list[int] = []
+    for plan in lookup_plans:
+        assert plan.dns_response_at is not None
+        assert plan.origin_connect_at is not None
+        assert plan.request_at < plan.dns_response_at < plan.origin_connect_at
+        residues.extend(
+            (
+                plan.dns_query_at.microsecond % 1000,
+                plan.dns_response_at.microsecond % 1000,
+                plan.origin_connect_at.microsecond % 1000,
+            )
+        )
+    assert sum(residue == 0 for residue in residues) / len(residues) < 0.02
+
+    audit = runtime.audit.snapshot()
+    expected_draws = len(lookup_plans) * 2
+    assert audit.sample_counts["proxy.dns.query_after_decision"] == expected_draws
+    assert audit.sample_counts["proxy.dns.response_after_request"] == expected_draws
+    assert audit.sample_counts["proxy.origin.connect_after_dns"] == expected_draws
 
 
 def test_proxy_context_separates_body_sizes_from_transfer_totals() -> None:

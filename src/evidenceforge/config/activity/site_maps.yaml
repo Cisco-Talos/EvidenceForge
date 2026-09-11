@@ -16,7 +16,7 @@
 # Depended on by: generation engine (browsing session depth)
 # Depends on: dns_registry.yaml (domain keys should exist in registry)
 #
-# Full schema: see commands/eforge/references/config-site-maps.md
+# Authoring reference: commands/eforge/references/config-dns-network.md
 
 # ─── Search terms for template substitution ───────────────────────────
 search_terms:

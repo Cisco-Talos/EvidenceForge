@@ -22,6 +22,7 @@
 
 """Tests for the CausalExpansionEngine core mechanics."""
 
+import random
 from datetime import UTC, datetime
 
 import pytest
@@ -280,6 +281,8 @@ class TestDnsBeforeConnection:
         assert ev.kwargs["src_ip"] == "10.10.10.5"
         assert ev.kwargs["dst_ip"] == "203.0.113.50"
         assert ev.timing.position == "before"
+        assert ev.occurrence_time_kwarg == "planned_query_time"
+        assert ev.trigger_time_kwarg == "time"
 
 
 # --- ExpansionContext ---
@@ -540,6 +543,31 @@ class TestSupplementaryAuditEvents:
         result = rule.expand("process_create", ctx)
         assert len(result) == 1
         assert result[0].method == "generate_account_deleted"
+
+    def test_account_sid_is_independent_of_process_global_rng_history(self):
+        """Causal account identities must not depend on unrelated threaded RNG consumption."""
+
+        rule = SupplementaryAuditEvents()
+        first_context = _make_ctx(
+            os_category="windows",
+            command_line="net user svc-audit P@ssw0rd /add /domain",
+            ad_domain="example.test",
+            sid_registry={"alice": "S-1-5-21-111111111-222222222-333333333-1001"},
+        )
+        random.seed(1)
+        first = rule.expand("process_create", first_context)[0].kwargs["target_sid"]
+        for _ in range(100):
+            random.random()
+        second_context = _make_ctx(
+            os_category="windows",
+            command_line="net user svc-audit P@ssw0rd /add /domain",
+            ad_domain="example.test",
+            sid_registry={"alice": "S-1-5-21-111111111-222222222-333333333-1001"},
+        )
+        second = rule.expand("process_create", second_context)[0].kwargs["target_sid"]
+
+        assert first == second
+        assert first.startswith("S-1-5-21-111111111-222222222-333333333-")
 
     def test_expand_schtasks_create(self):
         rule = SupplementaryAuditEvents()

@@ -14,10 +14,13 @@ import logging
 import random
 import re
 import shlex
-from typing import Any
+import uuid
+from datetime import UTC, datetime
+from typing import Any, Literal, Protocol
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
+from evidenceforge.config.schemas import EdrInstalledSoftwareProduct
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
@@ -32,6 +35,16 @@ _DEFAULT_RUNMRU_COMMANDS = (
     "cmd.exe /c ipconfig",
     "powershell.exe -NoExit Get-ChildItem",
     "notepad.exe",
+)
+_DEFAULT_REGISTRY_MRU_FILENAMES = (
+    "report.docx",
+    "meeting-notes.docx",
+    "budget.xlsx",
+    "forecast.xlsx",
+    "briefing.pdf",
+    "invoice.pdf",
+    "notes.txt",
+    "readme.txt",
 )
 _DEFAULT_GROUP_POLICY_EXTENSION_GUIDS = (
     "35378EAC-683F-11D2-A89A-00C04FBBCFA2",
@@ -53,9 +66,13 @@ _USERASSIST_RUNPATHS = (
 )
 _DEFAULT_INSTALLED_SOFTWARE_PRODUCTS = (
     {
+        "product_id": "microsoft-update-health-tools",
         "name": "Microsoft Update Health Tools",
         "publisher": "Microsoft Corporation",
         "version": "5.72.0.0",
+        "build": "5.72.0.0",
+        "architectures": ["neutral"],
+        "scope": "machine",
     },
 )
 _WINDOWS_SERVICE_USERS = {
@@ -100,6 +117,28 @@ _LINUX_SERVICE_USERS = {
     "uucp",
     "www-data",
 }
+
+
+class _InstalledSoftwareRelease(Protocol):
+    """Minimum immutable inventory descriptor consumed by template rendering."""
+
+    name: str
+    publisher: str
+    version: str
+
+
+class _InstalledSoftwareRegistry(Protocol):
+    """Exact compiled inventory access required by production materialization."""
+
+    def count_installed_software_on_host(self, hostname: str) -> int: ...
+
+    def installed_software_on_host_at(
+        self,
+        hostname: str,
+        ordinal: int,
+    ) -> _InstalledSoftwareRelease | None: ...
+
+
 _LINUX_ROOT_ONLY_FILE_PREFIXES = (
     "/var/cache/apt/",
     "/var/lib/apt/",
@@ -168,16 +207,37 @@ def _is_valid_registry_pool(value: Any) -> bool:
     return True
 
 
-def _is_valid_installed_software_products(value: Any) -> bool:
+def _validated_installed_software_products(value: Any) -> list[dict[str, Any]] | None:
+    """Return current typed product mappings or ``None`` for an invalid section."""
+
     if not isinstance(value, list) or len(value) == 0:
-        return False
+        return None
+    normalized: list[dict[str, Any]] = []
+    product_ids: set[str] = set()
+    current_fields = {"product_id", "build", "architectures", "scope"}
     for item in value:
         if not isinstance(item, dict):
-            return False
-        required = ("name", "publisher", "version")
-        if any(not isinstance(item.get(field), str) or not item.get(field) for field in required):
-            return False
-    return True
+            return None
+        present = current_fields & set(item)
+        if present and present != current_fields:
+            missing = ", ".join(sorted(current_fields - present))
+            raise ValueError(
+                "installed software mixes legacy and current fields; add all current fields: "
+                + missing
+            )
+        try:
+            product = EdrInstalledSoftwareProduct.model_validate(item)
+        except ValueError:
+            return None
+        if product.product_id in product_ids:
+            raise ValueError(f"installed software product_id {product.product_id!r} must be unique")
+        product_ids.add(product.product_id)
+        normalized.append(product.model_dump(mode="python"))
+    return normalized
+
+
+def _is_valid_installed_software_products(value: Any) -> bool:
+    return _validated_installed_software_products(value) is not None
 
 
 def _is_valid_ownership_rules(value: Any, marker_key: str) -> bool:
@@ -201,9 +261,9 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "file_paths_linux": _is_valid_string_list,
         "dll_pool": _is_valid_string_list,
         "runmru_commands": _is_valid_string_list,
+        "registry_mru_filenames": _is_valid_string_list,
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
-        "installed_software_products": _is_valid_installed_software_products,
         "group_policy_extension_guids": _is_valid_guid_string_list,
         "linux_service_users": _is_valid_string_list,
     }
@@ -217,6 +277,21 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
                 "Invalid EDR pool section %s in overlay-merged config; falling back to package defaults",
                 key,
             )
+    normalized_products = _validated_installed_software_products(
+        merged.get("installed_software_products")
+    )
+    if normalized_products is not None:
+        sanitized["installed_software_products"] = normalized_products
+    else:
+        fallback_products = _validated_installed_software_products(
+            defaults.get("installed_software_products")
+        )
+        if fallback_products is not None:
+            sanitized["installed_software_products"] = fallback_products
+        logger.warning(
+            "Invalid EDR pool section installed_software_products in overlay-merged config; "
+            "falling back to package defaults"
+        )
     candidate_profiles = merged.get("file_side_effect_profiles")
     if isinstance(candidate_profiles, list) and all(
         isinstance(p, dict) for p in candidate_profiles
@@ -365,8 +440,28 @@ def get_dll_pool() -> list[str]:
     return pools.get("dll_pool", [])
 
 
-def _installed_software_product(rng: random.Random) -> dict[str, str]:
+def _installed_software_product(
+    rng: random.Random,
+    *,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
+    hostname: str = "",
+) -> dict[str, str]:
     """Return one data-driven installed software product template."""
+    if deployment_registry is not None:
+        product_count = deployment_registry.count_installed_software_on_host(hostname)
+        if isinstance(product_count, int) and product_count > 0:
+            ordinal = rng.randrange(product_count)
+            release = deployment_registry.installed_software_on_host_at(hostname, ordinal)
+            if release is None:  # pragma: no cover - count and ordinal are one registry snapshot
+                raise RuntimeError("compiled installed-software count disagrees with exact lookup")
+            return {
+                "name": release.name,
+                "publisher": release.publisher,
+                "version": release.version,
+            }
+
+    # Compatibility-only callers and lightweight registry fixtures do not
+    # carry a compiled inventory. Production compilation always supplies one.
     products = load_edr_pools().get(
         "installed_software_products",
         list(_DEFAULT_INSTALLED_SOFTWARE_PRODUCTS),
@@ -495,20 +590,163 @@ def _userassist_value_name(rng: random.Random, user: str) -> str:
     return codecs.decode(f"UEME_RUNPATH:{path}", "rot_13")
 
 
-def _userassist_binary_details(rng: random.Random) -> str:
+def _format_binary_details(data: bytes | bytearray) -> str:
+    """Return canonical binary registry data as space-delimited bytes."""
+    return " ".join(f"{byte:02X}" for byte in data)
+
+
+def _userassist_binary_details(rng: random.Random, occurrence_time: datetime) -> str:
     """Return a structured 72-byte Windows 7+ UserAssist value payload."""
     data = bytearray(72)
     run_count = rng.randint(1, 80)
     focus_count = rng.randint(0, run_count)
     focus_milliseconds = focus_count * rng.randint(1_000, 180_000)
-    # Use a plausible collection-era FILETIME while keeping this pool deterministic.
-    unix_seconds = 1_709_251_200 + rng.randint(0, 31 * 24 * 60 * 60)
-    filetime = 116_444_736_000_000_000 + unix_seconds * 10_000_000
+    normalized_time = (
+        occurrence_time.replace(tzinfo=UTC)
+        if occurrence_time.tzinfo is None
+        else occurrence_time.astimezone(UTC)
+    )
+    unix_100ns = int(normalized_time.timestamp()) * 10_000_000
+    unix_100ns += normalized_time.microsecond * 10
+    filetime = 116_444_736_000_000_000 + unix_100ns
     data[4:8] = run_count.to_bytes(4, "little")
     data[8:12] = focus_count.to_bytes(4, "little")
     data[12:16] = focus_milliseconds.to_bytes(4, "little")
     data[60:68] = filetime.to_bytes(8, "little")
-    return " ".join(f"{byte:02X}" for byte in data)
+    return _format_binary_details(data)
+
+
+def _accent_palette_binary_details(rng: random.Random) -> str:
+    """Return an eight-color, 32-byte Explorer AccentPalette value."""
+    base_red = rng.randint(40, 190)
+    base_green = rng.randint(40, 190)
+    base_blue = rng.randint(40, 190)
+    palette = bytearray()
+    for factor in (1.45, 1.28, 1.12, 1.0, 0.86, 0.72, 0.58, 0.44):
+        palette.extend(
+            (
+                min(255, round(base_red * factor)),
+                min(255, round(base_green * factor)),
+                min(255, round(base_blue * factor)),
+                0,
+            )
+        )
+    return _format_binary_details(palette)
+
+
+def _registry_artifact_extension(template_context: str) -> str | None:
+    """Return an extension imposed by an extension-specific shell-history subkey."""
+    match = re.search(r"\\opensavepidlmru\\([^\\\n]+)", template_context, re.IGNORECASE)
+    if match is not None and match.group(1) != "*":
+        return match.group(1).removeprefix(".").lower()
+    match = re.search(r"\\recentdocs\\\.([^\\\n]+)", template_context, re.IGNORECASE)
+    return match.group(1).lower() if match is not None else None
+
+
+def _registry_mru_filename(rng: random.Random, extension: str | None) -> str:
+    """Choose one configured MRU filename, respecting an extension-specific subkey."""
+    configured = load_edr_pools().get("registry_mru_filenames", _DEFAULT_REGISTRY_MRU_FILENAMES)
+    filenames = [str(filename) for filename in configured]
+    if extension is not None:
+        matching = [
+            filename
+            for filename in filenames
+            if filename.rsplit(".", 1)[-1].lower() == extension.lower()
+        ]
+        if matching:
+            return str(rng.choice(matching))
+        return f"document.{extension}"
+    return str(rng.choice(filenames))
+
+
+def _shell_item(payload: bytes) -> bytes:
+    """Frame one opaque SHITEMID payload with its native little-endian byte count."""
+    return (len(payload) + 2).to_bytes(2, "little") + payload
+
+
+def _filesystem_shell_item(name: str, *, directory: bool) -> bytes:
+    """Return a bounded filesystem SHITEMID with an ANSI primary name."""
+    item_type = 0x31 if directory else 0x32
+    attributes = 0x10 if directory else 0x20
+    payload = (
+        bytes((item_type, 0x00))
+        + (0 if directory else 4096).to_bytes(4, "little")
+        + b"\x00\x00\x00\x00"
+        + attributes.to_bytes(2, "little")
+        + name.encode("windows-1252", errors="replace")
+        + b"\x00"
+    )
+    if len(payload) % 2:
+        payload += b"\x00"
+    return _shell_item(payload)
+
+
+def _filesystem_pidl(path: str) -> bytes:
+    """Serialize a filesystem path as a terminating shell item-ID list."""
+    normalized = path.replace("/", "\\")
+    components = [component for component in normalized.split("\\") if component]
+    if not components or not components[0].endswith(":"):
+        raise ValueError(f"PIDL filesystem path must be drive rooted, got {path!r}")
+
+    computer_guid = uuid.UUID("20d04fe0-3aea-1069-a2d8-08002b30309d")
+    root = _shell_item(b"\x1f\x50" + computer_guid.bytes_le)
+    # A volume shell item uses the 0x2f class, an ANSI drive root, and the
+    # reserved tail present in classic Windows filesystem PIDLs.
+    drive = _shell_item(b"\x2f" + f"{components[0]}\\".encode("ascii") + b"\x00" + bytes(18))
+    descendants = b"".join(
+        _filesystem_shell_item(component, directory=index < len(components) - 1)
+        for index, component in enumerate(components[1:], start=1)
+    )
+    return root + drive + descendants + b"\x00\x00"
+
+
+def _pidl_binary_details(path: str, *, last_visited_application: str | None = None) -> str:
+    """Return source-native OpenSave or LastVisited PIDL-family registry bytes."""
+    pidl = _filesystem_pidl(path)
+    if last_visited_application is not None:
+        pidl = last_visited_application.encode("utf-16le") + b"\x00\x00" + pidl
+    return _format_binary_details(pidl)
+
+
+def _last_visited_application(filename: str) -> str:
+    """Return the executable identity associated with a LastVisited shell artifact."""
+    extension = filename.rsplit(".", 1)[-1].lower()
+    return {
+        "docx": "WINWORD.EXE",
+        "xlsx": "EXCEL.EXE",
+        "pdf": "AcroRd32.exe",
+        "txt": "NOTEPAD.EXE",
+    }.get(extension, "explorer.exe")
+
+
+def _recent_docs_binary_details(filename: str) -> str:
+    """Return an Explorer RecentDocs binary value with a UTF-16 filename."""
+    data = filename.encode("utf-16le") + b"\x00\x00"
+    return _format_binary_details(data)
+
+
+def registry_value_type(
+    target: str,
+    value: str,
+) -> Literal["string", "dword", "qword", "binary"]:
+    """Return the canonical registry value type for a materialized effect."""
+    target_lower = target.lower()
+    if value.startswith("DWORD ("):
+        return "dword"
+    if value.startswith("QWORD ("):
+        return "qword"
+    if any(
+        marker in target_lower
+        for marker in (
+            "\\explorer\\userassist\\",
+            "\\explorer\\accent\\accentpalette",
+            "\\comdlg32\\opensavepidlmru\\",
+            "\\comdlg32\\lastvisitedpidlmru\\",
+            "\\explorer\\recentdocs\\",
+        )
+    ):
+        return "binary"
+    return "string"
 
 
 def _stable_registry_guid(host_key: str, identity: str) -> str:
@@ -574,11 +812,22 @@ def materialize_edr_template(
     host_key: str = "",
     host_os: str = "",
     process_name: str = "",
+    occurrence_time: datetime | None = None,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
-    installed_product = _installed_software_product(rng)
+    installed_product = _installed_software_product(
+        rng,
+        deployment_registry=deployment_registry,
+        hostname=host_key,
+    )
     template_lower = template.lower()
+    registry_filename = (
+        _registry_mru_filename(rng, _registry_artifact_extension(template))
+        if "{pidl_binary}" in template_lower or "{recent_docs_binary}" in template_lower
+        else None
+    )
     if "windows defender\\platform" in template_lower:
         version = defender_platform_version(host_key)
     elif "google\\chrome\\application" in template_lower:
@@ -616,7 +865,9 @@ def materialize_edr_template(
         "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
-        "userassist_binary": _userassist_binary_details(rng),
+        "userassist_binary": _userassist_binary_details(
+            rng, occurrence_time or datetime(1970, 1, 1, tzinfo=UTC)
+        ),
         "package": rng.choice(
             [
                 "Package_for_RollupFix",
@@ -633,6 +884,25 @@ def materialize_edr_template(
     def _replace(match: re.Match[str]) -> str:
         nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "userassist_binary":
+            if occurrence_time is None:
+                raise ValueError("UserAssist materialization requires occurrence_time")
+            return str(replacements[token])
+        if token == "accent_palette_binary":
+            return _accent_palette_binary_details(rng)
+        if token == "pidl_binary":
+            assert registry_filename is not None
+            username = user if user and user.upper() != "SYSTEM" else "Default"
+            path = rf"C:\Users\{username}\Documents\{registry_filename}"
+            application = (
+                _last_visited_application(registry_filename)
+                if "\\lastvisitedpidlmru" in template_lower
+                else None
+            )
+            return _pidl_binary_details(path, last_visited_application=application)
+        if token == "recent_docs_binary":
+            assert registry_filename is not None
+            return _recent_docs_binary_details(registry_filename)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
@@ -654,11 +924,22 @@ def materialize_edr_template_group(
     dns_server_ip: str = "",
     host_os: str = "",
     process_name: str = "",
+    occurrence_time: datetime | None = None,
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
-    installed_product = _installed_software_product(rng)
+    installed_product = _installed_software_product(
+        rng,
+        deployment_registry=deployment_registry,
+        hostname=host_key,
+    )
     combined_lower = "\n".join(templates).lower()
+    registry_filename = (
+        _registry_mru_filename(rng, _registry_artifact_extension("\n".join(templates)))
+        if "{pidl_binary}" in combined_lower or "{recent_docs_binary}" in combined_lower
+        else None
+    )
     if "windows defender\\platform" in combined_lower:
         version = defender_platform_version(host_key)
     elif "google\\chrome\\application" in combined_lower:
@@ -696,7 +977,9 @@ def materialize_edr_template_group(
         "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
-        "userassist_binary": _userassist_binary_details(rng),
+        "userassist_binary": _userassist_binary_details(
+            rng, occurrence_time or datetime(1970, 1, 1, tzinfo=UTC)
+        ),
         "package": rng.choice(
             [
                 "Package_for_RollupFix",
@@ -713,6 +996,25 @@ def materialize_edr_template_group(
     def _replace(match: re.Match[str]) -> str:
         nonlocal group_policy_extension_guid
         token = match.group(1)
+        if token == "userassist_binary":
+            if occurrence_time is None:
+                raise ValueError("UserAssist materialization requires occurrence_time")
+            return str(replacements[token])
+        if token == "accent_palette_binary":
+            return _accent_palette_binary_details(rng)
+        if token == "pidl_binary":
+            assert registry_filename is not None
+            username = user if user and user.upper() != "SYSTEM" else "Default"
+            path = rf"C:\Users\{username}\Documents\{registry_filename}"
+            application = (
+                _last_visited_application(registry_filename)
+                if "\\lastvisitedpidlmru" in combined_lower
+                else None
+            )
+            return _pidl_binary_details(path, last_visited_application=application)
+        if token == "recent_docs_binary":
+            assert registry_filename is not None
+            return _recent_docs_binary_details(registry_filename)
         if token == "group_policy_extension_guid":
             if group_policy_extension_guid is None:
                 group_policy_extension_guid = _group_policy_extension_guid(rng, host_key)
@@ -728,6 +1030,36 @@ def materialize_edr_template_group(
         )
         for template in templates
     )
+
+
+def materialize_registry_effect(
+    templates: tuple[str, str, str],
+    rng: random.Random,
+    user: str,
+    occurrence_time: datetime,
+    *,
+    host_key: str = "",
+    host_ip: str = "",
+    dns_server_ip: str = "",
+    host_os: str = "",
+    process_name: str = "",
+    deployment_registry: _InstalledSoftwareRegistry | None = None,
+) -> tuple[str, str, str, Literal["string", "dword", "qword", "binary"]]:
+    """Materialize one timestamp-aware canonical registry effect."""
+    key, value_name, value = materialize_edr_template_group(
+        templates,
+        rng,
+        user,
+        host_key=host_key,
+        host_ip=host_ip,
+        dns_server_ip=dns_server_ip,
+        host_os=host_os,
+        process_name=process_name,
+        occurrence_time=occurrence_time,
+        deployment_registry=deployment_registry,
+    )
+    target = f"{key}\\{value_name}"
+    return key, value_name, value, registry_value_type(target, value)
 
 
 def select_file_side_effect(

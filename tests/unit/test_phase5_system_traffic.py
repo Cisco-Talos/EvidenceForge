@@ -25,6 +25,7 @@
 import random
 import re
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ from evidenceforge.generation.activity.linux_interfaces import linux_primary_int
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
+    _anonymous_smb_event_offsets,
     _cron_shell_command_line,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
@@ -56,8 +58,10 @@ from evidenceforge.generation.engine.baseline import (
     _resolve_cron_command,
     _windows_background_process_lifetime_seconds,
 )
+from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+from evidenceforge.models.exceptions import StateError
 
 
 @pytest.fixture
@@ -94,6 +98,46 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_anonymous_smb_offsets_require_capability_and_use_sparse_own_cadence(monkeypatch):
+    """Anonymous SMB noise is independent of service-logon scaling and target gated."""
+
+    config = SimpleNamespace(
+        hourly_probability=1.0,
+        events_per_active_hour_min=1,
+        events_per_active_hour_max=2,
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.engine.baseline.anonymous_smb_baseline_config",
+        lambda: config,
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    blocked = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="MAIL-01",
+        supports_smb=False,
+    )
+    first = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="FILE-01",
+        supports_smb=True,
+    )
+    second = _anonymous_smb_event_offsets(
+        current_hour=current_hour,
+        generation_seed=42,
+        hostname="FILE-01",
+        supports_smb=True,
+    )
+
+    assert blocked == ()
+    assert first == second
+    assert 1 <= len(first) <= 2
+    assert first == tuple(sorted(first))
+    assert all(0 <= offset < 3599 for offset in first)
 
 
 def test_networkmanager_message_timestamp_uses_epoch_time():
@@ -422,10 +466,16 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     engine.state_manager = state_manager
     engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     engine.activity_generator = Mock()
-    engine.activity_generator.generate_system_process.return_value = 4242
+    engine.activity_generator.generate_process.return_value = 4242
+    engine.activity_generator.ensure_linux_visible_shell_parent.return_value = 3131
+    engine.activity_generator._user_model_for_username.return_value = User(
+        username="deploy",
+        full_name="Deploy User",
+        email="deploy@example.com",
+    )
     engine._polkit_action_profile = lambda _entry, _rng: (
         "org.freedesktop.packagekit.system-update",
-        "/usr/lib/packagekit/packagekitd",
+        "/usr/bin/pkcon",
     )
     entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
     template = next(message for message in entry["messages"] if "action {action_id}" in message)
@@ -441,11 +491,178 @@ def test_polkit_action_messages_materialize_companion_process(linux_system, stat
     )
 
     assert "unix-process:4242:" in message
-    call = engine.activity_generator.generate_system_process.call_args.kwargs
+    call = engine.activity_generator.generate_process.call_args.kwargs
     assert call["system"] is linux_system
     assert call["process_name"] in message
-    assert call["emit_linux_syslog"] is False
+    assert call["parent_pid"] == 3131
+    assert call["user"].username == "deploy"
     assert call["time"] < timestamp
+    assert call["source_visible_by"] == timestamp
+    assert engine.activity_generator.reserve_linux_foreground_process_start.called
+    assert (
+        engine.activity_generator.ensure_linux_visible_shell_parent.call_args.kwargs[
+            "source_visible_by"
+        ]
+        == timestamp
+    )
+    assert (
+        engine.activity_generator.ensure_linux_visible_shell_parent.call_args.kwargs[
+            "existing_only"
+        ]
+        is True
+    )
+
+
+def test_polkit_cli_rejection_does_not_bootstrap_parent_or_schedule_termination(
+    linux_system, state_manager, mock_emitters
+):
+    """A bounded polkit child rejection must leave process state and evidence unchanged."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+
+    before_processes = tuple(
+        (process.pid, process.image, process.start_time)
+        for process in state_manager.get_processes_on_system(linux_system.hostname)
+    )
+    before_emits = {name: emitter.emit.call_count for name, emitter in mock_emitters.items()}
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.packagekit.system-update",
+        process_path="/usr/bin/pkcon",
+        subject_user="deploy",
+        rng=random.Random(31),
+        sys_pids=pids,
+    )
+
+    after_processes = tuple(
+        (process.pid, process.image, process.start_time)
+        for process in state_manager.get_processes_on_system(linux_system.hostname)
+    )
+    assert pid is None
+    assert after_processes == before_processes
+    assert {
+        name: emitter.emit.call_count for name, emitter in mock_emitters.items()
+    } == before_emits
+
+
+def test_polkit_cli_pid_zero_rejection_never_schedules_unowned_termination(
+    linux_system, state_manager
+):
+    """The process reject sentinel must not cross the canonical termination boundary."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.activity_generator = Mock()
+    engine.activity_generator.ensure_linux_visible_shell_parent.return_value = 3131
+    engine.activity_generator.generate_process.return_value = 0
+    engine.activity_generator._user_model_for_username.return_value = User(
+        username="deploy",
+        full_name="Deploy User",
+        email="deploy@example.com",
+    )
+    engine._schedule_foreground_process_termination = Mock()
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.packagekit.system-update",
+        process_path="/usr/bin/pkcon",
+        subject_user="deploy",
+        rng=random.Random(31),
+        sys_pids={"systemd": 1, "dbus": 412},
+    )
+
+    assert pid is None
+    engine._schedule_foreground_process_termination.assert_not_called()
+
+
+def test_polkit_authorization_plan_keeps_subject_and_authentication_coherent(
+    linux_system, state_manager
+):
+    """Polkit owner and authentication identities come from one authorization plan."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    engine._polkit_action_profile_for_system = lambda _entry, _rng, _system: (
+        "org.freedesktop.systemd1.manage-units",
+        "/usr/bin/systemctl",
+    )
+    entry = {"params": {"subject_user": ["deploy"]}}
+
+    success = engine._plan_polkit_authorization(
+        entry,
+        random.Random(43),
+        linux_system,
+        "Operator successfully authenticated for action {action_id}",
+    )
+    assert success.subject_user == "deploy"
+    assert success.authentication_user == "root"
+
+    engine._polkit_action_profile_for_system = lambda _entry, _rng, _system: (
+        "org.freedesktop.login1.reboot",
+        "/usr/bin/systemctl",
+    )
+    failure = engine._plan_polkit_authorization(
+        entry,
+        random.Random(47),
+        linux_system,
+        "Operator successfully authenticated for action {action_id}",
+    )
+    assert failure.subject_user == "deploy"
+    assert failure.authentication_user == "deploy"
+    assert "failed to authenticate" in failure.template
+
+
+def test_polkit_resident_networkmanager_reuses_root_daemon_without_duplicate(
+    linux_system, state_manager, mock_emitters
+):
+    """A defensive daemon subject must reuse the seeded root process, never a user duplicate."""
+    from evidenceforge.generation.engine import GenerationEngine
+
+    engine = object.__new__(GenerationEngine)
+    engine.state_manager = state_manager
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine._system_pids = {}
+
+    pids: dict[str, int] = {}
+    engine._seed_linux_process_tree(linux_system, pids)
+    engine._system_pids[linux_system.hostname] = pids
+    activity_generator = ActivityGenerator(state_manager, mock_emitters)
+    activity_generator._system_pids = engine._system_pids
+    engine.activity_generator = activity_generator
+
+    pid = engine._materialize_polkit_action_process(
+        system=linux_system,
+        timestamp=datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC),
+        action_id="org.freedesktop.NetworkManager.settings.modify.system",
+        process_path="/usr/sbin/NetworkManager",
+        subject_user="deploy",
+        rng=random.Random(37),
+        sys_pids=pids,
+    )
+
+    assert pid == pids["networkmanager"]
+    daemon = state_manager.get_process(linux_system.hostname, pid)
+    assert daemon is not None
+    assert daemon.username == "root"
+    assert daemon.parent_pid == pids["systemd"]
+    assert not any(
+        call.args[0].process is not None
+        and call.args[0].process.image == "/usr/sbin/NetworkManager"
+        for call in mock_emitters["ecar"].emit.call_args_list
+    )
 
 
 def test_polkit_cli_companion_process_uses_visible_user_shell(
@@ -468,6 +685,14 @@ def test_polkit_cli_companion_process_uses_visible_user_shell(
     engine.activity_generator = activity_generator
 
     timestamp = datetime(2024, 3, 18, 12, 5, 0, tzinfo=UTC)
+    user = activity_generator._user_model_for_username("deploy")
+    assert user is not None
+    shell_pid = activity_generator.ensure_linux_visible_shell_parent(
+        user=user,
+        target_system=linux_system,
+        activity_time=timestamp - timedelta(seconds=5),
+    )
+    assert shell_pid is not None
     pid = engine._materialize_polkit_action_process(
         system=linux_system,
         timestamp=timestamp,
@@ -493,12 +718,39 @@ def test_polkit_cli_companion_process_uses_visible_user_shell(
         and event.process is not None
         and event.process.pid == pid
     )
+    shell_create_event = next(
+        event
+        for event in emitted_events
+        if event.event_type == "process_create"
+        and event.process is not None
+        and event.process.pid == create_event.process.parent_pid
+    )
 
     assert pid is not None
+    assert shell_create_event.source_timing is not None
+    assert create_event.source_timing is not None
+    shell_ecar_create_time = next(
+        source_time
+        for key, source_time in shell_create_event.source_timing.source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
+    process_ecar_create_time = next(
+        source_time
+        for key, source_time in create_event.source_timing.source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
     assert create_event.auth.username == "deploy"
     assert create_event.process.parent_image == "/bin/bash"
     assert create_event.process.parent_pid != 1
+    assert shell_create_event.auth.username == "deploy"
+    assert shell_ecar_create_time < process_ecar_create_time <= timestamp
     assert terminate_event.timestamp > create_event.timestamp
+    assert create_event.identity_plan is not None
+    assert terminate_event.identity_plan is not None
+    process_identity = state_manager.get_process_identity(linux_system.hostname, pid)
+    assert process_identity is not None
+    assert create_event.identity_plan.subject == process_identity
+    assert terminate_event.identity_plan.subject == process_identity
 
 
 def test_polkit_reboot_action_is_explicitly_unsuccessful(
@@ -756,6 +1008,7 @@ def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     """Anacron syslog should be a coherent daily run, not random repeated fragments."""
     engine = type("FakeEngine", (object,), {})()
     engine.activity_generator = Mock()
+    engine.activity_generator.generate_system_process.return_value = 1_920_117
     engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     engine.end_time = datetime(2024, 3, 18, 18, 0, 0, tzinfo=UTC)
     engine._scenario_tz = None
@@ -788,6 +1041,21 @@ def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     assert all("cron.weekly" not in message for message in messages)
     assert messages[-1] == "Normal exit (1 job run)"
     assert times == sorted(times)
+    assert {call.kwargs["pid"] for call in calls} == {1_920_117}
+    engine.activity_generator.generate_system_process.assert_called_once_with(
+        system=linux_system,
+        time=ts,
+        process_name="/usr/sbin/anacron",
+        command_line="/usr/sbin/anacron -s",
+        parent_pid=1,
+        username="root",
+        emit_linux_syslog=False,
+        concurrency_group_id="anacron:LNX-01:2024-03-18",
+    )
+    termination = engine.activity_generator.generate_system_process_termination
+    termination.assert_called_once()
+    assert termination.call_args.kwargs["pid"] == 1_920_117
+    assert termination.call_args.kwargs["time"] > times[-1]
 
 
 def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
@@ -1076,6 +1344,45 @@ class TestWindowsProcessTreeSeeding:
         assert proc is not None
         assert proc.parent_pid == pids["services"]
 
+    def test_scheduler_children_have_native_parentage_and_host_scoped_identity(
+        self, state_manager, win_system
+    ):
+        """Task engines share Schedule ownership but not a fleet-wide task GUID."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        first_engine = object.__new__(GenerationEngine)
+        first_engine.state_manager = state_manager
+        first_engine._system_pids = {}
+        first_engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(service_accounts=["svc_backup"])
+        )
+        first_pids: dict[str, int] = {}
+        first_engine._seed_windows_process_tree(win_system, first_pids)
+
+        taskeng = state_manager.get_process(win_system.hostname, first_pids["taskeng"])
+        taskhostw = state_manager.get_process(win_system.hostname, first_pids["taskhostw"])
+        assert taskeng is not None
+        assert taskhostw is not None
+        assert taskeng.parent_pid == first_pids["svchost_schedule"]
+        assert taskhostw.parent_pid == first_pids["svchost_schedule"]
+        assert re.fullmatch(r"taskeng\.exe \{[0-9A-F-]{36}\}", taskeng.command_line)
+
+        other_state = StateManager()
+        other_state.set_current_time(datetime(2024, 3, 15, 8, 0, tzinfo=UTC))
+        other_system = win_system.model_copy(update={"hostname": "WKS-02", "ip": "10.0.10.2"})
+        second_engine = object.__new__(GenerationEngine)
+        second_engine.state_manager = other_state
+        second_engine._system_pids = {}
+        second_engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(service_accounts=["svc_backup"])
+        )
+        second_pids: dict[str, int] = {}
+        second_engine._seed_windows_process_tree(other_system, second_pids)
+        other_taskeng = other_state.get_process(other_system.hostname, second_pids["taskeng"])
+
+        assert other_taskeng is not None
+        assert other_taskeng.command_line != taskeng.command_line
+
     def test_lsass_is_child_of_wininit(self, state_manager, win_system):
         """lsass.exe should be child of wininit.exe (not services.exe)."""
         from evidenceforge.generation.engine import GenerationEngine
@@ -1169,6 +1476,31 @@ class TestLinuxProcessTreeSeeding:
 
         rsyslogd = state_manager.get_process(linux_system.hostname, pids["rsyslogd"])
         assert rsyslogd.username == "syslog"
+
+    def test_samba_capability_seeds_profiled_smbd_listener(
+        self, state_manager, linux_system
+    ) -> None:
+        """Only Linux SMB servers should receive the persistent smbd master."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+        engine._system_pids = {}
+        host_world = Mock()
+        host_world.supports.return_value = True
+        engine.world_model = Mock(hosts={linux_system.hostname: host_world})
+        engine._system_service_defaults = {linux_system.hostname: ["samba"]}
+
+        pids: dict[str, int] = {}
+        engine._seed_linux_process_tree(linux_system, pids)
+
+        smbd = state_manager.get_process(linux_system.hostname, pids["smbd"])
+        assert smbd is not None
+        assert pids["smbd_master"] == pids["smbd"]
+        assert smbd.parent_pid == pids["systemd"]
+        assert smbd.image == "/usr/sbin/smbd"
+        assert smbd.command_line == "/usr/sbin/smbd --foreground --no-process-group"
+        assert smbd.username == "root"
 
     def test_dbus_runs_as_messagebus(self, state_manager, linux_system):
         """dbus-daemon should run as messagebus user."""
@@ -1653,6 +1985,359 @@ class TestInfrastructureDetection:
         assert event.network.orig_pkts >= 3
         assert event.network.resp_pkts >= 3
         assert event.network.history == "DdDdDd"
+
+    def test_kerberos_primary_dispatch_rejection_cancels_both_runtime_points_and_tgt_cache(
+        self,
+        activity_gen,
+    ):
+        """A rejected primary 4768 cannot leave pair, tuple, or TGT-cache claims."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        runtime_before = (runtime.state_digest(), runtime.census())
+        tgt_key = activity_gen._kerberos_tgt_cache_key(
+            "WS-01$",
+            source_ip,
+            dc_hostname,
+        )
+
+        with (
+            patch.object(
+                activity_gen.dispatcher,
+                "dispatch_builder",
+                side_effect=StateError("reject primary Kerberos audit"),
+            ),
+            pytest.raises(StateError, match="reject primary Kerberos audit"),
+        ):
+            activity_gen.generate_kerberos_tgt(
+                username="WS-01$",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        assert (runtime.state_digest(), runtime.census()) == runtime_before
+        assert tgt_key not in activity_gen._kerberos_tgt_cache_until
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                (source_ip, dc_hostname.lower()),
+            )
+            is None
+        )
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                (source_ip, dc_hostname.lower(), source_port),
+            )
+            is None
+        )
+
+    def test_kerberos_tuple_prepare_conflict_releases_pair_without_dispatching_primary(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A tuple reservation conflict cannot strand its already-staged pair sibling."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        pair_key = (source_ip, dc_hostname.lower())
+        tuple_key = (source_ip, dc_hostname.lower(), source_port)
+        blocker = runtime.begin_point_batch(
+            stable_id="kerberos-audit-tuple-blocker",
+            linearization_time=timestamp,
+        )
+        blocker.stage_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            tuple_key,
+            (timestamp,),
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+        blocked_census = runtime.census()
+        blocked_digest = runtime.state_digest()
+
+        with pytest.raises(StateError, match="reserved by another preparation"):
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        assert runtime.state_digest() == blocked_digest
+        assert runtime.census() == blocked_census
+        assert runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR, pair_key) is None
+        assert runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE, tuple_key) is None
+        assert not mock_emitters["windows_event_security"].emit.called
+        blocker.cancel()
+        census = runtime.census()
+        assert census.open_preparations == census.reserved_points == 0
+        assert census.preparation_fences == census.reserved_deadlines == 0
+
+    @pytest.mark.parametrize(
+        ("method_name", "event_type"),
+        (
+            ("generate_kerberos_tgt", "kerberos_tgt"),
+            ("generate_kerberos_tgt_renewal", "kerberos_tgt_renewal"),
+        ),
+    )
+    def test_kerberos_tgt_cache_is_remembered_only_after_primary_dispatch(
+        self,
+        activity_gen,
+        method_name,
+        event_type,
+    ):
+        """TGT and renewal cache truth cannot precede their primary DC audit."""
+
+        username = "WS-01$"
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        tgt_key = activity_gen._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
+        observed: list[str] = []
+
+        def observe_primary(event):
+            assert tgt_key not in activity_gen._kerberos_tgt_cache_until
+            observed.append(event.event_type)
+
+        with patch.object(
+            activity_gen.dispatcher,
+            "dispatch_builder",
+            side_effect=observe_primary,
+        ):
+            getattr(activity_gen, method_name)(
+                username=username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=50209,
+            )
+
+        assert observed == [event_type]
+        assert activity_gen._kerberos_tgt_cache_until[tgt_key] > timestamp
+        assert activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
+
+    def test_kerberos_transport_failure_prevents_unadmitted_primary_audit_points(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A failed KDC transport cannot publish a 4771 or reserve its audit points."""
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.36",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        source_port = 50209
+
+        with (
+            patch.object(
+                activity_gen,
+                "generate_connection",
+                side_effect=RuntimeError("reject optional KDC transport"),
+            ),
+            pytest.raises(RuntimeError, match="reject optional KDC transport"),
+        ):
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=client.ip,
+                dc_hostname=dc.hostname,
+                time=timestamp,
+                source_port=source_port,
+                emit_connection=True,
+            )
+
+        emitted = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "kerberos_preauth_failed"
+        ]
+        assert emitted == []
+        assert not activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                client.ip,
+                dc.hostname,
+                source_port,
+                timestamp,
+            )
+            == 0
+        )
+        census = activity_gen._network_transaction_runtime.census()
+        assert census.live_points == 0
+        assert census.prepared_transactions == census.claimed_transactions == 0
+        assert census.reserved_points == census.preparation_fences == 0
+
+    def test_kerberos_runtime_windows_cap_filter_expire_and_leave_no_generator_owner(
+        self,
+        activity_gen,
+    ):
+        """Pair/tuple points retain bounded ordered windows and prune via watermark."""
+
+        source_ip = "::ffff:10.10.1.36"
+        normalized_source_ip = "10.10.1.36"
+        dc_hostname = "DC-01."
+        source_port = 50209
+        start = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        times = tuple(start + timedelta(milliseconds=100 * index) for index in range(20))
+        runtime = activity_gen._network_transaction_runtime
+
+        assert not hasattr(activity_gen, "_kerberos_connection_audit_times")
+        assert not hasattr(activity_gen, "_kerberos_audit_tuple_times")
+        assert NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR.value == "kerberos_audit_pair"
+        assert NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE.value == "kerberos_audit_tuple"
+
+        for timestamp in times:
+            activity_gen.generate_kerberos_preauth_failed(
+                username="expired.user",
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=timestamp,
+                source_port=source_port,
+            )
+
+        pair_key = (normalized_source_ip, dc_hostname.lower())
+        tuple_key = (normalized_source_ip, dc_hostname.lower().rstrip("."), source_port)
+        assert (
+            runtime.get_point(NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR, pair_key)
+            == times[-12:]
+        )
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+                tuple_key,
+            )
+            == times[-16:]
+        )
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                times[-1],
+            )
+            == 16
+        )
+
+        late = times[-1] + timedelta(seconds=31)
+        activity_gen.generate_kerberos_preauth_failed(
+            username="expired.user",
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=late,
+            source_port=source_port,
+        )
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            pair_key,
+        ) == (late,)
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            tuple_key,
+        ) == (late,)
+        assert activity_gen._has_recent_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            late + timedelta(seconds=9),
+        )
+        assert not activity_gen._has_recent_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            late + timedelta(seconds=11),
+        )
+        assert (
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                late + timedelta(seconds=4),
+            )
+            == 0
+        )
+
+        expiry = late + timedelta(seconds=30)
+        census = runtime.census()
+        assert census.live_points == census.active_deadlines == census.expiry_backing == 2
+        assert runtime.get_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            pair_key,
+            at=expiry - timedelta(microseconds=1),
+        ) == (late,)
+        assert (
+            runtime.get_point(
+                NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+                pair_key,
+                at=expiry,
+            )
+            is None
+        )
+
+        expired = runtime.advance_watermark_page(expiry, limit=8)
+        assert expired.processed == 2
+        assert not expired.has_more
+        assert expired.census.live_points == 0
+        assert expired.census.tombstone_points == 2
+        assert expired.census.active_deadlines == expired.census.expiry_backing == 2
+        pruned = runtime.advance_watermark_page(expiry + timedelta(days=1), limit=8)
+        assert pruned.processed == 2
+        assert not pruned.has_more
+        assert pruned.census.live_points == pruned.census.tombstone_points == 0
+        assert pruned.census.active_deadlines == pruned.census.expiry_backing == 0
+
+    def test_kerberos_runtime_read_helpers_reject_legacy_or_malformed_value_shapes(
+        self,
+        activity_gen,
+    ):
+        """Planner reads require exact UTC datetime tuples, never legacy float lists."""
+
+        source_ip = "10.10.1.36"
+        dc_hostname = "DC-01"
+        source_port = 50209
+        timestamp = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        runtime = activity_gen._network_transaction_runtime
+        runtime.set_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_PAIR,
+            (source_ip, dc_hostname.lower()),
+            (timestamp.timestamp(),),
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+        runtime.set_point(
+            NetworkRuntimePointFamily.KERBEROS_AUDIT_TUPLE,
+            (source_ip, dc_hostname.lower(), source_port),
+            [timestamp],
+            expires_at=timestamp + timedelta(seconds=30),
+        )
+
+        with pytest.raises(StateError, match="malformed timestamps"):
+            activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
+        with pytest.raises(StateError, match="malformed timestamps"):
+            activity_gen._kerberos_audit_count_for_connection(
+                source_ip,
+                dc_hostname,
+                source_port,
+                timestamp,
+            )
 
     def test_connection_driven_kerberos_audits_are_counted_in_packets(
         self,

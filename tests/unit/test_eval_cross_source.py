@@ -40,6 +40,17 @@ CrossSourceScorer = CausalityScorer
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
+CAUSALITY_SUB_SCORE_KEYS = [
+    "causal_ordering",
+    "event_presence",
+    "indicator_accuracy",
+    "pivot_linkability",
+    "temporal_integrity",
+    "storyline_trace_coverage",
+    "intent_reconciliation",
+    "effect_reconciliation",
+]
+
 
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
     return ParsedRecord(source_format=fmt, raw="test", fields=fields, timestamp=ts)
@@ -262,7 +273,7 @@ class TestEndToEnd:
         assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 
     def test_with_retail_scenario(self):
         """Run on real fixtures — should produce valid scores."""
@@ -288,7 +299,7 @@ class TestEndToEnd:
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
         assert result.score is not None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 
 
 def _make_scenario_with_domain(domain="example.com"):

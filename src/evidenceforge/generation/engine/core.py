@@ -27,25 +27,46 @@ It coordinates StateManager, emitters, and activity generation to produce
 consistent synthetic security logs across multiple formats.
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import random
+import sqlite3
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
+from typing import TYPE_CHECKING
 
+from evidenceforge.composition.models import CompiledScenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.application_channels import ApplicationChannelRegistry
+from evidenceforge.generation.emitters.base import ExactPublicationAuthority
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentExecutionLedger
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
+from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
+from evidenceforge.generation.source_finalization import (
+    SourceFinalizationCoordinator,
+    SourceFinalizationParticipant,
+)
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.suspension import GenerationSuspendedError
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
@@ -64,6 +85,28 @@ from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.checkpoints.models import CheckpointCursor, CheckpointRecovery
+    from evidenceforge.generation.checkpoints.participants import (
+        IncrementalCheckpointParticipant,
+    )
+    from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+    from evidenceforge.generation.profiling import GenerationProfiler
+
+_ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
+_RUNTIME_RETIREMENT_HOURS = 6
+_UNBOUNDED_LIFECYCLE_WINDOW_END = datetime.max.replace(tzinfo=UTC) - timedelta(days=1)
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalOwnerSnapshot:
+    """Exact engine owners pinned before any terminal mutation begins."""
+
+    activity_generator: object | None
+    dispatcher: object | None
+    source_coordinator: object | None
+    emitters: tuple[tuple[str, object], ...]
 
 
 class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
@@ -97,6 +140,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         allow_large_workload: bool = False,
         workload_limits: WorkloadLimits | None = None,
         resource_forecast: ResourceForecast | None = None,
+        compiled_scenario: CompiledScenario | None = None,
+        checkpoint_hour_callback: Callable[[int, datetime, str], None] | None = None,
+        checkpoint_hours: int = 0,
+        checkpoint_controller: IncrementalCheckpointController | None = None,
+        checkpoint_recovery: CheckpointRecovery | None = None,
+        checkpoint_synchronization_hook: Callable[[CheckpointCursor], None] | None = None,
+        graceful_interrupt_requested: Callable[[], bool] | None = None,
+        profiler: GenerationProfiler | None = None,
     ):
         """Initialize generation engine.
 
@@ -111,6 +162,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             oob_hosts: Operator-registered live-callback host(s) for adversarial_payload
                 out-of-band testing (off by default). When set, an adversarial payload's
                 {canary} resolves to the first and all are host-allowlisted.
+            checkpoint_hour_callback: Optional internal cadence hook invoked after each
+                scheduled, completely swept simulated hour at an emitter barrier. The phase
+                names the post-boundary cursor and is one of warmup, collection, or tail.
+            checkpoint_hours: Internal positive cadence for checkpoint_hour_callback. Zero
+                disables the hook.
+            checkpoint_controller: Optional incremental checkpoint publisher. Its cadence must
+                match checkpoint_hours and it cannot be combined with the legacy test hook.
+            checkpoint_recovery: Optional validated recovery selected from the controller's store.
+            checkpoint_synchronization_hook: Internal post-publication test barrier. Production CLI
+                wiring exposes it only through the guarded pytest environment seam.
+            graceful_interrupt_requested: Process-local cancellation latch checked only at safe
+                completed-hour boundaries.
+            profiler: Optional process-local generation profiler. It does not participate in
+                deterministic state, fingerprints, or checkpoint recovery.
         """
         self.generation_seed = (
             scenario.generation_seed if generation_seed is None else generation_seed
@@ -118,19 +183,40 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if not 0 <= self.generation_seed <= MAX_GENERATION_SEED:
             raise ValueError(f"generation_seed must be between 0 and {MAX_GENERATION_SEED}")
         self.scenario = scenario.model_copy(update={"generation_seed": self.generation_seed})
+        from evidenceforge.composition.artifacts import minimal_compiled_scenario
+        from evidenceforge.composition.compiler import with_runtime_scenario
+
+        if compiled_scenario is not None and not isinstance(compiled_scenario, CompiledScenario):
+            raise TypeError("compiled_scenario must be a CompiledScenario")
+        base_compiled = compiled_scenario or minimal_compiled_scenario(self.scenario)
+        self.compiled_scenario = with_runtime_scenario(base_compiled, self.scenario)
         self.output_dir = Path(output_dir)
         self.scenario_root = Path(scenario_root) if scenario_root is not None else Path.cwd()
         self.allow_large_workload = allow_large_workload
-        self.workload_estimate = estimate_workload(
-            self.scenario,
-            scenario_root=self.scenario_root,
-            limits=workload_limits,
-        )
-        self.resource_forecast = resource_forecast or build_resource_forecast(
-            self.scenario,
-            self.workload_estimate,
-            self.output_dir,
-        )
+        from evidenceforge.config.overlay import retired_overlay_errors
+        from evidenceforge.config.provider import effective_config_scope
+        from evidenceforge.models.exceptions import ConfigurationError
+
+        with effective_config_scope(self.compiled_scenario.effective_config):
+            from evidenceforge.generation.activity.public_identity_profiles import (
+                PublicIdentityRegistry,
+            )
+
+            self.public_identity_registry = PublicIdentityRegistry.from_scenario(self.scenario)
+            retired = retired_overlay_errors()
+            if retired:
+                path, message = retired[0]
+                raise ConfigurationError(f"overlay/{path}: {message}")
+            self.workload_estimate = estimate_workload(
+                self.scenario,
+                scenario_root=self.scenario_root,
+                limits=workload_limits,
+            )
+            self.resource_forecast = resource_forecast or build_resource_forecast(
+                self.scenario,
+                self.workload_estimate,
+                self.output_dir,
+            )
         self.ground_truth_dir = (
             Path(ground_truth_dir) if ground_truth_dir is not None else self.output_dir
         )
@@ -140,9 +226,33 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.output_target = normalize_output_target(output_target)
         self.oob_hosts = tuple(oob_hosts)
         self.progress_callback = progress_callback
+        if type(checkpoint_hours) is not int or checkpoint_hours < 0:
+            raise ValueError("checkpoint_hours must be a non-negative integer")
+        if checkpoint_hour_callback is not None and checkpoint_hours == 0:
+            raise ValueError("checkpoint_hour_callback requires a positive checkpoint_hours")
+        if checkpoint_controller is not None and checkpoint_hour_callback is not None:
+            raise ValueError("checkpoint controller and checkpoint callback are mutually exclusive")
+        if checkpoint_controller is not None and checkpoint_controller.cadence.hours != (
+            checkpoint_hours
+        ):
+            raise ValueError("checkpoint controller cadence must match checkpoint_hours")
+        if checkpoint_recovery is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint recovery requires an incremental checkpoint controller")
+        if checkpoint_synchronization_hook is not None and checkpoint_controller is None:
+            raise ValueError("checkpoint synchronization requires an incremental controller")
+        self.checkpoint_hour_callback = checkpoint_hour_callback
+        self.checkpoint_hours = checkpoint_hours
+        self._checkpoint_controller = checkpoint_controller
+        self._checkpoint_recovery = checkpoint_recovery
+        self._checkpoint_synchronization_hook = checkpoint_synchronization_hook
+        self._graceful_interrupt_requested = graceful_interrupt_requested
+        self.profiler = profiler
+        self._checkpoint_participants: tuple[IncrementalCheckpointParticipant, ...] = ()
         self.state_manager = StateManager()
         self.emitters: dict = {}
         self.activity_generator: ActivityGenerator | None = None
+        self.timing_runtime: TimingRuntime | None = None
+        self.source_timing_planner: SourceTimingPlanner | None = None
         self.start_time: datetime | None = None
         self.end_time: datetime | None = None
         self.malicious_events: list[dict] = []  # Track for GROUND_TRUTH.md
@@ -152,10 +262,32 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.authored_intent_ledger = AuthoredIntentLedger.from_scenario(scenario)
         self.intent_execution_ledger = IntentExecutionLedger(self.authored_intent_ledger)
         self.network_resolver = ScenarioNetworkResolver.from_scenario(scenario)
+        self._source_finalization_authority: ExactPublicationAuthority | None = None
+        self._source_finalization_coordinator: SourceFinalizationCoordinator | None = None
+        self._ssh_lifecycles_finalized = False
+        self._rdp_lifecycles_finalized = False
+        self._linux_sudo_logoffs_finalized = False
+        self._foreground_lifecycles_finalized = False
+        self._persistent_smb_terminal_asserted = False
+        self._application_channels_finalized = False
+        self._terminal_runtime_cleanup_finalized = False
+        self._exact_projection_recoveries_finalized = False
+        self._terminal_transient_census_asserted = False
+        self._finalization_complete = False
+        self._finalization_aborted = False
+        self._initialization_complete = False
+        self._generation_body_completed = False
+        self._generation_complete = False
+        self._ids_alert_summary_applied = False
+        self._generate_owner = Lock()
+        self._expected_close_emitters: dict[str, object] | None = None
+        self._closed_emitter_names: set[str] = set()
+        self._source_coordinator_closed = False
+        self._exact_projection_recovery_dispatcher: object | None = None
+        self._terminal_owner_snapshot: _TerminalOwnerSnapshot | None = None
 
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
-
         from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
 
         reset_bash_command_memory()
@@ -167,15 +299,330 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             event_type: Type of progress event (e.g., "phase_start", "hour_progress")
             data: Event-specific data payload
         """
+        profiler = getattr(self, "profiler", None)
+        if profiler is not None:
+            profiler.observe_progress(event_type, data)
         if self.progress_callback:
             self.progress_callback(event_type, data)
+
+    def _profile_span(self, name: str) -> AbstractContextManager[None]:
+        """Return one optional low-frequency profiler span."""
+
+        profiler = getattr(self, "profiler", None)
+        if profiler is None:
+            return nullcontext()
+        return profiler.span(name)
+
+    def _checkpoint_after_completed_hour(
+        self,
+        *,
+        completed_simulated_hours: int,
+        next_hour: datetime,
+    ) -> None:
+        """Invoke the optional cadence hook with an exact post-hour cursor."""
+
+        callback = self.checkpoint_hour_callback
+        controller = self._checkpoint_controller
+        suspension_request = None if controller is None else controller.pending_suspension_request()
+        signal_requested = bool(
+            self._graceful_interrupt_requested is not None and self._graceful_interrupt_requested()
+        )
+        checkpoint_due = (
+            (callback is not None or controller is not None)
+            and self.checkpoint_hours > 0
+            and completed_simulated_hours % self.checkpoint_hours == 0
+        )
+        retirement_due = completed_simulated_hours % _RUNTIME_RETIREMENT_HOURS == 0
+        if (
+            not checkpoint_due
+            and not retirement_due
+            and suspension_request is None
+            and not signal_requested
+        ):
+            return
+        if self.start_time is None or self.end_time is None:
+            raise RuntimeError("checkpoint cadence hook requires initialized generation bounds")
+        self._barrier_flush_all_emitters()
+        if retirement_due or controller is not None:
+            self._prepare_incremental_checkpoint_barrier(next_hour)
+            # Retirement and channel finalization may emit terminal evidence. Seal
+            # those rows before any checkpoint participant snapshots its spools.
+            self._barrier_flush_all_emitters()
+        signal_requested = signal_requested or bool(
+            self._graceful_interrupt_requested is not None and self._graceful_interrupt_requested()
+        )
+        if not checkpoint_due and suspension_request is None and not signal_requested:
+            return
+        if next_hour < self.start_time:
+            phase = "warmup"
+        elif next_hour < self.end_time:
+            phase = "collection"
+        else:
+            phase = "tail"
+        cursor = None
+        if controller is not None or signal_requested:
+            from evidenceforge.generation.checkpoints.models import CheckpointCursor
+
+            cursor = CheckpointCursor(
+                phase=phase,
+                completed_simulated_hours=completed_simulated_hours,
+                next_hour=None if phase == "tail" else next_hour.isoformat(),
+            )
+        if controller is not None and controller.cadence.hours > 0:
+            assert cursor is not None
+            suspension_pending = suspension_request is not None or signal_requested
+            if suspension_request is not None:
+                self._report_progress(
+                    "suspension_requested",
+                    {
+                        "completed_simulated_hours": completed_simulated_hours,
+                        "phase": phase,
+                    },
+                )
+                controller.commit_suspension(
+                    request=suspension_request,
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            elif signal_requested:
+                controller.commit_local_suspension(
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            else:
+                controller.commit(
+                    cursor=cursor,
+                    participants=self._checkpoint_participants,
+                )
+            if self._checkpoint_synchronization_hook is not None:
+                self._checkpoint_synchronization_hook(cursor)
+            post_commit_signal = bool(
+                self._graceful_interrupt_requested is not None
+                and self._graceful_interrupt_requested()
+            )
+            if post_commit_signal and not suspension_pending:
+                controller.acknowledge_local_suspension(cursor)
+                suspension_pending = True
+            if suspension_pending:
+                raise GenerationSuspendedError(
+                    cursor,
+                    requested_by_signal=signal_requested or post_commit_signal,
+                )
+        elif signal_requested:
+            # The request is now outside all hour transactions. With checkpointing
+            # disabled, take the ordinary abort-cleanup path without attempting a
+            # recovery commit.
+            raise KeyboardInterrupt
+        else:
+            assert callback is not None
+            callback(completed_simulated_hours, next_hour, phase)
+
+    def _prepare_incremental_checkpoint_barrier(self, cutoff: datetime) -> None:
+        """Retire terminal authorities at the sealed post-hour frontier."""
+
+        self.lifecycle_registry.prune_action_cohort_receipt_authorities()
+        self.lifecycle_registry.prune_checkpoint_expired_state(cutoff)
+        self.lifecycle_registry.prune_checkpoint_terminal_transports(cutoff)
+        self.activity_generator.prune_checkpoint_terminal_network_state(cutoff)
+        for emitter in self.emitters.values():
+            prepare = getattr(emitter, "prepare_incremental_checkpoint_barrier", None)
+            if callable(prepare):
+                prepare(cutoff)
 
     def generate(self) -> None:
         """Generate one run inside its public deterministic seed namespace."""
 
-        with generation_seed_scope(self.generation_seed):
-            reset_thread_rng()
-            self._generate_scoped()
+        from evidenceforge.config.provider import effective_config_scope
+
+        if not self._generate_owner.acquire(blocking=False):
+            raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
+        profiler = self.profiler
+        try:
+            if profiler is not None and not profiler.started:
+                cursor = (
+                    None
+                    if self._checkpoint_recovery is None
+                    else self._checkpoint_recovery.manifest.cursor.model_dump(mode="json")
+                )
+                profiler.start(starting_cursor=cursor)
+            with effective_config_scope(self.compiled_scenario.effective_config):
+                with generation_seed_scope(self.generation_seed):
+                    reset_thread_rng()
+                    self._generate_scoped()
+        except GenerationSuspendedError:
+            if profiler is not None:
+                profiler.finish("suspended")
+            raise
+        except BaseException:
+            if profiler is not None:
+                profiler.finish("failed")
+            raise
+        finally:
+            self._generate_owner.release()
+
+    # behavior-surface: checkpoint-control-start
+    def verify_checkpoint_recovery(
+        self,
+        *,
+        progress: Callable[[str, dict[str, object]], None] | None = None,
+    ) -> dict[str, object]:
+        """Hydrate every checkpoint participant without generating another hour."""
+
+        from evidenceforge.config.provider import effective_config_scope
+        from evidenceforge.generation.checkpoints.lifecycle_head import (
+            LifecycleRegistryParticipant,
+        )
+
+        recovery = self._checkpoint_recovery
+        controller = self._checkpoint_controller
+        if recovery is None or controller is None:
+            raise ValueError("checkpoint verification requires a recovery and controller")
+        if not self._generate_owner.acquire(blocking=False):
+            raise RuntimeError("Generation cannot run concurrently or re-enter on one engine")
+        initialization_started = False
+        primary_error: BaseException | None = None
+        try:
+            with effective_config_scope(self.compiled_scenario.effective_config):
+                with generation_seed_scope(self.generation_seed):
+                    reset_thread_rng()
+                    if progress is not None:
+                        progress("initialization", {})
+                    initialization_started = True
+                    self._initialize()
+                    controller.restore_participants(
+                        recovery=recovery,
+                        participants=self._checkpoint_participants,
+                        progress=(
+                            None
+                            if progress is None
+                            else lambda completed, total, owner: progress(
+                                "hydration",
+                                {"completed": completed, "total": total, "owner": owner},
+                            )
+                        ),
+                    )
+                    lifecycle = next(
+                        (
+                            participant
+                            for participant in self._checkpoint_participants
+                            if isinstance(participant, LifecycleRegistryParticipant)
+                        ),
+                        None,
+                    )
+                    diagnostics = None if lifecycle is None else lifecycle.last_restore_diagnostics
+                    dangling_parents = (
+                        () if diagnostics is None else diagnostics.dangling_process_parents
+                    )
+                    return {
+                        "participant_count": len(self._checkpoint_participants),
+                        "dangling_process_parent_count": (
+                            0 if diagnostics is None else diagnostics.dangling_process_parent_count
+                        ),
+                        "dangling_process_parents": [
+                            {
+                                "object_id": object_id,
+                                "parent_object_id": parent_object_id,
+                                "image": image,
+                                "role": role,
+                            }
+                            for object_id, parent_object_id, image, role in dangling_parents
+                        ],
+                    }
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            cleanup_errors: list[BaseException] = []
+            if initialization_started:
+                if progress is not None:
+                    try:
+                        progress("cleanup", {})
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+                try:
+                    self._dispose_checkpoint_verification_scratch()
+                except BaseException as error:
+                    cleanup_errors.append(error)
+            self._generate_owner.release()
+            if cleanup_errors:
+                if primary_error is not None:
+                    for error in cleanup_errors:
+                        primary_error.add_note(
+                            f"Checkpoint verification cleanup also failed: {error!r}"
+                        )
+                else:
+                    first, *additional = cleanup_errors
+                    for error in additional:
+                        first.add_note(f"Additional scratch disposal failure: {error!r}")
+                    raise first
+
+    def _dispose_checkpoint_verification_scratch(self) -> None:
+        """Stop scratch workers and handles without normal source finalization."""
+
+        import io
+        import os
+
+        visited: set[int] = set()
+        closed_descriptors: set[int] = set()
+        emitters = getattr(self, "emitters", {})
+        pending: list[object] = list(emitters.values()) if type(emitters) is dict else []
+        failures: list[BaseException] = []
+        while pending:
+            owner = pending.pop()
+            identity = id(owner)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            stop_event = getattr(owner, "_stop_event", None)
+            worker = getattr(owner, "_thread", None)
+            if stop_event is not None and worker is not None and worker.is_alive():
+                owner._verification_discard = True
+                stop_event.set()
+                worker.join(timeout=5.0)
+                if worker.is_alive():
+                    failures.append(RuntimeError("checkpoint verification worker did not stop"))
+            attributes = getattr(owner, "__dict__", {})
+            if type(attributes) is not dict:
+                continue
+            for name, value in attributes.items():
+                if isinstance(value, sqlite3.Connection):
+                    try:
+                        value.close()
+                    except sqlite3.Error as error:
+                        failures.append(error)
+                    else:
+                        setattr(owner, name, None)
+                elif isinstance(value, io.IOBase):
+                    try:
+                        value.close()
+                    except OSError as error:
+                        failures.append(error)
+                    else:
+                        setattr(owner, name, None)
+                elif (
+                    name.endswith("_descriptor")
+                    and type(value) is int
+                    and value > 2
+                    and value not in closed_descriptors
+                ):
+                    try:
+                        os.close(value)
+                    except OSError as error:
+                        failures.append(error)
+                    else:
+                        closed_descriptors.add(value)
+                        setattr(owner, name, None)
+                elif type(value) is dict:
+                    pending.extend(value.values())
+                elif value.__class__.__module__.startswith("evidenceforge.generation.emitters"):
+                    pending.append(value)
+        if failures:
+            first, *additional = failures
+            for failure in additional:
+                first.add_note(f"Additional scratch disposal failure: {failure!r}")
+            raise first
+
+    # behavior-surface: checkpoint-control-end
 
     def _generate_scoped(self) -> None:
         """Main generation flow.
@@ -189,19 +636,58 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         """
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
-        # Phase 1: Initialize
-        self._report_progress(
-            "phase_start", {"phase": "initialize", "description": "Initializing generation engine"}
-        )
-        self._initialize()
-        self._report_progress("phase_end", {"phase": "initialize"})
+        if self._finalization_aborted:
+            self._retry_aborted_cleanup()
+            raise RuntimeError("Aborted generation cannot be restarted")
+        if self._generation_body_completed:
+            if not self._finalization_complete:
+                self._finalize_successfully_with_progress(
+                    description="Retrying generation finalization"
+                )
+            self._complete_generation_outputs()
+            return
+        if self._initialization_complete:
+            raise RuntimeError("Generation body cannot be restarted after an incomplete run")
+
+        # Phase 1: Initialize a fresh runtime, then hydrate semantic state when resuming.
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "initialize", "description": "Initializing generation engine"},
+            )
+            with self._profile_span("generation.initialize"):
+                self._initialize()
+            recovery = self._checkpoint_recovery
+            if recovery is not None:
+                controller = self._checkpoint_controller
+                if controller is None:  # pragma: no cover - constructor invariant
+                    raise RuntimeError("checkpoint recovery lost its controller")
+                controller.restore_participants(
+                    recovery=recovery,
+                    participants=self._checkpoint_participants,
+                )
+                if controller.migration_required:
+                    self._barrier_flush_all_emitters()
+                    controller.commit_migration(participants=self._checkpoint_participants)
+            self._initialization_complete = True
+            self._report_progress("phase_end", {"phase": "initialize"})
+        except BaseException as primary:
+            self._abort_failed_generation(primary)
+            raise
 
         try:
             # Phase 2: Generate baseline activity
             self._report_progress(
                 "phase_start", {"phase": "baseline", "description": "Generating baseline activity"}
             )
-            self._generate_baseline()
+            with self._profile_span("generation.baseline"):
+                self._generate_baseline(
+                    resume_cursor=(
+                        None
+                        if self._checkpoint_recovery is None
+                        else self._checkpoint_recovery.manifest.cursor
+                    )
+                )
             self._report_progress("phase_end", {"phase": "baseline"})
 
             # Phase 6.3: Execute remaining storyline events not covered by baseline hours
@@ -222,10 +708,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             "description": f"Executing {len(remaining)} remaining storyline events",
                         },
                     )
-                    for idx in remaining:
-                        self._execute_single_storyline_event(idx)
-                        self._storyline_executed.add(idx)
-                    self._barrier_flush_all_emitters()
+                    with self._profile_span("generation.remaining_storyline"):
+                        for idx in remaining:
+                            self._execute_single_storyline_event(idx)
+                            self._storyline_executed.add(idx)
+                        self._barrier_flush_all_emitters()
                     self._report_progress("phase_end", {"phase": "storyline"})
 
             # Execute remaining red herring events not covered by baseline hours
@@ -239,18 +726,112 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     logger.info(
                         f"Executing {len(remaining_rh)} remaining red herring events (outside baseline window)"
                     )
-                    for idx in remaining_rh:
-                        self._execute_single_red_herring_event(idx)
-                        self._red_herring_executed.add(idx)
-                    self._barrier_flush_all_emitters()
-        finally:
-            # Phase 4: Finalize and close emitters (always, even on error)
-            self._report_progress(
-                "phase_start", {"phase": "finalize", "description": "Finalizing generation"}
-            )
-            self._finalize()
-            self._report_progress("phase_end", {"phase": "finalize"})
+                    with self._profile_span("generation.remaining_red_herrings"):
+                        for idx in remaining_rh:
+                            self._execute_single_red_herring_event(idx)
+                            self._red_herring_executed.add(idx)
+                        self._barrier_flush_all_emitters()
+            with self._profile_span("generation.story_process_terminations"):
+                self._flush_story_process_terminations()
+            self._generation_body_completed = True
+        except GenerationSuspendedError:
+            raise
+        except BaseException as primary:
+            self._abort_failed_generation(primary)
+            raise
+        else:
+            with self._profile_span("generation.finalization"):
+                self._finalize_successfully_with_progress(description="Finalizing generation")
 
+        self._complete_generation_outputs()
+
+    def _abort_failed_generation(self, primary: BaseException) -> None:
+        """Close every initialized emitter without allowing progress errors to skip cleanup."""
+
+        self._finalization_aborted = True
+        secondary_errors: list[tuple[str, BaseException]] = []
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": "Finalizing generation"},
+            )
+        except BaseException as progress_error:
+            secondary_errors.append(("Generation failure progress callback", progress_error))
+        try:
+            self._finalize(generation_succeeded=False)
+        except BaseException as cleanup_error:
+            secondary_errors.append(("Generation failure cleanup", cleanup_error))
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException as progress_error:
+            secondary_errors.append(("Generation failure progress callback", progress_error))
+        for label, error in secondary_errors:
+            try:
+                BaseException.add_note(primary, f"{label} also failed: {error!r}")
+            except BaseException:
+                logger.debug("Unable to annotate the primary generation failure")
+
+    def _retry_aborted_cleanup(self) -> None:
+        """Resume only legacy terminal cleanup after an already-aborted run."""
+
+        if self._finalization_complete:
+            return
+        progress_error: BaseException | None = None
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": "Retrying aborted generation cleanup"},
+            )
+        except BaseException as error:
+            progress_error = error
+        try:
+            self._finalize(generation_succeeded=False)
+        except BaseException as cleanup_error:
+            if progress_error is not None:
+                cleanup_error.add_note(
+                    f"Aborted cleanup progress callback also failed: {progress_error!r}"
+                )
+            raise
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException:
+            if progress_error is None:
+                raise
+        if progress_error is not None:
+            raise progress_error
+
+    def _finalize_successfully_with_progress(self, *, description: str) -> None:
+        """Run retryable EOF finalization even when its progress callback fails."""
+
+        progress_error: BaseException | None = None
+        try:
+            self._report_progress(
+                "phase_start",
+                {"phase": "finalize", "description": description},
+            )
+        except BaseException as error:
+            progress_error = error
+        try:
+            self._finalize(generation_succeeded=True)
+        except BaseException as finalization_error:
+            if progress_error is not None:
+                finalization_error.add_note(
+                    f"Finalization progress callback also failed: {progress_error!r}"
+                )
+            raise
+        try:
+            self._report_progress("phase_end", {"phase": "finalize"})
+        except BaseException as error:
+            if progress_error is None:
+                progress_error = error
+        if progress_error is not None:
+            raise progress_error
+
+    def _complete_generation_outputs(self) -> None:
+        """Write successful-run metadata once after retryable terminal source close."""
+
+        if self._generation_complete:
+            return
         # Phase 5: Generate ground-truth reports for every successful run. Baseline-only
         # datasets still need an empty GROUND_TRUTH.md so CLI overwrite swaps
         # can keep data and metadata as a matched pair.
@@ -264,8 +845,45 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             {"phase": "ground_truth", "description": "Generating ground truth documentation"},
         )
         self._generate_ground_truth()
+        from evidenceforge.composition.artifacts import (
+            write_generation_manifest,
+            write_resolved_scenario,
+        )
+
+        write_resolved_scenario(self.compiled_scenario, self.ground_truth_dir)
+        if self.profiler is not None:
+            try:
+                self.profiler.record_final_emitters(
+                    {
+                        str(format_name): emitter.profiling_snapshot()
+                        for format_name, emitter in self.emitters.items()
+                    }
+                )
+            except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                self.profiler.mark_degraded(
+                    f"Unable to capture final emitter profile metrics: {exc}"
+                )
+            self.profiler.finish("completed")
+            self.profiler.write(self.ground_truth_dir)
+        write_generation_manifest(
+            self.compiled_scenario,
+            self.ground_truth_dir,
+            output_target=self.output_target.value,
+            formats=[
+                str(log["format"])
+                for log in self.scenario.output.logs
+                if isinstance(log, dict) and "format" in log
+            ],
+            oob_hosts=self.oob_hosts,
+            resume_provenance=(
+                None
+                if self._checkpoint_controller is None
+                else self._checkpoint_controller.resume_provenance
+            ),
+        )
         self._report_progress("phase_end", {"phase": "ground_truth"})
 
+        self._generation_complete = True
         logger.info("Generation complete")
 
     def _initialize(self) -> None:
@@ -296,6 +914,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.warmup_start_time = self.start_time - self.warmup_duration
         # Epoch for periodic schedules (DNS, SMB) — covers warm-up + real window
         self._generation_epoch = self.warmup_start_time
+        self.timing_runtime = TimingRuntime(
+            reference_time=self.warmup_start_time,
+            namespace=_ENGINE_TIMING_NAMESPACE,
+            generation_seed=self.generation_seed,
+        )
+        self.source_timing_planner = SourceTimingPlanner(
+            clock_profile_name=self.scenario.observation_profile,
+            timing_runtime=self.timing_runtime,
+        )
         if self.warmup_duration.total_seconds() > 0:
             logger.info(
                 f"Warm-up period: {self.warmup_start_time} to {self.start_time} "
@@ -308,6 +935,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         # Initialize emitters (from EmitterSetupMixin)
         self._init_emitters()
+        self._source_finalization_authority = ExactPublicationAuthority(
+            capacity=1,
+            row_capacity=512,
+            byte_capacity=20 * 1024 * 1024,
+        )
+        participants = tuple(
+            emitter
+            for emitter in self.emitters.values()
+            if isinstance(emitter, SourceFinalizationParticipant)
+        )
+        self._source_finalization_coordinator = SourceFinalizationCoordinator(
+            participants,
+            self._source_finalization_authority,
+        )
 
         # Initialize network visibility engine (Phase 2.5)
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -315,6 +956,26 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         visibility_engine = NetworkVisibilityEngine(
             network_config=self.scenario.environment.network,
             systems=self.scenario.environment.systems,
+        )
+        from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
+        from evidenceforge.generation.source_deployment_compiler import (
+            compile_scenario_source_deployment,
+        )
+
+        # Compile one immutable source deployment after concrete emitters and
+        # topology are known. Sensor-backed formats retain their legacy
+        # no-output behavior when no sensor is configured.
+        network = self.scenario.environment.network
+        has_network_sensors = network is not None and bool(network.sensors)
+        deployment_formats = tuple(
+            format_name
+            for format_name in self.emitters
+            if has_network_sensors
+            or DEFAULT_SOURCE_CATALOG.descriptor(format_name).owner is SourceOwnerKind.HOST
+        )
+        self.source_deployment_compilation = compile_scenario_source_deployment(
+            self.scenario,
+            emitter_formats=deployment_formats,
         )
 
         # Resolve logical people and platform accounts once, then expose the
@@ -336,6 +997,26 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 "inter_gap_bias": rng.gauss(0, 0.10),  # +/-10% gap timing
             }
 
+        # Establish the canonical State frontier before constructing any runtime owner that
+        # can publish lifecycle identity. Production owns exactly one registry/shadow/authority
+        # graph; boot processes enter State and lifecycle through its fleet transaction below.
+        self.state_manager.set_current_time(self.warmup_start_time)
+        self.lifecycle_registry = LifecycleRegistry()
+        self.lifecycle_shadow = LifecycleShadow(self.state_manager, self.lifecycle_registry)
+        self.lifecycle_authority = GeneratorLifecycleAuthority(
+            self.state_manager,
+            self.lifecycle_shadow,
+        )
+        self.application_channel_registry = ApplicationChannelRegistry(
+            window_start=self.warmup_start_time,
+            window_end=_UNBOUNDED_LIFECYCLE_WINDOW_END,
+        )
+        self.rdp_session_manager = RdpReconnectStateManager(
+            application_registry=self.application_channel_registry,
+            window_start=self.warmup_start_time,
+            window_end=_UNBOUNDED_LIFECYCLE_WINDOW_END,
+        )
+
         # Initialize event dispatcher and activity generator
         from evidenceforge.events.observation import ObservationPolicy
 
@@ -347,6 +1028,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             output_end_time=self.end_time,
             observation_policy=ObservationPolicy(self.scenario.observation_profile),
             intent_execution_ledger=self.intent_execution_ledger,
+            timing_runtime=self.timing_runtime,
+            source_timing_planner=self.source_timing_planner,
+            lifecycle_shadow=self.lifecycle_shadow,
+            collection_deployment=self.source_deployment_compilation.deployment,
         )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -356,6 +1041,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             identity_directory=identity_directory,
             source_timing_profile=self.scenario.observation_profile,
             dispatcher=self.dispatcher,
+            timing_runtime=self.timing_runtime,
+            source_timing_planner=self.source_timing_planner,
+            lifecycle_shadow=self.lifecycle_shadow,
+            lifecycle_authority=self.lifecycle_authority,
+            application_channel_registry=self.application_channel_registry,
+            rdp_session_manager=self.rdp_session_manager,
+            generation_window_start=self.warmup_start_time,
+            generation_window_end=self.end_time,
+            public_identity_registry=self.public_identity_registry,
         )
         self.activity_generator._network_resolver = self.network_resolver
         self.activity_generator._scenario_environment = self.scenario.environment
@@ -373,9 +1067,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._scenario_start_time = self.start_time
         self.activity_generator._scenario_end_time = self.end_time
         logger.info("Initialized activity generator")
-
-        # Set initial state manager time (warm-up start if applicable)
-        self.state_manager.set_current_time(self.warmup_start_time)
 
         # Resolve scenario timezone for work-hours modulation
         self._scenario_tz = None
@@ -398,6 +1089,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.world_model = WorldModel(self.scenario, self._ad_domain)
         self.activity_generator._world_model = self.world_model
         self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
+        from evidenceforge.generation.storage_world import StorageWorldModel
+
+        self.storage_world = StorageWorldModel.compile(self.scenario)
+        self.activity_generator._storage_world = self.storage_world
+        from evidenceforge.generation.deployment_compiler import (
+            compile_native_deployment_registry,
+        )
+
+        self.deployment_registry = compile_native_deployment_registry(
+            self.scenario,
+            self.world_model,
+            storage_world=self.storage_world,
+        )
+        self.dispatcher.bind_deployment_registry(self.deployment_registry)
 
         # Cache org CIDR networks for external IP exclusion
         import ipaddress as _ipa_core
@@ -452,6 +1157,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if "windows_event_security" in self.emitters:
             self.emitters["windows_event_security"]._state_manager = self.state_manager
             self.emitters["windows_event_security"]._system_pids = self._system_pids
+        if "ecar" in self.emitters:
+            self.emitters["ecar"]._state_manager = self.state_manager
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:
@@ -496,6 +1203,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         self.activity_generator._world_planner = self.world_planner
 
+        for emitter in self.emitters.values():
+            emitter.enable_deferred_sorted_publication()
+
+        if self._checkpoint_controller is not None:
+            from evidenceforge.generation.checkpoints.participant_set import (
+                production_checkpoint_participants,
+            )
+
+            self._checkpoint_participants = production_checkpoint_participants(self)
+
         logger.info("Initialization complete")
 
     def _find_user(self, username: str) -> User | None:
@@ -533,27 +1250,614 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 return system
         return None
 
-    def _finalize(self) -> None:
+    @staticmethod
+    def _emitter_identity_snapshot(emitters: dict) -> tuple[tuple[str, object], ...]:
+        """Return a deterministic identity-only snapshot of an emitter mapping."""
+
+        return tuple(sorted(emitters.items(), key=lambda item: item[0]))
+
+    def _pin_terminal_owners(self) -> _TerminalOwnerSnapshot:
+        """Pin every public owner before the first terminal stage mutates state."""
+
+        current = _TerminalOwnerSnapshot(
+            activity_generator=getattr(self, "activity_generator", None),
+            dispatcher=getattr(self, "dispatcher", None),
+            source_coordinator=getattr(self, "_source_finalization_coordinator", None),
+            emitters=self._emitter_identity_snapshot(getattr(self, "emitters", {})),
+        )
+        expected = getattr(self, "_terminal_owner_snapshot", None)
+        if expected is None:
+            self._terminal_owner_snapshot = current
+            return current
+        if current.activity_generator is not expected.activity_generator:
+            raise RuntimeError("Activity generator changed identity after terminal ownership")
+        if current.dispatcher is not expected.dispatcher:
+            raise RuntimeError("Generation dispatcher changed identity after terminal ownership")
+        if current.source_coordinator is not expected.source_coordinator:
+            raise RuntimeError(
+                "Source-finalization coordinator changed identity after terminal ownership"
+            )
+        if len(current.emitters) != len(expected.emitters):
+            raise RuntimeError("Emitter mapping keys changed after terminal ownership")
+        for (current_name, current_emitter), (expected_name, expected_emitter) in zip(
+            current.emitters,
+            expected.emitters,
+            strict=True,
+        ):
+            if current_name != expected_name:
+                raise RuntimeError("Emitter mapping keys changed after terminal ownership")
+            if current_emitter is not expected_emitter:
+                raise RuntimeError(
+                    f"Emitter mapping for {current_name!r} changed identity "
+                    "after terminal ownership"
+                )
+        return expected
+
+    def _run_bounded_terminal_stage(
+        self,
+        *,
+        completed_attribute: str,
+        description: str,
+        operation: Callable[[], None],
+    ) -> None:
+        """Run one restartable stage twice at most while preserving its first error."""
+
+        if getattr(self, completed_attribute, False):
+            return
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                operation()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"{description} retry also failed: {error!r}")
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            setattr(self, completed_attribute, True)
+            if primary is None:
+                return
+            raise primary
+
+    def _activity_terminal_capability(
+        self,
+        name: str,
+        *,
+        owner_attributes: tuple[str, ...],
+        missing_message: str,
+    ) -> Callable[..., object] | None:
+        """Resolve a terminal API while retaining compatibility-only test adapters."""
+
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            return None
+        capability = getattr(activity_generator, name, None)
+        if callable(capability):
+            return capability
+        owner_state = vars(activity_generator)
+        if any(attribute in owner_state for attribute in owner_attributes):
+            raise RuntimeError(missing_message)
+        return None
+
+    def _drain_exact_projection_recoveries_before_close(self) -> None:
+        """Finish dispatcher-owned exact projection recovery before sink shutdown.
+
+        The dispatcher is installed partway through initialization, and legacy
+        dispatchers cannot own exact projection recovery.  Treat a dispatcher
+        with neither capability as a no-op, but reject a partial or malformed
+        capability so emitter close cannot strand admitted source rows.
+        """
+
+        dispatcher = getattr(self, "dispatcher", None)
+        recovery_dispatcher = self._exact_projection_recovery_dispatcher
+        if recovery_dispatcher is not None and dispatcher is not recovery_dispatcher:
+            raise RuntimeError(
+                "Generation dispatcher changed identity after exact projection recovery ownership"
+            )
+        if dispatcher is None:
+            return
+        drain = getattr(dispatcher, "drain_exact_projection_recoveries", None)
+        assert_drained = getattr(
+            dispatcher,
+            "assert_exact_projection_recoveries_drained",
+            None,
+        )
+        if drain is None and assert_drained is None:
+            return
+        if not callable(drain) or not callable(assert_drained):
+            raise RuntimeError(
+                "Generation dispatcher has an incomplete exact projection recovery capability"
+            )
+        if recovery_dispatcher is None:
+            if self.dispatcher is not dispatcher:
+                raise RuntimeError(
+                    "Generation dispatcher changed identity during exact projection recovery setup"
+                )
+            self._exact_projection_recovery_dispatcher = dispatcher
+        drain()
+        assert_drained()
+
+    def _assert_ssh_session_lifecycles_drained_before_close(self) -> None:
+        """Require the activity owner's close journal to be terminal before sink close."""
+
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            return
+        assert_drained = getattr(
+            activity_generator,
+            "assert_ssh_session_lifecycles_drained",
+            None,
+        )
+        if not callable(assert_drained):
+            # Compatibility adapters that predate action-owned SSH journals
+            # have nothing to assert. A real owner exposing journal storage may
+            # never silently omit the matching terminal capability.
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_ssh_session_closures" in owner_state
+                or "_prepared_ssh_close_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no SSH close-journal terminal assertion")
+            return
+        assert_drained()
+
+    def _assert_rdp_session_lifecycles_drained_before_close(self) -> None:
+        """Require the RDP lifecycle journal to be terminal before sink close."""
+
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            return
+        assert_drained = getattr(
+            activity_generator,
+            "assert_rdp_session_lifecycles_drained",
+            None,
+        )
+        if not callable(assert_drained):
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_rdp_lifecycle_continuations" in owner_state
+                or "_prepared_rdp_lifecycle_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no RDP lifecycle terminal assertion")
+            return
+        assert_drained()
+
+    def _finalize_linux_sudo_logoffs_before_close(self) -> None:
+        """Drain sudo-logoff work with one recovery retry, preserving its first failure."""
+
+        if self._linux_sudo_logoffs_finalized:
+            return
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            self._linux_sudo_logoffs_finalized = True
+            return
+
+        owner_state = vars(activity_generator)
+        activity_type = type(activity_generator)
+        owns_journal = (
+            "_pending_linux_sudo_logoffs" in owner_state
+            or "finalize_linux_sudo_logoffs" in owner_state
+            or "assert_linux_sudo_logoffs_drained" in owner_state
+            or getattr(activity_type, "finalize_linux_sudo_logoffs", None) is not None
+            or getattr(activity_type, "assert_linux_sudo_logoffs_drained", None) is not None
+        )
+        if not owns_journal:
+            self._linux_sudo_logoffs_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_linux_sudo_logoffs", None)
+        assert_drained = getattr(activity_generator, "assert_linux_sudo_logoffs_drained", None)
+        if not callable(finalizer):
+            raise RuntimeError("Activity generator has no Linux sudo logoff finalizer")
+        if not callable(assert_drained):
+            raise RuntimeError("Activity generator has no Linux sudo logoff terminal assertion")
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                finalizer()
+                assert_drained()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"Linux sudo logoff journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after Linux sudo logoff failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            if primary is None:
+                self._linux_sudo_logoffs_finalized = True
+                return
+            try:
+                # A recovered retry may admit the terminal eCAR row after its
+                # canonical state was already committed. Authenticate both
+                # owners again before remembering the stage as complete.
+                self._drain_exact_projection_recoveries_before_close()
+                assert_drained()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    "Terminal recovery after Linux sudo logoff retry also failed: "
+                    f"{recovery_error!r}"
+                )
+                raise primary from recovery_error
+            self._linux_sudo_logoffs_finalized = True
+            raise primary
+
+    def _finalize_rdp_session_lifecycles_before_close(self) -> None:
+        """Drain RDP terminal work with one exact-projection recovery retry."""
+
+        if getattr(self, "_rdp_lifecycles_finalized", False):
+            return
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            self._rdp_lifecycles_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_rdp_session_lifecycles", None)
+        if not callable(finalizer):
+            owner_state = vars(activity_generator)
+            if (
+                "_pending_rdp_lifecycle_continuations" in owner_state
+                or "_prepared_rdp_lifecycle_continuations" in owner_state
+            ):
+                raise RuntimeError("Activity generator has no RDP lifecycle-journal finalizer")
+            self._rdp_lifecycles_finalized = True
+            return
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                lifecycle_frontier = getattr(
+                    self,
+                    "_terminal_lifecycle_frontier",
+                    getattr(self, "end_time", None),
+                )
+                if lifecycle_frontier is not None:
+                    finalizer(lifecycle_frontier)
+                self._assert_rdp_session_lifecycles_drained_before_close()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"RDP lifecycle-journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after RDP lifecycle failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            self._rdp_lifecycles_finalized = True
+            if primary is None:
+                return
+            try:
+                self._drain_exact_projection_recoveries_before_close()
+                self._assert_rdp_session_lifecycles_drained_before_close()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    f"Terminal recovery after RDP lifecycle retry also failed: {recovery_error!r}"
+                )
+            raise primary
+
+    def _finalize_ssh_session_lifecycles_before_close(self) -> None:
+        """Drain SSH close work with one recovery retry, preserving its first failure."""
+
+        if getattr(self, "_ssh_lifecycles_finalized", False):
+            return
+        activity_generator = getattr(self, "activity_generator", None)
+        if activity_generator is None:
+            self._ssh_lifecycles_finalized = True
+            return
+        finalizer = getattr(activity_generator, "finalize_ssh_session_lifecycles", None)
+        if not callable(finalizer):
+            raise RuntimeError("Activity generator has no SSH close-journal finalizer")
+
+        primary: BaseException | None = None
+        for attempt in range(2):
+            try:
+                lifecycle_frontier = getattr(
+                    self,
+                    "_terminal_lifecycle_frontier",
+                    getattr(self, "end_time", None),
+                )
+                if lifecycle_frontier is not None:
+                    finalizer(lifecycle_frontier)
+                self._assert_ssh_session_lifecycles_drained_before_close()
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note(f"SSH close-journal retry also failed: {error!r}")
+                try:
+                    self._drain_exact_projection_recoveries_before_close()
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Exact projection recovery after SSH close failure also failed: "
+                        f"{recovery_error!r}"
+                    )
+                    raise primary from recovery_error
+                if attempt == 1:
+                    raise primary from None
+                continue
+
+            self._ssh_lifecycles_finalized = True
+            if primary is None:
+                return
+            try:
+                # The recovered retry may itself have admitted terminal source
+                # rows. Finish those while sinks remain open, but preserve the
+                # caller-visible first failure.
+                self._drain_exact_projection_recoveries_before_close()
+                self._assert_ssh_session_lifecycles_drained_before_close()
+            except BaseException as recovery_error:
+                primary.add_note(
+                    f"Terminal recovery after SSH close retry also failed: {recovery_error!r}"
+                )
+            raise primary
+
+    def _assert_persistent_smb_terminal_state_before_close(self) -> None:
+        """Reject synchronous SMB action residue before shared watermarks advance."""
+
+        def assert_drained() -> None:
+            capability = self._activity_terminal_capability(
+                "assert_persistent_smb_terminal_state_drained",
+                owner_attributes=(
+                    "_persistent_smb_terminal_continuations",
+                    "_smb_channel_manager",
+                ),
+                missing_message=(
+                    "Activity generator has no persistent-SMB terminal-state assertion"
+                ),
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_persistent_smb_terminal_asserted",
+            description="Persistent-SMB terminal assertion",
+            operation=assert_drained,
+        )
+
+    def _finalize_application_channels_before_close(self) -> None:
+        """Advance the one shared terminal application/network watermark."""
+
+        def advance() -> None:
+            capability = self._activity_terminal_capability(
+                "advance_terminal_application_channel_watermark",
+                owner_attributes=(
+                    "_application_channel_registry",
+                    "_network_transaction_runtime",
+                ),
+                missing_message=(
+                    "Activity generator has no shared terminal application-channel watermark"
+                ),
+            )
+            end_time = getattr(
+                self,
+                "_terminal_lifecycle_frontier",
+                getattr(self, "end_time", None),
+            )
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError(
+                        "Generation engine lost its terminal application-channel watermark"
+                    )
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_application_channels_finalized",
+            description="Shared application-channel watermark",
+            operation=advance,
+        )
+
+    def _finalize_foreground_lifecycles_before_close(self) -> None:
+        """Finalize foreground process lifetimes as a restartable cleanup substage."""
+
+        def finalize() -> None:
+            capability = self._activity_terminal_capability(
+                "finalize_foreground_process_lifetimes",
+                owner_attributes=("_foreground_process_finalizers",),
+                missing_message=("Activity generator has no foreground-process terminal finalizer"),
+            )
+            end_time = getattr(
+                self,
+                "_terminal_lifecycle_frontier",
+                getattr(self, "end_time", None),
+            )
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError("Generation engine lost its foreground-process frontier")
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_foreground_lifecycles_finalized",
+            description="Foreground lifecycle finalization",
+            operation=finalize,
+        )
+
+    def _finalize_terminal_runtime_cleanup_before_close(self) -> None:
+        """Advance bounded process, lifecycle, network, and timing retention."""
+
+        def finalize() -> None:
+            capability = self._activity_terminal_capability(
+                "finalize_terminal_runtime_state",
+                owner_attributes=(
+                    "_lifecycle_authority",
+                    "_source_timing_planner",
+                    "_network_transaction_runtime",
+                ),
+                missing_message="Activity generator has no terminal runtime cleanup",
+            )
+            end_time = getattr(
+                self,
+                "_terminal_runtime_frontier",
+                getattr(self, "end_time", None),
+            )
+            if capability is not None:
+                if end_time is None:
+                    raise RuntimeError("Generation engine lost its terminal runtime frontier")
+                capability(end_time)
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_terminal_runtime_cleanup_finalized",
+            description="Terminal runtime cleanup",
+            operation=finalize,
+        )
+
+    def _finalize_exact_projection_recoveries_before_close(self) -> None:
+        """Drain exact rows, then reassert persistent-SMB group/source ownership."""
+
+        def finalize() -> None:
+            self._drain_exact_projection_recoveries_before_close()
+            capability = self._activity_terminal_capability(
+                "assert_persistent_smb_projection_state_drained",
+                owner_attributes=("_persistent_smb_terminal_continuations",),
+                missing_message=(
+                    "Activity generator has no persistent-SMB projection-state assertion"
+                ),
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_exact_projection_recoveries_finalized",
+            description="Exact projection recovery",
+            operation=finalize,
+        )
+
+    def _assert_terminal_transient_state_before_close(self) -> None:
+        """Require the composite transient-owner census to be empty before shutdown."""
+
+        def assert_drained() -> None:
+            capability = self._activity_terminal_capability(
+                "assert_terminal_transient_state_drained",
+                owner_attributes=(
+                    "_application_channel_registry",
+                    "_lifecycle_authority",
+                    "_source_timing_planner",
+                ),
+                missing_message="Activity generator has no composite terminal-state assertion",
+            )
+            if capability is not None:
+                capability()
+
+        self._run_bounded_terminal_stage(
+            completed_attribute="_terminal_transient_census_asserted",
+            description="Composite terminal transient assertion",
+            operation=assert_drained,
+        )
+
+    def _drain_terminal_stages_before_close(self, *, include_foreground: bool) -> None:
+        """Run every shared terminal stage in its single public shutdown order."""
+
+        activity_generator = getattr(self, "activity_generator", None)
+        collection_end = getattr(self, "end_time", None)
+        lifecycle_frontier = getattr(
+            activity_generator,
+            "terminal_lifecycle_frontier",
+            None,
+        )
+        if collection_end is not None and callable(lifecycle_frontier):
+            self._terminal_lifecycle_frontier = lifecycle_frontier(collection_end)
+        else:
+            self._terminal_lifecycle_frontier = collection_end
+        self._finalize_ssh_session_lifecycles_before_close()
+        self._finalize_rdp_session_lifecycles_before_close()
+        self._finalize_linux_sudo_logoffs_before_close()
+        self._assert_persistent_smb_terminal_state_before_close()
+        self._finalize_application_channels_before_close()
+        if include_foreground:
+            self._finalize_foreground_lifecycles_before_close()
+        runtime_frontier = getattr(activity_generator, "terminal_runtime_frontier", None)
+        if callable(runtime_frontier) and self._terminal_lifecycle_frontier is not None:
+            self._terminal_runtime_frontier = runtime_frontier(self._terminal_lifecycle_frontier)
+        else:
+            self._terminal_runtime_frontier = self._terminal_lifecycle_frontier
+        self._finalize_terminal_runtime_cleanup_before_close()
+        self._finalize_exact_projection_recoveries_before_close()
+        self._assert_terminal_transient_state_before_close()
+
+    def _close_emitters(self, *, primary: BaseException | None = None) -> None:
+        """Close every emitter, retaining a supplied lifecycle failure as primary."""
+
+        failures: list[BaseException] = []
+        snapshot = self._pin_terminal_owners()
+        expected_emitters = dict(snapshot.emitters)
+        self._expected_close_emitters = expected_emitters
+
+        for format_name, emitter in expected_emitters.items():
+            logger.info("Stopping %s emitter thread", format_name)
+            if format_name in self._closed_emitter_names:
+                continue
+            try:
+                emitter.close()
+            except BaseException as error:
+                failures.append(error)
+            else:
+                self._closed_emitter_names.add(format_name)
+        if primary is not None:
+            for failure in failures:
+                primary.add_note(f"Emitter cleanup also failed: {failure!r}")
+            return
+        if failures:
+            first, *additional = failures
+            for failure in additional:
+                first.add_note(f"Additional emitter cleanup failure: {failure!r}")
+            raise first
+
+    def _finalize(self, *, generation_succeeded: bool = True) -> None:
         """Finalize generation and close all emitters.
 
         Flushes remaining buffered events and closes emitter files.
         Phase 2.1: Gracefully stops emitter threads before closing.
         """
+        if getattr(self, "_finalization_complete", False):
+            return
         logger.info("Finalizing generation")
 
-        if self.activity_generator is not None and self.end_time is not None:
-            self.activity_generator.finalize_ssh_session_lifecycles(self.end_time)
-            self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
+        if not generation_succeeded:
+            self._finalization_aborted = True
+            self._pin_terminal_owners()
+            self._drain_terminal_stages_before_close(include_foreground=False)
+            self._close_emitters()
+            self._finalization_complete = True
+            return
+        if getattr(self, "_finalization_aborted", False):
+            raise RuntimeError("Aborted generation cannot resume exact source finalization")
 
-        for format_name, emitter in self.emitters.items():
-            logger.info(f"Stopping {format_name} emitter thread")
-            emitter.close()
+        snapshot = self._pin_terminal_owners()
+        self._drain_terminal_stages_before_close(include_foreground=True)
+        coordinator = snapshot.source_coordinator
+        if coordinator is None:
+            raise RuntimeError("Generation engine lost its source-finalization coordinator")
+        coordinator.finalize()
+        self._close_emitters()
+        if not getattr(self, "_source_coordinator_closed", False):
+            coordinator.mark_closed()
+            self._source_coordinator_closed = True
 
-        snort_emitter = self.emitters.get("snort_alert")
-        ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
-        if ids_summary:
-            self._apply_ids_alert_summary(ids_summary)
-        self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
+        if not getattr(self, "_ids_alert_summary_applied", False):
+            snort_emitter = self.emitters.get("snort_alert")
+            ids_summary = getattr(snort_emitter, "ids_alert_summary", {})
+            if ids_summary:
+                self._apply_ids_alert_summary(ids_summary)
+            self._ids_evaluation_summary = getattr(snort_emitter, "ids_evaluation_summary", None)
+            self._ids_alert_summary_applied = True
 
         if self.activity_generator is not None:
             self.activity_generator.write_artifacts_manifest()
@@ -567,6 +1871,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             workload_estimate=self.workload_estimate,
         )
 
+        self._finalization_complete = True
         logger.info("All emitters closed")
 
     def _apply_ids_alert_summary(
@@ -636,10 +1941,38 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         document = generator.build_document()
         generator.write_json(self.ground_truth_dir / GROUND_TRUTH_JSON_FILENAME, document)
         generator.generate(output_path, document)
+        from evidenceforge.generation.storage_world import write_storage_manifest
+
+        resolved_storage_targets = [
+            {
+                "section": section,
+                "actor": event.get("actor"),
+                "system": event.get("system"),
+                "activity": event.get("activity"),
+                "operations": event.get("operations", []),
+                "batch_summary": event.get("batch_summary", {}),
+            }
+            for section, events in (
+                ("storyline", self.malicious_events),
+                ("red_herring", self.red_herring_events),
+            )
+            for event in events
+            if event.get("type") == "smb_activity"
+        ]
+        write_storage_manifest(
+            self.ground_truth_dir / "STORAGE_MANIFEST.json",
+            self.storage_world,
+            resolved_targets=resolved_storage_targets,
+        )
         write_observation_manifest(
             self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
             self.scenario,
             source_evidence_status,
+            source_deployment_digest=(
+                self.source_deployment_compilation.digest
+                if self.scenario.environment.observation_overrides
+                else None
+            ),
         )
         write_output_target_marker(self.ground_truth_dir, self.output_target)
         logger.info(f"Ground truth documentation generated: {output_path}")

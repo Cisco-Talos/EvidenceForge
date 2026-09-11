@@ -1,0 +1,5 @@
+baseline_activity:
+  description: "Weekday specialty-practice activity across metropolitan offices."
+  intensity: medium
+  variation: medium
+  suspicious_noise: medium

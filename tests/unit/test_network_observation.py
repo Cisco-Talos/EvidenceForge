@@ -29,14 +29,21 @@ from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkSensorObservation,
     NetworkTrafficLedger,
+    NetworkTransactionPlan,
+    NetworkTuple,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation import network_observation as network_observation_module
 from evidenceforge.generation.activity.timing_profiles import NetworkSensorObservationTiming
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
-from evidenceforge.generation.network_observation import NetworkObservationPlanner
+from evidenceforge.generation.network_observation import (
+    NetworkObservationPlanner,
+    PersistentSmbTrafficRebindAuthority,
+    PersistentSmbTrafficRebindBinding,
+)
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
@@ -164,6 +171,297 @@ def _observation_by_sensor(
     observations: tuple[NetworkSensorObservation, ...],
 ) -> dict[str, NetworkSensorObservation]:
     return {observation.sensor_identity: observation for observation in observations}
+
+
+def _persistent_smb_transport() -> NetworkTransactionPlan:
+    return network_plan(
+        src_ip="10.0.1.25",
+        src_port=51000,
+        dst_ip="10.0.2.40",
+        dst_port=445,
+        protocol="tcp",
+        service="smb",
+        zeek_uid="CSmbPersistent1",
+        conn_id="conn-smb-persistent",
+        duration=2.5,
+        source_visible_start_time=T0,
+        source_visible_close_time=T0 + timedelta(seconds=2.5),
+        orig_bytes=1_000,
+        resp_bytes=500,
+        orig_pkts=10,
+        resp_pkts=5,
+        orig_ip_bytes=1_280,
+        resp_ip_bytes=640,
+        conn_state="SF",
+        history="ShADadFf",
+        ip_proto=6,
+    )
+
+
+def _persistent_smb_observation(
+    traffic: NetworkTrafficLedger,
+    *,
+    sensor_identity: str,
+    history: str = "ShADadFf",
+) -> NetworkSensorObservation:
+    connection_uid = network_observation_module.derive_sensor_identifier(
+        "CSmbPersistent1",
+        sensor_identity,
+    )
+    return NetworkSensorObservation(
+        sensor_identity=sensor_identity,
+        path_role="destination_side",
+        capture_profile="complete",
+        tuple_view=NetworkTuple("10.0.1.25", 51000, "10.0.2.40", 445, "tcp"),
+        connection_uid=connection_uid,
+        connection_ids=(("CSmbPersistent1", connection_uid),),
+        file_ids=(),
+        local_orig=True,
+        local_resp=False,
+        observed_start_time=T0,
+        observed_close_time=T0 + timedelta(seconds=2.5),
+        traffic=traffic,
+        visible_formats=frozenset({"zeek_conn", "zeek_smb_files"}),
+        history=history,
+        source_times=(("zeek_conn", T0 + timedelta(milliseconds=5)),),
+        source_durations=(("zeek_conn", 2.4),),
+    )
+
+
+def _lossy_smb_traffic() -> NetworkTrafficLedger:
+    return NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=900, packets=9, ip_bytes=1_150),
+        resp=DirectionalTrafficLedger(payload_bytes=450, packets=4, ip_bytes=570),
+        missed_orig_bytes=100,
+        missed_resp_bytes=50,
+    )
+
+
+def _final_smb_traffic() -> NetworkTrafficLedger:
+    return NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=1_300, packets=13, ip_bytes=1_660),
+        resp=DirectionalTrafficLedger(payload_bytes=700, packets=7, ip_bytes=900),
+    )
+
+
+def _final_lossy_smb_traffic() -> NetworkTrafficLedger:
+    return NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=1_170, packets=12, ip_bytes=1_500),
+        resp=DirectionalTrafficLedger(payload_bytes=630, packets=6, ip_bytes=810),
+        missed_orig_bytes=130,
+        missed_resp_bytes=70,
+    )
+
+
+def _authenticated_persistent_smb_rebind(
+    authority: PersistentSmbTrafficRebindAuthority,
+    binding: PersistentSmbTrafficRebindBinding,
+    transport: NetworkTransactionPlan,
+    final_traffic: NetworkTrafficLedger,
+    observations: tuple[NetworkSensorObservation, ...],
+    final_observation_traffic: tuple[NetworkTrafficLedger, ...],
+) -> tuple[NetworkTransactionPlan, tuple[NetworkSensorObservation, ...]]:
+    return authority._rebind_committed_close(
+        binding,
+        transport,
+        final_traffic,
+        observations,
+        final_observation_traffic,
+    )
+
+
+def _unproven_persistent_smb_rebind(
+    authority: PersistentSmbTrafficRebindAuthority,
+    binding: PersistentSmbTrafficRebindBinding,
+    transport: NetworkTransactionPlan,
+    final_traffic: NetworkTrafficLedger,
+    observations: tuple[NetworkSensorObservation, ...],
+    final_observation_traffic: tuple[NetworkTrafficLedger, ...],
+) -> tuple[NetworkTransactionPlan, tuple[NetworkSensorObservation, ...]]:
+    """Exercise final-traffic validation on one retained opening handle."""
+
+    return authority._rebind_committed_close(
+        binding,
+        transport,
+        final_traffic,
+        observations,
+        final_observation_traffic,
+    )
+
+
+def test_persistent_smb_rebind_uses_signed_ordinals_and_manual_frozen_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close-time rebinding is pure and preserves the signed sensor decisions."""
+
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    first = _persistent_smb_observation(transport.traffic, sensor_identity="sensor-a")
+    second = _persistent_smb_observation(
+        _lossy_smb_traffic(),
+        sensor_identity="sensor-b",
+        history="ShADadFf",
+    )
+    binding = authority.issue_binding(transport, (first, second))
+    canonical_final = _final_smb_traffic()
+    observed_final = (canonical_final, _final_lossy_smb_traffic())
+
+    def forbid_replan(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("persistent traffic rebinding must not replan")
+
+    monkeypatch.setattr(NetworkObservationPlanner, "plan", forbid_replan)
+    monkeypatch.setattr(NetworkObservationPlanner, "_observed_traffic", forbid_replan)
+    rebound_transport, rebound_observations = _authenticated_persistent_smb_rebind(
+        authority,
+        binding,
+        transport,
+        canonical_final,
+        (first, second),
+        observed_final,
+    )
+
+    assert rebound_transport.traffic is not canonical_final
+    assert rebound_transport.traffic == canonical_final
+    assert rebound_observations[0].traffic is rebound_transport.traffic
+    assert rebound_observations[1].traffic == observed_final[1]
+    assert rebound_observations[1].traffic is not observed_final[1]
+    assert rebound_observations[0].history == "ShADadFf"
+    assert rebound_observations[1].history == "ShADadFfGg"
+    assert rebound_transport.zeek_uid == transport.zeek_uid
+    assert rebound_transport.conn_id == transport.conn_id
+    assert rebound_transport.phase_times == transport.phase_times
+    assert rebound_transport.outcome == transport.outcome
+    assert rebound_observations[0].tuple_view == first.tuple_view
+    assert rebound_observations[0].connection_uid == first.connection_uid
+    assert rebound_observations[0].source_times == first.source_times
+    assert rebound_observations[0].visible_formats == first.visible_formats
+
+
+def test_persistent_smb_rebind_rejects_non_smb_and_unsuccessful_transport() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+
+    for invalid in (
+        replace(transport, dst_port=53, service="dns"),
+        replace(transport, protocol="udp", ip_proto=17),
+        replace(transport, conn_state="S0", outcome="failure"),
+        replace(transport, outcome="failure"),
+    ):
+        with pytest.raises(ValueError, match="successful SMB TCP/445"):
+            authority.issue_binding(invalid, ())
+
+
+def test_persistent_smb_rebind_rejects_shrink_missing_and_impossible_ledgers() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    observation = _persistent_smb_observation(transport.traffic, sensor_identity="sensor-a")
+    binding = authority.issue_binding(transport, (observation,))
+    smaller = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(payload_bytes=1, packets=1, ip_bytes=40),
+        resp=DirectionalTrafficLedger(payload_bytes=1, packets=1, ip_bytes=40),
+    )
+
+    with pytest.raises(ValueError, match="canonical traffic cannot shrink"):
+        _unproven_persistent_smb_rebind(
+            authority,
+            binding,
+            transport,
+            smaller,
+            (observation,),
+            (observation.traffic,),
+        )
+    with pytest.raises(ValueError, match="Every persistent network observation"):
+        _unproven_persistent_smb_rebind(
+            authority,
+            binding,
+            transport,
+            transport.traffic,
+            (observation,),
+            (),
+        )
+
+
+def test_persistent_smb_binding_rejects_sensor_traffic_above_canonical() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    tiny = replace(
+        transport,
+        traffic=NetworkTrafficLedger(
+            orig=DirectionalTrafficLedger(11, 1, 40),
+            resp=DirectionalTrafficLedger(11, 1, 40),
+        ),
+    )
+    sensor_10k = NetworkTrafficLedger(
+        orig=DirectionalTrafficLedger(10_000, 10, 10_400),
+        resp=DirectionalTrafficLedger(10, 1, 40),
+    )
+    observation = _persistent_smb_observation(sensor_10k, sensor_identity="sensor-a")
+
+    with pytest.raises(ValueError, match="exceeds canonical"):
+        authority.issue_binding(tiny, (observation,))
+
+
+def test_persistent_smb_binding_preserves_lossless_alias_topology() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    equal_distinct = replace(transport.traffic)
+    observation = _persistent_smb_observation(equal_distinct, sensor_identity="sensor-a")
+
+    with pytest.raises(ValueError, match="must alias canonical traffic"):
+        authority.issue_binding(transport, (observation,))
+
+    observation = _persistent_smb_observation(transport.traffic, sensor_identity="sensor-a")
+    binding = authority.issue_binding(transport, (observation,))
+    final_traffic = _final_smb_traffic()
+    with pytest.raises(ValueError, match="must alias final canonical traffic"):
+        _unproven_persistent_smb_rebind(
+            authority,
+            binding,
+            transport,
+            final_traffic,
+            (observation,),
+            (replace(final_traffic),),
+        )
+
+
+def test_persistent_smb_binding_recomputes_directional_gap_history() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    observation = _persistent_smb_observation(
+        _lossy_smb_traffic(),
+        sensor_identity="sensor-a",
+        history="ShADadFfggGG",
+    )
+    binding = authority.issue_binding(transport, (observation,))
+
+    rebound, observations = _authenticated_persistent_smb_rebind(
+        authority,
+        binding,
+        transport,
+        _final_smb_traffic(),
+        (observation,),
+        (_final_lossy_smb_traffic(),),
+    )
+
+    assert rebound.history == "ShADadFf"
+    assert observations[0].history == "ShADadFfGg"
+
+
+def test_persistent_smb_binding_enforces_exact_sensor_cohort_cap() -> None:
+    authority = PersistentSmbTrafficRebindAuthority()
+    transport = _persistent_smb_transport()
+    observations = tuple(
+        _persistent_smb_observation(
+            transport.traffic,
+            sensor_identity=f"sensor-{ordinal}",
+        )
+        for ordinal in range(4_096)
+    )
+
+    binding = authority.issue_binding(transport, observations)
+    assert len(binding.observation_digests) == 4_096
+    with pytest.raises(ValueError, match="cohort bound"):
+        authority.issue_binding(transport, (*observations, observations[0]))
 
 
 def test_lossless_and_nat_only_observations_retain_canonical_accounting() -> None:
@@ -440,6 +738,60 @@ def test_same_connection_observations_preserve_canonical_request_order() -> None
         assert timedelta(microseconds=990) <= observed_delta <= timedelta(microseconds=1010)
 
 
+def test_proxy_child_observation_stays_after_connect_request() -> None:
+    """A shared proxy route projection preserves request-before-origin causality."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    parent_group_id = "proxy-transaction-observation-order"
+    client = _network_event(
+        start=T0,
+        stable_id="network:proxy-client",
+        protocol="tcp",
+        zeek_uid="CProxyClient",
+    )
+    client.dns = None
+    client.network = replace(client.network, service="http")
+    client.http = HttpContext(
+        method="CONNECT",
+        host="updates.example.com",
+        uri="updates.example.com:443",
+        canonical_request_time=T0 + timedelta(microseconds=100),
+    )
+    client.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-client",
+        canonical_start=T0,
+        phase="prerequisite",
+        parent_group_id=parent_group_id,
+    )
+    client._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_http": ["source-tap", "destination-tap"],
+    }
+    origin = _network_event(
+        start=T0 + timedelta(microseconds=200),
+        stable_id="network:proxy-origin",
+        protocol="tcp",
+        zeek_uid="CProxyOrigin",
+    )
+    origin.dns = None
+    origin.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-origin",
+        canonical_start=T0 + timedelta(microseconds=200),
+        phase="dependent",
+        parent_group_id=parent_group_id,
+    )
+    origin._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+    }
+
+    client_observations = _observation_by_sensor(planner.plan(client, {"zeek_conn", "zeek_http"}))
+    origin_observations = _observation_by_sensor(planner.plan(origin, {"zeek_conn"}))
+
+    for sensor_identity, client_observation in client_observations.items():
+        client_times = dict(client_observation.source_times)
+        assert client_times["zeek_http"] < origin_observations[sensor_identity].observed_start_time
+
+
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:
     """Only an explicit capture-loss profile may change observed counters."""
 
@@ -662,8 +1014,8 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
     assert rows["destination-tap"][0]["id.orig_h"] == "198.51.100.25"
 
 
-def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> None:
-    """DNS query and response timing stays within a very short parent flow."""
+def test_single_exchange_dns_shares_packet_anchors_at_every_sensor(tmp_path) -> None:
+    """One-query UDP DNS rows share their request and response packet anchors."""
 
     event = _network_event(start=T0, stable_id="network:short-dns")
     event.timestamp = T0 + timedelta(milliseconds=2)
@@ -690,8 +1042,8 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
         phase="start",
     )
     event._sensor_hostnames_by_format = {
-        "zeek_conn": ["source-tap"],
-        "zeek_dns": ["source-tap"],
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_dns": ["source-tap", "destination-tap"],
     }
     event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
         event,
@@ -701,12 +1053,12 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter = ZeekEmitter(
         load_format("zeek_conn"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
     dns_emitter = ZeekDnsEmitter(
         load_format("zeek_dns"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
 
     conn_emitter.emit(event)
@@ -714,10 +1066,11 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter.close()
     dns_emitter.close()
 
-    conn = json.loads((tmp_path / "source-tap" / "conn.json").read_text())
-    dns = json.loads((tmp_path / "source-tap" / "dns.json").read_text())
-    assert dns["ts"] == pytest.approx(conn["ts"])
-    assert dns["ts"] + dns["rtt"] <= conn["ts"] + conn["duration"]
+    for sensor in ("source-tap", "destination-tap"):
+        conn = json.loads((tmp_path / sensor / "conn.json").read_text())
+        dns = json.loads((tmp_path / sensor / "dns.json").read_text())
+        assert dns["ts"] == pytest.approx(conn["ts"])
+        assert dns["ts"] + dns["rtt"] == pytest.approx(conn["ts"] + conn["duration"])
 
 
 def test_http_companion_never_precedes_planned_sensor_connection(tmp_path) -> None:
@@ -805,8 +1158,8 @@ def test_snort_consumes_planned_sensor_timestamp_and_tuple(tmp_path) -> None:
     assert "198.51.100.25:62000 -> 10.0.2.40:53" in line
 
 
-def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
-    """One firewall policy supplies the SYN timeout instead of per-flow emitter jitter."""
+def test_firewall_observation_owns_syn_timeout_with_processing_texture() -> None:
+    """One firewall policy supplies the timeout plus typed source processing."""
 
     config = NetworkConfig(
         segments=[
@@ -853,9 +1206,8 @@ def test_firewall_observation_owns_fixed_syn_timeout_policy() -> None:
 
     assert observation.firewall_teardown_reason == "SYN Timeout"
     assert observation.firewall_teardown_time is not None
-    assert observation.firewall_teardown_time - observation.observed_start_time == timedelta(
-        seconds=30
-    )
+    teardown_delay = observation.firewall_teardown_time - observation.observed_start_time
+    assert timedelta(seconds=30) < teardown_delay < timedelta(seconds=30.019)
 
 
 def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> None:
@@ -919,7 +1271,8 @@ def test_firewall_observation_keeps_dynamic_pat_alive_through_syn_timeout() -> N
     assert observation.nat.local_ip == "10.0.2.40"
     assert observation.nat.global_ip == "203.0.113.10"
     assert observation.nat.teardown_time == observation.firewall_teardown_time
-    assert observation.nat.teardown_time == observation.observed_start_time + timedelta(seconds=30)
+    teardown_delay = observation.nat.teardown_time - observation.observed_start_time
+    assert timedelta(seconds=30) < teardown_delay < timedelta(seconds=30.019)
 
 
 def test_firewall_observation_owns_inbound_static_nat_address_roles() -> None:
@@ -1028,7 +1381,10 @@ def test_subsecond_midstream_fragment_is_not_labeled_connection_timeout() -> Non
 
     assert observation.firewall_teardown_reason == "TCP Reset-O"
     assert observation.firewall_teardown_reason != "Conn-timeout"
-    assert observation.firewall_teardown_time == observation.observed_close_time
+    assert observation.observed_close_time < observation.firewall_teardown_time
+    assert observation.firewall_teardown_time - observation.observed_close_time < timedelta(
+        milliseconds=12.5
+    )
 
 
 def test_firewall_teardown_after_export_window_is_marked_unobserved() -> None:

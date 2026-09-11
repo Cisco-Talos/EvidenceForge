@@ -1,0 +1,43 @@
+# Zeek smb_files.log JSON projection.
+name: zeek_smb_files
+version: "1.0"
+description: "Zeek SMB file action observations"
+category: network
+fields:
+  - {name: ts, type: timestamp, required: true}
+  - {name: uid, type: string, required: true}
+  - {name: id.orig_h, type: ip_address, required: true}
+  - {name: id.orig_p, type: port, required: true}
+  - {name: id.resp_h, type: ip_address, required: true}
+  - {name: id.resp_p, type: port, required: true}
+  - {name: action, type: string, required: true}
+  - {name: path, type: string, required: true}
+  - {name: name, type: string, required: true}
+  - {name: size, type: integer, required: false}
+  - {name: prev_name, type: string, required: false}
+  - {name: fuid, type: string, required: false}
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "action": {{ action | tojson }},
+      "path": {{ path | tojson }},
+      "name": {{ name | tojson }}
+      {%- if size is not none %},
+      "size": {{ size | tojson }}
+      {%- endif %}
+      {%- if prev_name is not none %},
+      "prev_name": {{ prev_name | tojson }}
+      {%- endif %}
+      {%- if fuid is not none %},
+      "fuid": {{ fuid | tojson }}
+      {%- endif %}
+    }

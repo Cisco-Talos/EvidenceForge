@@ -1,0 +1,12 @@
+persona_catalog:
+  platform_engineer:
+    name: platform_engineer
+    description: "Platform engineer operating build, deployment, and observability systems."
+    typical_activities:
+      - "Review CI pipeline results"
+      - "Deploy services to staging"
+      - "Investigate observability alerts"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Terminal", "Chrome", "Docker", "Git"]
+    risk_profile: high
+    browsing_intensity: heavy

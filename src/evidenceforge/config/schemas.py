@@ -13,7 +13,11 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
+from copy import deepcopy
+from datetime import date
+from string import Formatter
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
 
@@ -26,6 +30,7 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.config.compatibility import stable_config_id, warn_legacy_config
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 from evidenceforge.models.http import HttpMultipartEntitySpec
 
@@ -60,6 +65,7 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
     inspection: Literal["metadata", "payload_cleartext", "payload_decrypted"] = "metadata"
     http_methods: list[str] = Field(default_factory=list)
     http_statuses: list[int] = Field(default_factory=list)
+    http_user_agents: list[str] = Field(default_factory=list)
     requires_http_body: bool = False
     tls_server_names: list[str] = Field(default_factory=list)
     file_mime_types: list[str] = Field(default_factory=list)
@@ -97,6 +103,19 @@ class IdsSignaturePredicateSpec(BaseModel, extra="forbid", frozen=True):
         if len(values) != len(set(values)):
             raise ValueError("http_statuses must not contain duplicates")
         return values
+
+    @field_validator("http_user_agents")
+    @classmethod
+    def normalize_http_user_agents(cls, values: list[str]) -> list[str]:
+        """Normalize and deduplicate exact HTTP User-Agent requirements."""
+
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("http_user_agents must contain non-empty values")
+        casefolded = [value.casefold() for value in normalized]
+        if len(casefolded) != len(set(casefolded)):
+            raise ValueError("http_user_agents must not contain case-insensitive duplicates")
+        return normalized
 
     @field_validator("file_mime_types")
     @classmethod
@@ -379,6 +398,162 @@ class ExternalActorProfilesConfig(BaseModel, extra="forbid"):
         return self
 
 
+class PublicIdentityEntry(BaseModel, extra="forbid"):
+    """One fixed public identity available to a canonical role."""
+
+    ip: str
+    provider: str
+    weight: int = Field(default=1, gt=0)
+    forward_names: list[str] = Field(default_factory=list)
+    ptr: str = ""
+    tls_profile: str = ""
+    traits: dict[str, Any] = Field(default_factory=dict)
+    source: str = "packaged"
+
+    @field_validator("ip")
+    @classmethod
+    def public_ip_valid(cls, value: str) -> str:
+        parsed = ipaddress.ip_address(value)
+        if not parsed.is_global:
+            raise ValueError(f"{value!r} must be a globally routable public IP address")
+        return str(parsed)
+
+    @field_validator("forward_names")
+    @classmethod
+    def forward_names_valid(cls, values: list[str]) -> list[str]:
+        return [_normalized_hostname(value) for value in values]
+
+    @field_validator("ptr")
+    @classmethod
+    def ptr_valid(cls, value: str) -> str:
+        return _normalized_hostname(value) if value else ""
+
+
+class PublicIdentityProviderProfile(BaseModel, extra="forbid"):
+    """Provider-owned public address and source-native identity traits."""
+
+    id: str
+    roles: list[str]
+    weight: int = Field(default=1, gt=0)
+    hostname_patterns: list[str] = Field(default_factory=list)
+    ipv4_prefixes: list[tuple[int, int, int, int]] = Field(default_factory=list)
+    forward_names: list[str] = Field(default_factory=list)
+    ptr_templates: list[str] = Field(default_factory=list)
+    tls_profile: str = ""
+    traits: dict[str, Any] = Field(default_factory=dict)
+    source: str = "packaged"
+
+    @model_validator(mode="after")
+    def provider_valid(self) -> Self:
+        if not self.id.strip() or not self.roles:
+            raise ValueError("public identity providers require id and roles")
+        for first, second, third_min, third_max in self.ipv4_prefixes:
+            if not all(0 <= value <= 255 for value in (first, second, third_min, third_max)):
+                raise ValueError("ipv4_prefixes octets must be between 0 and 255")
+            if third_min > third_max:
+                raise ValueError("ipv4_prefixes third-octet minimum cannot exceed maximum")
+        self.hostname_patterns[:] = [
+            value.strip().lower().rstrip(".") for value in self.hostname_patterns
+        ]
+        self.forward_names[:] = [_normalized_hostname(value) for value in self.forward_names]
+        return self
+
+
+class PublicIdentityRoleProfile(BaseModel, extra="forbid"):
+    """Canonical role with provider and fixed-identity choices."""
+
+    id: str
+    providers: list[str]
+    identities: list[PublicIdentityEntry] = Field(default_factory=list)
+    allow_same_role_nat: bool = True
+    share_with_roles: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def role_valid(self) -> Self:
+        if not self.id.strip() or not self.providers:
+            raise ValueError("public identity roles require id and providers")
+        _unique_values(self.identities, "ip", f"roles.{self.id}.identities")
+        return self
+
+
+class PublicIdentityProfilesConfig(BaseModel, extra="forbid"):
+    """Canonical public identity registry configuration."""
+
+    schema_version: Literal["1.0"]
+    reserved_replacement_domains: list[str]
+    providers: list[PublicIdentityProviderProfile]
+    roles: list[PublicIdentityRoleProfile]
+
+    @model_validator(mode="after")
+    def registry_consistent(self) -> Self:
+        if not self.reserved_replacement_domains:
+            raise ValueError("reserved_replacement_domains must not be empty")
+        self.reserved_replacement_domains[:] = [
+            _normalized_domain(value) for value in self.reserved_replacement_domains
+        ]
+        _unique_values(self.providers, "id", "providers")
+        _unique_values(self.roles, "id", "roles")
+        if len(set(self.reserved_replacement_domains)) != len(self.reserved_replacement_domains):
+            raise ValueError("reserved_replacement_domains contains duplicate domains")
+        provider_ids = {provider.id for provider in self.providers}
+        role_ids = {role.id for role in self.roles}
+        required_roles = {
+            "scanner",
+            "external_logon",
+            "failed_logon",
+            "c2",
+            "human",
+            "crawler",
+            "api_client",
+            "ordinary_responder",
+            "cdn",
+            "dns",
+            "ntp",
+            "mail",
+        }
+        if missing_roles := required_roles - role_ids:
+            raise ValueError(f"public identity registry is missing roles: {sorted(missing_roles)}")
+        providers_by_id = {provider.id: provider for provider in self.providers}
+        owners: dict[str, tuple[str, str]] = {}
+        for role in self.roles:
+            unknown = set(role.providers) - provider_ids
+            if unknown:
+                raise ValueError(
+                    f"role {role.id!r} references unknown providers: {sorted(unknown)}"
+                )
+            if unknown_roles := set(role.share_with_roles) - role_ids:
+                raise ValueError(
+                    f"role {role.id!r} shares with unknown roles: {sorted(unknown_roles)}"
+                )
+            for provider_id in role.providers:
+                if role.id not in providers_by_id[provider_id].roles:
+                    raise ValueError(f"provider {provider_id!r} does not declare role {role.id!r}")
+            for identity in role.identities:
+                if identity.provider not in role.providers:
+                    raise ValueError(
+                        f"role {role.id!r} identity provider {identity.provider!r} is not enabled"
+                    )
+                previous = owners.get(identity.ip)
+                if (
+                    previous is not None
+                    and previous[0] not in role.share_with_roles
+                    and not previous[1].startswith("legacy:")
+                    and not identity.source.startswith("legacy:")
+                ):
+                    raise ValueError(
+                        f"public IP {identity.ip} is reused by disjoint roles {previous[0]!r} "
+                        f"and {role.id!r}"
+                    )
+                owners[identity.ip] = (role.id, identity.source)
+        for provider in self.providers:
+            unknown = set(provider.roles) - role_ids
+            if unknown:
+                raise ValueError(
+                    f"provider {provider.id!r} references unknown roles: {sorted(unknown)}"
+                )
+        return self
+
+
 class SuspiciousBenignDnsHostEntry(BaseModel, extra="forbid"):
     """Weighted suspicious-looking benign DNS hostname entry."""
 
@@ -472,16 +647,143 @@ class CommandParameterPoolsConfig(BaseModel, extra="forbid"):
 # --- Application Catalog ---
 
 
+class ApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Path-independent release and placement policy for one application platform."""
+
+    kind: Literal["managed"]
+    product_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    version: str = Field(min_length=1, max_length=128)
+    build: str = Field(min_length=1, max_length=128)
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...] = ("x64",)
+    scope: Literal["machine", "user"]
+    variant: str = Field(default="stable", min_length=1, max_length=64)
+    fleet_prevalence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_kind(cls, value: Any) -> Any:
+        """Accept the pre-discriminator managed descriptor at the public boundary."""
+
+        if not isinstance(value, dict) or "kind" in value:
+            return value
+        normalized = dict(value)
+        normalized["kind"] = "managed"
+        warn_legacy_config(
+            "application platform deployment without kind",
+            "deployment.kind: managed",
+            stacklevel=4,
+        )
+        return normalized
+
+    @field_validator("version", "build", "variant")
+    @classmethod
+    def deployment_names_are_nonempty(cls, value: str) -> str:
+        """Normalize release dimensions before they become identity keys."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("deployment release fields must not be blank")
+        return normalized
+
+    @field_validator("architectures")
+    @classmethod
+    def architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require at least one unique architecture in deterministic order."""
+
+        if not value:
+            raise ValueError("deployment architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("deployment architectures must be unique")
+        return tuple(sorted(value))
+
+
+class CatalogApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Current catalog-owned release policy without an authored package version.
+
+    ``pe_metadata`` takes the exact source-native version from the adjacent
+    platform metadata. ``host_build`` binds an OS-owned/package-manager image
+    to the scenario host build or distribution release. ``unspecified`` keeps
+    a stable explicit legacy-native release dimension without fabricating a
+    version.
+    """
+
+    kind: Literal["catalog"]
+    release_policy: Literal["pe_metadata", "host_build", "unspecified"]
+    scope: Literal["machine", "user"]
+    product_id: str | None = Field(
+        default=None,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...] = ("x64",)
+    variant: str = Field(default="stable", min_length=1, max_length=64)
+    fleet_prevalence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("architectures")
+    @classmethod
+    def catalog_architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require deterministic non-empty architecture eligibility."""
+
+        if not value:
+            raise ValueError("catalog deployment architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("catalog deployment architectures must be unique")
+        return tuple(sorted(value))
+
+    @field_validator("variant")
+    @classmethod
+    def catalog_variant_is_nonempty(cls, value: str) -> str:
+        """Normalize the release variant before identity compilation."""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("catalog deployment variant must not be blank")
+        return normalized
+
+
+class LegacyStaticApplicationDeploymentEntry(BaseModel, extra="forbid", frozen=True):
+    """Explicit compatibility descriptor for applications not yet release-managed."""
+
+    kind: Literal["legacy_static"]
+
+
 class LoadedModuleEntry(BaseModel, extra="forbid"):
     """A DLL/module entry in a loaded_modules list."""
 
     path: str
+    release_policy: Literal["owner_release", "pe_metadata", "host_build", "unspecified"] | None = (
+        None
+    )
+    product_id: str | None = None
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
     pe_metadata: dict[str, str] | None = None
     load_phase: Literal["startup", "runtime"] | None = None
     startup_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_release_policy(cls, value: Any) -> Any:
+        """Upgrade legacy module rows without inventing host/package versions."""
+
+        if not isinstance(value, dict) or "release_policy" in value:
+            return value
+        normalized = dict(value)
+        normalized["release_policy"] = (
+            "owner_release" if isinstance(normalized.get("pe_metadata"), dict) else "unspecified"
+        )
+        warn_legacy_config(
+            f"loaded module {normalized.get('path') or '<unknown>'} without release_policy",
+            "release_policy: owner_release, pe_metadata, host_build, or unspecified",
+            stacklevel=4,
+        )
+        return normalized
 
     @field_validator("startup_probability", mode="before")
     @classmethod
@@ -525,15 +827,47 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
                 )
         return self
 
+    @model_validator(mode="after")
+    def independent_metadata_has_product_identity(self) -> Self:
+        """Require an explicit product namespace for standalone versioned modules."""
+
+        if self.release_policy == "pe_metadata":
+            if self.pe_metadata is None:
+                raise ValueError("pe_metadata release policy requires exact PE metadata")
+            if not self.product_id or not self.product_id.strip():
+                raise ValueError("pe_metadata release policy requires product_id")
+        return self
+
 
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
     image_path: str
+    available_from: date | None = None
+    available_until: date | None = None
+    deployment: (
+        ApplicationDeploymentEntry
+        | CatalogApplicationDeploymentEntry
+        | LegacyStaticApplicationDeploymentEntry
+        | None
+    ) = None
     pe_metadata: dict[str, str] | None = None
     command_templates: list[str] | None = None
+    command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
+
+    @model_validator(mode="after")
+    def valid_release_window(self) -> Self:
+        """Require an ordered inclusive release-validity window."""
+
+        if (
+            self.available_from is not None
+            and self.available_until is not None
+            and self.available_until < self.available_from
+        ):
+            raise ValueError("application platform available_until precedes available_from")
+        return self
 
 
 class ApplicationEntry(BaseModel, extra="forbid"):
@@ -549,6 +883,160 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     compatibility_group: str | None = None
     compatibility_option: str | None = None
     singleton_per_session: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment_descriptors(cls, value: Any) -> Any:
+        """Normalize one pre-v2 application entry before platform validation."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = deepcopy(value)
+        raw_platforms = normalized.get("platforms")
+        if not isinstance(raw_platforms, dict):
+            return normalized
+        legacy_platforms: list[str] = []
+        for platform_name, raw_platform in raw_platforms.items():
+            if not isinstance(raw_platform, dict):
+                continue
+            deployment = raw_platform.get("deployment")
+            if deployment is None:
+                raw_platform["deployment"] = {"kind": "legacy_static"}
+                legacy_platforms.append(str(platform_name))
+            elif isinstance(deployment, dict) and "kind" not in deployment:
+                raw_platform["deployment"] = {"kind": "managed", **deployment}
+                legacy_platforms.append(str(platform_name))
+        if legacy_platforms:
+            application_id = str(normalized.get("id") or "<unknown>")
+            platforms = ", ".join(sorted(legacy_platforms))
+            warn_legacy_config(
+                f"application_catalog applications[{application_id}] platforms ({platforms})",
+                "an explicit deployment.kind of managed or legacy_static",
+                stacklevel=4,
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def deployment_metadata_is_content_complete(self) -> Self:
+        """Validate release metadata at the application catalog ownership boundary."""
+
+        required_pe_fields = {
+            "file_version",
+            "description",
+            "product",
+            "company",
+            "original_filename",
+        }
+        for platform_name, platform in self.platforms.items():
+            deployment = platform.deployment
+            if isinstance(deployment, CatalogApplicationDeploymentEntry):
+                if deployment.scope == "machine" and "{username}" in platform.image_path:
+                    raise ValueError(
+                        f"{self.id}.{platform_name} machine deployment cannot use {{username}}"
+                    )
+                if deployment.release_policy == "pe_metadata":
+                    metadata = platform.pe_metadata or {}
+                    missing = sorted(
+                        field for field in required_pe_fields if not metadata.get(field)
+                    )
+                    if missing:
+                        raise ValueError(
+                            f"{self.id}.{platform_name} pe_metadata release policy missing fields: "
+                            f"{', '.join(missing)}"
+                        )
+                elif (
+                    deployment.release_policy == "host_build"
+                    and platform_name == "windows"
+                    and not deployment.product_id
+                ):
+                    raise ValueError(
+                        f"{self.id}.windows host_build deployment requires an explicit "
+                        "OS product_id"
+                    )
+                continue
+            if not isinstance(deployment, ApplicationDeploymentEntry):
+                continue
+            if deployment.scope == "machine" and "{username}" in platform.image_path:
+                raise ValueError(
+                    f"{self.id}.{platform_name} machine deployment cannot use {{username}}"
+                )
+            if platform_name != "windows":
+                continue
+            metadata = platform.pe_metadata or {}
+            missing = sorted(field for field in required_pe_fields if not metadata.get(field))
+            if missing:
+                raise ValueError(
+                    f"{self.id}.windows deployment missing pe_metadata fields: {', '.join(missing)}"
+                )
+            if metadata["file_version"].strip() != deployment.version:
+                raise ValueError(
+                    f"{self.id}.windows deployment version must match pe_metadata.file_version"
+                )
+            for module in platform.loaded_modules or []:
+                if deployment.scope == "machine" and "{username}" in module.path:
+                    raise ValueError(
+                        f"{self.id}.{platform_name} machine module cannot use {{username}}"
+                    )
+                if module.pe_metadata is None:
+                    continue
+                missing = sorted(
+                    field for field in required_pe_fields if not module.pe_metadata.get(field)
+                )
+                if missing:
+                    raise ValueError(
+                        f"{self.id}.windows deployed module {module.path!r} missing "
+                        f"pe_metadata fields: {', '.join(missing)}"
+                    )
+        return self
+
+
+class ApplicationCatalogConfig(BaseModel, extra="forbid"):
+    """Versioned application catalog normalized before legacy dict projection."""
+
+    schema_version: Literal[2]
+    default_deployment: LegacyStaticApplicationDeploymentEntry
+    applications: list[ApplicationEntry]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_document(cls, value: Any) -> Any:
+        """Upgrade an unversioned catalog and warn once for each legacy app entry."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = deepcopy(value)
+        legacy_document = "schema_version" not in normalized
+        if legacy_document:
+            normalized["schema_version"] = 2
+        if "default_deployment" not in normalized:
+            normalized["default_deployment"] = {"kind": "legacy_static"}
+
+        default_deployment = normalized.get("default_deployment")
+        applications = normalized.get("applications")
+        if not isinstance(default_deployment, dict) or not isinstance(applications, list):
+            return normalized
+        for application in applications:
+            if not isinstance(application, dict):
+                continue
+            if legacy_document:
+                application_id = str(application.get("id") or "<unknown>")
+                warn_legacy_config(
+                    f"application_catalog applications[{application_id}] unversioned entry",
+                    "schema_version: 2 and an explicit deployment.kind of managed or legacy_static",
+                    stacklevel=4,
+                )
+            platforms = application.get("platforms")
+            if not isinstance(platforms, dict):
+                continue
+            for platform in platforms.values():
+                if not isinstance(platform, dict):
+                    continue
+                deployment = platform.get("deployment")
+                if deployment is None:
+                    platform["deployment"] = deepcopy(default_deployment)
+                elif legacy_document and isinstance(deployment, dict) and "kind" not in deployment:
+                    platform["deployment"] = {"kind": "managed", **deployment}
+        return normalized
 
 
 # --- Persona ---
@@ -569,10 +1057,14 @@ class PersonaEntry(BaseModel, extra="forbid"):
 # --- Systemd Schedules ---
 
 
-class SystemdScheduleEntry(BaseModel, extra="forbid"):
+class SystemdScheduleEntry(BaseModel, extra="forbid", frozen=True):
     """A single schedule entry in systemd_schedules.yaml."""
 
+    id: str | None = None
     service: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
+    variant: str | None = None
     type: Literal["systemd_timer", "cron"]
     frequency: Literal["daily", "weekly", "30min"]
     typical_hour: int
@@ -597,6 +1089,32 @@ class SystemdScheduleEntry(BaseModel, extra="forbid"):
     # Optional fields for cron type
     cron_user: str | None = None
     cron_commands: dict[str, str] | None = None
+    deployment_paths_by_distro: dict[str, list[str]] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize a legacy timer/cron row to an explicit static deployment."""
+
+        if not isinstance(value, dict) or (
+            value.get("id")
+            and value.get("release_policy")
+            and value.get("product_id")
+            and value.get("variant")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("service") or "linux-schedule"))
+        normalized.setdefault("id", f"legacy-linux-task-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.linux-task.{identity}")
+        normalized.setdefault("variant", "legacy-native")
+        warn_legacy_config(
+            f"systemd schedule {normalized.get('service') or '<unknown>'}",
+            "id, release_policy, product_id, and variant deployment fields",
+            stacklevel=4,
+        )
+        return normalized
 
 
 # --- Extra Syslog Messages ---
@@ -799,11 +1317,11 @@ class TlsOcspResponseConfig(BaseModel, extra="forbid"):
 
     size_bytes_min: int = Field(gt=0)
     size_bytes_max: int = Field(gt=0)
-    latency_ms_min: float = Field(gt=0)
-    latency_ms_max: float = Field(gt=0)
-    throughput_bytes_per_second_min: float = Field(gt=0)
-    throughput_bytes_per_second_max: float = Field(gt=0)
-    file_duration_floor_ms: float = Field(gt=0)
+    latency_ms_min: float = Field(gt=0, allow_inf_nan=False)
+    latency_ms_max: float = Field(gt=0, allow_inf_nan=False)
+    throughput_bytes_per_second_min: float = Field(gt=0, allow_inf_nan=False)
+    throughput_bytes_per_second_max: float = Field(gt=0, allow_inf_nan=False)
+    file_duration_floor_ms: float = Field(gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def ranges_are_ordered(self) -> Self:
@@ -1363,23 +1881,6 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
         return self
 
 
-# --- SMB File Transfers ---
-
-
-class SmbFileSizeBand(BaseModel, extra="forbid"):
-    """One weighted file-size band for an SMB MIME family."""
-
-    size_min: int = Field(ge=1)
-    size_max: int = Field(ge=1)
-    weight: int = Field(gt=0)
-
-    @model_validator(mode="after")
-    def size_range_ordered(self) -> Self:
-        if self.size_max < self.size_min:
-            raise ValueError("size_max must be greater than or equal to size_min")
-        return self
-
-
 class HttpRequestProfilesConfig(BaseModel, extra="forbid"):
     """Request-entity classification values in http_file_profiles.yaml."""
 
@@ -1466,99 +1967,6 @@ class HttpMultipartProfilesConfig(BaseModel, extra="forbid"):
         if set(values) != required or len(values) != len(required):
             raise ValueError("multipart header_order must list every supported header exactly once")
         return values
-
-
-class SmbMimeTypeEntry(BaseModel, extra="forbid"):
-    """A weighted MIME type in smb_file_transfers.yaml."""
-
-    mime_type: str
-    weight: int
-    size_min: int = Field(ge=1)
-    size_max: int = Field(ge=1)
-    size_bands: list[SmbFileSizeBand] = Field(default_factory=list)
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-    @model_validator(mode="after")
-    def size_range_ordered(self) -> Self:
-        if self.size_max < self.size_min:
-            raise ValueError("size_max must be greater than or equal to size_min")
-        return self
-
-
-class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
-    """A weighted Zeek file analyzer set in smb_file_transfers.yaml."""
-
-    analyzers: list[str]
-    weight: int
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-
-class SmbFilenameTemplateEntry(BaseModel, extra="forbid"):
-    """A weighted SMB filename template set in smb_file_transfers.yaml."""
-
-    mime_types: list[str] = Field(default_factory=list)
-    templates: list[str]
-    weight: int
-
-    @field_validator("templates")
-    @classmethod
-    def templates_non_empty(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("templates must not be empty")
-        return v
-
-    @field_validator("weight")
-    @classmethod
-    def weight_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("weight must be positive")
-        return v
-
-
-class SmbFileTransferConfig(BaseModel, extra="forbid"):
-    """Root schema for smb_file_transfers.yaml."""
-
-    min_transfer_bytes: int
-    working_set_probability: float = Field(ge=0.0, le=1.0)
-    working_set_size: int = Field(ge=1, le=100)
-    lexical_composition_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    shares: list[str] = Field(min_length=1)
-    departments: list[str] = Field(min_length=1)
-    projects: list[str] = Field(min_length=1)
-    basenames: list[str] = Field(min_length=1)
-    lexical_subjects: list[str] = Field(default_factory=list)
-    lexical_document_kinds: list[str] = Field(default_factory=list)
-    lexical_qualifiers: list[str] = Field(default_factory=list)
-    binary_extensions: list[str] = Field(min_length=1)
-    mime_types: list[SmbMimeTypeEntry]
-    analyzer_sets: list[SmbAnalyzerSetEntry]
-    filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
-
-    @field_validator("min_transfer_bytes")
-    @classmethod
-    def min_transfer_bytes_positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("min_transfer_bytes must be positive")
-        return v
-
-    @field_validator("mime_types", "analyzer_sets")
-    @classmethod
-    def non_empty_weighted_lists(cls, v: list[Any]) -> list[Any]:
-        if not v:
-            raise ValueError("weighted lists must not be empty")
-        return v
 
 
 # --- Auth Noise ---
@@ -1662,8 +2070,29 @@ class ServiceAccountDelegationProfileConfig(BaseModel, extra="forbid"):
 class ServiceAccountDelegationConfig(BaseModel, extra="forbid"):
     """Service-account explicit-credential baseline profile."""
 
-    hourly_probability: float = Field(ge=0.0, le=0.95)
+    hourly_probability: float | None = Field(default=None, ge=0.0, le=0.95)
+    owner_host_count_min: int = Field(default=1, ge=1)
+    owner_host_count_max: int = Field(default=2, ge=1)
+    interval_minutes_min: float = Field(default=150.0, gt=0)
+    interval_minutes_max: float = Field(default=330.0, gt=0)
+    first_occurrence_seconds_min: float = Field(default=300.0, ge=0)
+    first_occurrence_seconds_max: float = Field(default=7200.0, ge=0)
+    jitter_seconds_min: float = Field(default=-240.0)
+    jitter_seconds_max: float = Field(default=540.0)
     caller_profiles: list[ServiceAccountDelegationProfileConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def ranges_are_ordered(self) -> Self:
+        """Reject inverted owner, interval, phase, or jitter bounds."""
+        if self.owner_host_count_max < self.owner_host_count_min:
+            raise ValueError("owner_host_count_max must be >= owner_host_count_min")
+        if self.interval_minutes_max < self.interval_minutes_min:
+            raise ValueError("interval_minutes_max must be >= interval_minutes_min")
+        if self.first_occurrence_seconds_max < self.first_occurrence_seconds_min:
+            raise ValueError("first_occurrence_seconds_max must be >= first_occurrence_seconds_min")
+        if self.jitter_seconds_max < self.jitter_seconds_min:
+            raise ValueError("jitter_seconds_max must be >= jitter_seconds_min")
+        return self
 
 
 class AuthNoiseConfig(BaseModel, extra="forbid"):
@@ -1746,6 +2175,701 @@ class ExternalScannerPortProfile(BaseModel, extra="forbid"):
         if not v:
             raise ValueError("ports must not be empty")
         return v
+
+
+class NmapCommandProbeConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded address-space planning for process-owned nmap commands."""
+
+    full_cidr_max_hosts: int = Field(ge=1, le=1024)
+    max_expanded_targets: int = Field(ge=1, le=1024)
+    large_cidr_connect_targets: int = Field(ge=1, le=128)
+    large_cidr_discovery_targets: int = Field(ge=1, le=128)
+    large_cidr_unmodeled_targets: int = Field(ge=1, le=64)
+    max_ports: int = Field(ge=1, le=32)
+    connect_window_seconds_min: float = Field(gt=0.0, le=60.0)
+    connect_window_seconds_max: float = Field(gt=0.0, le=60.0)
+    discovery_window_seconds_min: float = Field(gt=0.0, le=60.0)
+    discovery_window_seconds_max: float = Field(gt=0.0, le=60.0)
+
+    @model_validator(mode="after")
+    def planning_bounds_are_coherent(self) -> Self:
+        """Reject target and timing bounds that cannot satisfy the planner contract."""
+
+        if self.max_expanded_targets < self.full_cidr_max_hosts:
+            raise ValueError("max_expanded_targets must be >= full_cidr_max_hosts")
+        if (
+            max(
+                self.large_cidr_connect_targets,
+                self.large_cidr_discovery_targets,
+            )
+            > self.max_expanded_targets
+        ):
+            raise ValueError("large CIDR target caps must fit max_expanded_targets")
+        if self.large_cidr_unmodeled_targets > min(
+            self.large_cidr_connect_targets,
+            self.large_cidr_discovery_targets,
+        ):
+            raise ValueError("large_cidr_unmodeled_targets must fit both large CIDR caps")
+        if self.connect_window_seconds_max < self.connect_window_seconds_min:
+            raise ValueError("connect_window_seconds_max must be >= connect_window_seconds_min")
+        if self.discovery_window_seconds_max < self.discovery_window_seconds_min:
+            raise ValueError("discovery_window_seconds_max must be >= discovery_window_seconds_min")
+        return self
+
+
+# --- SMB Client and Server Profiles ---
+
+
+SmbOperationName = Literal["browse", "read", "create", "update", "copy", "move", "delete"]
+SmbPurposeName = Literal[
+    "interactive",
+    "administrative",
+    "software",
+    "backup",
+    "collection",
+    "ransomware",
+    "auto",
+]
+SmbProcessOperandMode = Literal[
+    "none",
+    "remote",
+    "download",
+    "upload",
+    "rename",
+    "transfer",
+]
+SmbAuthOptionName = Literal["auto", "kerberos", "ntlmssp"]
+_SMB_OPERATIONS = frozenset({"browse", "read", "create", "update", "copy", "move", "delete"})
+_SMB_PURPOSES = frozenset(
+    {"interactive", "administrative", "software", "backup", "collection", "ransomware", "auto"}
+)
+SmbVfsAuditProfileName = Literal["standard", "high"]
+SmbAuditEventType = Literal[
+    "smb_directory_enumeration",
+    "smb_file_open",
+    "smb_file_read",
+    "smb_file_write",
+    "smb_file_rename",
+    "smb_file_delete",
+    "smb_file_close",
+]
+_SMB_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "smb_directory_enumeration",
+        "smb_file_open",
+        "smb_file_read",
+        "smb_file_write",
+        "smb_file_rename",
+        "smb_file_delete",
+        "smb_file_close",
+    }
+)
+_SMB_TEMPLATE_FIELDS = frozenset(
+    {
+        "server",
+        "share",
+        "path",
+        "client_path",
+        "local_path",
+        "source_path",
+        "destination_path",
+        "username",
+        "smb_principal",
+        "auth_options",
+        "operation",
+        "client_ip",
+    }
+)
+
+
+def _validate_smb_filesystem_label(value: str) -> str:
+    """Normalize one safe SMB wire-advertised filesystem label."""
+
+    normalized = value.strip()
+    if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._ -]{0,63}", normalized) is None:
+        raise ValueError("advertised filesystem labels must be nonempty safe labels")
+    return normalized
+
+
+class SmbAdvertisedFilesystemDefaults(BaseModel, extra="forbid", frozen=True):
+    """Provider defaults mapping backing filesystems to SMB wire labels."""
+
+    windows: dict[Literal["ntfs", "refs"], str]
+    linux: dict[Literal["ext4", "xfs"], str]
+
+    @field_validator("windows", "linux")
+    @classmethod
+    def valid_labels(cls, values: dict[str, str]) -> dict[str, str]:
+        """Normalize every advertised label before it reaches compiler output."""
+
+        return {
+            filesystem: _validate_smb_filesystem_label(label)
+            for filesystem, label in values.items()
+        }
+
+    @model_validator(mode="after")
+    def complete_platform_defaults(self) -> Self:
+        """Require one default for every supported platform/backing pair."""
+
+        if set(self.windows) != {"ntfs", "refs"}:
+            raise ValueError("advertised filesystem windows defaults require ntfs and refs")
+        if set(self.linux) != {"ext4", "xfs"}:
+            raise ValueError("advertised filesystem linux defaults require ext4 and xfs")
+        return self
+
+
+class SmbSambaAuditOperation(BaseModel, extra="forbid", frozen=True):
+    """Source-native Samba label and audit-tier eligibility for one event."""
+
+    label: str
+    audit_profiles: tuple[SmbVfsAuditProfileName, ...]
+
+    @field_validator("label")
+    @classmethod
+    def valid_label(cls, value: str) -> str:
+        """Require a compact vfs_full_audit-style operation token."""
+
+        normalized = value.strip().casefold()
+        if re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", normalized) is None:
+            raise ValueError("Samba audit operation label must be a safe lowercase token")
+        return normalized
+
+    @field_validator("audit_profiles", mode="before")
+    @classmethod
+    def lifecycle_only_minimal(cls, values: object) -> object:
+        """Reject attempts to turn the minimal lifecycle tier into file auditing."""
+
+        if isinstance(values, (list, tuple)) and any(
+            str(value).strip().casefold() == "minimal" for value in values
+        ):
+            raise ValueError(
+                "Samba operation audit_profiles cannot include minimal; minimal is lifecycle-only"
+            )
+        return values
+
+    @field_validator("audit_profiles")
+    @classmethod
+    def unique_audit_profiles(
+        cls,
+        values: tuple[SmbVfsAuditProfileName, ...],
+    ) -> tuple[SmbVfsAuditProfileName, ...]:
+        """Reject duplicate or non-monotonic tier declarations."""
+
+        if len(values) != len(set(values)):
+            raise ValueError("Samba operation audit_profiles must not contain duplicates")
+        if "standard" in values and "high" not in values:
+            raise ValueError(
+                "Samba operation audit_profiles containing standard must also contain high"
+            )
+        return values
+
+
+class SmbSambaAuditConfig(BaseModel, extra="forbid", frozen=True):
+    """Samba VFS audit eligibility and canonical operation labels."""
+
+    failure_audit_profiles: tuple[SmbVfsAuditProfileName, ...]
+    operations: dict[SmbAuditEventType, SmbSambaAuditOperation]
+
+    @field_validator("failure_audit_profiles", mode="before")
+    @classmethod
+    def lifecycle_only_minimal_failures(cls, values: object) -> object:
+        """Reject per-file failure audit configuration in the minimal tier."""
+
+        if isinstance(values, (list, tuple)) and any(
+            str(value).strip().casefold() == "minimal" for value in values
+        ):
+            raise ValueError(
+                "failure_audit_profiles cannot include minimal; minimal is lifecycle-only"
+            )
+        return values
+
+    @field_validator("failure_audit_profiles")
+    @classmethod
+    def unique_failure_profiles(
+        cls,
+        values: tuple[SmbVfsAuditProfileName, ...],
+    ) -> tuple[SmbVfsAuditProfileName, ...]:
+        """Require a duplicate-free, monotonic failure-observation tier set."""
+
+        if len(values) != len(set(values)):
+            raise ValueError("failure_audit_profiles must not contain duplicates")
+        if "standard" in values and "high" not in values:
+            raise ValueError("failure_audit_profiles containing standard must also contain high")
+        return values
+
+    @model_validator(mode="after")
+    def complete_operation_map(self) -> Self:
+        """Keep every canonical Samba audit event mapped explicitly."""
+
+        missing = sorted(_SMB_AUDIT_EVENT_TYPES - set(self.operations))
+        if missing:
+            raise ValueError(f"Samba audit operations are missing canonical events: {missing}")
+        return self
+
+
+def _validate_smb_template(value: str, field_name: str) -> str:
+    """Validate one SMB process template without evaluating it."""
+
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    try:
+        parsed = tuple(Formatter().parse(value))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} has invalid format syntax: {exc}") from exc
+    for _literal, placeholder, format_spec, conversion in parsed:
+        if placeholder is None:
+            continue
+        if placeholder not in _SMB_TEMPLATE_FIELDS:
+            raise ValueError(
+                f"{field_name} uses unsupported placeholder {placeholder!r}; "
+                f"allowed placeholders are {sorted(_SMB_TEMPLATE_FIELDS)}"
+            )
+        if format_spec or conversion:
+            raise ValueError(f"{field_name} placeholders cannot use conversions or format specs")
+    return value
+
+
+class SmbProcessProfile(BaseModel, extra="forbid", frozen=True):
+    """Process metadata for one SMB client or server lifecycle owner."""
+
+    key_template: str
+    image: str
+    command_line_template: str
+    username_template: str
+    lifecycle: Literal["resident", "operation", "transport", "service"]
+    credential_source: Literal["none", "smb_principal"] = "none"
+    operand_mode: SmbProcessOperandMode = "none"
+
+    @field_validator("key_template", "command_line_template", "username_template")
+    @classmethod
+    def valid_template(cls, value: str, info: ValidationInfo) -> str:
+        """Reject empty templates, unsafe field traversal, and unknown placeholders."""
+
+        return _validate_smb_template(value, info.field_name)
+
+    @field_validator("image")
+    @classmethod
+    def image_non_empty(cls, value: str) -> str:
+        """Require a literal image path rather than a generated template."""
+
+        if not value.strip():
+            raise ValueError("image must not be empty")
+        if "{" in value or "}" in value:
+            raise ValueError("image must be a literal path without placeholders")
+        return value
+
+    @model_validator(mode="after")
+    def coherent_identity_and_operands(self) -> Self:
+        """Keep local ownership, remote credentials, and command operands distinct."""
+
+        def placeholders(template: str) -> set[str]:
+            return {
+                placeholder
+                for _literal, placeholder, _format_spec, _conversion in Formatter().parse(template)
+                if placeholder is not None
+            }
+
+        command_fields = placeholders(self.command_line_template)
+        owner_fields = placeholders(self.username_template)
+        if "smb_principal" in owner_fields:
+            raise ValueError("username_template cannot use the remote SMB principal")
+        if self.credential_source == "smb_principal":
+            if "smb_principal" not in command_fields:
+                raise ValueError(
+                    "credential_source=smb_principal requires {smb_principal} in the command"
+                )
+        elif "smb_principal" in command_fields:
+            raise ValueError(
+                "commands using {smb_principal} must declare credential_source=smb_principal"
+            )
+
+        required_fields = {
+            "none": set(),
+            "remote": {"path"},
+            "download": {"path", "local_path"},
+            "upload": {"path", "local_path"},
+            "rename": {"path", "destination_path"},
+            "transfer": {"source_path", "destination_path"},
+        }[self.operand_mode]
+        missing_fields = sorted(required_fields - command_fields)
+        if missing_fields:
+            raise ValueError(
+                f"operand_mode={self.operand_mode} requires command placeholders {missing_fields}"
+            )
+        if self.operand_mode in {"download", "upload"} and "client_path" in command_fields:
+            raise ValueError(
+                f"operand_mode={self.operand_mode} must use {{local_path}}, not {{client_path}}"
+            )
+        return self
+
+
+class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
+    """Platform-native client presentation and process ownership profile."""
+
+    os_category: Literal["windows", "linux"]
+    access_mode: Literal["explorer", "desktop", "direct", "mounted"]
+    path_style: Literal["unc", "mapped", "smb_uri", "mounted"]
+    transport_attribution: Literal["process", "kernel", "none"]
+    service_aliases: tuple[str, ...] = ()
+    weight: float = Field(default=1.0, gt=0.0, allow_inf_nan=False)
+    system_types: tuple[Literal["workstation", "server", "domain_controller"], ...] = (
+        "workstation",
+        "server",
+        "domain_controller",
+    )
+    auth_options: dict[SmbAuthOptionName, str] = Field(default_factory=dict)
+    process: SmbProcessProfile | None = None
+    operation_processes: dict[SmbOperationName, SmbProcessProfile] = Field(default_factory=dict)
+
+    @field_validator("service_aliases")
+    @classmethod
+    def valid_service_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize non-empty service aliases and reject duplicates."""
+
+        normalized = tuple(value.strip().casefold() for value in values)
+        if any(
+            not value or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value) for value in normalized
+        ):
+            raise ValueError("service_aliases must contain non-empty service identifiers")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("service_aliases must not contain duplicates")
+        return normalized
+
+    @field_validator("system_types")
+    @classmethod
+    def valid_system_types(
+        cls,
+        values: tuple[Literal["workstation", "server", "domain_controller"], ...],
+    ) -> tuple[Literal["workstation", "server", "domain_controller"], ...]:
+        """Require a non-empty, duplicate-free eligibility set."""
+
+        if not values:
+            raise ValueError("system_types must not be empty")
+        if len(values) != len(set(values)):
+            raise ValueError("system_types must not contain duplicates")
+        return values
+
+    @field_validator("auth_options")
+    @classmethod
+    def valid_auth_options(cls, values: dict[str, str]) -> dict[str, str]:
+        """Require source-native smbclient options without shell control syntax."""
+
+        option_pattern = re.compile(
+            r"--[a-z0-9][a-z0-9-]*(?:=[a-z0-9][a-z0-9._-]*)?"
+            r"(?: --[a-z0-9][a-z0-9-]*(?:=[a-z0-9][a-z0-9._-]*)?)*"
+        )
+        normalized = {name: option.strip() for name, option in values.items()}
+        invalid = sorted(
+            name for name, option in normalized.items() if option_pattern.fullmatch(option) is None
+        )
+        if invalid:
+            raise ValueError(f"auth_options contain unsafe or empty values for {invalid}")
+        return normalized
+
+    @model_validator(mode="after")
+    def coherent_platform_and_ownership(self) -> Self:
+        """Keep access mode, presentation, and process ownership coherent."""
+
+        if self.access_mode == "explorer" and self.os_category != "windows":
+            raise ValueError("explorer access_mode requires os_category=windows")
+        if self.access_mode != "explorer" and self.os_category != "linux":
+            raise ValueError(f"{self.access_mode} access_mode requires os_category=linux")
+        if self.os_category == "windows" and self.path_style not in {"unc", "mapped"}:
+            raise ValueError("Windows SMB clients require unc or mapped path_style")
+        if self.access_mode in {"desktop", "direct"} and self.path_style != "smb_uri":
+            raise ValueError(f"{self.access_mode} access_mode requires path_style=smb_uri")
+        if self.access_mode == "mounted" and self.path_style != "mounted":
+            raise ValueError("mounted access_mode requires path_style=mounted")
+        if self.access_mode == "direct" and self.transport_attribution != "process":
+            raise ValueError("direct access_mode requires transport_attribution=process")
+        if self.access_mode == "mounted" and self.transport_attribution != "kernel":
+            raise ValueError("mounted access_mode requires transport_attribution=kernel")
+
+        missing_operations = sorted(_SMB_OPERATIONS - set(self.operation_processes))
+        if self.access_mode == "mounted" and self.process is not None:
+            raise ValueError(
+                "mounted access_mode cannot declare a default process; mount lifecycle is "
+                "separate from per-operation actors"
+            )
+        if self.access_mode == "mounted" and missing_operations:
+            raise ValueError(
+                "mounted access_mode requires operation_processes for every SMB operation; "
+                f"missing {missing_operations}"
+            )
+        if self.process is None and missing_operations:
+            raise ValueError(
+                "profiles without a default process require operation_processes for every SMB "
+                f"operation; missing {missing_operations}"
+            )
+        if self.access_mode in {"explorer", "desktop"} and (
+            self.process is None or self.process.lifecycle != "resident"
+        ):
+            raise ValueError(f"{self.access_mode} access_mode requires a resident process")
+        if (
+            self.access_mode == "direct"
+            and self.process is not None
+            and self.process.lifecycle != "operation"
+        ):
+            raise ValueError("direct access_mode default process must use lifecycle=operation")
+        if self.access_mode in {"direct", "mounted"} and any(
+            process.lifecycle != "operation" for process in self.operation_processes.values()
+        ):
+            raise ValueError(f"{self.access_mode} operation_processes must use lifecycle=operation")
+        processes = [
+            process
+            for process in (self.process, *self.operation_processes.values())
+            if process is not None
+        ]
+        uses_auth_options = any(
+            "{auth_options}" in process.command_line_template for process in processes
+        )
+        if uses_auth_options and set(self.auth_options) != {"auto", "kerberos", "ntlmssp"}:
+            raise ValueError(
+                "profiles using {auth_options} require auto, kerberos, and ntlmssp mappings"
+            )
+        if self.auth_options and not uses_auth_options:
+            raise ValueError("auth_options require {auth_options} in a process command template")
+        return self
+
+
+class SmbServerProfile(BaseModel, extra="forbid", frozen=True):
+    """Platform-native SMB server listener and optional connection worker."""
+
+    os_category: Literal["windows", "linux"]
+    service_aliases: tuple[str, ...]
+    listener: SmbProcessProfile
+    worker: SmbProcessProfile | None = None
+
+    @field_validator("service_aliases")
+    @classmethod
+    def valid_service_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize server service aliases and reject duplicates."""
+
+        normalized = tuple(value.strip().casefold() for value in values)
+        if not normalized or any(
+            not value or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value) for value in normalized
+        ):
+            raise ValueError("service_aliases must contain non-empty service identifiers")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("service_aliases must not contain duplicates")
+        return normalized
+
+    @model_validator(mode="after")
+    def coherent_process_lifecycles(self) -> Self:
+        """Require one durable listener and Linux per-transport workers."""
+
+        if self.listener.lifecycle != "service":
+            raise ValueError("SMB server listener must use lifecycle=service")
+        if self.worker is not None and self.worker.lifecycle != "transport":
+            raise ValueError("SMB server worker must use lifecycle=transport")
+        if self.os_category == "linux" and self.worker is None:
+            raise ValueError("Linux Samba server profiles require a per-transport worker")
+        return self
+
+
+class SmbTransferTimingConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded wire-rate and operation timing texture for canonical SMB activity."""
+
+    throughput_median_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    throughput_sigma: float = Field(gt=0.0, le=2.0, allow_inf_nan=False)
+    throughput_min_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    throughput_max_bytes_per_second: float = Field(gt=0.0, allow_inf_nan=False)
+    session_setup_seconds: tuple[float, float]
+    operation_setup_seconds: tuple[float, float]
+    operation_jitter_seconds: tuple[float, float]
+    close_delay_seconds: tuple[float, float]
+    purpose_dwell_seconds: dict[SmbPurposeName, tuple[float, float]]
+    transport_tail_seconds: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @field_validator(
+        "session_setup_seconds",
+        "operation_setup_seconds",
+        "operation_jitter_seconds",
+        "close_delay_seconds",
+    )
+    @classmethod
+    def valid_range(cls, values: tuple[float, float], info: ValidationInfo) -> tuple[float, float]:
+        """Require finite, nonnegative, increasing timing ranges."""
+
+        if len(values) != 2:
+            raise ValueError(f"{info.field_name} must contain exactly [minimum, maximum]")
+        minimum, maximum = values
+        if not math.isfinite(minimum) or not math.isfinite(maximum):
+            raise ValueError(f"{info.field_name} values must be finite")
+        if minimum < 0 or maximum <= minimum:
+            raise ValueError(f"{info.field_name} must have 0 <= minimum < maximum, got {values!r}")
+        return values
+
+    @model_validator(mode="after")
+    def coherent_bounds(self) -> Self:
+        """Keep throughput and total-duration clamps internally coherent."""
+
+        if self.throughput_max_bytes_per_second <= self.throughput_min_bytes_per_second:
+            raise ValueError(
+                "throughput_max_bytes_per_second must exceed throughput_min_bytes_per_second"
+            )
+        if not (
+            self.throughput_min_bytes_per_second
+            <= self.throughput_median_bytes_per_second
+            <= self.throughput_max_bytes_per_second
+        ):
+            raise ValueError("throughput median must fall within the configured bounds")
+        missing = sorted(_SMB_PURPOSES - set(self.purpose_dwell_seconds))
+        if missing:
+            raise ValueError(f"purpose_dwell_seconds is missing SMB purposes: {missing}")
+        for purpose, values in self.purpose_dwell_seconds.items():
+            if len(values) != 2:
+                raise ValueError(f"purpose_dwell_seconds.{purpose} must contain [minimum, maximum]")
+            minimum, maximum = values
+            if (
+                not math.isfinite(minimum)
+                or not math.isfinite(maximum)
+                or minimum < 0
+                or maximum <= minimum
+            ):
+                raise ValueError(
+                    f"purpose_dwell_seconds.{purpose} must have 0 <= minimum < maximum"
+                )
+        return self
+
+
+class SmbFileEvolutionProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded mean-reverting size behavior for one SMB file family."""
+
+    minimum_size_ratio: float = Field(gt=0.0, le=1.0, allow_inf_nan=False)
+    maximum_size_ratio: float = Field(ge=1.0, allow_inf_nan=False)
+    capacity_bytes: int = Field(gt=0)
+    mean_reversion: float = Field(gt=0.0, le=1.0, allow_inf_nan=False)
+    variation_ratio: float = Field(ge=0.0, le=0.25, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def coherent_bounds(self) -> Self:
+        """Require an envelope that contains the nominal file size."""
+
+        if self.maximum_size_ratio < self.minimum_size_ratio:
+            raise ValueError("maximum_size_ratio must be >= minimum_size_ratio")
+        return self
+
+
+class SmbFileEvolutionConfig(BaseModel, extra="forbid", frozen=True):
+    """Extension-routed internal SMB file-size evolution profiles."""
+
+    default_profile: str
+    extension_profiles: dict[str, str]
+    profiles: dict[str, SmbFileEvolutionProfile]
+
+    @model_validator(mode="after")
+    def valid_profile_references(self) -> Self:
+        """Normalize profile names and require every extension route to resolve."""
+
+        if not self.profiles:
+            raise ValueError("SMB file evolution profiles must not be empty")
+        invalid_names = sorted(
+            name for name in self.profiles if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name) is None
+        )
+        if invalid_names:
+            raise ValueError(f"SMB file evolution profiles have invalid names: {invalid_names}")
+        if self.default_profile not in self.profiles:
+            raise ValueError("SMB file evolution default_profile must reference a profile")
+        invalid_extensions = sorted(
+            extension
+            for extension in self.extension_profiles
+            if re.fullmatch(r"\.[a-z0-9][a-z0-9._-]*", extension) is None
+        )
+        if invalid_extensions:
+            raise ValueError(
+                f"SMB file evolution routes have invalid extensions: {invalid_extensions}"
+            )
+        missing = sorted(set(self.extension_profiles.values()) - set(self.profiles))
+        if missing:
+            raise ValueError(f"SMB file evolution routes reference unknown profiles: {missing}")
+        return self
+
+
+class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Root schema for smb_profiles.yaml."""
+
+    schema_version: Literal[1]
+    advertised_filesystem_defaults: SmbAdvertisedFilesystemDefaults
+    transfer_timing: SmbTransferTimingConfig
+    file_evolution: SmbFileEvolutionConfig
+    samba_audit: SmbSambaAuditConfig
+    client_defaults: dict[Literal["windows", "linux"], str]
+    client_profiles: dict[str, SmbClientProfile]
+    server_defaults: dict[Literal["windows", "linux"], str]
+    server_profiles: dict[str, SmbServerProfile]
+
+    @model_validator(mode="after")
+    def valid_defaults_and_native_images(self) -> Self:
+        """Validate default references, profile keys, and native executable paths."""
+
+        for profile_group_name, profiles in (
+            ("client_profiles", self.client_profiles),
+            ("server_profiles", self.server_profiles),
+        ):
+            if not profiles:
+                raise ValueError(f"{profile_group_name} must not be empty")
+            invalid_names = sorted(
+                name for name in profiles if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name)
+            )
+            if invalid_names:
+                raise ValueError(f"{profile_group_name} has invalid names: {invalid_names}")
+
+        self._validate_default_references(
+            defaults=self.client_defaults,
+            profiles=self.client_profiles,
+            field_name="client_defaults",
+        )
+        self._validate_default_references(
+            defaults=self.server_defaults,
+            profiles=self.server_profiles,
+            field_name="server_defaults",
+        )
+        for profile in self.client_profiles.values():
+            processes = [
+                process
+                for process in (profile.process, *profile.operation_processes.values())
+                if process is not None
+            ]
+            self._validate_native_images(profile.os_category, processes)
+        for profile in self.server_profiles.values():
+            processes = [process for process in (profile.listener, profile.worker) if process]
+            self._validate_native_images(profile.os_category, processes)
+        return self
+
+    @staticmethod
+    def _validate_default_references(
+        *,
+        defaults: dict[Literal["windows", "linux"], str],
+        profiles: dict[str, SmbClientProfile] | dict[str, SmbServerProfile],
+        field_name: str,
+    ) -> None:
+        missing_platforms = sorted({"windows", "linux"} - set(defaults))
+        if missing_platforms:
+            raise ValueError(f"{field_name} is missing platforms: {missing_platforms}")
+        for os_category, profile_name in defaults.items():
+            profile = profiles.get(profile_name)
+            if profile is None:
+                raise ValueError(f"{field_name}.{os_category} references unknown {profile_name!r}")
+            if profile.os_category != os_category:
+                raise ValueError(
+                    f"{field_name}.{os_category} references {profile_name!r} for "
+                    f"os_category={profile.os_category}"
+                )
+
+    @staticmethod
+    def _validate_native_images(
+        os_category: Literal["windows", "linux"],
+        processes: list[SmbProcessProfile],
+    ) -> None:
+        for process in processes:
+            if os_category == "linux" and not process.image.startswith("/"):
+                raise ValueError(f"Linux SMB process image must be absolute: {process.image!r}")
+            if os_category == "windows" and not re.fullmatch(
+                r"[A-Za-z]:\\.+|\\\\.+",
+                process.image,
+            ):
+                raise ValueError(f"Windows SMB process image must be absolute: {process.image!r}")
 
 
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
@@ -1854,6 +2978,81 @@ class WindowsGroupPolicyRefreshConfig(BaseModel, extra="forbid"):
         return self
 
 
+class WindowsRemoteAuthDurationProfile(BaseModel, extra="forbid", frozen=True):
+    """One bounded right-skew transport-duration profile."""
+
+    distribution: Literal["lognormal"]
+    median_seconds: float = Field(gt=0.0, le=3600.0)
+    sigma: float = Field(gt=0.0, le=3.0)
+    minimum_seconds: float = Field(ge=0.001, le=3600.0)
+    maximum_seconds: float = Field(gt=0.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def duration_bounds_are_ordered(self) -> Self:
+        """Require the median and clamp to describe one coherent distribution."""
+
+        if self.maximum_seconds < self.minimum_seconds:
+            raise ValueError("maximum_seconds must be >= minimum_seconds")
+        if not self.minimum_seconds <= self.median_seconds <= self.maximum_seconds:
+            raise ValueError("median_seconds must fall within the duration bounds")
+        return self
+
+
+class WindowsRemoteAuthOutcomeProfiles(BaseModel, extra="forbid", frozen=True):
+    """Profile references for successful and failed remote authentication."""
+
+    success: str = Field(min_length=1)
+    failure: str = Field(min_length=1)
+
+
+class WindowsRemoteAuthTransportConfig(BaseModel, extra="forbid", frozen=True):
+    """Source/outcome-aware Windows remote-authentication transport texture."""
+
+    profiles: dict[str, WindowsRemoteAuthDurationProfile]
+    defaults: WindowsRemoteAuthOutcomeProfiles
+    sources: dict[str, WindowsRemoteAuthOutcomeProfiles]
+
+    @model_validator(mode="after")
+    def profile_references_exist(self) -> Self:
+        """Reject empty profile maps and dangling source/default references."""
+
+        if not self.profiles:
+            raise ValueError("remote_auth_transport.profiles must not be empty")
+        references = {
+            self.defaults.success,
+            self.defaults.failure,
+            *(
+                profile_name
+                for source_profiles in self.sources.values()
+                for profile_name in (source_profiles.success, source_profiles.failure)
+            ),
+        }
+        missing = sorted(references - set(self.profiles))
+        if missing:
+            raise ValueError(
+                f"remote_auth_transport references unknown duration profiles: {missing}"
+            )
+        if any(not source.strip() for source in self.sources):
+            raise ValueError("remote_auth_transport source names must not be empty")
+        return self
+
+
+class WindowsAnonymousSmbBaselineConfig(BaseModel, extra="forbid", frozen=True):
+    """Sparse host-scoped cadence for anonymous SMB enumeration noise."""
+
+    hourly_probability: float = Field(ge=0.0, le=1.0)
+    events_per_active_hour_min: int = Field(ge=1, le=10)
+    events_per_active_hour_max: int = Field(ge=1, le=10)
+
+    @model_validator(mode="after")
+    def event_bounds_are_ordered(self) -> Self:
+        """Reject inverted per-hour count bounds."""
+
+        if self.events_per_active_hour_max < self.events_per_active_hour_min:
+            raise ValueError("events_per_active_hour_max must be >= events_per_active_hour_min")
+        return self
+
+
 class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
     """Source-native 4672 privilege list profile."""
 
@@ -1906,6 +3105,8 @@ class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
 
     workstation_lock: WindowsWorkstationLockConfig
     group_policy_refresh: WindowsGroupPolicyRefreshConfig
+    remote_auth_transport: WindowsRemoteAuthTransportConfig
+    anonymous_smb_baseline: WindowsAnonymousSmbBaselineConfig
     failed_logon: WindowsFailedLogonConfig
     special_privileges: WindowsSpecialPrivilegesConfig
 
@@ -2156,16 +3357,76 @@ class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
 class EdrInstalledSoftwareProduct(BaseModel, extra="forbid"):
     """A data-driven installed software identity in edr_pools.yaml."""
 
+    product_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
     name: str
     publisher: str
     version: str
+    build: str
+    architectures: tuple[Literal["x86", "x64", "arm64", "neutral"], ...]
+    scope: Literal["machine", "user"]
 
-    @field_validator("name", "publisher", "version")
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_product(cls, value: Any) -> Any:
+        """Map the legacy display triple to an explicit neutral machine release."""
+
+        if not isinstance(value, dict):
+            return value
+        current_fields = {"product_id", "build", "architectures", "scope"}
+        present = current_fields & set(value)
+        if present and present != current_fields:
+            missing = ", ".join(sorted(current_fields - present))
+            raise ValueError(
+                "installed software mixes legacy and current fields; add all current fields: "
+                + missing
+            )
+        if present:
+            return value
+
+        name = value.get("name")
+        version = value.get("version")
+        if not isinstance(name, str) or not name.strip() or not isinstance(version, str):
+            return value
+        normalized = dict(value)
+        normalized.update(
+            {
+                "product_id": stable_config_id(name),
+                "build": version,
+                "architectures": ("neutral",),
+                "scope": "machine",
+            }
+        )
+        warn_legacy_config(
+            f"edr_pools.installed_software_products[{name}] name/publisher/version triple",
+            "product_id, name, publisher, version, build, architectures, and scope",
+            stacklevel=4,
+        )
+        return normalized
+
+    @field_validator("name", "publisher", "version", "build")
     @classmethod
     def values_non_empty(cls, v: str) -> str:
         if not v:
             raise ValueError("installed software fields must be non-empty")
         return v
+
+    @field_validator("architectures")
+    @classmethod
+    def installed_architectures_are_unique(
+        cls,
+        value: tuple[Literal["x86", "x64", "arm64", "neutral"], ...],
+    ) -> tuple[Literal["x86", "x64", "arm64", "neutral"], ...]:
+        """Require a deterministic non-empty release architecture set."""
+
+        if not value:
+            raise ValueError("installed software architectures must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("installed software architectures must be unique")
+        if "neutral" in value and len(value) > 1:
+            raise ValueError(
+                "installed software neutral architecture cannot be combined with exact architectures"
+            )
+        return tuple(sorted(value))
 
 
 # --- Endpoint Noise ---
@@ -2395,6 +3656,8 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
         "zeek_smtp": "zeek",
         "zeek_ssl": "zeek",
         "zeek_files": "zeek",
+        "zeek_smb_files": "zeek",
+        "zeek_smb_mapping": "zeek",
         "zeek_x509": "zeek",
         "zeek_dhcp": "zeek",
         "zeek_ntp": "zeek",
@@ -2443,7 +3706,33 @@ class ObservationProfileEntry(BaseModel, extra="forbid"):
 class ObservationProfilesConfig(BaseModel, extra="forbid"):
     """Root schema for observation_profiles.yaml."""
 
+    schema_version: Literal[2]
     profiles: dict[str, ObservationProfileEntry]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_profile_document(cls, value: Any) -> Any:
+        """Version the legacy named-profile wrapper without changing profile semantics."""
+
+        if not isinstance(value, dict) or "schema_version" in value:
+            return value
+        normalized = deepcopy(value)
+        normalized["schema_version"] = 2
+        profiles = normalized.get("profiles")
+        if isinstance(profiles, dict):
+            for profile_name in profiles:
+                warn_legacy_config(
+                    f"observation_profiles.profiles[{profile_name}] unversioned named profile",
+                    "observation_profiles schema_version: 2 with the same named profile fields",
+                    stacklevel=4,
+                )
+        else:
+            warn_legacy_config(
+                "observation_profiles unversioned document",
+                "observation_profiles schema_version: 2",
+                stacklevel=4,
+            )
+        return normalized
 
     @field_validator("profiles")
     @classmethod
@@ -2549,11 +3838,13 @@ class SpawnRuleEntry(BaseModel, extra="forbid"):
 # --- System Processes ---
 
 
-class ScheduledTaskEntry(BaseModel, extra="forbid"):
+class ScheduledTaskEntry(BaseModel, extra="forbid", frozen=True):
     """A scheduled task entry in system_processes.yaml."""
 
     id: str | None = None
     image: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
@@ -2566,19 +3857,87 @@ class ScheduledTaskEntry(BaseModel, extra="forbid"):
     compatibility_option: str | None = None
     compatibility_scope: Literal["host"] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize one legacy task descriptor once at the config boundary."""
 
-class SystemServiceEntry(BaseModel, extra="forbid"):
+        if not isinstance(value, dict) or (
+            value.get("id") and value.get("release_policy") and value.get("product_id")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("image") or "scheduled-task"))
+        normalized.setdefault("id", f"legacy-task-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.windows.{identity}")
+        warn_legacy_config(
+            f"scheduled task {normalized.get('image') or '<unknown>'}",
+            "id, release_policy, and product_id deployment fields",
+            stacklevel=4,
+        )
+        return normalized
+
+
+class SystemServiceEntry(BaseModel, extra="forbid", frozen=True):
     """A system service entry in system_processes.yaml."""
 
+    id: str | None = None
     image: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    product_id: str | None = None
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
     singleton: bool = False
+    roles_any: tuple[str, ...] = ()
+    services_any: tuple[str, ...] = ()
     compatibility_group: str | None = None
     compatibility_option: str | None = None
     compatibility_scope: Literal["host"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_deployment(cls, value: Any) -> Any:
+        """Normalize one legacy service descriptor once at the config boundary."""
+
+        if not isinstance(value, dict) or (
+            value.get("id") and value.get("release_policy") and value.get("product_id")
+        ):
+            return value
+        normalized = dict(value)
+        identity = stable_config_id(str(normalized.get("image") or "system-service"))
+        normalized.setdefault("id", f"legacy-service-{identity}")
+        normalized.setdefault("release_policy", "unspecified")
+        normalized.setdefault("product_id", f"legacy-native.windows.{identity}")
+        warn_legacy_config(
+            f"system service {normalized.get('image') or '<unknown>'}",
+            "id, release_policy, and product_id deployment fields",
+            stacklevel=4,
+        )
+        return normalized
+
+
+class NativeSystemBinaryReleaseEntry(BaseModel, extra="forbid", frozen=True):
+    """Path-independent release metadata for an OS-native system binary."""
+
+    product_id: str = Field(min_length=1)
+    variant: str = Field(default="core-os", min_length=1)
+    description: str = Field(min_length=1)
+    product: str = Field(min_length=1)
+    company: str = Field(min_length=1)
+    original_filename: str = Field(min_length=1)
+
+    @field_validator("original_filename")
+    @classmethod
+    def original_filename_is_not_a_path(cls, value: str) -> str:
+        """Require source-native VERSIONINFO filename identity, not placement."""
+
+        normalized = value.strip()
+        if "/" in normalized or "\\" in normalized:
+            raise ValueError("original_filename must be a filename, not an installation path")
+        return normalized
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):
@@ -2586,6 +3945,36 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
 
     exe: str
     path: str
+    release_policy: Literal["host_build", "unspecified"] | None = None
+    distro: Literal["all", "debian", "rhel"] | None = None
+    system_types: tuple[Literal["workstation", "server", "domain_controller"], ...] = ()
+    roles_any: tuple[str, ...] = ()
+    services_any: tuple[str, ...] = ()
+    native_release: NativeSystemBinaryReleaseEntry | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_release_policy(cls, value: Any) -> Any:
+        """Upgrade legacy binary rows without fabricating package versions."""
+
+        if not isinstance(value, dict) or "release_policy" in value:
+            return value
+        normalized = dict(value)
+        normalized["release_policy"] = "unspecified"
+        warn_legacy_config(
+            f"system binary {normalized.get('path') or normalized.get('exe') or '<unknown>'}",
+            "release_policy: host_build or unspecified",
+            stacklevel=4,
+        )
+        return normalized
+
+    @model_validator(mode="after")
+    def exact_native_release_requires_host_build(self) -> Self:
+        """Keep authored OS VERSIONINFO attached only to its host build."""
+
+        if self.native_release is not None and self.release_policy != "host_build":
+            raise ValueError("native_release requires release_policy: host_build")
+        return self
 
 
 # --- Traffic Rates ---

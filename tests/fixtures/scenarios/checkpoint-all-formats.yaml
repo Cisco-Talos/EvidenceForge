@@ -1,0 +1,108 @@
+version: "1.0"
+name: checkpoint-all-formats
+description: "Bounded mixed-platform checkpoint coverage for every output family"
+
+environment:
+  description: "One Windows and one Linux workstation behind network and firewall sensors"
+  proxy:
+    mode: explicit
+    listener_port: 8080
+  users:
+    - username: alice
+      full_name: "Alice Example"
+      email: "alice@example.test"
+      primary_system: WIN-01
+      enabled: true
+    - username: bob
+      full_name: "Bob Example"
+      email: "bob@example.test"
+      primary_system: LINUX-01
+      enabled: true
+  systems:
+    - hostname: WIN-01
+      ip: 10.0.0.10
+      os: "Windows 10"
+      type: workstation
+    - hostname: LINUX-01
+      ip: 10.0.0.20
+      os: "Ubuntu 22.04"
+      type: server
+      services: [squid, nginx, dns-client]
+      roles: [forward_proxy, web_server]
+  network:
+    segments:
+      - name: workstations
+        cidr: 10.0.0.0/24
+        exposure: internal
+        systems: [WIN-01, LINUX-01]
+    sensors:
+      - type: network
+        name: core-zeek
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+      - type: ids
+        name: core-ids
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: tap
+        log_formats: [snort_alert]
+      - type: firewall
+        name: edge-fw
+        monitoring_segments: [workstations]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
+
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+
+baseline_activity:
+  description: "Small mixed-platform baseline"
+  intensity: low
+  variation: low
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+
+storyline:
+  - id: fixture-activity
+    time: "+10m"
+    actor: bob
+    system: LINUX-01
+    activity: "Exercise Linux command and web request output families"
+    events:
+      - type: process
+        process_name: "/usr/bin/curl"
+        command_line: "curl https://example.com/health"
+      - type: connection
+        dst_ip: "93.184.216.34"
+        dst_port: 443
+        hostname: "example.com"
+        service: "https"
+      - type: web_scan
+        source_ip: "198.51.100.25"
+        dst_ip: "10.0.0.20"
+        dst_port: 80
+        hostname: "linux-01.example.test"
+        preset: nikto
+        rate: 1.0
+        duration: "1m"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: cisco_asa
+    - format: web_access
+    - format: proxy_access
+  destination: "./output"
+  compression: false

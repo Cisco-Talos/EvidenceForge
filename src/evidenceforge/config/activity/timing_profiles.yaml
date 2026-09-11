@@ -10,7 +10,44 @@
 # Values are intentionally conservative. Scenario-specific projects can override
 # them with .eforge/config/activity/timing_profiles.yaml.
 
+# SSH authentication work begins only after the required transport/eCAR FLOW
+# visibility floor. Profiles mix fast, ordinary, and slow-tail outcomes, then
+# add deterministic route, receiver-load, credential-backend cache, and key-type
+# costs. This prevents the source-observation floor from collapsing every
+# public-key session into one narrow timing band.
+ssh_authentication:
+  profiles:
+    publickey:
+      fast_probability: 0.22
+      fast_ms: {min: 25, max: 180}
+      typical_ms: {min: 180, max: 1250}
+      tail_probability: 0.12
+      tail_ms: {min: 1250, max: 4800}
+      cache_miss_probability: 0.18
+      cache_miss_ms: {min: 120, max: 1500}
+    password:
+      fast_probability: 0.08
+      fast_ms: {min: 180, max: 550}
+      typical_ms: {min: 550, max: 3600}
+      tail_probability: 0.18
+      tail_ms: {min: 3600, max: 9000}
+      cache_miss_probability: 0.32
+      cache_miss_ms: {min: 250, max: 2800}
+  route_rtt_ms:
+    private: {min: 2, max: 55}
+    public: {min: 25, max: 320}
+  receiver_load_ms: {min: 0, max: 650}
+  public_key_penalty_ms:
+    ED25519: {min: 0, max: 35}
+    ECDSA: {min: 5, max: 75}
+    RSA: {min: 20, max: 240}
+
 relationships:
+  linux.pipeline_stage_start:
+    class: burst_fanout
+    position: after
+    min_ms: 6
+    max_ms: 115
   network.dns_before_tcp:
     class: causal_prerequisite
     position: before
@@ -81,11 +118,26 @@ relationships:
     position: after
     min_ms: 3
     max_ms: 35
+  windows.kerberos_after_wfp:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 45
   windows.network_logon_after_transport:
     class: source_latency
     position: after
     min_ms: 8
     max_ms: 140
+  windows.machine_logon_after_service_ticket:
+    class: source_latency
+    position: after
+    min_ms: 3
+    max_ms: 135
+  source.session_dependent_after_login:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 75
   windows.special_privilege_after_logon:
     class: source_latency
     position: after
@@ -196,6 +248,16 @@ relationships:
     position: after
     min_ms: 275
     max_ms: 650
+  source.ecar_smb_session_after_accept:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 140
+  smb.cross_server_delete_after_destination:
+    class: causal_prerequisite
+    position: after
+    min_ms: 250
+    max_ms: 1200
   source.ecar_remote_thread:
     class: source_latency
     position: after

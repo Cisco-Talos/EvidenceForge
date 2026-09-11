@@ -1,0 +1,9 @@
+pack_schema_version: "2.0"
+type: industry
+publisher: evidenceforge
+publisher_display_name: "EvidenceForge Official"
+name: healthcare
+version: "1.0.0"
+requires_evidenceforge: ">=2.0.0,<3.0.0"
+description: "Reusable healthcare personas and clinical workflow vocabulary."
+industry_dependencies: []

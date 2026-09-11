@@ -9,7 +9,9 @@
 #
 # Template variables: {user} = process owner username, {rand} = 5-digit random,
 # {hex} = 8-character hexadecimal token, {process_prefetch_name} = owning
-# process basename uppercased for Windows Prefetch artifacts.
+# process basename uppercased for Windows Prefetch artifacts. Registry-only binary
+# placeholders include {userassist_binary}, {accent_palette_binary}, {pidl_binary}, and
+# {recent_docs_binary}.
 
 # Additional application/service principals that must never receive generic interactive-user
 # file churn. Core operating-system accounts remain protected in code for compatibility.
@@ -279,30 +281,62 @@ registry_ownership_rules:
     executables: ["msiexec.exe"]
 
 installed_software_products:
-  - name: "Microsoft Update Health Tools"
+  - product_id: microsoft-update-health-tools
+    name: "Microsoft Update Health Tools"
     publisher: "Microsoft Corporation"
     version: "5.72.0.0"
-  - name: "Microsoft Edge Update"
+    build: "5.72.0.0"
+    architectures: [neutral]
+    scope: machine
+  - product_id: microsoft-edge-update
+    name: "Microsoft Edge Update"
     publisher: "Microsoft Corporation"
     version: "1.3.187.37"
-  - name: "Microsoft OneDrive"
+    build: "1.3.187.37"
+    architectures: [neutral]
+    scope: machine
+  - product_id: microsoft-onedrive
+    name: "Microsoft OneDrive"
     publisher: "Microsoft Corporation"
     version: "24.045.0303.0002"
-  - name: "Google Chrome"
+    build: "24.045.0303.0002"
+    architectures: [neutral]
+    scope: machine
+  - product_id: google-chrome
+    name: "Google Chrome"
     publisher: "Google LLC"
     version: "123.0.6312.86"
-  - name: "Mozilla Firefox"
+    build: "123.0.6312.86"
+    architectures: [neutral]
+    scope: machine
+  - product_id: mozilla-firefox
+    name: "Mozilla Firefox"
     publisher: "Mozilla Corporation"
     version: "121.0.1"
-  - name: "7-Zip 23.01 (x64)"
+    build: "121.0.1"
+    architectures: [neutral]
+    scope: machine
+  - product_id: 7-zip-23-01-x64
+    name: "7-Zip 23.01 (x64)"
     publisher: "Igor Pavlov"
     version: "23.01"
-  - name: "Adobe Acrobat Reader"
+    build: "23.01"
+    architectures: [x64]
+    scope: machine
+  - product_id: adobe-acrobat-reader
+    name: "Adobe Acrobat Reader"
     publisher: "Adobe Inc."
     version: "24.001.20604"
-  - name: "Cisco Secure Client"
+    build: "24.001.20604"
+    architectures: [neutral]
+    scope: machine
+  - product_id: cisco-secure-client
+    name: "Cisco Secure Client"
     publisher: "Cisco Systems, Inc."
     version: "5.1.8.42"
+    build: "5.1.8.42"
+    architectures: [neutral]
+    scope: machine
 
 file_paths_windows:
   # User documents
@@ -369,6 +403,18 @@ runmru_commands:
   - "explorer.exe \\\\FILE-SRV-01\\Shared"
   - "cmd.exe /k cd C:\\Users\\{user}\\Downloads"
 
+# Filenames used by RecentDocs and ComDlg32 MRU artifacts. Extension-specific
+# subkeys select only matching entries; overlays may extend the lived-in corpus.
+registry_mru_filenames:
+  - "report.docx"
+  - "meeting-notes.docx"
+  - "budget.xlsx"
+  - "forecast.xlsx"
+  - "briefing.pdf"
+  - "invoice.pdf"
+  - "notes.txt"
+  - "readme.txt"
+
 registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "{runmru_name}", "{runmru_command}"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt", "DWORD (0x00000001)"]
@@ -378,22 +424,21 @@ registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "MigrateProxy", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "AppsUseLightTheme", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count", "{userassist_value}", "{userassist_binary}"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*", "0", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*", "0", "{pidl_binary}"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1", "Datetime", "2024-03-18T13:00:00"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "SubscribedContent-338389Enabled", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search", "SearchboxTaskbarMode", "DWORD (0x00000002)"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", "hex:{hex}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", "{accent_palette_binary}"]
   - ["HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore", "HarvestContacts", "DWORD (0x00000001)"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU", "{mru}", "hex(2):43,00,3a,00"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\docx", "{mru}", "hex(2):43,00,3a,00"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\pdf", "{mru}", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU", "{mru}", "{pidl_binary}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\docx", "{mru}", "{pidl_binary}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\pdf", "{mru}", "{pidl_binary}"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document {doc}", "Datetime", "2024-03-18T13:{minute}:00"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\budget-{doc}.xlsx"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\briefing-{doc}.pptx"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.docx", "{mru}", "hex:7b,{hex}"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.pdf", "{mru}", "hex:7b,{hex}"]
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count", "{userassist_value}", "{userassist_binary}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.docx", "{mru}", "{recent_docs_binary}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.pdf", "{mru}", "{recent_docs_binary}"]
   - ["HKCU\\Software\\Microsoft\\Windows\\Shell\\BagMRU\\{mru}", "NodeSlot", "DWORD (0x0000{mru})"]
   - ["HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\Bags\\{doc}\\Shell", "FolderType", "Generic"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths", "url{mru}", "C:\\Users\\{user}\\Documents"]

@@ -55,6 +55,8 @@
         "password_change",
         "password_reset",
         "process_access",
+        "rdp_disconnect",
+        "rdp_reconnect",
         "service_installed",
         "ssh_session",
         "workstation_locked",

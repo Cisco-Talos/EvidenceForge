@@ -8,7 +8,7 @@ from __future__ import annotations
 import fnmatch
 import random
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from evidenceforge.events.contexts import X509Context
 from evidenceforge.events.cryptography import (
@@ -24,20 +24,98 @@ from evidenceforge.generation.activity.tls_realism import (
     signature_algorithm_for_issuer,
 )
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
+from evidenceforge.generation.timing import (
+    ConstantDistribution,
+    DistributionSpec,
+    MixtureDistribution,
+    TimingRuntime,
+    TimingSampler,
+    TimingScope,
+    TriangularDistribution,
+    WeightedDistribution,
+)
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
+
+
+class _TlsCertificateTimingRuntime(Protocol):
+    """Typed sampling surface shared by canonical and prepared timing owners."""
+
+    @property
+    def sampler(self) -> TimingSampler:
+        """Return the owner's stateless audited timing sampler."""
+
+
+def _inclusive_integer_distribution(minimum: int, maximum: int) -> DistributionSpec:
+    """Return a continuous distribution that rounds to an inclusive integer uniform."""
+
+    if minimum == maximum:
+        return ConstantDistribution(float(minimum))
+    lower = float(minimum) - 0.499999
+    upper = float(maximum) + 0.499999
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=lower, maximum=upper),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=lower, mode=upper, maximum=upper),
+            ),
+        )
+    )
+
+
+def _sample_inclusive_integer(
+    runtime: _TlsCertificateTimingRuntime,
+    *,
+    minimum: int,
+    maximum: int,
+    relationship_key: str,
+    scope: TimingScope,
+    sample_key: str,
+) -> int:
+    """Return one audited deterministic integer sample from an inclusive range."""
+
+    sampled = runtime.sampler.sample_value(
+        _inclusive_integer_distribution(minimum, maximum),
+        relationship_key=relationship_key,
+        scope=scope,
+        sample_key=sample_key,
+    )
+    return int(sampled + 0.5)
 
 
 class TlsCertificatePlanner:
     """Plan stable certificate identities and per-handshake chain presentation."""
 
-    def __init__(self, registry: CryptographicMaterialRegistry) -> None:
+    def __init__(
+        self,
+        registry: CryptographicMaterialRegistry,
+        *,
+        timing_runtime: _TlsCertificateTimingRuntime | None = None,
+    ) -> None:
         self._registry = registry
+        # Direct planner construction remains a deterministic compatibility
+        # surface. Production ActivityGenerator construction always injects
+        # its exact engine runtime, including the prepared planning view.
+        self._timing_runtime = (
+            timing_runtime if timing_runtime is not None else TimingRuntime.compatibility_default()
+        )
 
-    @staticmethod
+    @property
+    def timing_runtime(self) -> _TlsCertificateTimingRuntime:
+        """Return the exact canonical or prepared timing owner used by this planner."""
+
+        return self._timing_runtime
+
     def _validity_window(
+        self,
         *,
         identity: str,
+        backend_identity: str,
+        subject_name: str,
         event_time: datetime,
         validity_days_min: int,
         validity_days_max: int,
@@ -45,15 +123,48 @@ class TlsCertificatePlanner:
     ) -> tuple[int, int]:
         """Return an order-independent certificate-rotation window containing the event."""
 
-        rng = random.Random(_stable_seed(f"tls_certificate_validity:{identity}"))
-        validity_days = rng.randint(validity_days_min, max(validity_days_min, validity_days_max))
+        identity_scope = TimingScope(
+            stable_id=backend_identity or identity,
+            host=subject_name or identity,
+            source="tls_certificate",
+            lifecycle_id=f"{identity}|validity-policy",
+        )
+        validity_days = _sample_inclusive_integer(
+            self._timing_runtime,
+            minimum=validity_days_min,
+            maximum=max(validity_days_min, validity_days_max),
+            relationship_key="tls.certificate.validity.duration_days",
+            scope=identity_scope,
+            sample_key="validity_days",
+        )
         rotation_days = max(1, int(validity_days * 0.72))
         event_day = int(event_time.timestamp()) // 86400
         bucket_start_day = (event_day // rotation_days) * rotation_days
         available_overlap = max(1, validity_days - rotation_days)
         max_back_days = max(1, min(not_before_max_days, available_overlap))
-        not_before_days = rng.randint(1, max_back_days)
-        not_valid_before = (bucket_start_day - not_before_days) * 86400 + rng.randint(0, 86399)
+        bucket_scope = TimingScope(
+            stable_id=identity_scope.stable_id,
+            host=identity_scope.host,
+            source=identity_scope.source,
+            lifecycle_id=f"{identity}|rotation-bucket:{bucket_start_day}",
+        )
+        not_before_days = _sample_inclusive_integer(
+            self._timing_runtime,
+            minimum=1,
+            maximum=max_back_days,
+            relationship_key="tls.certificate.validity.not_before_days",
+            scope=bucket_scope,
+            sample_key="not_before_days",
+        )
+        within_day_seconds = _sample_inclusive_integer(
+            self._timing_runtime,
+            minimum=0,
+            maximum=86399,
+            relationship_key="tls.certificate.validity.not_before_second",
+            scope=bucket_scope,
+            sample_key="within_day_seconds",
+        )
+        not_valid_before = (bucket_start_day - not_before_days) * 86400 + within_day_seconds
         not_valid_after = not_valid_before + validity_days * 86400
         if not_valid_before >= int(event_time.timestamp()):
             not_valid_before = (bucket_start_day - 1) * 86400
@@ -67,6 +178,10 @@ class TlsCertificatePlanner:
         event_time: datetime,
         *,
         identity: str,
+        backend_identity: str = "",
+        subject_name: str = "",
+        lifecycle_id: str = "",
+        timing_runtime: _TlsCertificateTimingRuntime | None = None,
     ) -> tuple[int, int]:
         """Keep a child interval inside its issuer without copying the issuer boundary."""
 
@@ -83,10 +198,25 @@ class TlsCertificatePlanner:
             available_seconds = max(1, event_epoch - issuer_start - 1)
             maximum_offset = min(45 * 86400, available_seconds)
             minimum_offset = min(3600, maximum_offset)
-            bound_rng = random.Random(
-                _stable_seed(f"tls_child_issuer_bound:{identity}:{issuer_name}")
+            runtime = (
+                timing_runtime
+                if timing_runtime is not None
+                else TimingRuntime.compatibility_default()
             )
-            start = issuer_start + bound_rng.randint(minimum_offset, maximum_offset)
+            sampled_offset = _sample_inclusive_integer(
+                runtime,
+                minimum=minimum_offset,
+                maximum=maximum_offset,
+                relationship_key="tls.certificate.validity.bound_to_issuer",
+                scope=TimingScope(
+                    stable_id=backend_identity or identity,
+                    host=subject_name or identity,
+                    source="tls_certificate",
+                    lifecycle_id=f"{issuer_name}|{lifecycle_id or identity}",
+                ),
+                sample_key="not_before_offset_seconds",
+            )
+            start = issuer_start + sampled_offset
         else:
             start = max(start, issuer_start + 1)
         end = min(validity[1], issuer_end)
@@ -113,6 +243,8 @@ class TlsCertificatePlanner:
         validity_fallback = int(issuer_config.get("validity_days", 397))
         validity = self._validity_window(
             identity=leaf_identity,
+            backend_identity=backend_identity,
+            subject_name=f"CN={cert_name}",
             event_time=event_time,
             validity_days_min=int(issuer_config.get("validity_days_min", validity_fallback)),
             validity_days_max=int(issuer_config.get("validity_days_max", validity_fallback)),
@@ -123,6 +255,10 @@ class TlsCertificatePlanner:
             issuer_name,
             event_time,
             identity=leaf_identity,
+            backend_identity=backend_identity,
+            subject_name=f"CN={cert_name}",
+            lifecycle_id=f"{leaf_identity}|{validity[0]}|{validity[1]}",
+            timing_runtime=self._timing_runtime,
         )
         leaf = self._registry.resolve_certificate(
             backend_identity=backend_identity,
@@ -257,6 +393,8 @@ class TlsCertificatePlanner:
             config = certificate_chain_config()
             validity = self._validity_window(
                 identity=f"authority:{subject_name}:{issuer_name}:{key_type}:{key_size}",
+                backend_identity=f"certificate-authority:{subject_name}",
+                subject_name=subject_name,
                 event_time=event_time,
                 validity_days_min=int(config.get("intermediate_validity_days_min", 1825)),
                 validity_days_max=int(config.get("intermediate_validity_days_max", 3650)),

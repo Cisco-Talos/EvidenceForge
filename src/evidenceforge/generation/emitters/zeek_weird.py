@@ -26,6 +26,7 @@ from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekWeirdEmitter(SensorMultiplexEmitter):
@@ -61,6 +62,7 @@ class ZeekWeirdEmitter(SensorMultiplexEmitter):
             "notice": weird.notice,
             "peer": weird.peer,
             "source": weird.source,
+            "_source_timing_key": network_source_timing_key("zeek_weird"),
             **self._sensor_metadata(event, self.format_def.name),
         }
         self.emit_event(event_data)

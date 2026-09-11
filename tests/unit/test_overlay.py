@@ -3,7 +3,32 @@
 
 """Unit tests for the config overlay merge system."""
 
-from evidenceforge.config.overlay import deep_merge_dict, merge_keyed_list
+from pathlib import Path
+
+from evidenceforge.config.overlay import (
+    deep_merge_dict,
+    merge_keyed_list,
+    retired_overlay_errors,
+)
+
+
+def test_retired_smb_transfer_overlay_fails_with_migration_guidance(tmp_path: Path) -> None:
+    """The removed SMB heuristic overlay must never be silently ignored."""
+
+    retired = tmp_path / "activity" / "smb_file_transfers.yaml"
+    retired.parent.mkdir(parents=True)
+    retired.write_text("enabled: true\n", encoding="utf-8")
+
+    errors = retired_overlay_errors(tmp_path)
+
+    assert errors == [
+        (
+            "activity/smb_file_transfers.yaml",
+            errors[0][1],
+        )
+    ]
+    assert "removed in EvidenceForge 2.0" in errors[0][1]
+    assert "environment.storage and smb_activity" in errors[0][1]
 
 
 class TestMergeKeyedList:

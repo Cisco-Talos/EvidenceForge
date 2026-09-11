@@ -100,8 +100,12 @@ def _pattern_ids_for_family(family: str) -> list[str]:
     return [pattern_id for pattern_id in ids if pattern_id in available] or list(available)
 
 
-def _render_pattern(pattern: dict[str, Any], hostname: str) -> str:
-    """Render one pattern with host-stable module offsets."""
+def _render_pattern(
+    pattern: dict[str, Any],
+    platform_cohort: str,
+    call_site_key: str,
+) -> str:
+    """Render one pattern with build- and call-site-stable module offsets."""
     modules = pattern.get("modules", [])
     ranges = pattern.get("offset_ranges", {})
     pattern_id = str(pattern.get("id") or "|".join(str(module) for module in modules))
@@ -110,7 +114,11 @@ def _render_pattern(pattern: dict[str, Any], hostname: str) -> str:
         module_name = str(module)
         offset_range = ranges.get(module_name, [0x1000, 0x2000])
         lo, hi = int(offset_range[0]), int(offset_range[1])
-        rng = random.Random(_stable_seed(f"calltrace_offset:{hostname}:{pattern_id}:{module_name}"))
+        rng = random.Random(
+            _stable_seed(
+                f"calltrace_offset:{platform_cohort}:{pattern_id}:{call_site_key}:{module_name}"
+            )
+        )
         off = rng.randint(lo, hi)
         parts.append(f"C:\\Windows\\SYSTEM32\\{module_name}+{off:X}")
     return "|".join(parts)
@@ -120,17 +128,19 @@ def render_call_trace_for_source(
     source_image: str,
     hostname: str,
     *,
+    platform: str = "",
     seed_parts: tuple[Any, ...] = (),
 ) -> str:
-    """Render a source-image-aware CallTrace string for one ProcessAccess event."""
+    """Render a build- and call-site-aware trace for one ProcessAccess event."""
     patterns = _patterns_by_id()
     if not patterns:
         return ""
     family = source_family_for_image(source_image)
     candidate_ids = _pattern_ids_for_family(family)
-    seed = ":".join(
-        str(part) for part in (hostname, family, _image_basename(source_image), *seed_parts)
+    platform_cohort = (platform or hostname).strip().lower()
+    call_site_key = ":".join(
+        str(part).strip().lower() for part in (family, _image_basename(source_image), *seed_parts)
     )
-    rng = random.Random(_stable_seed(f"calltrace_choice:{seed}"))
+    rng = random.Random(_stable_seed(f"calltrace_choice:{platform_cohort}:{call_site_key}"))
     pattern_id = rng.choice(candidate_ids)
-    return _render_pattern(patterns[pattern_id], hostname)
+    return _render_pattern(patterns[pattern_id], platform_cohort, call_site_key)

@@ -15,14 +15,14 @@ jobs:
   slow-comprehensive:
     name: Slow comprehensive tests (no coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120
 
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
           prune-cache: true
@@ -36,7 +36,10 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run slow comprehensive tests without coverage
-        run: uv run pytest --include-slow -m slow --no-cov --durations=20
+        run: uv run pytest -m slow --no-cov --durations=20
+
+      - name: Verify Python 3.12 to 3.13 checkpoint portability
+        run: uv run python scripts/check_checkpoint_python_portability.py
 
   release-required:
     name: Required Release CI

@@ -24,46 +24,114 @@
 
 import importlib.resources
 import os
+import re
 import shutil
 from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
 
-CHATGPT_SKILL_NAMES = ("scenario", "generate", "validate", "evaluate", "config")
+CHATGPT_SKILL_NAMES = (
+    "scenario",
+    "generate",
+    "validate",
+    "evaluate",
+    "config",
+    "pack",
+    "industry-pack",
+    "organization-pack",
+    "pack-release",
+)
 
 _CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
+        "references/project-context.md",
         "references/config-apps-processes.md",
+        "references/config-compatibility.md",
         "references/config-dependency-graph.md",
         "references/config-dns-network.md",
-        "references/config-evaluation.md",
-        "references/config-formats.md",
         "references/config-host-activity.md",
         "references/config-ids.md",
         "references/config-personas.md",
         "references/config-validation.md",
     ),
     "evaluate": (
-        "references/evidence-formats.md",
-        "references/scenario-reference.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
     ),
     "generate": (
-        "references/evidence-formats.md",
-        "references/scenario-reference.md",
+        "references/project-context.md",
+        "references/checkpoint-recovery.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
     ),
+    "industry-pack": (
+        "references/project-context.md",
+        "references/pack-reference.md",
+        "references/scenario-baseline-output.md",
+        "references/scenario-core.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment.md",
+        "references/scenario-smb.md",
+    ),
+    "organization-pack": (
+        "references/project-context.md",
+        "references/pack-reference.md",
+        "references/scenario-baseline-output.md",
+        "references/scenario-email.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment.md",
+        "references/scenario-http.md",
+        "references/scenario-smb.md",
+    ),
+    "pack": ("references/project-context.md", "references/pack-reference.md"),
+    "pack-release": ("references/project-context.md", "references/pack-reference.md"),
     "scenario": (
-        "references/evidence-formats.md",
-        "references/scenario-reference.md",
+        "references/project-context.md",
+        "references/evidence-endpoint-linux.md",
+        "references/evidence-network-ids.md",
+        "references/evidence-web-email.md",
+        "references/evidence-windows.md",
+        "references/generation-bundle-targets.md",
+        "references/scenario-briefing.md",
+        "references/scenario-baseline-output.md",
+        "references/scenario-core.md",
+        "references/scenario-email.md",
+        "references/scenario-environment.md",
+        "references/scenario-environment-identities.md",
+        "references/scenario-environment-network.md",
+        "references/scenario-environment-overrides.md",
+        "references/scenario-events-endpoint.md",
+        "references/scenario-events-network.md",
+        "references/scenario-http.md",
+        "references/scenario-pack-consumption.md",
+        "references/scenario-payloads.md",
+        "references/scenario-smb.md",
+        "references/scenario-storyline.md",
     ),
-    "validate": ("references/scenario-reference.md",),
+    "validate": (
+        "references/project-context.md",
+        "references/validation-safety.md",
+        "references/validation-storage.md",
+    ),
 }
 
-_CHATGPT_REFERENCE_REWRITES = {
-    "/eforge:references:scenario-reference": "`references/scenario-reference.md`",
-    "/eforge:references:evidence-formats": "`references/evidence-formats.md`",
-}
+_CHATGPT_REFERENCE_INVOCATION = re.compile(
+    r"`?/eforge:references:(?P<name>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`?"
+)
 
 _CHATGPT_COMMAND_REWRITES = {
+    "/eforge industry-pack": "the `eforge-industry-pack` skill",
+    "/eforge organization-pack": "the `eforge-organization-pack` skill",
+    "/eforge pack": "the `eforge-pack` skill",
+    "/eforge pack-release": "the `eforge-pack-release` skill",
     "/eforge scenario": "the `eforge-scenario` skill",
     "/eforge generate": "the `eforge-generate` skill",
     "/eforge validate": "the `eforge-validate` skill",
@@ -338,6 +406,7 @@ def _chatgpt_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str
     """Build ChatGPT-compatible SKILL.md frontmatter from Claude command metadata."""
     name = _extract_frontmatter_value(frontmatter_lines, "name", source)
     description_lines = _extract_frontmatter_block(frontmatter_lines, "description", source)
+    description_lines = _rewrite_chatgpt_content("\n".join(description_lines)).splitlines()
 
     return (
         "---\n"
@@ -352,11 +421,18 @@ def _chatgpt_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str
     )
 
 
-def _rewrite_chatgpt_skill_body(body: str) -> str:
-    """Adapt Claude-specific references in a skill body for ChatGPT."""
-    content = body
-    for old, new in _CHATGPT_REFERENCE_REWRITES.items():
-        content = content.replace(old, new)
+def _rewrite_chatgpt_content(content: str) -> str:
+    """Adapt Claude-specific skill and reference invocations for ChatGPT."""
+
+    # Canonical Claude sources normally format command/reference invocations as
+    # inline code. Consume those delimiters with the invocation before applying
+    # the replacement so generated Markdown cannot contain nested backticks.
+    content = _CHATGPT_REFERENCE_INVOCATION.sub(
+        lambda match: f"`references/{match.group('name')}.md`",
+        content,
+    )
+    for old, new in _CHATGPT_COMMAND_REWRITES.items():
+        content = content.replace(f"`{old}`", new)
     for old, new in _CHATGPT_COMMAND_REWRITES.items():
         content = content.replace(old, new)
     return content
@@ -413,7 +489,7 @@ def _chatgpt_skill_text(source: Path) -> str:
     """Read a command file and convert it to a valid ChatGPT SKILL.md file."""
     content = source.read_text(encoding="utf-8")
     frontmatter_lines, body = _split_frontmatter(content, source)
-    return _chatgpt_frontmatter_text(source, frontmatter_lines) + _rewrite_chatgpt_skill_body(body)
+    return _chatgpt_frontmatter_text(source, frontmatter_lines) + _rewrite_chatgpt_content(body)
 
 
 def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
@@ -453,9 +529,9 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     """Install EvidenceForge skills to a ChatGPT skills directory.
 
     Creates one ChatGPT skill directory per EvidenceForge command, each with a
-    SKILL.md file and bundled references. Existing EvidenceForge-owned skill
-    directories are updated and stale EvidenceForge-owned skill directories are
-    removed.
+    SKILL.md file and bundled references adapted to local ChatGPT skill links.
+    Existing EvidenceForge-owned skill directories are updated, and stale files
+    within the currently installed skill directories are removed.
 
     Args:
         target_dir: ChatGPT skills directory, e.g. .agents/skills/.
@@ -487,7 +563,10 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
         for rel_path, ref_source in sorted(skill_reference_files.items()):
             dest = _safe_install_destination(skill_dir, rel_path)
-            _copy_file_no_follow(ref_source, dest)
+            _write_text_no_follow(
+                dest,
+                _rewrite_chatgpt_content(ref_source.read_text(encoding="utf-8")),
+            )
             installed.append(f"{skill_name}/{rel_path}")
 
         for stale in _remove_stale_files(skill_dir, skill_manifest):

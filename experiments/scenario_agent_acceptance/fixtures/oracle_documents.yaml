@@ -1,0 +1,78 @@
+guided_interview:
+  scenario_version: "2.0"
+  environment:
+    users: [{username: test_user}]
+    systems: [{hostname: TEST-01}]
+  output:
+    logs:
+      - {format: windows_event_security}
+      - {format: zeek_conn}
+
+windows_email:
+  scenario_version: "2.0"
+  environment:
+    service_accounts: [svc-backup]
+    network_identities:
+      - id: partner_portal
+        hosts: [partner.example.test]
+  storyline:
+    - events: [{type: email_read, duration: 45.0}]
+
+windows_rdp:
+  environment:
+    systems:
+      - services: [termservice]
+  storyline:
+    - events: [{type: rdp_session}]
+  output:
+    logs: [{format: zeek_conn}]
+
+linux_ssh:
+  environment:
+    systems:
+      - services: [ssh]
+  storyline:
+    - events: [{type: ssh_session}]
+  output:
+    logs:
+      - {format: syslog}
+      - {format: zeek_conn}
+
+mixed_smb:
+  environment:
+    storage:
+      servers:
+        - share_overrides: [{share: FS-01.collaboration}]
+  storyline:
+    - events: [{type: smb_activity}]
+
+healthcare_pack:
+  composition:
+    organization:
+      source: package
+      publisher: evidenceforge
+      name: northstar-health
+      version: 1.0.0
+
+sensor_compatibility:
+  environment:
+    network:
+      sensors:
+        - {log_formats: [zeek_conn]}
+        - {log_formats: [snort_alert]}
+        - {log_formats: [cisco_asa]}
+  output:
+    logs:
+      - {format: zeek_conn}
+      - {format: snort_alert}
+      - {format: cisco_asa}
+
+controlled_repair:
+  environment:
+    service_accounts: [svc-backup]
+    network_identities:
+      - {id: partner_portal}
+    systems:
+      - {services: [rdp]}
+  storyline:
+    - events: [{duration: 45.0}]

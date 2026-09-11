@@ -1,0 +1,11 @@
+destination_catalog:
+  claims-clearinghouse:
+    description: "Synthetic claims-clearinghouse destination family."
+    data:
+      tags: [healthcare]
+      endpoints:
+        - domain: claims.healthcare.example
+          ips: [198.51.100.80]
+      services:
+        web:
+          protocol: https

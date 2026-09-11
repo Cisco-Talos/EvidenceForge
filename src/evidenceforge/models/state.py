@@ -88,6 +88,12 @@ class ActiveSession:
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
     end_plan: SessionEndPlan | None = None
+    auth_protocol: str = ""
+    smb_principal: str = ""
+    account_scope: str = ""
+    auth_session_ref: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
 
 
 @dataclass
@@ -119,11 +125,15 @@ class RunningProcess:
     integrity_level: str
     last_activity_time: datetime | None = None
     logon_id: str = ""
+    token_logon_id: str = ""
+    auth_session_id: int | None = None
+    auth_logon_type: int | None = None
     ecar_object_id: str = ""
     story_created: bool = False
     primary_tid: int = -1
     lifecycle_group_id: str = ""
     parent_lifecycle_group_id: str = ""
+    concurrency_group_id: str = ""
     pid_logical_position: int = -1
     end_time: datetime | None = None
 
@@ -190,6 +200,68 @@ class OpenConnection:
     conn_state: str = ""
     history: str = ""
     duration: float | None = None
+
+
+@dataclass
+class SmbSessionState:
+    """Active SMB application session attached to one authenticated transport."""
+
+    session_id: str
+    client_ip: str
+    principal: str
+    server: str
+    security_policy: str
+    logon_id: str
+    transport_uid: str
+    started_at: datetime
+    expires_at: datetime
+    auth_session_ref: str = ""
+    auth_protocol: str = ""
+    account_scope: str = ""
+    effective_uid: int | None = None
+    effective_gid: int | None = None
+    client_access: str = ""
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbTreeState:
+    """Reusable tree connection to one share."""
+
+    tree_id: str
+    session_id: str
+    share: str
+    connected_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbHandleState:
+    """Minimal active file handle and share-mode state."""
+
+    handle_id: str
+    tree_id: str
+    file_id: str
+    opened_at: datetime
+    access: str
+    deny_write: bool = False
+    closed_at: datetime | None = None
+
+
+@dataclass
+class SmbFileState:
+    """Copy-on-write mutable view over one compiled storage file."""
+
+    file_id: str
+    share: str
+    path: str
+    version: int
+    size_bytes: int
+    mime_type: str
+    tags: tuple[str, ...] = ()
+    deleted: bool = False
+    prior_paths: tuple[str, ...] = ()
 
 
 @dataclass

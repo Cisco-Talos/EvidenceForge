@@ -20,6 +20,56 @@ group_policy_refresh:
     - {command_line: "gpupdate.exe /force", weight: 8}
     - {command_line: "gpupdate.exe /target:computer /force", weight: 2}
 
+# Canonical transport texture for Windows remote-authentication occurrences.
+# Duration profiles are lognormal (median + sigma) and clamped to explicit
+# lifecycle bounds. Sources not listed below use the outcome defaults.
+remote_auth_transport:
+  profiles:
+    default_success:
+      distribution: lognormal
+      median_seconds: 8.0
+      sigma: 1.05
+      minimum_seconds: 1.0
+      maximum_seconds: 90.0
+    machine_account_success:
+      distribution: lognormal
+      median_seconds: 4.0
+      sigma: 1.25
+      minimum_seconds: 0.5
+      maximum_seconds: 120.0
+    anonymous_success:
+      distribution: lognormal
+      median_seconds: 1.2
+      sigma: 0.85
+      minimum_seconds: 0.15
+      maximum_seconds: 12.0
+    failure:
+      distribution: lognormal
+      median_seconds: 0.15
+      sigma: 0.75
+      minimum_seconds: 0.02
+      maximum_seconds: 1.5
+  defaults:
+    success: default_success
+    failure: failure
+  sources:
+    activity_generator:
+      success: default_success
+      failure: failure
+    machine_account_logon:
+      success: machine_account_success
+      failure: failure
+    anonymous_logon:
+      success: anonymous_success
+      failure: failure
+
+# Anonymous SMB enumeration is resource-server noise, not a service-logon
+# multiplier. Keep it sparse and only schedule it on SMB-capable Windows hosts.
+anonymous_smb_baseline:
+  hourly_probability: 0.35
+  events_per_active_hour_min: 1
+  events_per_active_hour_max: 2
+
 failed_logon:
   local_interactive:
     logon_process_name: User32

@@ -1,0 +1,7 @@
+process_catalog:
+  engineering-toolchain:
+    description: "Engineering command and build process vocabulary."
+    data:
+      builtins: [vscode, git, docker, kubectl]
+      custom: []
+      document_terms: []

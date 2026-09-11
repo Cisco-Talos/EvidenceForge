@@ -167,6 +167,18 @@ ZEEK_LOG_SPECS: tuple[ZeekLogSpec, ...] = (
         sof_elk_filebeat_input=True,
     ),
     ZeekLogSpec(
+        log_type="zeek_smb_mapping",
+        staged_name="smb_mapping.log",
+        source_names=("smb_mapping.json", "zeek_smb_mapping.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_smb_files",
+        staged_name="smb_files.log",
+        source_names=("smb_files.json", "zeek_smb_files.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
         log_type="zeek_ssl",
         staged_name="ssl.log",
         source_names=("ssl.json", "zeek_ssl.json"),

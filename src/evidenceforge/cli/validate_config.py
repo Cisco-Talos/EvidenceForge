@@ -28,6 +28,9 @@ formats, evaluation) and reports errors, warnings, and info items.
 
 import math
 import re
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,6 +56,20 @@ WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
         "services.exe",
         "lsass.exe",
         "winlogon.exe",
+    }
+)
+WINDOWS_SEEDED_PARENT_SYMBOLS = frozenset(
+    {
+        "csrss_s0",
+        "search_indexer",
+        "services",
+        "svchost_dcom",
+        "svchost_local_system",
+        "svchost_netsvcs",
+        "svchost_schedule",
+        "svchost_wusvcs",
+        "taskeng",
+        "taskhostw",
     }
 )
 RECURRING_SYSLOG_STARTUP_PATTERNS = frozenset(
@@ -176,6 +193,260 @@ def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict
                         "paths without web-role/process constraints",
                     )
                 )
+
+
+def _validate_registry_mru_filenames(
+    result: ValidationResult, edr_pools_data: dict[str, Any]
+) -> None:
+    """Validate filename-only identities consumed by Windows shell MRU encoders."""
+    filenames = edr_pools_data.get("registry_mru_filenames", [])
+    if not isinstance(filenames, list):
+        return
+    seen: set[str] = set()
+    for filename in filenames:
+        if not isinstance(filename, str):
+            continue
+        normalized = filename.strip().lower()
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or "\\" in normalized
+            or "/" in normalized
+            or "." not in normalized
+            or normalized.endswith(".")
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"MRU artifact identity must be a filename with an extension, got {filename!r}",
+                )
+            )
+        elif normalized in seen:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"duplicate MRU artifact filename {filename!r}",
+                )
+            )
+        seen.add(normalized)
+
+
+def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Reject proxy-phase values that the runtime would otherwise replace with fallbacks."""
+
+    file_name = "proxy_phase_profiles.yaml"
+    max_phase_ms = 60_000
+
+    def check_range(path: str, value: Any) -> None:
+        if not isinstance(value, dict) or set(value) != {"min", "max"}:
+            result.issues.append(
+                Issue("ERROR", file_name, f"{path} must contain exactly min and max")
+            )
+            return
+        minimum = value["min"]
+        maximum = value["max"]
+        if (
+            isinstance(minimum, bool)
+            or isinstance(maximum, bool)
+            or not isinstance(minimum, int)
+            or not isinstance(maximum, int)
+            or minimum < 0
+            or maximum < minimum
+            or maximum > max_phase_ms
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{path} must be an ordered integer range between 0 and {max_phase_ms} ms",
+                )
+            )
+
+    resolver_ranges = {
+        "dns_completion_after_request_ms",
+        "origin_after_request_ms",
+        "origin_after_dns_ms",
+    }
+    allowed_resolvers = {"resolver_cache_hit", "ordinary_lookup", "retry_queue"}
+    resolver_mixture = data.get("resolver_mixture")
+    if not isinstance(resolver_mixture, list) or not resolver_mixture:
+        result.issues.append(Issue("ERROR", file_name, "resolver_mixture must be a non-empty list"))
+    else:
+        seen: set[str] = set()
+        for index, entry in enumerate(resolver_mixture, start=1):
+            if not isinstance(entry, dict):
+                result.issues.append(
+                    Issue("ERROR", file_name, f"resolver_mixture entry #{index} must be a mapping")
+                )
+                continue
+            unknown = set(entry) - {"name", "weight", *resolver_ranges}
+            if unknown:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} has unknown fields: {sorted(unknown)}",
+                    )
+                )
+            name = entry.get("name")
+            if name not in allowed_resolvers:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} has unsupported name {name!r}",
+                    )
+                )
+            elif name in seen:
+                result.issues.append(
+                    Issue("ERROR", file_name, f"resolver_mixture contains duplicate name {name!r}")
+                )
+            else:
+                seen.add(name)
+            weight = entry.get("weight")
+            if (
+                isinstance(weight, bool)
+                or not isinstance(weight, int | float)
+                or not math.isfinite(float(weight))
+                or weight <= 0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} weight must be positive and finite",
+                    )
+                )
+            for field_name in resolver_ranges & set(entry):
+                check_range(f"resolver_mixture[{index}].{field_name}", entry[field_name])
+
+    phase_timing = data.get("phase_timing")
+    expected_timing = {
+        "request_after_connect_ms",
+        "inspected_request_after_connect_setup_ms",
+        "policy_decision_after_request_ms",
+        "dns_query_after_decision_ms",
+        "tls_after_origin_connect_ms",
+        "origin_service_ms",
+        "client_flush_after_response_ms",
+        "terminal_response_after_decision_ms",
+        "close_after_flush_ms",
+        "gateway_attempt_ms",
+    }
+    if not isinstance(phase_timing, dict):
+        result.issues.append(Issue("ERROR", file_name, "phase_timing must be a mapping"))
+    else:
+        unknown = set(phase_timing) - expected_timing
+        if unknown:
+            result.issues.append(
+                Issue("ERROR", file_name, f"phase_timing has unknown fields: {sorted(unknown)}")
+            )
+        for field_name in expected_timing & set(phase_timing):
+            check_range(f"phase_timing.{field_name}", phase_timing[field_name])
+
+
+def _validate_storage_catalog(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Validate project storage-catalog overlays with the public vocabulary schema."""
+
+    from evidenceforge.composition.models import StorageCatalogData
+
+    file_name = "storage_catalog.yaml"
+    counts = data.get("population_counts")
+    if not isinstance(counts, dict):
+        result.issues.append(Issue("ERROR", file_name, "population_counts must be a mapping"))
+    else:
+        expected_counts = {"small", "medium", "large", "auto"}
+        unknown = set(counts) - expected_counts
+        if unknown:
+            result.issues.append(
+                Issue(
+                    "ERROR", file_name, f"population_counts has unknown fields: {sorted(unknown)}"
+                )
+            )
+        for name in ("small", "medium", "large"):
+            value = counts.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR", file_name, f"population_counts.{name} must be a positive integer"
+                    )
+                )
+        automatic = counts.get("auto")
+        if not isinstance(automatic, dict) or not automatic:
+            result.issues.append(
+                Issue("ERROR", file_name, "population_counts.auto must be a non-empty mapping")
+            )
+        elif any(
+            not isinstance(name, str)
+            or not name
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            for name, value in automatic.items()
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    "population_counts.auto must map non-empty names to positive integers",
+                )
+            )
+
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        result.issues.append(Issue("ERROR", file_name, "profiles must be a non-empty mapping"))
+        return
+    for name, profile in profiles.items():
+        if not isinstance(name, str) or not name:
+            result.issues.append(
+                Issue("ERROR", file_name, "profile names must be non-empty strings")
+            )
+            continue
+        try:
+            StorageCatalogData.model_validate(profile)
+        except ValidationError as exc:
+            result.issues.append(Issue("ERROR", file_name, f"profile {name!r}: {exc}"))
+
+
+def _validate_tls_issuer_overrides(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Require every domain override to name an available issuer profile."""
+
+    file_name = "tls_issuers.yaml"
+    issuers = data.get("issuers", [])
+    issuer_names = {
+        issuer.get("name")
+        for issuer in issuers
+        if isinstance(issuer, dict) and isinstance(issuer.get("name"), str)
+    }
+    overrides = data.get("domain_ca_overrides")
+    if not isinstance(overrides, dict):
+        result.issues.append(
+            Issue("ERROR", file_name, "domain_ca_overrides must be a mapping of globs to issuers")
+        )
+        return
+    for pattern, issuer_name in overrides.items():
+        if not isinstance(pattern, str) or not pattern.strip():
+            result.issues.append(
+                Issue("ERROR", file_name, "domain_ca_overrides patterns must be non-empty strings")
+            )
+        if not isinstance(issuer_name, str) or not issuer_name.strip():
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"domain_ca_overrides[{pattern!r}] must name a non-empty issuer",
+                )
+            )
+        elif issuer_name not in issuer_names:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"domain_ca_overrides[{pattern!r}] references unknown issuer {issuer_name!r}",
+                )
+            )
 
 
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
@@ -355,10 +626,21 @@ def _validate_payload_families(result: ValidationResult) -> None:
         )
 
 
-def validate_config() -> ValidationResult:
+def validate_config(
+    *,
+    merged_scope_factory: Callable[[], AbstractContextManager[None]] | None = None,
+    _prechecked_overlay_files: int = 0,
+) -> ValidationResult:
     """Run validation checks across config files.
 
     Uses the same loader paths the engine uses (including overlay merges).
+
+    Args:
+        merged_scope_factory: Optional delayed context factory for activating an
+            immutable effective-configuration provider. Raw overlay structure is
+            checked before the factory is called.
+        _prechecked_overlay_files: Internal count preserved across the delayed
+            merged-provider pass.
     """
     result = ValidationResult()
     activity_dir = get_activity_directory()
@@ -370,24 +652,34 @@ def validate_config() -> ValidationResult:
     # Overlay files must parse cleanly before merged loaders use them.
     # If an overlay file has bad YAML, report it as an error rather than
     # letting it crash the merged loaders.
-    from evidenceforge.config.overlay import get_overlay_directory
+    from evidenceforge.config.overlay import get_overlay_directory, retired_overlay_errors
 
     overlay_dir = get_overlay_directory()
     overlay_yaml_files: list[Path] = []
     if overlay_dir and overlay_dir.is_dir():
         overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
+    for relative_path, message in retired_overlay_errors(overlay_dir):
+        result.issues.append(Issue("ERROR", f"overlay/{relative_path}", message))
 
     # File-scoped overlay structure schemas.
     # Maps overlay file path → expected field types.
     # "list_fields": {field_name: key_field_or_None} — must be list of dicts
     # "dict_fields": {field_names} — must be dicts
+    # "string_list_fields": {field_names} — must be lists of strings
+    # "value_list_fields": {field_names} — must be lists; merged validation owns item shape
+    # "fixed_string_sequence_fields": {field_name: length} — list of fixed-length string sequences
+    # "string_dict_fields": mappings whose keys and values must be non-empty strings
+    # "string_fields" / "number_fields": scalar root fields with explicit primitive types
     _OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "activity/dns_registry.yaml": {
-            "list_fields": {"domains": "domain", "cdn_ranges": None},
-            "dict_fields": {"valid_tags", "long_tail", "ipv6_map"},
+            "list_fields": {"domains": "domain"},
+            "dict_fields": {"valid_tags", "long_tail", "ipv6_map", "ipv6_prefixes"},
+            "value_list_fields": {"cdn_ranges"},
         },
         "activity/application_catalog.yaml": {
             "list_fields": {"applications": "id"},
+            "dict_fields": {"default_deployment"},
+            "scalar_fields": {"schema_version": int},
         },
         "activity/traffic_profiles.yaml": {
             "dict_fields": {"role_traffic", "persona_traffic"},
@@ -396,7 +688,9 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"windows", "linux"},
         },
         "activity/proxy_uri_templates.yaml": {
-            "dict_fields": {"domains", "tags", "generic", "search_terms"},
+            "dict_fields": {"domains", "tags", "generic"},
+            "string_list_fields": {"search_terms"},
+            "string_fields": {"default_http_policy"},
         },
         "activity/proxy_user_agents.yaml": {
             "dict_fields": {"domain_overrides", "workstation", "server"},
@@ -405,7 +699,8 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"profiles"},
         },
         "activity/site_maps.yaml": {
-            "dict_fields": {"domains", "tags", "generic", "search_terms"},
+            "dict_fields": {"domains", "tags", "generic"},
+            "string_list_fields": {"search_terms"},
         },
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
@@ -428,6 +723,11 @@ def validate_config() -> ValidationResult:
                 "connection_c2_ips": "ip",
             },
         },
+        "activity/public_identity_profiles.yaml": {
+            "list_fields": {"providers": "id", "roles": "id"},
+            "string_list_fields": {"reserved_replacement_domains"},
+            "scalar_fields": {"schema_version": str},
+        },
         "activity/suspicious_benign.yaml": {
             "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
         },
@@ -442,7 +742,7 @@ def validate_config() -> ValidationResult:
         },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
-            "dict_fields": {"start_locations", "target_overrides"},
+            "dict_fields": {"baseline_noise", "start_locations", "target_overrides"},
         },
         "activity/system_processes.yaml": {
             "dict_fields": {
@@ -468,6 +768,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"families": "name"},
             "dict_fields": {"network_allowlist"},
             "string_list_fields": {"markers"},
+            "string_fields": {"default_marker", "canary_host"},
         },
         "activity/tls_issuers.yaml": {
             "list_fields": {"issuers": "name"},
@@ -482,27 +783,37 @@ def validate_config() -> ValidationResult:
                 "mail_profiles": "name",
                 "aaaa_profiles": "name",
             },
-        },
-        "activity/smb_file_transfers.yaml": {
-            "list_fields": {"mime_types": None, "analyzer_sets": None},
+            "number_fields": {"generic_aaaa_probability"},
         },
         "activity/network_params.yaml": {
             "list_fields": {
                 "oui_prefixes": None,
                 "public_dns_resolvers": "name",
                 "public_ntp_servers": "name",
-                "dns_tunnel_ttl_choices": None,
                 "external_scanner_port_profiles": "name",
+                "linux_smb_connection_owners": "role",
             },
             "dict_fields": {
                 "dns_tunnel_rtt",
                 "dns_tunnel_rcode_weights",
+                "nmap_command_probe",
                 "proxy_connect_status_messages",
             },
-            "string_list_fields": {"dns_tunnel_response_templates"},
+            "string_list_fields": {
+                "dns_tunnel_response_templates",
+                "external_client_excluded_cidrs",
+            },
+            "value_list_fields": {"dns_tunnel_ttl_choices"},
         },
         "activity/windows_auth_realism.yaml": {
-            "dict_fields": {"workstation_lock"},
+            "dict_fields": {
+                "workstation_lock",
+                "group_policy_refresh",
+                "remote_auth_transport",
+                "anonymous_smb_baseline",
+                "failed_logon",
+                "special_privileges",
+            },
         },
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
@@ -522,12 +833,23 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"source_families"},
         },
         "activity/edr_pools.yaml": {
-            "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
+            "list_fields": {
+                "file_side_effect_profiles": None,
+                "file_ownership_rules": None,
+                "registry_ownership_rules": None,
+                "installed_software_products": None,
+            },
             "string_list_fields": {
+                "linux_service_users",
+                "group_policy_extension_guids",
                 "file_paths_windows",
                 "file_paths_linux",
                 "dll_pool",
                 "runmru_commands",
+            },
+            "fixed_string_sequence_fields": {
+                "registry_keys_hkcu": 3,
+                "registry_keys_hklm": 3,
             },
         },
         "activity/endpoint_noise.yaml": {
@@ -549,7 +871,7 @@ def validate_config() -> ValidationResult:
             },
         },
         "activity/http_file_profiles.yaml": {
-            "dict_fields": {"extension_mime_types", "request_profiles"},
+            "dict_fields": {"extension_mime_types", "request_profiles", "multipart"},
         },
         "activity/ids_signatures.yaml": {
             "list_fields": {"signatures": None},
@@ -566,15 +888,76 @@ def validate_config() -> ValidationResult:
         "activity/timing_profiles.yaml": {
             "dict_fields": {
                 "relationships",
+                "ssh_authentication",
                 "endpoint_clock",
                 "windows_startup_modules",
                 "windows_event_time",
                 "network_sensor_observation",
+                "firewall_observation",
+                "sysmon_event_envelope",
             },
+        },
+        "activity/smb_profiles.yaml": {
+            "dict_fields": {
+                "advertised_filesystem_defaults",
+                "client_defaults",
+                "client_profiles",
+                "samba_audit",
+                "server_defaults",
+                "server_profiles",
+            },
+            "scalar_fields": {"schema_version": int},
+        },
+        "activity/service_process_profiles.yaml": {
+            "dict_fields": {"families"},
+        },
+        "activity/kerberos_realism.yaml": {
+            "dict_fields": {
+                "tgt_success",
+                "tgt_failure",
+                "certificate_profiles",
+                "transport_profiles",
+            },
+        },
+        "activity/observation_profiles.yaml": {
+            "dict_fields": {"profiles"},
+            "scalar_fields": {"schema_version": int},
+        },
+        "activity/proxy_phase_profiles.yaml": {
+            "list_fields": {"resolver_mixture": "name"},
+            "dict_fields": {"phase_timing"},
+        },
+        "activity/rsat_tools.yaml": {
+            "list_fields": {"tools": "id"},
+        },
+        "activity/snort_classifications.yaml": {
+            "string_dict_fields": {"classifications"},
+        },
+        "activity/storage_catalog.yaml": {
+            "dict_fields": {"population_counts", "profiles"},
         },
     }
 
     overlay_errors = False
+    from evidenceforge.config.overlay_registry import CONFIG_OVERLAY_FAMILIES
+
+    registered_activity_paths = {
+        path for path in CONFIG_OVERLAY_FAMILIES if path.startswith("activity/")
+    }
+    schema_paths = set(_OVERLAY_FILE_SCHEMAS)
+    if schema_paths != registered_activity_paths:
+        missing_schemas = sorted(registered_activity_paths - schema_paths)
+        missing_registry = sorted(schema_paths - registered_activity_paths)
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "config overlay registry",
+                "Overlay inventory and validator schemas disagree: "
+                f"missing schemas={missing_schemas}, missing registry entries={missing_registry}",
+            )
+        )
+        overlay_errors = True
+
     for path in overlay_yaml_files:
         data, err = _safe_load_yaml(path)
         rel_path = str(path.relative_to(overlay_dir))
@@ -617,10 +1000,26 @@ def validate_config() -> ValidationResult:
 
             # Reject unexpected top-level keys (they will be silently ignored by the engine)
             string_list_fields = file_schema.get("string_list_fields", set())
-            known_keys = set(list_fields.keys()) | dict_fields | set(string_list_fields)
+            scalar_fields = file_schema.get("scalar_fields", {})
+            value_list_fields = file_schema.get("value_list_fields", set())
+            fixed_string_sequence_fields = file_schema.get("fixed_string_sequence_fields", {})
+            string_dict_fields = file_schema.get("string_dict_fields", set())
+            string_fields = file_schema.get("string_fields", set())
+            number_fields = file_schema.get("number_fields", set())
+            known_keys = (
+                set(list_fields)
+                | set(dict_fields)
+                | set(string_list_fields)
+                | set(value_list_fields)
+                | set(fixed_string_sequence_fields)
+                | set(string_dict_fields)
+                | set(string_fields)
+                | set(number_fields)
+                | set(scalar_fields)
+            )
             if known_keys:
                 for key in data:
-                    if key not in known_keys and key != "_replace":
+                    if key not in known_keys:
                         result.issues.append(
                             Issue(
                                 "ERROR",
@@ -693,6 +1092,38 @@ def validate_config() -> ValidationResult:
                     )
                     overlay_errors = True
 
+            for field_name in string_dict_fields:
+                if field_name not in data:
+                    continue
+                value = data[field_name]
+                if not isinstance(value, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a mapping, got {type(value).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+                    continue
+                for key, item in value.items():
+                    if (
+                        not isinstance(key, str)
+                        or not key.strip()
+                        or not isinstance(item, str)
+                        or not item.strip()
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" must map non-empty strings to '
+                                "non-empty strings",
+                            )
+                        )
+                        overlay_errors = True
+                        break
+
             # Check string list fields (lists of plain strings, e.g., edr_pools paths)
             for field_name in string_list_fields:
                 if field_name in data:
@@ -717,6 +1148,117 @@ def validate_config() -> ValidationResult:
                                     )
                                 )
                                 overlay_errors = True
+
+            # Check explicitly typed scalar fields used by versioned config documents.
+            for field_name, expected_type in scalar_fields.items():
+                if field_name in data and type(data[field_name]) is not expected_type:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a '
+                            f"{expected_type.__name__}, got {type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            # Check list-valued fields whose item shape is owned by merged validation.
+            for field_name in value_list_fields:
+                if field_name in data and not isinstance(data[field_name], list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a list, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            # EDR registry pools use compact [key, value_name, details] entries.
+            for field_name, required_length in fixed_string_sequence_fields.items():
+                if field_name not in data:
+                    continue
+                value = data[field_name]
+                if not isinstance(value, list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+                    continue
+                for i, item in enumerate(value):
+                    if (
+                        not isinstance(item, list | tuple)
+                        or len(item) != required_length
+                        or any(not isinstance(part, str) or not part for part in item)
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'"{field_name}" entry #{i + 1} should contain exactly '
+                                f"{required_length} non-empty strings",
+                            )
+                        )
+                        overlay_errors = True
+
+            for field_name in string_fields:
+                if field_name in data and not isinstance(data[field_name], str):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a string, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            for field_name in number_fields:
+                if field_name in data and (
+                    isinstance(data[field_name], bool)
+                    or not isinstance(data[field_name], int | float)
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a number, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            if rel_path == "activity/external_actor_profiles.yaml":
+                from evidenceforge.config.schemas import ExternalActorIpEntry
+
+                for field_name in (
+                    "logon_source_ips",
+                    "failed_logon_source_ips",
+                    "connection_c2_ips",
+                ):
+                    entries = data.get(field_name, [])
+                    if not isinstance(entries, list):
+                        continue
+                    for index, entry in enumerate(entries):
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            ExternalActorIpEntry.model_validate(entry)
+                        except ValidationError as exc:
+                            message = exc.errors()[0].get("msg", str(exc))
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "external_actor_profiles.yaml",
+                                    f"{field_name} entry #{index + 1}: {message}",
+                                )
+                            )
+                            overlay_errors = True
 
     # Validate overlay persona files specifically (one-file-per-persona pattern)
     if overlay_dir:
@@ -762,6 +1304,10 @@ def validate_config() -> ValidationResult:
         result.files_checked = len(overlay_yaml_files)
         return result
 
+    if merged_scope_factory is not None:
+        with merged_scope_factory():
+            return validate_config(_prechecked_overlay_files=len(overlay_yaml_files))
+
     # Load all data through overlay-aware loaders for consistency.
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
@@ -793,10 +1339,15 @@ def validate_config() -> ValidationResult:
         load_process_access_patterns,
     )
     from evidenceforge.generation.activity.process_network import load_process_network_map
+    from evidenceforge.generation.activity.proxy_phase_profiles import load_proxy_phase_profiles
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        load_public_identity_profiles,
+    )
     from evidenceforge.generation.activity.site_maps import load_site_maps
+    from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.suspicious_benign_config import (
         load_suspicious_benign,
@@ -813,6 +1364,7 @@ def validate_config() -> ValidationResult:
         load_web_session_profiles,
     )
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
+    from evidenceforge.generation.storage_world import _load_catalog_config
 
     dns_data = load_dns_registry()
     public_dns_profiles_data = load_public_dns_profiles()
@@ -824,6 +1376,7 @@ def validate_config() -> ValidationResult:
     email_background_data = load_email_background()
     mail_public_identities_data = load_mail_public_identities()
     external_actor_profiles_data = load_external_actor_profiles()
+    public_identity_profiles_data = load_public_identity_profiles()
     suspicious_benign_data = load_suspicious_benign()
     command_parameter_pools_data = load_command_parameter_pools()
     process_access_data = load_process_access_patterns()
@@ -831,6 +1384,7 @@ def validate_config() -> ValidationResult:
     auth_noise_data = load_auth_noise_config()
     create_remote_thread_data = load_create_remote_thread_patterns()
     create_remote_thread_config = load_create_remote_thread_config()
+    proxy_phase_profiles_data = load_proxy_phase_profiles()
     proxy_data = load_proxy_uri_templates()
     proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
@@ -840,15 +1394,29 @@ def validate_config() -> ValidationResult:
     observation_profiles_data = load_observation_profiles()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
-    timing_profiles_data = load_timing_profiles()
+    timing_profiles_data = deepcopy(load_timing_profiles())
     web_session_profiles_data = load_web_session_profiles()
+    try:
+        load_smb_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "smb_profiles.yaml",
+                f"invalid SMB profiles config: {exc}",
+            )
+        )
+    storage_catalog_data = _load_catalog_config()
+
+    _validate_proxy_phase_profiles(result, proxy_phase_profiles_data)
+    _validate_storage_catalog(result, storage_catalog_data)
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
     for d in [activity_dir, personas_dir, formats_dir, evaluation_dir]:
         if d.is_dir():
             yaml_files.extend(d.glob("*.yaml"))
-    result.files_checked = len(yaml_files) + len(overlay_yaml_files)
+    result.files_checked = len(yaml_files) + max(len(overlay_yaml_files), _prechecked_overlay_files)
 
     # --- Checks 1-2: YAML Health (package files) ---
     for path in yaml_files:
@@ -1348,6 +1916,124 @@ def validate_config() -> ValidationResult:
                         f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
                     )
                 )
+
+    ssh_authentication = timing_profiles_data.get("ssh_authentication", {})
+    if not isinstance(ssh_authentication, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "ssh_authentication must be a mapping")
+        )
+    else:
+        ssh_profiles = ssh_authentication.get("profiles")
+        if not isinstance(ssh_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.profiles must be a mapping",
+                )
+            )
+            ssh_profiles = {}
+
+        def validate_ssh_range(path: str, value: object) -> None:
+            if not isinstance(value, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path} must be a mapping")
+                )
+                return
+            minimum = value.get("min")
+            maximum = value.get("max")
+            for bound_name, bound in (("min", minimum), ("max", maximum)):
+                if not isinstance(bound, int) or isinstance(bound, bool) or bound < 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{path}.{bound_name} must be a non-negative integer",
+                        )
+                    )
+            if (
+                isinstance(minimum, int)
+                and not isinstance(minimum, bool)
+                and isinstance(maximum, int)
+                and not isinstance(maximum, bool)
+                and maximum < minimum
+            ):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path}.max must be >= min")
+                )
+
+        for method in ("publickey", "password"):
+            profile = ssh_profiles.get(method)
+            profile_path = f"ssh_authentication.profiles.{method}"
+            if not isinstance(profile, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{profile_path} must be a mapping")
+                )
+                continue
+            probabilities: list[float] = []
+            for probability_name in (
+                "fast_probability",
+                "tail_probability",
+                "cache_miss_probability",
+            ):
+                probability = profile.get(probability_name)
+                if (
+                    not isinstance(probability, int | float)
+                    or isinstance(probability, bool)
+                    or not math.isfinite(float(probability))
+                    or not 0.0 <= float(probability) <= 1.0
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{profile_path}.{probability_name} must be finite and between 0 and 1",
+                        )
+                    )
+                else:
+                    probabilities.append(float(probability))
+            if len(probabilities) >= 2 and probabilities[0] + probabilities[1] > 1.0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"{profile_path} fast_probability + tail_probability must be <= 1",
+                    )
+                )
+            for range_name in ("fast_ms", "typical_ms", "tail_ms", "cache_miss_ms"):
+                validate_ssh_range(f"{profile_path}.{range_name}", profile.get(range_name))
+
+        route_profiles = ssh_authentication.get("route_rtt_ms")
+        if not isinstance(route_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.route_rtt_ms must be a mapping",
+                )
+            )
+        else:
+            for route_class in ("private", "public"):
+                validate_ssh_range(
+                    f"ssh_authentication.route_rtt_ms.{route_class}",
+                    route_profiles.get(route_class),
+                )
+        validate_ssh_range(
+            "ssh_authentication.receiver_load_ms",
+            ssh_authentication.get("receiver_load_ms"),
+        )
+        key_penalties = ssh_authentication.get("public_key_penalty_ms")
+        if not isinstance(key_penalties, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.public_key_penalty_ms must be a mapping",
+                )
+            )
+        else:
+            for key_type, penalty in key_penalties.items():
+                validate_ssh_range(f"ssh_authentication.public_key_penalty_ms.{key_type}", penalty)
 
     startup_module_timing = timing_profiles_data.get("windows_startup_modules", {})
     if not isinstance(startup_module_timing, dict):
@@ -2627,6 +3313,7 @@ def validate_config() -> ValidationResult:
         KerberosRealismConfig,
         LoadedModuleEntry,
         MailPublicIdentitiesConfig,
+        NmapCommandProbeConfig,
         ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
@@ -2635,10 +3322,10 @@ def validate_config() -> ValidationResult:
         ProxyUserAgentOverrideEntry,
         PublicDnsProfilesConfig,
         PublicDnsResolverEntry,
+        PublicIdentityProfilesConfig,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
-        SmbFileTransferConfig,
         SpawnRuleEntry,
         SuspiciousBenignConfig,
         SyslogProgramEntry,
@@ -2656,6 +3343,11 @@ def validate_config() -> ValidationResult:
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
         ([email_background_data], EmailBackgroundConfig, "email_background.yaml"),
+        (
+            [public_identity_profiles_data],
+            PublicIdentityProfilesConfig,
+            "public_identity_profiles.yaml",
+        ),
         ([mail_public_identities_data], MailPublicIdentitiesConfig, "mail_public_identities.yaml"),
         (
             [external_actor_profiles_data],
@@ -2838,6 +3530,7 @@ def validate_config() -> ValidationResult:
     edr_pools_data = load_edr_pools()
     if edr_pools_data:
         _validate_edr_file_path_pools(result, edr_pools_data)
+        _validate_registry_mru_filenames(result, edr_pools_data)
         _SCHEMA_CHECKS.append(
             (
                 edr_pools_data.get("file_side_effect_profiles", []),
@@ -2897,6 +3590,7 @@ def validate_config() -> ValidationResult:
     tls_data = load_tls_issuers()
     if tls_data:
         _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
+        _validate_tls_issuer_overrides(result, tls_data)
 
     # tls_realism.yaml
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
@@ -2918,15 +3612,6 @@ def validate_config() -> ValidationResult:
     if kerberos_realism_data:
         _SCHEMA_CHECKS.append(
             ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
-        )
-
-    # smb_file_transfers.yaml
-    from evidenceforge.generation.activity.smb_file_transfers import load_smb_file_transfers
-
-    smb_file_transfer_data = load_smb_file_transfers()
-    if smb_file_transfer_data:
-        _SCHEMA_CHECKS.append(
-            ([smb_file_transfer_data], SmbFileTransferConfig, "smb_file_transfers.yaml")
         )
 
     # http_file_profiles.yaml
@@ -3070,6 +3755,13 @@ def validate_config() -> ValidationResult:
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
+        err = validate_entry(
+            net_params.get("nmap_command_probe", {}),
+            NmapCommandProbeConfig,
+            "network_params.yaml (nmap_command_probe)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
         templates = net_params.get("dns_tunnel_response_templates", [])
         if not isinstance(templates, list) or not templates:
             result.issues.append(
@@ -3313,6 +4005,45 @@ def validate_config() -> ValidationResult:
     err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
     if err:
         result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
+
+    configured_parent_symbols: list[tuple[str, str]] = []
+    for task in sys_proc_data.get("scheduled_tasks", []):
+        if isinstance(task, dict):
+            configured_parent_symbols.append(
+                ("system_processes.yaml (scheduled_tasks)", str(task.get("parent") or ""))
+            )
+    for role, entries in sys_proc_data.get("system_services", {}).items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                configured_parent_symbols.append(
+                    (
+                        f"system_processes.yaml (system_services.{role})",
+                        str(entry.get("parent") or ""),
+                    )
+                )
+    delegation = auth_noise_data.get("service_account_delegation", {})
+    for profile in delegation.get("caller_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        for process in profile.get("processes", []):
+            if isinstance(process, dict):
+                configured_parent_symbols.append(
+                    (
+                        "auth_noise.yaml (service_account_delegation)",
+                        str(process.get("parent_key") or "services"),
+                    )
+                )
+    for source, parent_symbol in configured_parent_symbols:
+        if parent_symbol not in WINDOWS_SEEDED_PARENT_SYMBOLS:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    source,
+                    f"unknown seeded Windows parent symbol {parent_symbol!r}",
+                )
+            )
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(

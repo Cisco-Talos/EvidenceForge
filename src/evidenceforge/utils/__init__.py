@@ -23,15 +23,19 @@
 """EvidenceForge utility functions."""
 
 from .files import (
+    LoadedScenarioSource,
+    LoadedSourceGraph,
     ScenarioIncludeBudget,
+    ScenarioIncludeBudgetState,
     ensure_directory,
+    load_scenario_source_graph,
     load_scenario_yaml,
     load_yaml,
     resolve_safe_child_path,
     validate_output_path,
     write_yaml,
 )
-from .ids import generate_zeek_uid
+from .ids import generate_zeek_uid, generate_zeek_uid_from_rng
 from .logging import redact_secrets
 from .time import (
     convert_to_output_timezone,
@@ -44,6 +48,7 @@ from .time import (
 __all__ = [
     # ID utilities
     "generate_zeek_uid",
+    "generate_zeek_uid_from_rng",
     # Logging utilities
     "redact_secrets",
     # Time utilities
@@ -55,7 +60,11 @@ __all__ = [
     # File utilities
     "load_yaml",
     "load_scenario_yaml",
+    "load_scenario_source_graph",
+    "LoadedScenarioSource",
+    "LoadedSourceGraph",
     "ScenarioIncludeBudget",
+    "ScenarioIncludeBudgetState",
     "resolve_safe_child_path",
     "write_yaml",
     "ensure_directory",

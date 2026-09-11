@@ -259,7 +259,11 @@ class TestObjectIdLifecycle:
             "cmd.exe",
         )
         create_obj_id = state_manager.get_process_object_id(win_system.hostname, pid)
-        state_manager.end_process(win_system.hostname, pid)
+        state_manager.end_process(
+            win_system.hostname,
+            pid,
+            end_time=timestamp + timedelta(seconds=5),
+        )
 
         activity_gen.generate_process_termination(
             test_user,
@@ -299,11 +303,20 @@ class TestObjectIdLifecycle:
             and call[0][0].process.pid == parent_pid
         )
 
-        assert create_event.identity_plan.object_id == state_manager.get_process_object_id(
-            win_system.hostname,
-            parent_pid,
-        )
+        state_identity = state_manager.get_process_identity(win_system.hostname, parent_pid)
+        assert state_identity is not None
+        assert create_event.identity_plan.object_id == state_identity.object_id
         assert create_event.identity_plan.object_id != ""
+
+        registry_process = activity_gen._lifecycle_authority.registry.get_process(
+            state_identity.object_id
+        )
+        assert registry_process is not None
+        assert registry_process.closed_at is None
+        assert registry_process.identity.object_id == state_identity.object_id
+        assert registry_process.identity.hostname == state_identity.hostname
+        assert registry_process.identity.pid == state_identity.pid
+        assert registry_process.identity.started_at == state_identity.started_at
 
 
 # ---- actorID Linkage ----

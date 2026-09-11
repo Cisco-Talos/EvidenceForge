@@ -116,6 +116,62 @@ def test_non_pkinit_profile_leaves_certificate_fields_empty(monkeypatch):
     assert fields["cert_thumbprint"] == ""
 
 
+def test_tgt_success_no_preauth_requires_explicit_account_policy(monkeypatch):
+    """A type-0 success profile is selectable only for an explicitly exempt account."""
+
+    def load_no_preauth_only_config():
+        return {
+            "tgt_success": {
+                "pre_auth_types": {
+                    "none": {
+                        "value": 0,
+                        "weight": 1,
+                        "certificate_required": False,
+                    }
+                },
+                "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+            },
+            "certificate_profiles": {},
+        }
+
+    monkeypatch.setattr(
+        kerberos_realism,
+        "load_kerberos_realism",
+        load_no_preauth_only_config,
+    )
+
+    ordinary = kerberos_realism.pick_tgt_success_fields(random.Random(3))
+    exempt = kerberos_realism.pick_tgt_success_fields(
+        random.Random(3),
+        allow_no_preauth=True,
+    )
+
+    assert ordinary["pre_auth_type"] == 2
+    assert exempt["pre_auth_type"] == 0
+
+
+def test_bad_password_failure_requires_encrypted_timestamp_preauth(monkeypatch):
+    """KDC_ERR_PREAUTH_FAILED cannot claim that no pre-authentication was supplied."""
+
+    def load_failure_config():
+        return {
+            "tgt_failure": {
+                "pre_auth_types": {
+                    "none": {"value": 0, "weight": 100},
+                    "encrypted_timestamp": {"value": 2, "weight": 1},
+                },
+                "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+            }
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_failure_config)
+
+    for seed in range(20):
+        fields = kerberos_realism.pick_tgt_failure_fields(random.Random(seed), "0x18")
+        assert fields["pre_auth_type"] == 2
+
+
 def test_kerberos_transport_profile_picks_udp_and_tcp(monkeypatch):
     def load_transport_config():
         return {

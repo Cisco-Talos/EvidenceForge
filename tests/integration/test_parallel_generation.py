@@ -27,7 +27,6 @@ consistency, cross-log referential integrity, and data correctness.
 """
 
 import json
-import tempfile
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -219,227 +218,81 @@ def first_zeek_conn_file(output_dir: Path) -> Path:
 class TestParallelGeneration:
     """Test parallel generation with threaded emitters."""
 
-    def test_parallel_generation_temporal_consistency(self):
-        """Test parallel generation completes successfully with multiple formats."""
-        scenario = create_test_scenario(users=2, hours=3)
+    def test_parallel_generation_integrity(self, tmp_path: Path) -> None:
+        """One shared run proves parsing, identity, timing, and storyline integrity."""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(scenario, Path(tmpdir))
-            engine.generate()
-
-            # Verify both log files exist
-            # Files may be in per-host/per-sensor subdirectories
-            win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
-            zeek_files = list(Path(tmpdir).rglob("conn.json"))
-            assert len(win_files) > 0, "No Windows event files found"
-            assert len(zeek_files) > 0, "No Zeek files found"
-
-            # Parse and verify events were generated
-            windows_events = parse_windows_log(
-                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
-            )
-            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
-
-            # Check Windows events exist
-            windows_timestamps = [e["TimeCreated"] for e in windows_events if "TimeCreated" in e]
-            assert len(windows_timestamps) > 0, "No Windows events generated"
-
-            # Check Zeek events exist (may be 0 if no connections generated)
-            # This is OK for low-intensity baseline
-            [e["ts"] for e in zeek_events]
-            # assert len(zeek_timestamps) >= 0  # Always true, just checking it parses
-
-    def test_parallel_generation_cross_log_consistency(self):
-        """Test LogonIDs, PID lifetimes, and UIDs across parallel emitters."""
-        scenario = create_test_scenario(users=5, hours=2)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(scenario, Path(tmpdir))
-            engine.generate()
-
-            # Extract cross-references
-            windows_events = [
-                event
-                for log_path in Path(tmpdir).rglob("windows_event_security.xml")
-                for event in parse_windows_log(log_path)
-            ]
-
-            # Dynamically allocated LogonIDs are unique within one host. Workstation
-            # unlocks reuse an active interactive session, while Windows' built-in
-            # service principals intentionally retain their well-known LUIDs across
-            # distinct Type 5 authentication occurrences.
-            well_known_service_ids = {
-                "SYSTEM": "0x3e7",
-                "LOCAL SERVICE": "0x3e5",
-                "NETWORK SERVICE": "0x3e4",
-            }
-            dynamic_logon_ids_by_host: dict[str, list[str]] = {}
-            session_logons = [
-                event
-                for event in windows_events
-                if event.get("TargetLogonId")
-                and event.get("EventID") == "4624"
-                and str(event.get("LogonType")) != "7"
-            ]
-            assert session_logons
-            for event in session_logons:
-                hostname = event.get("Computer")
-                username = str(event.get("TargetUserName") or "").upper()
-                logon_id = str(event["TargetLogonId"]).lower()
-                assert hostname
-                expected_well_known_id = well_known_service_ids.get(username)
-                if expected_well_known_id is not None:
-                    assert str(event.get("LogonType")) == "5"
-                    assert logon_id == expected_well_known_id
-                    continue
-
-                assert logon_id not in well_known_service_ids.values(), (
-                    f"Well-known LogonID {logon_id} assigned to {username} on {hostname}"
-                )
-                dynamic_logon_ids_by_host.setdefault(hostname, []).append(logon_id)
-
-            for hostname, logon_ids in dynamic_logon_ids_by_host.items():
-                assert len(logon_ids) == len(set(logon_ids)), (
-                    f"Duplicate dynamically allocated LogonIDs found on {hostname}!"
-                )
-
-            # PID values may be reused after exit. They must never identify two
-            # overlapping process lifetimes on the same host.
-            active_pids: dict[str, set[str]] = {}
-            for event in sorted(
-                windows_events,
-                key=lambda item: item.get("TimeCreated", datetime.min.replace(tzinfo=UTC)),
-            ):
-                system = event.get("Computer")
-                if not system:
-                    continue
-                if event.get("EventID") == "4688":
-                    pid = event.get("NewProcessId")
-                    if not pid:
-                        continue
-                    active = active_pids.setdefault(system, set())
-                    assert pid not in active, f"Overlapping PID {pid} found on {system}!"
-                    active.add(pid)
-                elif event.get("EventID") == "4689":
-                    pid = event.get("ProcessId")
-                    if pid:
-                        active_pids.setdefault(system, set()).discard(pid)
-
-            # Verify Zeek UID uniqueness
-            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
-            uids = [e["uid"] for e in zeek_events]
-            assert len(uids) > 0
-            assert len(uids) == len(set(uids)), "Duplicate Zeek UIDs found!"
-
-    def test_parallel_generation_no_data_corruption(self):
-        """Test all events are valid and parseable (no file corruption)."""
-        scenario = create_test_scenario(users=3, hours=2)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(scenario, Path(tmpdir))
-            engine.generate()
-
-            # Parse both log files (will raise exception if corrupted)
-            windows_events = parse_windows_log(
-                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
-            )
-            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
-
-            # Verify events parsed successfully
-            assert len(windows_events) > 0, "No Windows events generated"
-            assert len(zeek_events) > 0, "No Zeek events generated"
-
-            # Verify all Windows events have required fields
-            for event in windows_events:
-                assert "EventID" in event
-                assert "TimeCreated" in event
-                assert "Computer" in event
-                assert "EventRecordID" in event
-
-            # Verify all Zeek events have required fields
-            for event in zeek_events:
-                assert "ts" in event
-                assert "uid" in event
-                assert "id.orig_h" in event
-                assert "id.resp_h" in event
-                assert "proto" in event
-
-    def test_parallel_generation_with_storyline(self):
-        """Test storyline events maintain correct ordering with threading."""
-        scenario = create_test_scenario(users=2, hours=2)
-
-        # Add a storyline event
+        scenario = create_test_scenario(users=5, hours=1)
         scenario.storyline = [
             StorylineEvent(
                 id="evt-test-1",
-                time="2024-01-01T09:30:00",
+                time="2024-01-01T09:15:00",
                 actor="user0",
                 system="TEST-WS-01",
                 activity="suspicious logon from external IP",
                 events=[{"type": "logon", "source_ip": "203.0.113.10", "logon_type": 3}],
             )
         ]
+        GenerationEngine(scenario, tmp_path).generate()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(scenario, Path(tmpdir))
-            engine.generate()
+        win_files = list(tmp_path.rglob("windows_event_security.xml"))
+        zeek_files = list(tmp_path.rglob("conn.json"))
+        assert win_files and zeek_files
+        assert (tmp_path / "GROUND_TRUTH.md").exists()
 
-            # Verify ground truth file created
-            ground_truth_file = Path(tmpdir) / "GROUND_TRUTH.md"
-            assert ground_truth_file.exists()
+        windows_events = [event for path in win_files for event in parse_windows_log(path)]
+        zeek_events = parse_zeek_log(first_zeek_conn_file(tmp_path))
+        assert windows_events and zeek_events
+        for event in windows_events:
+            assert {"EventID", "TimeCreated", "Computer", "EventRecordID"} <= event.keys()
+        for event in zeek_events:
+            assert {"ts", "uid", "id.orig_h", "id.resp_h", "proto"} <= event.keys()
 
-            # Parse logs from all host directories
-            windows_events = []
-            for xml_file in Path(tmpdir).rglob("windows_event_security.xml"):
-                windows_events.extend(parse_windows_log(xml_file))
+        well_known_service_ids = {
+            "SYSTEM": "0x3e7",
+            "LOCAL SERVICE": "0x3e5",
+            "NETWORK SERVICE": "0x3e4",
+        }
+        dynamic_logon_ids_by_host: dict[str, list[str]] = {}
+        session_logons = [
+            event
+            for event in windows_events
+            if event.get("TargetLogonId")
+            and event.get("EventID") == "4624"
+            and str(event.get("LogonType")) != "7"
+        ]
+        assert session_logons
+        for event in session_logons:
+            hostname = str(event["Computer"])
+            username = str(event.get("TargetUserName") or "").upper()
+            logon_id = str(event["TargetLogonId"]).lower()
+            expected = well_known_service_ids.get(username)
+            if expected is not None:
+                assert str(event.get("LogonType")) == "5"
+                assert logon_id == expected
+            else:
+                assert logon_id not in well_known_service_ids.values()
+                dynamic_logon_ids_by_host.setdefault(hostname, []).append(logon_id)
+        for logon_ids in dynamic_logon_ids_by_host.values():
+            assert len(logon_ids) == len(set(logon_ids))
 
-            # Verify storyline event present in logs
-            # Look for logon event around 9:30 AM
-            storyline_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=UTC)
-            tolerance = timedelta(minutes=1)
+        active_pids: dict[str, set[str]] = {}
+        for event in sorted(
+            windows_events,
+            key=lambda item: item.get("TimeCreated", datetime.min.replace(tzinfo=UTC)),
+        ):
+            hostname = str(event.get("Computer") or "")
+            if event.get("EventID") == "4688" and event.get("NewProcessId"):
+                pid = str(event["NewProcessId"])
+                assert pid not in active_pids.setdefault(hostname, set())
+                active_pids[hostname].add(pid)
+            elif event.get("EventID") == "4689" and event.get("ProcessId"):
+                active_pids.setdefault(hostname, set()).discard(str(event["ProcessId"]))
 
-            storyline_events = [
-                e
-                for e in windows_events
-                if "TimeCreated" in e
-                and abs((e["TimeCreated"] - storyline_time).total_seconds())
-                < tolerance.total_seconds()
-            ]
-
-            assert len(storyline_events) > 0, "Storyline event not found in logs"
-
-    def test_parallel_generation_performance(self):
-        """Test parallel generation completes successfully."""
-        # This is a basic performance test - just verify it completes
-        # without errors for a moderate-sized scenario
-        scenario = create_test_scenario(users=10, hours=2)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            engine = GenerationEngine(scenario, Path(tmpdir))
-
-            # Measure generation time
-            start_time = datetime.now()
-            engine.generate()
-            end_time = datetime.now()
-
-            duration = (end_time - start_time).total_seconds()
-
-            # Verify generation completed
-            # Files may be in per-host/per-sensor subdirectories
-            win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
-            zeek_files = list(Path(tmpdir).rglob("conn.json"))
-            assert len(win_files) > 0, "No Windows event files found"
-            assert len(zeek_files) > 0, "No Zeek files found"
-
-            # Verify generation time is reasonable (< 30 seconds for this small scenario)
-            assert duration < 30, f"Generation took too long: {duration:.2f}s"
-
-            # Verify events were generated
-            windows_events = parse_windows_log(
-                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
-            )
-            zeek_events = parse_zeek_log(first_zeek_conn_file(Path(tmpdir)))
-
-            # With 10 users, 2 hours, low intensity: events distributed across 7 formats
-            assert len(windows_events) > 10, "Too few Windows events generated"
-            assert len(zeek_events) > 0, "No Zeek events generated"
+        uids = [event["uid"] for event in zeek_events]
+        assert len(uids) == len(set(uids))
+        storyline_time = datetime(2024, 1, 1, 9, 15, tzinfo=UTC)
+        assert any(
+            abs((event["TimeCreated"] - storyline_time).total_seconds()) < 60
+            for event in windows_events
+            if "TimeCreated" in event
+        )

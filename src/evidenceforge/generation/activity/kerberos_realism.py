@@ -41,11 +41,23 @@ def reset_kerberos_realism_cache() -> None:
     _CACHED_DATA = None
 
 
-def pick_tgt_success_fields(rng: random.Random, ad_domain: str = "") -> dict[str, Any]:
+def pick_tgt_success_fields(
+    rng: random.Random,
+    ad_domain: str = "",
+    *,
+    allow_no_preauth: bool = False,
+) -> dict[str, Any]:
     """Pick coherent 4768 success fields from Kerberos realism config."""
     cfg = load_kerberos_realism()
     tgt_success = cfg.get("tgt_success", {})
-    pre_auth = _pick_weighted_profile(tgt_success.get("pre_auth_types", {}), rng)
+    pre_auth_profiles = tgt_success.get("pre_auth_types", {})
+    if not allow_no_preauth:
+        pre_auth_profiles = {
+            name: profile
+            for name, profile in pre_auth_profiles.items()
+            if not isinstance(profile, dict) or int(profile.get("value", 2)) != 0
+        }
+    pre_auth = _pick_weighted_profile(pre_auth_profiles, rng)
     certificate_fields = _certificate_fields(pre_auth, rng, ad_domain)
     return {
         "ticket_options": _pick_weighted_value(tgt_success.get("ticket_options", {}), rng),
@@ -55,17 +67,30 @@ def pick_tgt_success_fields(rng: random.Random, ad_domain: str = "") -> dict[str
     }
 
 
-def pick_tgt_failure_fields(rng: random.Random) -> dict[str, Any]:
+def pick_tgt_failure_fields(rng: random.Random, status: str = "0x18") -> dict[str, Any]:
     """Pick coherent 4771 failure fields from Kerberos realism config."""
     cfg = load_kerberos_realism()
     failure = cfg.get("tgt_failure", {})
+    pre_auth_profiles = failure.get("pre_auth_types", {})
+    if _normalize_kerberos_status(status) == 0x18:
+        pre_auth_profiles = {
+            name: profile
+            for name, profile in pre_auth_profiles.items()
+            if not isinstance(profile, dict) or int(profile.get("value", 2)) != 0
+        }
     return {
         "ticket_options": _pick_weighted_value(failure.get("ticket_options", {}), rng)
         or "0x40810010",
-        "pre_auth_type": int(
-            _pick_weighted_profile(failure.get("pre_auth_types", {}), rng).get("value", 2)
-        ),
+        "pre_auth_type": int(_pick_weighted_profile(pre_auth_profiles, rng).get("value", 2)),
     }
+
+
+def _normalize_kerberos_status(status: str) -> int | None:
+    """Return an integer Kerberos status or None for an unrecognized caller value."""
+    try:
+        return int(status, 0)
+    except (TypeError, ValueError):
+        return None
 
 
 def pick_kerberos_transport(rng: random.Random, profile: str = "default") -> str:

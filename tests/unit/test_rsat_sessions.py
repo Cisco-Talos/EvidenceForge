@@ -108,6 +108,61 @@ class TestRsatSessionTiming:
 
         assert reused == logon_id
 
+    def test_ensure_session_does_not_reuse_historical_windows_interactive(self) -> None:
+        class Planner:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def ensure_user_session(self, *args, **kwargs):
+                self.calls += 1
+                return SimpleNamespace(logon_id="0xreplacement")
+
+        mixin = BaselineMixin()
+        mixin.state_manager = StateManager()
+        planner = Planner()
+        mixin.world_planner = planner
+        user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha@example.com",
+            enabled=True,
+        )
+        system = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        session_start = datetime(2024, 3, 18, 13, 1, tzinfo=UTC)
+        activity_time = datetime(2024, 3, 18, 13, 8, tzinfo=UTC)
+        mixin.state_manager.set_current_time(session_start)
+        historical_logon_id = mixin.state_manager.create_session(
+            username=user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+        )
+        historical = mixin.state_manager.get_session(historical_logon_id)
+        assert historical is not None
+        mixin.state_manager.end_session(
+            historical_logon_id,
+            activity_time + timedelta(minutes=30),
+        )
+        historical_activity = historical.last_activity_time
+
+        selected = mixin._ensure_session_on_system(
+            user,
+            system,
+            activity_time,
+            random.Random(7),
+        )
+
+        assert selected == "0xreplacement"
+        assert historical.last_activity_time == historical_activity
+        assert planner.calls == 1
+
     def test_rsat_activity_moves_after_existing_future_workstation_session(self) -> None:
         mixin = BaselineMixin()
         mixin.state_manager = StateManager()

@@ -3,13 +3,17 @@
 import random
 import re
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+import pytest
 
 from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
     _pick_non_colliding_account_name,
+    _require_seeded_windows_parent,
     _scheduled_stale_failure_offsets,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -154,6 +158,194 @@ class TestBaselineFailedLogonPatterns:
             assert (ft - base_time).total_seconds() < 20
 
 
+class TestServiceAccountDelegationSchedule:
+    """Recurring automation has stable ownership, cadence, and scheduler ancestry."""
+
+    @staticmethod
+    def _engine() -> BaselineMixin:
+        engine = object.__new__(BaselineMixin)
+        engine.start_time = datetime(2024, 3, 18, tzinfo=UTC)
+        engine.scenario = SimpleNamespace(
+            name="schedule-test",
+            environment=SimpleNamespace(domain="example.test"),
+        )
+        return engine
+
+    def test_owner_hosts_are_stable_and_bounded(self):
+        engine = self._engine()
+        systems = [
+            SimpleNamespace(
+                hostname=f"WIN-{index:02d}",
+                os="Windows 11",
+                type=("workstation", "server", "domain_controller")[index % 3],
+            )
+            for index in range(8)
+        ] + [SimpleNamespace(hostname="LINUX-01", os="Ubuntu 22.04")]
+        config = {"owner_host_count_min": 1, "owner_host_count_max": 2}
+
+        first = engine._service_account_delegation_owner_hostnames("svc_backup", systems, config)
+        second = engine._service_account_delegation_owner_hostnames(
+            "svc_backup", list(reversed(systems)), config
+        )
+
+        assert first == second
+        assert 1 <= len(first) <= 2
+        assert "LINUX-01" not in first
+
+    def test_occurrences_use_non_hourly_multi_hour_cadence(self):
+        engine = self._engine()
+        config = {
+            "interval_minutes_min": 150,
+            "interval_minutes_max": 330,
+            "first_occurrence_seconds_min": 300,
+            "first_occurrence_seconds_max": 7200,
+            "jitter_seconds_min": -240,
+            "jitter_seconds_max": 540,
+        }
+        occurrences = [
+            occurrence
+            for hour in range(24)
+            if (
+                occurrence := engine._service_account_delegation_time_for_hour(
+                    current_hour=engine.start_time + timedelta(hours=hour),
+                    svc_name="svc_backup",
+                    hostname="WIN-01",
+                    config=config,
+                )
+            )
+            is not None
+        ]
+
+        assert 3 <= len(occurrences) <= 10
+        gaps = [(later - earlier).total_seconds() for earlier, later in pairwise(occurrences)]
+        assert all(gap > 3600 for gap in gaps)
+        assert len({round(gap, 3) for gap in gaps}) > 1
+
+    def test_selected_caller_is_stable_across_occurrences(self):
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "backup",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\BackupA\agent.exe",
+                            "command_line": "agent.exe --run",
+                            "parent_key": "services",
+                            "weight": 1,
+                        },
+                        {
+                            "image": r"C:\Program Files\BackupB\agent.exe",
+                            "command_line": "agent.exe --run",
+                            "parent_key": "services",
+                            "weight": 1,
+                        },
+                    ],
+                }
+            ]
+        }
+        first_engine = self._engine()
+        second_engine = self._engine()
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            first = first_engine._stable_service_account_delegation_choice("svc_backup")
+            repeated = first_engine._stable_service_account_delegation_choice("svc_backup")
+            regenerated = second_engine._stable_service_account_delegation_choice("svc_backup")
+
+        assert first == repeated == regenerated
+
+    def test_owner_hosts_respect_selected_caller_system_types(self):
+        engine = self._engine()
+        systems = [
+            SimpleNamespace(hostname="WS-01", os="Windows 11", type="workstation"),
+            SimpleNamespace(hostname="SRV-01", os="Windows Server 2022", type="server"),
+            SimpleNamespace(hostname="DC-01", os="Windows Server 2022", type="domain_controller"),
+        ]
+        config = {
+            "owner_host_count_min": 2,
+            "owner_host_count_max": 2,
+            "caller_profiles": [
+                {
+                    "name": "backup",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": r"C:\Program Files\Backup\agent.exe",
+                            "command_line": "agent.exe --run",
+                            "parent_key": "services",
+                            "system_types": ["server", "domain_controller"],
+                            "weight": 1,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            owners = engine._service_account_delegation_owner_hostnames(
+                "svc_backup", systems, config
+            )
+
+        assert owners == {"SRV-01", "DC-01"}
+
+    def test_scheduler_process_uses_seeded_taskeng_parent(self):
+        engine = self._engine()
+        engine.state_manager = StateManager()
+        engine.activity_generator = Mock()
+        engine.activity_generator.generate_system_process.return_value = 8124
+        timestamp = engine.start_time + timedelta(hours=2)
+        config = {
+            "caller_profiles": [
+                {
+                    "name": "scheduled_check",
+                    "account_terms": ["backup"],
+                    "weight": 1,
+                    "processes": [
+                        {
+                            "image": (r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+                            "command_line": "powershell.exe -File backup-check.ps1",
+                            "parent_key": "taskeng",
+                            "weight": 1,
+                        }
+                    ],
+                }
+            ]
+        }
+        system = SimpleNamespace(hostname="WIN-01", os="Windows 11", type="workstation")
+
+        with patch(
+            "evidenceforge.generation.engine.baseline.service_account_delegation_config",
+            return_value=config,
+        ):
+            engine._ensure_service_account_delegation_process(
+                system=system,
+                svc_name="svc_backup",
+                time=timestamp,
+                sys_pids={"taskeng": 7900},
+                rng=random.Random(7),
+            )
+
+        assert (
+            engine.activity_generator.generate_system_process.call_args.kwargs["parent_pid"] == 7900
+        )
+
+    def test_unknown_parent_symbol_fails_fast(self):
+        with pytest.raises(ValueError, match="Unknown Windows parent symbol 'missing'"):
+            _require_seeded_windows_parent(
+                {"services": 700},
+                "missing",
+                family="test",
+            )
+
+
 class TestStorylineAccountLifecycle:
     """Storyline-created accounts should not leak into pre-creation baseline noise."""
 
@@ -264,7 +456,7 @@ class TestStorylineAccountLifecycle:
                 {
                     "name": "default_service_tasks",
                     "account_terms": ["svc"],
-                    "weight": 1,
+                    "weight": 10_000,
                     "processes": [
                         {
                             "image": r"C:\Windows\System32\taskhostw.exe",

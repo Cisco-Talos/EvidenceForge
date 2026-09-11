@@ -80,6 +80,16 @@ fields:
     required: false
     description: "Canonical client-to-proxy tunnel duration in milliseconds when available"
 
+  - name: tunnel_id
+    type: string
+    required: false
+    description: "Proxy-native stable identity shared by a CONNECT summary and inspected children"
+
+  - name: client_src_port
+    type: integer
+    required: false
+    description: "Client source port for exact proxy-tunnel transport correlation"
+
   - name: time_taken
     type: integer
     required: false

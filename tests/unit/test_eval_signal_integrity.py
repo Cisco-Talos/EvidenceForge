@@ -22,13 +22,14 @@
 
 """Tests for Causality scoring (merged from signal_integrity)."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
-from evidenceforge.evaluation.storyline import _match_activity, resolve_storyline
+from evidenceforge.evaluation.storyline import ResolvedEvent, _match_activity, resolve_storyline
 from evidenceforge.events.ground_truth import GroundTruthDocument
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
@@ -40,6 +41,17 @@ GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
 SCENARIOS_DIR = Path(__file__).parent.parent / "fixtures" / "scenarios"
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+CAUSALITY_SUB_SCORE_KEYS = [
+    "causal_ordering",
+    "event_presence",
+    "indicator_accuracy",
+    "pivot_linkability",
+    "temporal_integrity",
+    "storyline_trace_coverage",
+    "intent_reconciliation",
+    "effect_reconciliation",
+]
 
 
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
@@ -97,6 +109,257 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
         ),
         storyline=[StorylineEvent(**e) for e in storyline_yaml],
         output=OutputSpec(logs=[{"format": "windows"}], destination="./out"),
+    )
+
+
+def test_smb_trace_matching_uses_canonical_transport_and_file_identities():
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "smb-read": {
+            "transport_uids": ["C-SMB-1"],
+            "operations": [
+                {
+                    "share": "FS-01.finance",
+                    "path": r"Reports\FY26\forecast.xlsx",
+                    "fuid": "F-SMB-1",
+                }
+            ],
+        }
+    }
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="WS-01",
+        system_ip="10.0.0.10",
+        activity="Read forecast",
+        details={},
+        event_types=["smb_activity"],
+        storyline_id="smb-read",
+    )
+
+    assert scorer._smb_record_matches({"uid": "C-SMB-1"}, "zeek_smb_files", event)
+    assert scorer._smb_record_matches({"fuid": "F-SMB-1"}, "zeek_files", event)
+    assert scorer._smb_record_matches(
+        {
+            "EventID": 4663,
+            "SubjectUserName": "jsmith",
+            "ObjectName": r"D:\Departments\Finance\Reports\FY26\forecast.xlsx",
+        },
+        "windows_event_security",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "action": "READ",
+            "principal": "jsmith",
+            "file_path": r"D:\Departments\Finance\Reports\FY26\forecast.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches({"uid": "C-OTHER"}, "zeek_conn", event)
+
+
+def test_smb_trace_matching_accepts_samba_syslog_and_posix_endpoint_paths():
+    """Samba-native evidence should match the same canonical share/file identity."""
+
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "samba-read": {
+            "transport_uids": ["C-SAMBA-1"],
+            "operations": [
+                {
+                    "share": "SAMBA-01.finance",
+                    "path": r"Reports\FY26\linux-plan.xlsx",
+                    "fuid": "F-SAMBA-1",
+                }
+            ],
+        }
+    }
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="LNX-CLIENT-01",
+        system_ip="10.0.0.10",
+        activity="Read Samba workbook",
+        details={},
+        event_types=["smb_activity"],
+        storyline_id="samba-read",
+    )
+
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "action": "READ",
+            "hostname": "SAMBA-01",
+            "principal": "jsmith",
+            "file_path": "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: other-user|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/other.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+
+    external_event = replace(event, system="SAMBA-01")
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|198.51.100.42|Finance|read|success|"
+                "/srv/samba/data/Departments/Finance/Reports/FY26/linux-plan.xlsx"
+            ),
+        },
+        "syslog",
+        external_event,
+    )
+
+
+def test_smb_trace_matching_accepts_fixed_mapping_principal():
+    """Server-native evidence can use fixed SMB credentials distinct from the local actor."""
+
+    scorer = CausalityScorer()
+    scorer._smb_gt = {
+        "fixed-read": {
+            "transport_uids": ["C-FIXED-1"],
+            "operations": [
+                {
+                    "share": "SAMBA-01.finance",
+                    "path": r"Reports\fixed.xlsx",
+                    "fuid": "F-FIXED-1",
+                }
+            ],
+        }
+    }
+    scorer._smb_mapping_principals = {"finance-fixed": "svc_smb_reader"}
+    event = ResolvedEvent(
+        index=0,
+        time=T0,
+        actor="jsmith",
+        system="LNX-CLIENT-01",
+        system_ip="10.0.0.10",
+        activity="Read through a fixed CIFS credential",
+        details={"mapping": "FINANCE-FIXED"},
+        event_types=["smb_activity"],
+        storyline_id="fixed-read",
+    )
+
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: svc_smb_reader|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Reports/fixed.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "connect to service Finance as user svc_smb_reader (uid=20041)",
+        },
+        "syslog",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "connect to service Finance as user jsmith (uid=20041)",
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd",
+            "message": "closed connection to service Finance",
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "SAMBA-01",
+            "principal": "svc_smb_reader",
+            "file_path": "/srv/samba/data/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "SAMBA-01",
+            "principal": "jsmith",
+            "file_path": "/srv/samba/data/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "hostname": "SAMBA-01",
+            "app_name": "smbd_audit",
+            "message": (
+                "smbd_audit: jsmith|10.0.0.10|Finance|read|success|"
+                "/srv/samba/data/Reports/fixed.xlsx"
+            ),
+        },
+        "syslog",
+        event,
+    )
+    assert scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "LNX-CLIENT-01",
+            "principal": "jsmith",
+            "file_path": "/mnt/finance/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
+    )
+    assert not scorer._smb_record_matches(
+        {
+            "object": "FILE",
+            "hostname": "LNX-CLIENT-01",
+            "principal": "svc_smb_reader",
+            "file_path": "/mnt/finance/Reports/fixed.xlsx",
+        },
+        "ecar",
+        event,
     )
 
 
@@ -1219,7 +1482,7 @@ class TestEndToEnd:
         assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS
 
     def test_with_retail_scenario(self):
         """Run scorer on existing good fixtures with real scenario."""
@@ -1242,4 +1505,4 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         # Should produce a score (may be low since fixtures don't match storyline)
         assert result.score is not None
-        assert len(result.sub_scores) == 7
+        assert [sub_score.key for sub_score in result.sub_scores] == CAUSALITY_SUB_SCORE_KEYS

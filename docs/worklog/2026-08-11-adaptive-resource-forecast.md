@@ -4,7 +4,8 @@
 
 Replace the static generation workload rejection and public `--allow-large-workload` requirement
 with an always-visible, machine-aware forecast. Validation and generation must report projected
-peak memory, available RAM plus swap, projected output size, and destination filesystem capacity.
+peak memory, available RAM plus swap, projected final output, peak working disk, and destination
+filesystem capacity.
 When projected pressure is material, output a low, medium, or high advisory warning and continue.
 
 ## Design
@@ -96,3 +97,109 @@ Raw measurements are stored in:
 - `docs/design/resource-forecast-calibration-holdout-sources.json`
 - `docs/design/resource-forecast-calibration-holdout-full.json`
 - `docs/design/resource-forecast-calibration-holdout-independent.json`
+
+## Canonical SMB recalibration (2026-08-13)
+
+Calibration model v3 separates final logical output from peak working-disk demand. The latter adds
+the bounded Zeek external-sort runs that coexist with the merge destination. Workload estimation
+now supplies compiled SMB catalog size, authored activity count, resolved batch operations, and
+retained mutations. Source-specific output terms cover fixed SMB session/tree overhead and
+per-operation Zeek, Windows Security, and eCAR evidence; separate sidecar terms cover ground truth,
+storage-manifest targets, and observation metadata. Logical SMB file sizes remain excluded because
+canonical V1 generates metadata/evidence rather than payload artifacts.
+
+The calibration harness now samples unique allocated filesystem blocks during generation (hard
+links counted once), records final bytes per generated filename, and can retain storylines in
+source-isolated profiles. The representative calibration scenario exercises single and batched
+reads, updates, copies, deletes, high auditing, mapped paths, a folder-mounted ReFS volume, and an
+encrypted share. Matched baseline runs isolate the canonical SMB increment.
+
+For the 146-operation authored SMB workload, the measured-versus-forecast final-output deltas were
+0.226/0.226 MiB for Zeek, 0.873/0.866 MiB for Windows Security, and 0.236/0.234 MiB for eCAR. Peak
+RSS deltas were 0.98 MiB, 4.34 MiB, and -0.16 MiB respectively; the small negative eCAR delta is
+ordinary process-RSS noise, and every absolute measurement landed inside the calibrated memory
+interval. This confirms that SMB operation fan-out is represented directly rather than hidden in
+the duration-only background rates.
+
+The duration holdout covered 7-day and 31-day Zeek-only and full-format runs. Zeek peak RSS stayed
+bounded at 101.3/114.3 MiB while final output grew from 3.57 to 14.99 MiB. Full-format peak RSS was
+186.7/345.2 MiB and final output was 71.16/308.81 MiB. All measured memory, final-output, and peak
+working-disk values landed inside their v3 intervals. The low-intensity holdout deliberately leaves
+the expected final-size estimate conservative; its lower/upper interval accounts for variation in
+baseline intensity, topology, and source eligibility. Final output retains the tighter 14% lower
+multiplier, while peak working disk uses a separate 10% lower multiplier because output-rate and
+external-sort overlap uncertainty compound.
+
+Raw measurements:
+
+- `docs/design/resource-forecast-calibration-smb-v3.json`
+- `docs/design/resource-forecast-calibration-smb-v3-baseline.json`
+- `docs/design/resource-forecast-calibration-smb-v3-long.json`
+
+Verification after the v3 fit:
+
+- Focused resource/workload/CLI/SMB suite: 69 passed.
+- Full non-slow suite: 5,530 passed and 21 skipped in 382.74 seconds.
+- `eforge validate-config`: 91 files checked with no findings.
+- Repository-wide Ruff lint, Ruff format, and `git diff --check`: passed.
+- Real `eforge validate --show-storage` output displayed separate peak-memory, final-output, and
+  peak-working-disk forecasts under calibration model v3.
+
+## Bounded-registry calibration model v5 (2026-08-16)
+
+Model v5 keeps the established whole-generator memory/disk forecast and adds a typed registry
+report retaining historical calibration derived during the V2 foundation work.
+`WorkloadEstimate.registry_inputs` records the
+scenario duration, base/effect occurrences, render-channel observations, effect/channel fanout,
+static deployment bindings, and exact scenario-override contribution for each registry family.
+The resource layer applies data-owned lifecycle/retention horizons and capacities to derive
+created, live, retained, leased, stale, expired, backing, and high-water counts. Mutable state
+plateaus from cadence × horizon rather than retaining duration-wide measurement history.
+
+Each `RegistryResourceProjection` reports a structural/expected/upper memory range, measured load,
+mutation, lookup, and expiry costs, plateau horizon and reached time, maximum lookup candidates,
+heap/segment amplification, and bounded compaction work. The report includes lifecycle,
+application channels, local artifacts, collection deployment, and deployment/content in one stable
+order. Missing measurements fail closed. Mutable operation costs remain explicitly provisional and
+tagged `historical_smoke_calibration`; they are not promoted by the current completion work. The
+deployment/content measurement remains explicitly
+`provisional` and provenance-tagged `historical_deployment_path_packed_calibration` because it
+comes from the separate packed 1M/2M binding workload rather than the four-registry mixed probe.
+
+Registry memory does not get added to the legacy calibrated peak. Instead, model v5 constructs an
+explicit registry-plus-emitter/payload floor and takes the maximum of that floor and the prior
+whole-generator calibration. This retains existing budgets while preventing both underforecasting
+and double counting. Pre-v5 `ResourceForecastCalibration` values may omit `registries`; they keep
+the exact legacy calculation and return `registry_report=None`.
+
+## Release evidence closure (2026-08-17)
+
+**Retired on 2026-08-22:** the 161-case foundation scale matrix described below is historical
+design context only. It is permanently outside the current and future acceptance plan and must not
+be executed or replaced by a comparable substitute matrix. EvidenceForge now uses the official
+normal and slow release suites, focused owner/regression tests, and bounded real-generation and
+evaluation runs for release confidence.
+
+The release-scale harness preserved the canonical matrix as an exact static contract: 93 scale
+cases, 32 duration cases, 35 protocol-sidecar cases, and one mixed-family case, for 161 cases total.
+The sizes, durations, concurrency points, hash seeds, query counts, churn, and one-million-entry
+mixed/sidecar thresholds are unchanged. This closure did not execute the matrix.
+
+The retired design gave every retained-state family typed release-case evidence. Lifecycle,
+application channels, local artifacts, collection deployment, and deployment/content bound to their
+scenario forecast registry; process/timing runtime and protocol sidecars bound to exact matrix
+cases. The current report instead exposes historical calibration evidence for those legacy-peak
+families and does not bind them to a current acceptance workload. Report validation rejects a
+missing, swapped, or silently reclassified calibration binding.
+
+Implementation provenance hashed the complete integration-owner manifest used by the mixed and
+sidecar workloads, including configuration, event contracts, action bundles, timing, deployment,
+lifecycle, protocol, and scale-probe owners. The retired authority contract would have required the
+canonical 161-case configuration, one implementation digest, an unchanged Git SHA, a clean start
+and end, and a complete provenance manifest. That contract is no longer a completion or release
+requirement. Existing focused
+reference-host gates remain useful diagnostics where their owning code changes.
+
+Historical focused verification reported 48 passing tests across the former harness, resource
+forecast, and workload-limit suites in an isolated HEAD-plus-candidate checkout. This result is
+provenance only; the deleted harness suite is not an executable instruction or acceptance path.

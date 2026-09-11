@@ -1,0 +1,5 @@
+baseline_activity:
+  description: "Normal Northstar clinical, email, and cross-platform administrative activity."
+  intensity: low
+  variation: medium
+  suspicious_noise: medium

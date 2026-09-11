@@ -22,9 +22,13 @@
 
 """Unit tests for activity generation."""
 
+import ipaddress
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -38,6 +42,8 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
+from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -49,6 +55,9 @@ from evidenceforge.generation.actions import (
     AnonymousLogonRequest,
     CreateRemoteThreadActionBundle,
     CreateRemoteThreadRequest,
+    ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -80,6 +89,7 @@ from evidenceforge.generation.actions import (
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
+    NmapCommandProbePlanner,
     NmapCommandProbeRequest,
     NtlmValidationActionBundle,
     NtlmValidationRequest,
@@ -106,6 +116,7 @@ from evidenceforge.generation.actions import (
     WorkstationLockResult,
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
+    plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -133,9 +144,18 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
 )
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+from evidenceforge.generation.identity import IdentityDirectory, WindowsAccount
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.generation.source_timing import (
+    ecar_flow_identity_key,
+    ecar_flow_render_key,
+)
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import NetworkConfig, NetworkSegment, System, User
+from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import reset_thread_rng
 from tests.network_factories import network_plan
 
@@ -156,6 +176,30 @@ def test_linux_gui_editor_process_is_not_modeled_as_short_foreground_exit():
     )
 
     assert lifetime is None
+
+
+def test_linux_output_file_flag_does_not_imply_follow_mode():
+    """A command-specific output flag must not occupy the shell until session close."""
+    lifetime = _linux_foreground_lifetime(
+        "/usr/bin/pg_dump",
+        "pg_dump -h localhost -U app_svc -Fc appdb -f /tmp/appdb.bin",
+    )
+
+    assert lifetime is not None
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        ("/usr/bin/tail", "tail -f /var/log/syslog"),
+        ("/usr/bin/journalctl", "journalctl -u ssh -f"),
+        ("/usr/bin/docker", "docker logs -f api-server"),
+        ("/usr/bin/kubectl", "kubectl logs -f deploy/api-server"),
+    ],
+)
+def test_linux_follow_commands_remain_unbounded(image: str, command_line: str) -> None:
+    """Known follow-mode commands retain the shell until explicitly stopped."""
+    assert _linux_foreground_lifetime(image, command_line) is None
 
 
 @pytest.mark.parametrize(
@@ -315,6 +359,17 @@ def test_zeek_connection_observation_time_varies_submillisecond_suffixes():
 
 
 class TestApacheRawSyslogNormalization:
+    def test_generate_raw_skips_format_disabled_by_output_filter(self):
+        """Valid raw events should not fail when their emitter was intentionally filtered."""
+        dispatcher = EventDispatcher(state_manager=StateManager(), emitters={})
+        generator = ActivityGenerator(dispatcher.state_manager, {}, dispatcher=dispatcher)
+
+        generator.generate_raw(
+            datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            "syslog",
+            {"message": "filtered"},
+        )
+
     def test_embedded_timestamp_regex_matches_apache_variants(self):
         """Apache raw syslog timestamp normalization should keep common timestamp variants."""
         pattern = generator_module._APACHE_EMBEDDED_TS_RE
@@ -919,22 +974,27 @@ class TestActivityGenerator:
         activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
         system = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
         user = User(username="root", full_name="Root", email="root@example.com")
-        systemd_pid = state_manager.create_process(
-            system=system.hostname,
+        systemd_pid = activity_gen.generate_process(
+            user=user,
+            system=system,
+            time=timestamp,
+            logon_id="",
+            process_name="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd &",
             parent_pid=0,
-            image="/usr/lib/systemd/systemd",
-            command_line="/usr/lib/systemd/systemd",
-            username="root",
-            integrity_level="System",
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
         )
+        ecar_emitter.reset_mock()
 
         class AlwaysSideEffectRng(random.Random):
             def random(self) -> float:
                 return 0.0
 
         monkeypatch.setattr(
-            "evidenceforge.generation.activity.generator._get_rng",
-            lambda: AlwaysSideEffectRng(1),
+            activity_gen,
+            "_process_endpoint_effect_rng",
+            lambda _request, _actor: AlwaysSideEffectRng(1),
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.edr_pools.select_file_side_effect",
@@ -1621,6 +1681,31 @@ class TestActivityGenerator:
         )
         logon_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
         logon_id = "0x12345"
+        state_manager.set_current_time(logon_time - timedelta(hours=1))
+        systemd_pid = state_manager.create_process(
+            linux_server.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+        agetty_pid = state_manager.create_process(
+            linux_server.hostname,
+            systemd_pid,
+            "/sbin/agetty",
+            "/sbin/agetty --noclear tty1 linux",
+            "root",
+            "System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {
+            linux_server.hostname: {
+                "systemd": systemd_pid,
+                "agetty1": agetty_pid,
+            }
+        }
 
         first_id = activity_gen.generate_logon(
             test_user,
@@ -1664,6 +1749,26 @@ class TestActivityGenerator:
         assert len(login_events) == 1
         assert len(process_events) == 1
         assert pam_event.syslog.pid == process_events[0].process.pid
+        assert process_events[0].process.username == "root"
+        assert process_events[0].process.logon_id == "0x3e7"
+        assert process_events[0].process.parent_pid == agetty_pid
+        assert pam_event.timestamp - process_events[0].timestamp >= timedelta(milliseconds=2500)
+        source_create_time = activity_gen.process_source_create_time(
+            linux_server.hostname,
+            process_events[0].process.pid,
+        )
+        assert source_create_time is not None
+        assert pam_event.timestamp >= source_create_time + (
+            dispatcher.observation_policy.maximum_delay_difference("ecar", "syslog")
+        )
+        login_process = state_manager.get_process(
+            linux_server.hostname,
+            process_events[0].process.pid,
+        )
+        shell_process = state_manager.get_process(linux_server.hostname, shell_pid)
+        assert login_process is not None
+        assert shell_process is not None
+        assert shell_process.parent_pid == login_process.pid
 
     def test_linux_sudo_bootstrap_before_window_is_registered_without_login_event(
         self, state_manager, test_user
@@ -1701,7 +1806,97 @@ class TestActivityGenerator:
         assert child_pid is not None
         assert len(sessions) == 1
         assert sessions[0].start_time < scenario_start
+        assert sessions[0].session_id > 0
         assert "logon" not in emitted_types
+
+    def test_linux_sudo_bootstrap_allocates_fresh_identity_after_completed_session(
+        self, state_manager, test_user
+    ):
+        """A reused TTY must not resurrect the prior completed session's LogonID."""
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.return_value = True
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        scenario_start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        activity_gen._scenario_start_time = scenario_start
+        activity_gen._scenario_end_time = scenario_start + timedelta(hours=6)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+
+        activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=scenario_start + timedelta(seconds=30),
+            child_time=scenario_start + timedelta(seconds=30, milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/1",
+            command="/usr/bin/id",
+            reserve_until=scenario_start + timedelta(seconds=32),
+            lifecycle_group_id="sudo-first",
+        )
+        first = state_manager.get_sessions_for_user(test_user.username)[0]
+        assert state_manager.end_session(first.logon_id, scenario_start + timedelta(minutes=1))
+
+        activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=scenario_start + timedelta(minutes=5),
+            child_time=scenario_start + timedelta(minutes=5, milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/1",
+            command="/usr/bin/hostname",
+            reserve_until=scenario_start + timedelta(minutes=5, seconds=2),
+            lifecycle_group_id="sudo-second",
+        )
+        second = state_manager.get_sessions_for_user(test_user.username)[0]
+
+        assert second.logon_id != first.logon_id
+        assert second.ecar_object_id != first.ecar_object_id
+        assert second.session_id != first.session_id
+
+    def test_linux_sudo_reuses_eligible_live_session_across_ttys(self, state_manager, test_user):
+        """Sudo terminal changes should not create duplicate local login sessions."""
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.return_value = True
+        emitters = {"ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        activity_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_server = System(
+            hostname="APP-LINUX-01",
+            ip="10.0.0.42",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_server.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=activity_time - timedelta(minutes=10),
+            session_kind="interactive",
+        )
+
+        sudo_pid, _child_pid, _, _ = activity_gen.generate_linux_sudo_processes(
+            system=linux_server,
+            sudo_time=activity_time,
+            child_time=activity_time + timedelta(milliseconds=200),
+            sudo_user=test_user.username,
+            tty="pts/4",
+            command="/usr/bin/id",
+            reserve_until=activity_time + timedelta(seconds=2),
+            lifecycle_group_id="sudo-live-session-test",
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert sudo_pid > 0
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert not any(
+            call.args[0].event_type == "logon" for call in ecar_emitter.emit.call_args_list
+        )
 
     def test_linux_local_logon_with_stale_ssh_kind_gets_logind_companion(
         self, state_manager, test_user
@@ -1887,7 +2082,7 @@ class TestActivityGenerator:
     ):
         """Interactive shells should not all inherit one long-lived userinit.exe parent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        state_manager.set_current_time(timestamp)
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
         smss_pid = state_manager.create_process(
             test_system.hostname,
             4,
@@ -1997,6 +2192,16 @@ class TestActivityGenerator:
         assert set(by_name) == shell_names
         assert creates["explorer.exe"].timestamp < by_name["userinit.exe"].timestamp
         assert by_name["userinit.exe"].timestamp < logoff_time - timedelta(minutes=50)
+        assert creates["winlogon.exe"].auth is not None
+        assert creates["winlogon.exe"].auth.username == "SYSTEM"
+        assert creates["winlogon.exe"].auth.logon_id == "0x3e7"
+        assert by_name["winlogon.exe"].auth is not None
+        assert by_name["winlogon.exe"].auth.username == "SYSTEM"
+        assert by_name["winlogon.exe"].auth.logon_id == "0x3e7"
+        assert by_name["winlogon.exe"].auth.session_id == creates["winlogon.exe"].auth.session_id
+        assert by_name["winlogon.exe"].process.logon_id == "0x3e7"
+        assert by_name["explorer.exe"].auth is not None
+        assert by_name["explorer.exe"].auth.logon_id == logon_id
         logout_gap = abs(by_name["winlogon.exe"].timestamp - by_name["explorer.exe"].timestamp)
         assert logout_gap != timedelta(milliseconds=50)
 
@@ -2005,7 +2210,7 @@ class TestActivityGenerator:
     ):
         """Baseline explorer.exe launches should reuse the interactive session shell."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        state_manager.set_current_time(timestamp)
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
         smss_pid = state_manager.create_process(
             test_system.hostname,
             4,
@@ -2054,6 +2259,43 @@ class TestActivityGenerator:
             for event in emitted
         )
 
+    def test_explorer_namespace_process_does_not_reuse_session_shell(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """An argument-bearing Explorer client must not become the durable shell owner."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        session = state_manager.get_session(logon_id)
+        assert session is not None and session.explorer_pid is not None
+        desktop_shell_pid = session.explorer_pid
+        mock_emitters["windows_event_security"].reset_mock()
+
+        namespace_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            r'explorer.exe "\\FILE-SRV-01\Shared"',
+            parent_pid=desktop_shell_pid,
+        )
+
+        assert namespace_pid != desktop_shell_pid
+        namespace_process = state_manager.get_process(test_system.hostname, namespace_pid)
+        assert namespace_process is not None
+        assert namespace_process.parent_pid == desktop_shell_pid
+
     def test_repeated_logon_render_does_not_duplicate_session_shell(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -2095,8 +2337,19 @@ class TestActivityGenerator:
                 timestamp + timedelta(seconds=1),
                 logon_id,
             )
-            is None
+            == first_explorer_pid
         )
+
+        reused_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=2),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+        assert reused_pid == first_explorer_pid
 
         activity_gen.generate_logon(
             test_user,
@@ -2612,6 +2865,17 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         mock_emitters["ecar"] = Mock()
         activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
         state_manager.set_current_time(timestamp)
 
         logon_id = activity_gen.generate_logon(
@@ -2650,6 +2914,33 @@ class TestActivityGenerator:
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.source_ready_time == ecar_login_time
+        assert session.session_winlogon_pid is not None
+        winlogon_pid = session.session_winlogon_pid
+        winlogon = state_manager.get_process(test_system.hostname, winlogon_pid)
+        assert winlogon is not None
+        assert winlogon.username == "SYSTEM"
+        assert winlogon.logon_id == "0x3e7"
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            timestamp + timedelta(hours=1),
+            logon_id,
+            logon_type=10,
+        )
+
+        winlogon_terminate = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == winlogon_pid
+        )
+        assert winlogon_terminate.auth is not None
+        assert winlogon_terminate.auth.username == "SYSTEM"
+        assert winlogon_terminate.auth.logon_id == "0x3e7"
+        assert winlogon_terminate.auth.session_id == session.session_id
+        assert winlogon_terminate.process.logon_id == "0x3e7"
 
     def test_generate_logon_rdp_preserves_explicit_modeled_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3181,6 +3472,7 @@ class TestActivityGenerator:
 
         assert second == first
 
+    @pytest.mark.slow
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
     ):
@@ -3213,6 +3505,16 @@ class TestActivityGenerator:
             target_a.ip: target_a,
             target_b.ip: target_b,
         }
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=source.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
         state_manager.set_current_time(timestamp)
         probe_requests = []
         original_generate_connection = activity_gen.generate_connection
@@ -3228,7 +3530,7 @@ class TestActivityGenerator:
             user=test_user,
             system=source,
             time=timestamp,
-            logon_id="0x123",
+            logon_id=logon_id,
             process_name="/usr/bin/nmap",
             command_line="nmap -sT -p 22,80,443,445,3306 10.10.2.0/24",
             parent_pid=0,
@@ -3242,7 +3544,30 @@ class TestActivityGenerator:
             and call.args[0].network.initiating_pid == pid
         ]
         assert probe_requests
-        assert {request["dst_ip"] for request in probe_requests} == {target_a.ip, target_b.ip}
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert min(request["time"] for request in probe_requests) > visible_create
+        observed_targets = {request["dst_ip"] for request in probe_requests}
+        assert {target_a.ip, target_b.ip} < observed_targets
+        silent_targets = observed_targets - {target_a.ip, target_b.ip}
+        assert len(observed_targets) == 254
+        assert silent_targets == {
+            str(address) for address in ipaddress.ip_network("10.10.2.0/24").hosts()
+        } - {target_a.ip, target_b.ip}
+        assert len(probe_requests) == 1270
+        assert max(request["time"] for request in probe_requests) - min(
+            request["time"] for request in probe_requests
+        ) <= timedelta(seconds=12.01)
+        assert all(
+            request["conn_state"] == "S0" and request["resp_bytes"] == 0
+            for request in probe_requests
+            if request["dst_ip"] in silent_targets
+        )
+        assert all(
+            {request["dst_port"] for request in probe_requests if request["dst_ip"] == target}
+            == {22, 80, 443, 445, 3306}
+            for target in observed_targets
+        )
         assert {request["dst_port"] for request in probe_requests} >= {22, 80, 443, 445, 3306}
         assert {request.get("service") for request in probe_requests if request.get("service")} >= {
             "ssh",
@@ -3255,7 +3580,7 @@ class TestActivityGenerator:
             request["suppress_application_side_effects"] is True for request in probe_requests
         )
         assert scan_events
-        assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
+        assert {target_a.ip, target_b.ip} <= {event.network.dst_ip for event in scan_events}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445}
         assert len({event.network.conn_state for event in scan_events}) > 1
         assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
@@ -3264,6 +3589,36 @@ class TestActivityGenerator:
         assert all(event.protocol.leaf_certificate is None for event in scan_events)
         assert all(event.protocol.ocsp is None for event in scan_events)
         assert all(event.protocol.primary_file_transfer is None for event in scan_events)
+        max_scan_close = max(
+            event.network.closed_at for event in scan_events if event.network.closed_at is not None
+        )
+        process = state_manager.get_process(source.hostname, pid)
+        assert process is not None
+        assert process.last_activity_time is not None
+        assert process.last_activity_time >= max_scan_close
+        lifecycle_hold = activity_gen._lifecycle_authority.process_hold_until(
+            source.hostname,
+            pid,
+        )
+        assert lifecycle_hold is not None
+        assert lifecycle_hold >= max_scan_close
+        ecar_scan_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.src_ip == source.ip
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(ecar_scan_events) == len(probe_requests)
+        assert all(
+            event.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)]
+            > visible_create
+            for event in ecar_scan_events
+        )
+        assert all(
+            event.source_timing.finalized_flags[ecar_flow_identity_key("outbound", source.hostname)]
+            for event in ecar_scan_events
+        )
 
     def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
         """Nmap command probe bundles should expose deterministic anchors."""
@@ -3312,21 +3667,245 @@ class TestActivityGenerator:
 
         executor._execute_nmap_command_probe_bundle.assert_called_once_with(request)
 
-    def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
-        """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
+    def test_nmap_planner_bounds_broad_cidr_and_retains_silent_targets(self, test_user):
+        """Broad CIDRs should be bounded while retaining unmodeled address-space probes."""
         source = System(
             hostname="WEB-01",
             ip="10.10.3.10",
             os="Ubuntu 22.04",
             type="server",
         )
-        activity_gen._ip_to_system = {source.ip: source}
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 80 1.0.0.0/8",
+        )
+        profile = SimpleNamespace(
+            full_cidr_max_hosts=256,
+            max_expanded_targets=256,
+            large_cidr_connect_targets=20,
+            large_cidr_discovery_targets=24,
+            large_cidr_unmodeled_targets=12,
+            max_ports=12,
+            connect_window_seconds_min=6.0,
+            connect_window_seconds_max=12.0,
+            discovery_window_seconds_min=2.0,
+            discovery_window_seconds_max=5.0,
+        )
 
-        targets = activity_gen._resolve_nmap_targets("nmap -p 80 1.0.0.0/8", source)
+        plan = NmapCommandProbePlanner(profile).plan(request, {source.ip: source})
 
-        assert len(targets) == 8
-        assert targets[0] == "1.0.0.1"
-        assert targets[-1] == "1.0.0.8"
+        assert plan is not None
+        assert len(plan.targets) == profile.large_cidr_connect_targets
+        assert len(plan.targets) <= profile.max_expanded_targets
+        assert all(not target.modeled for target in plan.targets)
+        assert len({target.ip for target in plan.targets}) == len(plan.targets)
+        second_octets = {int(target.ip.split(".")[1]) for target in plan.targets}
+        assert min(second_octets) < 20
+        assert max(second_octets) > 230
+
+    @pytest.mark.slow
+    def test_nmap_ping_scan_emits_modeled_replies_and_silent_attempts(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Nmap -sn should emit bounded process-owned ICMP discovery evidence."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(hostname="SCAN-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
+        target = System(hostname="APP-01", ip="10.10.2.30", os="Ubuntu 22.04", type="server")
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=source.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+        requests: list[dict] = []
+        original_generate_connection = activity_gen.generate_connection
+
+        def capture_probe_connection(**kwargs):
+            if kwargs.get("process_image") == "/usr/bin/nmap":
+                requests.append(dict(kwargs))
+            return original_generate_connection(**kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", capture_probe_connection)
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=source,
+            time=timestamp,
+            logon_id=logon_id,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -sn 10.10.2.0/24",
+            parent_pid=0,
+        )
+
+        assert requests
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert min(request["time"] for request in requests) > visible_create
+        assert all(request["proto"] == "icmp" and request["pid"] == pid for request in requests)
+        modeled = [request for request in requests if request["dst_ip"] == target.ip]
+        silent = [request for request in requests if request["dst_ip"] != target.ip]
+        assert len(modeled) == 1
+        assert modeled[0]["resp_bytes"] == modeled[0]["orig_bytes"]
+        assert len(requests) == 254
+        assert len(silent) == 253
+        assert all(request["resp_bytes"] == 0 for request in silent)
+        assert len({request["orig_bytes"] for request in requests}) == 1
+        rendered = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.protocol == "icmp"
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(rendered) == len(requests)
+        modeled_rendered = [event for event in rendered if event.network.dst_ip == target.ip]
+        silent_rendered = [event for event in rendered if event.network.dst_ip != target.ip]
+        assert modeled_rendered[0].network.orig_pkts == 1
+        assert modeled_rendered[0].network.resp_pkts == 1
+        assert all(event.network.orig_pkts == 1 for event in silent_rendered)
+        assert all(event.network.resp_pkts == 0 for event in silent_rendered)
+        max_close = max(
+            event.network.closed_at for event in rendered if event.network.closed_at is not None
+        )
+        process = state_manager.get_process(source.hostname, pid)
+        assert process is not None
+        assert process.last_activity_time is not None
+        assert process.last_activity_time >= max_close
+        lifecycle_hold = activity_gen._lifecycle_authority.process_hold_until(
+            source.hostname,
+            pid,
+        )
+        assert lifecycle_hold is not None
+        assert lifecycle_hold >= max_close
+        ecar_scan_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.protocol == "icmp"
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert len(ecar_scan_events) == len(requests)
+        assert all(
+            event.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)]
+            > visible_create
+            for event in ecar_scan_events
+        )
+        assert all(
+            event.source_timing.finalized_flags[ecar_flow_identity_key("outbound", source.hostname)]
+            for event in ecar_scan_events
+        )
+
+    def test_windows_nmap_probe_uses_same_source_ready_contract(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Windows nmap command effects should obey the shared eCAR CREATE floor."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-SCAN-01",
+            ip="10.10.1.55",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="APP-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        state_manager.set_current_time(timestamp)
+        probe_requests: list[dict] = []
+        original_generate_connection = activity_gen.generate_connection
+
+        def capture_probe_connection(**kwargs):
+            if kwargs.get("process_image", "").lower().endswith("nmap.exe"):
+                probe_requests.append(dict(kwargs))
+            return original_generate_connection(**kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", capture_probe_connection)
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=source,
+            time=timestamp,
+            logon_id="0x123",
+            process_name=r"C:\Program Files\Nmap\nmap.exe",
+            command_line=r'"C:\Program Files\Nmap\nmap.exe" -sT -p 80 10.10.2.30',
+            parent_pid=0,
+        )
+
+        visible_create = activity_gen.process_source_create_time(source.hostname, pid)
+        assert visible_create is not None
+        assert len(probe_requests) == 1
+        assert probe_requests[0]["time"] > visible_create
+        ecar_flow = next(
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.initiating_pid == pid
+        )
+        assert (
+            ecar_flow.source_timing.finalized_times[
+                ecar_flow_render_key("outbound", source.hostname)
+            ]
+            > visible_create
+        )
+        assert ecar_flow.source_timing.finalized_flags[
+            ecar_flow_identity_key("outbound", source.hostname)
+        ]
+
+    def test_nmap_explicit_ip_does_not_invent_neighbor_targets(self, test_user):
+        """An explicit IP operand should remain exact rather than sampling its implicit /32."""
+
+        source = System(hostname="SCAN-01", ip="10.10.3.10", os="Ubuntu 22.04", type="server")
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 443 10.10.2.30",
+        )
+        profile = SimpleNamespace(
+            full_cidr_max_hosts=256,
+            max_expanded_targets=256,
+            large_cidr_connect_targets=20,
+            large_cidr_discovery_targets=24,
+            large_cidr_unmodeled_targets=12,
+            max_ports=12,
+            connect_window_seconds_min=6.0,
+            connect_window_seconds_max=12.0,
+            discovery_window_seconds_min=2.0,
+            discovery_window_seconds_max=5.0,
+        )
+
+        plan = NmapCommandProbePlanner(profile).plan(request, {})
+
+        assert plan is not None
+        assert [target.ip for target in plan.targets] == ["10.10.2.30"]
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3449,6 +4028,7 @@ class TestActivityGenerator:
             logon_type=3,
             source_ip=source_ip,
             source_port=52595,
+            remote_auth_destination_port=445,
         )
 
         logon_event = next(
@@ -3476,6 +4056,37 @@ class TestActivityGenerator:
         session = state_manager.get_session(logon_event.auth.logon_id)
         assert session is not None
         assert session.parent_lifecycle_group_id == logon_event.remote_auth.stable_id
+
+    def test_generic_remote_type3_does_not_invent_smb_transport(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A Type 3 record needs an owning service before it can claim TCP/445 evidence."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip="10.0.0.50",
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert logon_event.auth.logon_type == 3
+        assert logon_event.auth.source_port > 0
+        assert logon_event.remote_auth is None
+        assert network_events == []
 
     def test_remote_logon_reuses_existing_exact_transport_without_duplicate_flow(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3585,6 +4196,7 @@ class TestActivityGenerator:
             logon_type=3,
             source_ip=source_ip,
             source_port=52595,
+            remote_auth_destination_port=445,
         )
 
         logon_event = next(
@@ -4169,6 +4781,19 @@ class TestActivityGenerator:
         state_manager.set_current_time(timestamp)
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
+        activity_gen._ip_to_system["10.0.1.10"] = System(
+            hostname="WKS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system["10.0.2.10"] = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
 
         sessions_before = len(state_manager.state.active_sessions)
         activity_gen.generate_machine_account_logon(
@@ -4194,7 +4819,7 @@ class TestActivityGenerator:
         assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
         assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
         assert all(
-            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+            abs((event.timestamp - timestamp).total_seconds()) < 4.0 for event in kerberos_events
         )
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
@@ -4219,6 +4844,13 @@ class TestActivityGenerator:
             if call.args[0].event_type == "connection"
             and call.args[0].network.dst_port in {389, 445}
         )
+        kerberos_connection = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert max(event.timestamp for event in kerberos_events) < service_connection.timestamp
+        assert kerberos_connection.timestamp < service_connection.timestamp
         assert machine_logon.auth.source_port == service_connection.network.src_port
         assert (
             machine_logon.remote_auth.primary_transport.transaction_id
@@ -4228,6 +4860,92 @@ class TestActivityGenerator:
             event.kerberos.source_port != machine_logon.auth.source_port
             for event in kerberos_events
         )
+
+    def test_machine_account_registration_fail_before_preserves_logon_id(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A rejected registration must not consume the previewed machine LogonID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id("DC-01", timestamp)
+
+        def reject_registration(**kwargs: object) -> None:
+            assert kwargs["logon_id"] == expected_logon_id
+            raise StateError("injected machine-account registration failure")
+
+        monkeypatch.setattr(state_manager, "register_session", reject_registration)
+
+        with pytest.raises(StateError, match="injected machine-account registration failure"):
+            activity_gen.generate_machine_account_logon(
+                hostname="WKS-01",
+                machine_username="WKS-01$",
+                dc_hostname="DC-01",
+                source_ip="10.0.1.10",
+                dc_ip="10.0.2.10",
+                time=timestamp,
+                domain="EXAMPLE",
+            )
+
+        assert state_manager.get_session_identity(expected_logon_id) is None
+        assert state_manager.preview_logon_id("DC-01", timestamp) == expected_logon_id
+        emitted_types = {
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        }
+        assert "machine_logon" not in emitted_types
+        assert "logoff" not in emitted_types
+
+    def test_machine_account_registration_lost_return_reuses_exact_session(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A lost registration return must not allocate a sibling machine session."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id("DC-01", timestamp)
+        assert expected_logon_id == "0x176341e"
+        sessions_before = len(state_manager.state.active_sessions)
+        register_session = state_manager.register_session
+
+        def commit_then_raise(**kwargs: object) -> None:
+            registered = register_session(**kwargs)
+            assert registered.logon_id == expected_logon_id
+            raise RuntimeError("injected machine-account registration lost return")
+
+        monkeypatch.setattr(state_manager, "register_session", commit_then_raise)
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        security_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        machine_logon = next(
+            event for event in security_events if event.event_type == "machine_logon"
+        )
+        machine_logoff = next(event for event in security_events if event.event_type == "logoff")
+        assert machine_logon.auth.logon_id == expected_logon_id
+        assert machine_logoff.auth.logon_id == expected_logon_id
+        assert machine_logon.identity_plan.object_id == machine_logoff.identity_plan.object_id
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(expected_logon_id)
+        assert identity is not None
+        assert identity.object_id == machine_logon.identity_plan.object_id
+        assert state_manager.preview_logon_id("DC-01", timestamp) != expected_logon_id
 
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
@@ -4772,6 +5490,332 @@ class TestActivityGenerator:
         ][-1]
         assert logoff_event.auth.logon_type == 3
 
+    def test_generic_windows_parent_follows_retained_closed_child(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Generic Windows teardown must honor a lifecycle-retained child frontier."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session_plan = state_manager.plan_session_materialization(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+            lifecycle_group_id="generic:windows-retained-child",
+            session_id=3,
+        )
+        session, receipt = activity_gen._lifecycle_authority.materialize_session(session_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            session_plan,
+            receipt,
+        )
+        parent_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=1),
+            session.logon_id,
+            r"C:\Tools\SessionHost.exe",
+            "SessionHost.exe",
+            parent_pid=0,
+            suppress_command_file_effect=True,
+            lifecycle_group_id=session.lifecycle_group_id,
+        )
+        child_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=2),
+            session.logon_id,
+            r"C:\Tools\Worker.exe",
+            "Worker.exe --once",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            lifecycle_group_id="generic:windows-worker",
+        )
+        session.process_tree_root = parent_pid
+        parent_identity = state_manager.get_process_identity(test_system.hostname, parent_pid)
+        child_identity = state_manager.get_process_identity(test_system.hostname, child_pid)
+        assert parent_identity is not None
+        assert child_identity is not None
+        retained_child_close = session_start + timedelta(minutes=20)
+        activity_gen.generate_process_termination(
+            test_user,
+            test_system,
+            retained_child_close,
+            child_pid,
+            r"C:\Tools\Worker.exe",
+            session.logon_id,
+        )
+        assert state_manager.get_process(test_system.hostname, child_pid) is None
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            session_start + timedelta(minutes=5),
+            session.logon_id,
+            logon_type=2,
+            from_storyline=True,
+        )
+
+        child_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            child_identity.object_id
+        )
+        parent_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            parent_identity.object_id
+        )
+        session_lifecycle = activity_gen._lifecycle_authority.registry.get_session(
+            session.ecar_object_id
+        )
+        assert child_lifecycle is not None
+        assert parent_lifecycle is not None
+        assert session_lifecycle is not None
+        assert child_lifecycle.closed_at == retained_child_close
+        assert retained_child_close < parent_lifecycle.closed_at < session_lifecycle.closed_at
+
+    def test_generic_windows_frozen_schedule_owns_one_shot_parent_close(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """A frozen generic teardown must not recursively drift a scheduled shell parent."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        session_plan = state_manager.plan_session_materialization(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+            lifecycle_group_id="generic:windows-one-shot-parent",
+            session_id=4,
+        )
+        session, session_receipt = activity_gen._lifecycle_authority.materialize_session(
+            session_plan
+        )
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            session_plan,
+            session_receipt,
+        )
+        parent_plan = state_manager.plan_process_materialization(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c Worker.exe --once",
+            username=test_user.username,
+            integrity_level="Medium",
+            os_category="windows",
+            logon_id=session.logon_id,
+            lifecycle_group_id=session.lifecycle_group_id,
+            start_time=session_start + timedelta(seconds=1),
+            require_session=True,
+            auth_session_id=session.session_id,
+            auth_logon_type=session.logon_type,
+        )
+        parent, parent_receipt = activity_gen._lifecycle_authority.materialize_process(parent_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            parent_plan,
+            parent_receipt,
+        )
+        child_plan = state_manager.plan_process_materialization(
+            system=test_system.hostname,
+            parent_pid=parent.pid,
+            image=r"C:\Tools\Worker.exe",
+            command_line="Worker.exe --once",
+            username=test_user.username,
+            integrity_level="Medium",
+            os_category="windows",
+            logon_id=session.logon_id,
+            lifecycle_group_id="generic:windows-one-shot-child",
+            start_time=session_start + timedelta(seconds=2),
+            require_session=True,
+            auth_session_id=session.session_id,
+            auth_logon_type=session.logon_type,
+        )
+        child, child_receipt = activity_gen._lifecycle_authority.materialize_process(child_plan)
+        assert activity_gen._lifecycle_authority.authenticates_materialization_receipt(
+            child_plan,
+            child_receipt,
+        )
+        session.process_tree_root = parent.pid
+        frozen_closes: list[object] = []
+        original_planner = activity_gen._plan_generic_logoff_process_closes
+
+        def capture_plan(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+            plans, frontier = original_planner(**kwargs)
+            frozen_closes.extend(plans)
+            return plans, frontier
+
+        with patch.object(
+            activity_gen,
+            "_plan_generic_logoff_process_closes",
+            side_effect=capture_plan,
+        ):
+            activity_gen.generate_logoff(
+                test_user,
+                test_system,
+                session_start + timedelta(minutes=5),
+                session.logon_id,
+                logon_type=2,
+                from_storyline=True,
+            )
+
+        closes_by_object = {plan.identity.object_id: plan.end_time for plan in frozen_closes}
+        parent_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            parent.ecar_object_id
+        )
+        child_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            child.ecar_object_id
+        )
+        assert parent_lifecycle is not None
+        assert child_lifecycle is not None
+        assert parent_lifecycle.closed_at == closes_by_object[parent.ecar_object_id]
+        assert child_lifecycle.closed_at == closes_by_object[child.ecar_object_id]
+        assert child_lifecycle.closed_at < parent_lifecycle.closed_at
+
+    def test_generic_logoff_pid_reuse_drift_rejects_before_mutation_and_restores_context(
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+    ):
+        """A reused PID cannot consume another process's frozen close authority."""
+
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = session_start + timedelta(minutes=5)
+        end_plan = SessionEndPlan(deadline, "explicit_storyline", "evt-pid-reuse-logoff")
+        state_manager.set_current_time(session_start)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            session_start,
+            session_end_plan=end_plan,
+        )
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=1),
+            logon_id,
+            r"C:\Tools\Worker.exe",
+            "Worker.exe --once",
+        )
+
+        session = state_manager.get_session(logon_id)
+        session_identity = state_manager.get_session_identity(logon_id)
+        assert session is not None
+        assert session_identity is not None
+        original_planner = activity_gen._plan_generic_logoff_process_closes
+        original_identity_lookup = state_manager.get_process_identity
+        armed = False
+        target_close: object | None = None
+        before: dict[str, object] = {}
+
+        def running_state() -> tuple[tuple[object, ...], ...]:
+            return tuple(
+                sorted(
+                    (
+                        process.system,
+                        process.pid,
+                        process.parent_pid,
+                        process.image,
+                        process.command_line,
+                        process.username,
+                        process.start_time,
+                        process.last_activity_time,
+                        process.logon_id,
+                        process.token_logon_id,
+                        process.ecar_object_id,
+                        process.end_time,
+                    )
+                    for process in state_manager.list_running_processes()
+                )
+            )
+
+        def emitter_calls() -> dict[str, int]:
+            return {
+                name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+            }
+
+        def plan_and_arm(**kwargs: Any) -> tuple[tuple[object, ...], datetime | None]:
+            nonlocal armed, target_close
+            plans, frontier = original_planner(**kwargs)
+            assert plans
+            target_close = plans[0]
+            before.update(
+                running=running_state(),
+                session=repr(state_manager.get_session(logon_id)),
+                current_time=state_manager.get_current_time(),
+                lifecycle=activity_gen._lifecycle_authority.census(),
+                audit=activity_gen.execution_effect_audit_snapshot(),
+                emitters=emitter_calls(),
+                terminated_keys=frozenset(activity_gen._terminated_process_keys),
+                terminated_times=dict(activity_gen._terminated_process_times),
+            )
+            armed = True
+            return plans, frontier
+
+        def pid_reuse_identity(hostname: str, pid: int):
+            identity = original_identity_lookup(hostname, pid)
+            if (
+                armed
+                and target_close is not None
+                and identity is not None
+                and identity.object_id == target_close.identity.object_id
+            ):
+                return replace(
+                    identity,
+                    started_at=identity.started_at + timedelta(microseconds=1),
+                )
+            return identity
+
+        outer_schedule = generator_module._GenericLogoffFrozenSchedule(
+            owner=object(),
+            session_identity=session_identity,
+            owning_session_end_plan=session.end_plan,
+            termination_end_plan=end_plan,
+            from_storyline=True,
+            closes=(),
+        )
+        schedule_context = generator_module._GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE
+        assert schedule_context.get() is None
+        outer_token = schedule_context.set(outer_schedule)
+        outer_restored = False
+        try:
+            with (
+                patch.object(
+                    activity_gen,
+                    "_plan_generic_logoff_process_closes",
+                    side_effect=plan_and_arm,
+                ),
+                patch.object(
+                    state_manager,
+                    "get_process_identity",
+                    side_effect=pid_reuse_identity,
+                ),
+                pytest.raises(StateError, match="identity drifted from its frozen schedule"),
+            ):
+                activity_gen.generate_logoff(
+                    test_user,
+                    test_system,
+                    deadline,
+                    logon_id,
+                    from_storyline=True,
+                    session_end_plan=end_plan,
+                )
+            outer_restored = schedule_context.get() is outer_schedule
+        finally:
+            schedule_context.reset(outer_token)
+
+        assert outer_restored
+        assert schedule_context.get() is None
+        assert running_state() == before["running"]
+        assert repr(state_manager.get_session(logon_id)) == before["session"]
+        assert state_manager.get_current_time() == before["current_time"]
+        assert activity_gen._lifecycle_authority.census() == before["lifecycle"]
+        assert activity_gen.execution_effect_audit_snapshot() == before["audit"]
+        assert emitter_calls() == before["emitters"]
+        assert frozenset(activity_gen._terminated_process_keys) == before["terminated_keys"]
+        assert dict(activity_gen._terminated_process_times) == before["terminated_times"]
+
     def test_process_termination_after_ended_session_clamps_before_logoff(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -4809,34 +5853,116 @@ class TestActivityGenerator:
         assert termination_event.timestamp < logoff_time
         assert termination_event.auth.logon_id == logon_id
 
-    def test_process_create_after_ended_session_clamps_before_logoff(
+    def test_authoritative_process_close_survives_source_create_floor_past_session_end(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Source-visible ordering cannot move canonical teardown past an exact end."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deadline = timestamp + timedelta(minutes=5)
+        end_plan = SessionEndPlan(deadline, "explicit_storyline", "evt-logoff")
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            session_end_plan=end_plan,
+        )
+        parent_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Tools\SessionHost.exe",
+            "SessionHost.exe",
+        )
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=2),
+            logon_id,
+            r"C:\Tools\Worker.exe",
+            "Worker.exe --once",
+            parent_pid=parent_pid,
+        )
+        identity = state_manager.get_process_identity(test_system.hostname, pid)
+        parent_identity = state_manager.get_process_identity(test_system.hostname, parent_pid)
+        assert identity is not None
+        assert parent_identity is not None
+
+        with patch.object(
+            activity_gen,
+            "process_source_create_bound",
+            return_value=deadline + timedelta(milliseconds=400),
+        ):
+            activity_gen.generate_process_termination(
+                test_user,
+                test_system,
+                deadline - timedelta(milliseconds=100),
+                pid,
+                r"C:\Tools\Worker.exe",
+                logon_id,
+                from_storyline=True,
+                session_end_plan=end_plan,
+            )
+
+        lifecycle = activity_gen._lifecycle_authority.registry.get_process(identity.object_id)
+        assert lifecycle is not None
+        assert lifecycle.closed_at is not None
+        assert identity.started_at < lifecycle.closed_at < deadline
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            deadline,
+            logon_id,
+            from_storyline=True,
+            session_end_plan=end_plan,
+        )
+
+        parent_lifecycle = activity_gen._lifecycle_authority.registry.get_process(
+            parent_identity.object_id
+        )
+        assert parent_lifecycle is not None
+        assert parent_lifecycle.closed_at is not None
+        assert lifecycle.closed_at < parent_lifecycle.closed_at < deadline
+        assert state_manager.get_session(logon_id) is None
+
+    def test_process_create_after_ended_session_rejects_without_root_mutation(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Late process creation for a closed session should render before 4634."""
+        """Late process creation for a closed session should fail allocation-free."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
         logoff_time = timestamp + timedelta(minutes=5)
         activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id)
+        processes_before = tuple(state_manager.list_running_processes())
+        current_time_before = state_manager.get_current_time()
+        lifecycle_before = activity_gen._lifecycle_authority.census()
+        audit_before = activity_gen.execution_effect_audit_snapshot()
+        emitter_calls_before = {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        }
 
-        activity_gen.generate_process(
-            test_user,
-            test_system,
-            logoff_time + timedelta(minutes=20),
-            logon_id,
-            r"C:\Windows\System32\cmd.exe",
-            "cmd.exe /c whoami",
-        )
+        with pytest.raises(ExecutionEffectPlanError) as exc_info:
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                logoff_time + timedelta(minutes=20),
+                logon_id,
+                r"C:\Windows\System32\cmd.exe",
+                "cmd.exe /c whoami",
+            )
 
-        process_event = [
-            call.args[0]
-            for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call.args[0].event_type == "process_create"
-            and call.args[0].process
-            and call.args[0].process.command_line == "cmd.exe /c whoami"
-        ][-1]
-        assert process_event.timestamp < logoff_time
-        assert process_event.auth.logon_id == logon_id
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+        assert tuple(state_manager.list_running_processes()) == processes_before
+        assert state_manager.get_current_time() == current_time_before
+        assert activity_gen._lifecycle_authority.census() == lifecycle_before
+        assert activity_gen.execution_effect_audit_snapshot() == audit_before
+        assert {
+            name: len(emitter.emit.call_args_list) for name, emitter in mock_emitters.items()
+        } == emitter_calls_before
 
     def test_generate_process_creates_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -4908,6 +6034,62 @@ class TestActivityGenerator:
 
         assert pid == 4242
         executor._execute_process_create_bundle.assert_called_once_with(request)
+
+    def test_process_execution_bundle_preflights_effect_plan_before_adapter(
+        self,
+        test_user,
+        test_system,
+    ):
+        """An opted-in executor should plan before entering its stateful adapter."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        calls = []
+
+        class Executor:
+            def _plan_process_execution_effects(self, planned_request, anchor):
+                calls.append(("plan", planned_request.effect_plan))
+                return ExecutionEffectPlan(anchor)
+
+            def _execute_process_create_bundle(self, execution_request):
+                calls.append(("execute", execution_request.effect_plan))
+                return 4242
+
+        pid = ProcessExecutionActionBundle(Executor(), request).execute()
+
+        assert pid == 4242
+        assert calls[0] == ("plan", None)
+        assert calls[1][0] == "execute"
+        assert isinstance(calls[1][1], ExecutionEffectPlan)
+
+    def test_process_execution_bundle_rejects_invalid_plan_before_adapter(
+        self,
+        test_user,
+        test_system,
+    ):
+        """Invalid preflight output must not enter PID/state allocation code."""
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        executor = Mock()
+        executor._plan_process_execution_effects = Mock(return_value="invalid-plan")
+
+        with pytest.raises(ExecutionEffectPlanError) as exc_info:
+            ProcessExecutionActionBundle(executor, request).execute()
+
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_PLAN
+        executor._execute_process_create_bundle.assert_not_called()
 
     def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
         """Termination should share the process action-bundle boundary."""
@@ -5567,6 +6749,186 @@ class TestActivityGenerator:
             timestamp,
         )
 
+    def test_postfix_workers_share_root_owned_master_across_entry_paths(
+        self, activity_gen, state_manager
+    ):
+        """SMTP flow owners from email and generic LDAP paths share one Postfix master."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        mail = System(
+            hostname="MAIL-EDGE-01",
+            ip="10.10.2.25",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["smtp", "postfix"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=mail.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {mail.hostname: {"systemd": 1}}
+
+        generic_pid, _ = activity_gen._ensure_system_connection_owner_process(
+            source_system=mail,
+            time=timestamp,
+            key="postfix",
+            image="/usr/lib/postfix/sbin/smtpd",
+            command_line="smtpd -n smtp -t inet -u",
+            username="postfix",
+        )
+        smtpd_pid = activity_gen._ensure_email_server_process(
+            mail,
+            time=timestamp + timedelta(minutes=1),
+            port=25,
+        )
+        smtp_pid = activity_gen._ensure_email_mta_outbound_process(
+            mail,
+            time=timestamp + timedelta(minutes=2),
+        )
+
+        smtpd = state_manager.get_process(mail.hostname, smtpd_pid)
+        smtp = state_manager.get_process(mail.hostname, smtp_pid)
+        assert smtpd is not None
+        assert smtp is not None
+        assert generic_pid == smtpd_pid
+        assert smtpd.parent_pid == smtp.parent_pid
+        master = state_manager.get_process(mail.hostname, smtpd.parent_pid)
+        assert master is not None
+        assert master.image == "/usr/lib/postfix/sbin/master"
+        assert master.username == "root"
+        assert master.parent_pid == 1
+        assert master.start_time < min(smtpd.start_time, smtp.start_time)
+
+    def test_owa_worker_descends_from_reused_was_service_host(self, activity_gen, state_manager):
+        """Exchange OWA workers are children of WAS, never direct children of services.exe."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        exchange = System(
+            hostname="MAIL-FIN-01",
+            ip="10.10.2.27",
+            os="Windows Server 2022",
+            type="server",
+            services=["owa", "exchange"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=500,
+            parent_pid=4,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        activity_gen._system_pids = {exchange.hostname: {"system": 4, "services": 500}}
+
+        first_pid = activity_gen._ensure_email_server_process(
+            exchange,
+            time=timestamp,
+            port=443,
+        )
+        second_pid = activity_gen._ensure_email_server_process(
+            exchange,
+            time=timestamp + timedelta(minutes=5),
+            port=443,
+        )
+
+        assert second_pid == first_pid
+        worker = state_manager.get_process(exchange.hostname, first_pid)
+        assert worker is not None
+        assert worker.parent_pid != 500
+        was = state_manager.get_process(exchange.hostname, worker.parent_pid)
+        assert was is not None
+        assert was.image == r"C:\Windows\System32\svchost.exe"
+        assert was.command_line == "svchost.exe -k iissvcs -p -s WAS"
+        assert was.parent_pid == 500
+        assert was.start_time < worker.start_time
+
+    def test_direct_owa_system_process_uses_profiled_was_parent(self, activity_gen, state_manager):
+        """Direct system-process callers cannot bypass configured service ancestry."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        exchange = System(
+            hostname="MAIL-FIN-01",
+            ip="10.10.2.27",
+            os="Windows Server 2022",
+            type="server",
+            services=["owa", "exchange"],
+            roles=["mail_server"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(hours=1))
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        state_manager.register_process(
+            system=exchange.hostname,
+            pid=500,
+            parent_pid=4,
+            image=r"C:\Windows\System32\services.exe",
+            command_line="services.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            os_category="windows",
+        )
+        activity_gen._system_pids = {exchange.hostname: {"system": 4, "services": 500}}
+
+        pid = activity_gen.generate_system_process(
+            system=exchange,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\inetsrv\w3wp.exe",
+            command_line=(r'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'),
+            parent_pid=500,
+            username="SYSTEM",
+            emit_linux_syslog=False,
+        )
+
+        worker = state_manager.get_process(exchange.hostname, pid)
+        assert worker is not None
+        assert worker.parent_pid != 500
+        was = state_manager.get_process(exchange.hostname, worker.parent_pid)
+        assert was is not None
+        assert was.image == r"C:\Windows\System32\svchost.exe"
+        assert was.parent_pid == 500
+
+        process_bundle_pid = activity_gen.generate_process(
+            user=User(
+                username="SYSTEM",
+                full_name="Local System",
+                email="system@example.test",
+            ),
+            system=exchange,
+            time=timestamp + timedelta(minutes=1),
+            logon_id="0x3e7",
+            process_name=r"C:\Windows\System32\inetsrv\w3wp.exe",
+            command_line=(r'C:\Windows\System32\inetsrv\w3wp.exe -ap "MSExchangeOWAAppPool"'),
+            parent_pid=500,
+        )
+        assert process_bundle_pid == pid
+
     @pytest.mark.parametrize("method", ["http", "https"])
     def test_apt_method_connection_owner_has_frontend_parent(
         self, activity_gen, state_manager, method
@@ -5742,14 +7104,18 @@ class TestActivityGenerator:
         activity_gen._ip_to_system = {workstation.ip: workstation, app_server.ip: app_server}
         activity_gen._all_system_ips = [workstation.ip, app_server.ip]
         activity_gen._users_by_username = {test_user.username: test_user}
-        state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
-            username=test_user.username,
-            system=workstation.hostname,
-            logon_type=2,
-            source_ip="-",
-            session_kind="interactive",
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            workstation.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
         )
+        activity_gen._system_pids = {workstation.hostname: {"smss": smss_pid}}
+        activity_gen.generate_logon(test_user, workstation, logon_time, logon_type=2)
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_connection(
@@ -5811,14 +7177,18 @@ class TestActivityGenerator:
             proxy_server.ip: proxy_server,
         }
         activity_gen._users_by_username = {test_user.username: test_user}
-        state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
-            username=test_user.username,
-            system=workstation.hostname,
-            logon_type=2,
-            source_ip="-",
-            session_kind="interactive",
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time - timedelta(minutes=1))
+        smss_pid = state_manager.create_process(
+            workstation.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
         )
+        activity_gen._system_pids = {workstation.hostname: {"smss": smss_pid}}
+        activity_gen.generate_logon(test_user, workstation, logon_time, logon_type=2)
         state_manager.set_current_time(timestamp)
 
         app_pid, _ = activity_gen._ensure_high_confidence_connection_owner(
@@ -5956,8 +7326,19 @@ class TestActivityGenerator:
             source_user.username: source_user,
             remote_user.username: remote_user,
         }
+        mock_emitters["syslog"] = Mock()
+        state_manager.set_current_time(timestamp - timedelta(minutes=11))
+        smss_pid = state_manager.create_process(
+            workstation.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {workstation.hostname: {"smss": smss_pid}}
         state_manager.set_current_time(timestamp - timedelta(minutes=10))
-        state_manager.create_session(
+        source_logon_id = state_manager.create_session(
             username=source_user.username,
             system=workstation.hostname,
             logon_type=2,
@@ -5965,6 +7346,9 @@ class TestActivityGenerator:
             session_kind="interactive",
         )
         state_manager.set_current_time(timestamp)
+        activity_gen._last_one_shot_cli_launch_by_exe[
+            (workstation.hostname, source_user.username, source_logon_id, "ssh.exe")
+        ] = timestamp + timedelta(seconds=30)
 
         activity_gen.generate_ssh_session(
             user=remote_user,
@@ -6008,7 +7392,122 @@ class TestActivityGenerator:
             ssh_proc.pid,
         )
         assert source_create_time is not None
+        assert ssh_proc.start_time < connection_event.network.started_at
         assert source_create_time <= connection_event.network.started_at
+
+        ssh_syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].event_type == "syslog"
+            and call.args[0].syslog is not None
+            and call.args[0].syslog.app_name == "sshd"
+        ]
+        accepted = next(
+            event for event in ssh_syslog_events if event.syslog.message.startswith("Accepted ")
+        )
+        pam_open = next(
+            event
+            for event in ssh_syslog_events
+            if "pam_unix(sshd:session): session opened" in event.syslog.message
+        )
+        assert connection_event.network.started_at < accepted.timestamp < pam_open.timestamp
+
+    def test_ssh_session_linux_client_create_precedes_transport_when_shell_is_busy(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """A busy source shell must not move its SSH client behind transport or target auth."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        user = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.local",
+        )
+        workstation = System(
+            hostname="LT-MCHEN-01",
+            ip="10.10.1.33",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=user.username,
+        )
+        target = System(
+            hostname="DB-PROD-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["database_server"],
+            services=["ssh"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, target.ip: target}
+        activity_gen._all_system_ips = [workstation.ip, target.ip]
+        activity_gen._users_by_username = {user.username: user}
+        mock_emitters["syslog"] = Mock()
+        logon_time = timestamp - timedelta(minutes=10)
+        state_manager.set_current_time(logon_time)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        shell_pid = activity_gen.ensure_linux_session_shell(
+            user=user,
+            target_system=workstation,
+            logon_id=logon_id,
+            logon_time=logon_time,
+            activity_time=timestamp - timedelta(seconds=30),
+        )
+        assert shell_pid is not None
+        activity_gen._foreground_shell_next_time[
+            (workstation.hostname, user.username, logon_id, shell_pid)
+        ] = timestamp + timedelta(seconds=30)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=timestamp,
+            source_ip=workstation.ip,
+            source_system=workstation,
+            duration=30.0,
+        )
+
+        ssh_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(workstation.hostname)
+            if proc.image == "/usr/bin/ssh"
+        ]
+        assert ssh_processes
+        ssh_proc = ssh_processes[-1]
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 22
+        )
+        source_create_time = activity_gen.process_source_create_time(
+            workstation.hostname,
+            ssh_proc.pid,
+        )
+        assert source_create_time is not None
+        assert ssh_proc.start_time < connection_event.network.started_at
+        assert source_create_time <= connection_event.network.started_at
+
+        ssh_syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].event_type == "syslog"
+            and call.args[0].syslog is not None
+            and call.args[0].syslog.app_name == "sshd"
+        ]
+        accepted = next(
+            event for event in ssh_syslog_events if event.syslog.message.startswith("Accepted ")
+        )
+        pam_open = next(
+            event
+            for event in ssh_syslog_events
+            if "pam_unix(sshd:session): session opened" in event.syslog.message
+        )
+        assert connection_event.network.started_at < accepted.timestamp < pam_open.timestamp
 
     def test_linux_smb_browse_owner_is_scoped_to_command_target(
         self, activity_gen, test_user, state_manager
@@ -6088,8 +7587,349 @@ class TestActivityGenerator:
         assert dc_proc is not None
         assert file_pid != dc_pid
         assert file_reuse_pid == file_pid
-        assert file_proc.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
-        assert dc_proc.command_line == "gvfsd-smb-browse smb://DC-01/shared"
+        assert file_proc.command_line == 'gvfsd-smb-browse "smb://FILE-SRV-01/shared"'
+        assert dc_proc.command_line == 'gvfsd-smb-browse "smb://DC-01/shared"'
+
+    def test_cifs_mount_operation_actor_is_not_transport_owner(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Mounted CIFS uses a local operation actor and kernel-owned transport."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-CIFS-01",
+            ip="10.10.1.60",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["cifs-utils"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/mnt/engineering/Reports/Q1.csv",
+            operation="read",
+            time=timestamp,
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == "/usr/bin/head"
+        assert process.command_line == 'head -c 4096 "/mnt/engineering/Reports/Q1.csv"'
+        assert plan.access_mode == "mounted"
+        assert plan.transport_pid == -1
+        assert plan.transport_image == ""
+
+    def test_smb_actor_session_excludes_terminalized_historical_session(
+        self, activity_gen, test_user, test_system, state_manager
+    ) -> None:
+        """SMB state attachment requires a currently mutable local session."""
+
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.10.1.50",
+            start_time=timestamp - timedelta(minutes=10),
+            session_kind="remote_interactive",
+        )
+        state_manager.end_session(logon_id, timestamp + timedelta(minutes=10))
+
+        assert state_manager.get_session_at(logon_id, timestamp) is not None
+        assert activity_gen._smb_actor_session(test_system, test_user, timestamp) is None
+
+    @pytest.mark.parametrize(
+        ("operation", "transfer_direction", "source_path", "destination_path", "image"),
+        [
+            (
+                "copy",
+                "download",
+                "/mnt/engineering/Reports/Q1.csv",
+                "/var/tmp/smb-cache/Q1.csv",
+                "/usr/bin/cp",
+            ),
+            (
+                "copy",
+                "upload",
+                "/var/tmp/outgoing/Q1.csv",
+                "/mnt/engineering/Incoming/Q1.csv",
+                "/usr/bin/cp",
+            ),
+            (
+                "move",
+                "upload",
+                "/var/tmp/outgoing/Q1.csv",
+                "/mnt/engineering/Incoming/Q1.csv",
+                "/usr/bin/mv",
+            ),
+            (
+                "move",
+                "remote",
+                "/mnt/engineering/Reports/Q1.csv",
+                "/mnt/engineering/Archive/Q1.csv",
+                "/usr/bin/mv",
+            ),
+        ],
+    )
+    def test_cifs_mount_transfer_uses_resolved_native_operands(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        operation: str,
+        transfer_direction: str,
+        source_path: str,
+        destination_path: str,
+        image: str,
+    ) -> None:
+        """Mounted transfers retain cp/mv and the authored native endpoints."""
+
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-CIFS-XFER-01",
+            ip="10.10.1.64",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["cifs-utils"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/mnt/engineering/Reports/Q1.csv",
+            local_path="/var/tmp/outgoing/Q1.csv",
+            source_path=source_path,
+            destination_path=destination_path,
+            operation=operation,
+            transfer_direction=transfer_direction,
+            time=timestamp,
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == image
+        assert process.command_line == (
+            f'{image.rsplit("/", 1)[-1]} -- "{source_path}" "{destination_path}"'
+        )
+        assert "/home/" not in process.command_line
+        assert "/usr/bin/touch" not in process.command_line
+        assert plan.transport_pid == -1
+        assert plan.transport_image == ""
+
+    def test_smbclient_operation_process_owns_direct_transport(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Direct Linux SMB activity uses one bounded smbclient transport owner."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-SMBCLIENT-01",
+            ip="10.10.1.61",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["smbclient"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path="Reports/Q1.csv",
+            client_path="/home/testuser/Q1.csv",
+            operation="update",
+            time=timestamp,
+            smb_principal=r"EXAMPLE\finance-writer",
+            auth_protocol="ntlmssp",
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.image == "/usr/bin/smbclient"
+        assert process.username == test_user.username
+        assert 'smbclient "//SAMBA-01/Engineering"' in process.command_line
+        assert '-U "EXAMPLE\\finance-writer"' in process.command_line
+        assert "--use-kerberos=off" in process.command_line
+        assert 'put "/home/testuser/Q1.csv" "Reports/Q1.csv"' in process.command_line
+        assert plan.access_mode == "direct"
+        assert plan.transport_pid == plan.actor_pid
+        assert (
+            activity_gen.foreground_process_termination_time(
+                workstation.hostname,
+                plan.actor_pid,
+            )
+            is not None
+        )
+
+    def test_smbclient_remote_presentation_never_becomes_local_get_operand(
+        self, activity_gen, test_user, state_manager
+    ) -> None:
+        """Direct SMB downloads fall back to a local basename, not a second UNC path."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        workstation = System(
+            hostname="LT-SMBCLIENT-02",
+            ip="10.10.1.63",
+            os="Ubuntu 24.04",
+            type="workstation",
+            assigned_user=test_user.username,
+            services=["smbclient"],
+        )
+        activity_gen._users_by_username = {test_user.username: test_user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.create_session(
+            username=test_user.username,
+            system=workstation.hostname,
+            logon_type=2,
+            source_ip="-",
+            session_kind="interactive",
+        )
+        state_manager.set_current_time(timestamp)
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=workstation,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Engineering",
+            path=r"Reports\Q1.csv",
+            client_path="//SAMBA-01/Engineering/Reports/Q1.csv",
+            operation="read",
+            time=timestamp,
+            smb_principal="share-reader",
+            auth_protocol="kerberos",
+        )
+
+        process = state_manager.get_process(workstation.hostname, plan.actor_pid)
+        assert process is not None
+        assert process.username == test_user.username
+        assert '-U "share-reader"' in process.command_line
+        assert "--use-kerberos=required" in process.command_line
+        assert 'get "Reports\\Q1.csv" "Q1.csv"' in process.command_line
+        assert process.command_line.count("//SAMBA-01/Engineering") == 1
+
+    def test_linux_smb_source_pid_never_uses_local_smbd(self, activity_gen, state_manager) -> None:
+        """A Samba listener cannot be inferred as an outbound Linux client."""
+        system = System(
+            hostname="SAMBA-CLIENT-01",
+            ip="10.10.1.62",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba", "smbclient"],
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 14, 20, tzinfo=UTC))
+        state_manager.register_process(
+            system=system.hostname,
+            pid=1440,
+            parent_pid=0,
+            image="/usr/sbin/smbd",
+            command_line="/usr/sbin/smbd --foreground",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {system.hostname: {"smbd": 1440}}
+
+        assert activity_gen._infer_connection_pid(system, "smb", 445, "tcp") == -1
+
+    def test_linux_samba_responder_is_tuple_scoped_worker(
+        self, activity_gen, state_manager
+    ) -> None:
+        """Successful inbound SMB transports resolve to smbd children, not the master."""
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        server = System(
+            hostname="SAMBA-01",
+            ip="10.10.2.20",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["samba"],
+        )
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        state_manager.register_process(
+            system=server.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        activity_gen._system_pids = {server.hostname: {"systemd": 1}}
+        state_manager.set_current_time(timestamp)
+
+        first = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp,
+            source_ip="10.10.1.60",
+            source_port=51000,
+            close_time=timestamp + timedelta(seconds=30),
+        )
+        reused = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp + timedelta(seconds=1),
+            source_ip="10.10.1.60",
+            source_port=51000,
+        )
+        second = activity_gen.ensure_linux_smb_responder_process(
+            target_system=server,
+            time=timestamp + timedelta(seconds=2),
+            source_ip="10.10.1.61",
+            source_port=51001,
+        )
+
+        master = activity_gen._system_pids[server.hostname]["smbd"]
+        first_process = state_manager.get_process(server.hostname, first)
+        assert first_process is not None
+        assert first == reused
+        assert first != second
+        assert first != master
+        assert first_process.parent_pid == master
+        assert first_process.image == "/usr/sbin/smbd"
+
+        activity_gen.finalize_foreground_process_lifetimes(timestamp + timedelta(minutes=1))
+
+        assert activity_gen._process_termination_recorded(
+            server.hostname,
+            first,
+            first_process.start_time,
+        )
 
     def test_linux_smb_browse_owner_reuses_resource_when_requests_arrive_out_of_order(
         self, activity_gen, test_user, state_manager
@@ -6149,7 +7989,7 @@ class TestActivityGenerator:
             process
             for process in state_manager.get_processes_on_system(workstation.hostname)
             if process.image == "/usr/bin/gvfsd-smb-browse"
-            and process.command_line == "gvfsd-smb-browse smb://FILE-SRV-01/shared"
+            and process.command_line == 'gvfsd-smb-browse "smb://FILE-SRV-01/shared"'
         ]
         assert earlier_pid == later_pid
         assert len(owners) == 1
@@ -6430,10 +8270,23 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp > process_event.timestamp
 
-    def test_service_payload_file_event_precedes_service_process_create(
-        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    @pytest.mark.parametrize(
+        "service_image",
+        [
+            r"C:\Windows\PSEXESVC.exe",
+            r"C:\Windows\HealthMonitorSvc.exe",
+        ],
+    )
+    def test_bundle_owned_service_payload_excludes_generic_process_file_create(
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+        service_image,
     ):
-        """Dropped service binaries should be written before the service process starts."""
+        """Generic process generation must not duplicate bundle-owned service payloads."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -6442,8 +8295,8 @@ class TestActivityGenerator:
             test_system,
             timestamp,
             "0x12345",
-            r"C:\Windows\PSEXESVC.exe",
-            r"C:\Windows\PSEXESVC.exe",
+            service_image,
+            service_image,
             ensure_file_event=True,
         )
 
@@ -6451,17 +8304,15 @@ class TestActivityGenerator:
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         process_event = next(event for event in events if event.event_type == "process_create")
-        file_event = next(
+        matching_file_events = [
             event
             for event in events
             if event.event_type == "file_create"
             and event.file is not None
-            and event.file.path == r"C:\Windows\PSEXESVC.exe"
-        )
-        assert file_event.timestamp < process_event.timestamp
-        assert file_event.process.pid == process_event.process.parent_pid
-        assert file_event.file.pid == process_event.process.parent_pid
-        assert file_event.process.pid != process_event.process.pid
+            and event.file.path.casefold() == service_image.casefold()
+        ]
+        assert process_event.process.image.casefold() == service_image.casefold()
+        assert matching_file_events == []
 
     def test_service_payload_file_event_precedes_service_install(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -6491,6 +8342,56 @@ class TestActivityGenerator:
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
         assert file_event.timestamp < service_event.timestamp
+        assert file_event.process.pid == 4
+        assert file_event.process.parent_pid == 0
+        assert file_event.process.image == "System"
+        assert file_event.process.command_line == "System"
+        assert file_event.file.pid == 4
+        assert file_event.lifecycle is not None
+        assert service_event.lifecycle is not None
+        assert file_event.lifecycle.group_id == service_event.lifecycle.group_id
+        assert file_event.lifecycle.phase == "start"
+        assert service_event.lifecycle.phase == "dependent"
+        assert file_event.lifecycle.canonical_start == file_event.timestamp
+        assert service_event.lifecycle.canonical_start == file_event.timestamp
+        policy = ObservationPolicy("messy_collection")
+        for format_name in ("windows_event_sysmon", "ecar"):
+            assert policy.decide(format_name, file_event) == policy.decide(
+                format_name,
+                service_event,
+            )
+
+    def test_preexisting_service_binary_starts_lifecycle_without_payload_file(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Preinstalled service images should not acquire a fabricated drop prerequisite."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_service_installed(
+            test_user,
+            test_system,
+            timestamp,
+            service_name="DeviceSyncSvc",
+            service_file_name=r"C:\Windows\System32\DeviceSyncSvc.exe",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        service_event = next(event for event in events if event.event_type == "service_installed")
+        matching_files = [
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path.casefold() == r"C:\Windows\System32\DeviceSyncSvc.exe".casefold()
+        ]
+
+        assert matching_files == []
+        assert service_event.lifecycle is not None
+        assert service_event.lifecycle.phase == "start"
+        assert service_event.lifecycle.canonical_start == timestamp
 
     def test_windows_service_install_bundle_anchor_is_stable(self, test_user, test_system):
         """Identical service-install bundle requests should have stable action anchors."""
@@ -6737,7 +8638,11 @@ class TestActivityGenerator:
             enabled=True,
         )
 
-        with patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom):
+        with patch.object(
+            activity_gen,
+            "_process_endpoint_effect_rng",
+            return_value=RegistryOnlyRandom(),
+        ):
             activity_gen.generate_process(
                 system_user,
                 test_system,
@@ -6754,6 +8659,99 @@ class TestActivityGenerator:
         ]
         assert registry_events
         assert registry_events[-1].registry.key.startswith("HKLM\\")
+
+    def test_process_registry_uses_occurrence_aware_canonical_materializer(self):
+        """Process-owned registry effects must supply time and type before dispatch."""
+        import inspect
+
+        source = inspect.getsource(ActivityGenerator._plan_process_execution_side_effects)
+        assert (
+            "key, value_name, details, value_type = materialize_registry_effect(\n"
+            "                    (key, value_name, details),\n"
+            "                    rng,\n"
+            '                    request.user.username if request.user else "SYSTEM",\n'
+            "                    registry_time,\n"
+        ) in source
+        assert "value_type=value_type" in source
+
+    def test_process_userassist_effect_preserves_actor_session_and_time(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A process-side UserAssist effect stays owned by its Explorer session."""
+
+        class RegistryOnlyRandom:
+            def __init__(self):
+                self.random_calls = 0
+
+            def random(self):
+                self.random_calls += 1
+                return 0.1 if self.random_calls == 3 else 0.99
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, population, weights=None, k=1):
+                return [population[0]]
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def uniform(self, lower, _upper):
+                return lower
+
+            def getrandbits(self, bits):
+                return (1 << min(bits, 8)) - 1
+
+        timestamp = datetime(2027, 8, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        userassist_template = [
+            (
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                r"\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
+                "{userassist_value}",
+                "{userassist_binary}",
+            )
+        ]
+
+        with (
+            patch.object(
+                activity_gen,
+                "_process_endpoint_effect_rng",
+                return_value=RegistryOnlyRandom(),
+            ),
+            patch(
+                "evidenceforge.generation.activity.edr_pools.get_registry_keys_hkcu",
+                return_value=userassist_template,
+            ),
+            patch(
+                "evidenceforge.generation.activity.edr_pools.get_registry_keys_hklm",
+                return_value=[],
+            ),
+        ):
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+                r"C:\Windows\explorer.exe",
+                r"C:\Windows\explorer.exe",
+            )
+
+        registry_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "registry_modify"
+        ]
+        assert len(registry_events) == 1
+        event = registry_events[0]
+        assert event.process.image.lower().endswith(r"\explorer.exe")
+        assert event.process.logon_id == event.auth.logon_id == logon_id
+        assert event.registry.value_type == "binary"
+        payload = bytes.fromhex(event.registry.value)
+        filetime = int.from_bytes(payload[60:68], "little")
+        embedded_time = datetime(1601, 1, 1, tzinfo=UTC) + timedelta(microseconds=filetime // 10)
+        assert embedded_time <= event.timestamp
 
     def test_storyline_powershell_does_not_receive_generic_registry_noise(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -6953,27 +8951,50 @@ class TestActivityGenerator:
         assert event.process.integrity_level == "Medium"
 
     def test_log_cleared_uses_service_subject_identity(
-        self, activity_gen, test_system, state_manager, mock_emitters
+        self,
+        test_system,
+        state_manager,
+        monkeypatch,
+        tmp_path: Path,
     ):
         """1102 should use the clearing service token's source-native subject fields."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
-        service_logon_id = activity_gen.generate_service_logon(
-            system=test_system,
-            time=timestamp - timedelta(seconds=1),
-            service_account="SYSTEM",
+        emitter = WindowsEventEmitter(
+            load_format("windows_event_security"),
+            tmp_path / "output",
+            threaded=False,
+            source_finalization=True,
         )
-        mock_emitters["windows_event_security"].reset_mock()
+        emitters = {"windows_event_security": emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        emitted = []
+        original_emit = emitter.emit
+
+        def capture_emit(event):
+            emitted.append(event)
+            original_emit(event)
+
+        monkeypatch.setattr(emitter, "emit", capture_emit)
         system_user = User(
             username="SYSTEM",
             full_name="Local System",
             email="system@example.com",
             enabled=True,
         )
+        try:
+            service_logon_id = activity_gen.generate_service_logon(
+                system=test_system,
+                time=timestamp - timedelta(seconds=1),
+                service_account="SYSTEM",
+            )
+            emitted.clear()
+            activity_gen.generate_log_cleared(system_user, test_system, timestamp)
+        finally:
+            emitter.close()
 
-        activity_gen.generate_log_cleared(system_user, test_system, timestamp)
-
-        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        event = emitted[0]
         assert event.event_type == "log_cleared"
         assert event.auth.subject_sid == "S-1-5-18"
         assert event.auth.subject_username == "SYSTEM"
@@ -6991,10 +9012,10 @@ class TestActivityGenerator:
     )
     def test_builtin_service_logon_uses_well_known_authentication_id(
         self,
-        activity_gen,
         test_system,
         state_manager,
-        mock_emitters,
+        monkeypatch,
+        tmp_path: Path,
         service_account,
         expected_logon_id,
     ):
@@ -7002,25 +9023,49 @@ class TestActivityGenerator:
 
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
-
-        first = activity_gen.generate_service_logon(test_system, timestamp, service_account)
-        second = activity_gen.generate_service_logon(
-            test_system,
-            timestamp + timedelta(minutes=5),
-            service_account,
+        emitter = WindowsEventEmitter(
+            load_format("windows_event_security"),
+            tmp_path / "output",
+            threaded=False,
+            source_finalization=True,
         )
+        emitters = {"windows_event_security": emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        prepare_projection = dispatcher.prepare_action_cohort_projection
+        events = []
 
-        events = [
-            call.args[0]
-            for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 5
-        ]
+        def capture_projection(event, **kwargs):
+            events.append(event)
+            return prepare_projection(event, **kwargs)
+
+        monkeypatch.setattr(dispatcher, "prepare_action_cohort_projection", capture_projection)
+        try:
+            first = activity_gen.generate_service_logon(test_system, timestamp, service_account)
+            second = activity_gen.generate_service_logon(
+                test_system,
+                timestamp + timedelta(minutes=5),
+                service_account,
+            )
+        finally:
+            emitter.close()
+        exact_census = emitter.exact_candidate_census()
+        recovery_census = dispatcher.exact_projection_recovery_census()
+
         assert first == second == expected_logon_id
         assert {event.auth.logon_id for event in events} == {expected_logon_id}
-        assert len({event.identity_plan.session.object_id for event in events}) == 2
+        assert len({event.identity_plan.subject.object_id for event in events}) == 2
+        assert all(
+            event.identity_plan.subject.kind == "authentication_occurrence" for event in events
+        )
+        assert all(event.identity_plan.session is None for event in events)
         assert len({event.lifecycle.group_id for event in events}) == 2
-        assert all(event.identity_plan.session.logon_id == expected_logon_id for event in events)
         assert state_manager.get_session(expected_logon_id) is None
+        assert exact_census.current_rows == 0
+        assert exact_census.current_bytes == 0
+        assert exact_census.current_participants == 0
+        assert recovery_census.unresolved_recoveries == 0
+        assert recovery_census.authority.active_batches == 0
 
     def test_log_cleared_can_inherit_causative_process_logon_id(
         self, activity_gen, test_system, mock_emitters
@@ -7072,6 +9117,136 @@ class TestActivityGenerator:
         assert event.event_type == "kerberos_preauth_failed"
         assert event.kerberos.source_ip == "-"
         assert event.kerberos.source_port == 0
+
+    def test_kerberos_preauth_failed_status_0x18_never_emits_type_zero(
+        self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
+    ):
+        """A rendered bad-password 4771 must identify the failed pre-auth mechanism."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {
+                "tgt_failure": {
+                    "pre_auth_types": {
+                        "none": {"value": 0, "weight": 100},
+                        "encrypted": {"value": 2, "weight": 1},
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                }
+            },
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_kerberos_preauth_failed(
+            test_user.username,
+            "10.0.0.20",
+            "DC-01",
+            timestamp,
+            status="0x18",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.kerberos.ticket_status == "0x18"
+        assert event.kerberos.pre_auth_type == 2
+
+    def test_kerberos_tgt_type_zero_requires_canonical_account_control(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Successful 4768 type zero is gated by explicit identity-directory state."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {
+                "tgt_success": {
+                    "pre_auth_types": {
+                        "none": {
+                            "value": 0,
+                            "weight": 1,
+                            "certificate_required": False,
+                        }
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                    "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+                },
+                "certificate_profiles": {},
+            },
+        )
+        activity_gen.identity_directory = IdentityDirectory(
+            windows_domain="corp.example.com",
+            domain_sid_base="S-1-5-21-1-2-3",
+            has_windows_domain=True,
+            windows_accounts={
+                ("legacy.user", "*"): WindowsAccount(
+                    logical_name="legacy.user",
+                    account_name="legacy.user",
+                    sid="S-1-5-21-1-2-3-1001",
+                    scope="domain",
+                    domain="corp.example.com",
+                    account_control=frozenset({"DONT_REQUIRE_PREAUTH"}),
+                ),
+                ("ordinary-ws$", "*"): WindowsAccount(
+                    logical_name="ORDINARY-WS$",
+                    account_name="ORDINARY-WS$",
+                    sid="S-1-5-21-1-2-3-1002",
+                    scope="machine",
+                    domain="corp.example.com",
+                ),
+                ("legacy-ws$", "*"): WindowsAccount(
+                    logical_name="LEGACY-WS$",
+                    account_name="LEGACY-WS$",
+                    sid="S-1-5-21-1-2-3-1003",
+                    scope="machine",
+                    domain="corp.example.com",
+                    account_control=frozenset({"DONT_REQUIRE_PREAUTH"}),
+                ),
+                ("ordinary.user", "*"): WindowsAccount(
+                    logical_name="ordinary.user",
+                    account_name="ordinary.user",
+                    sid="S-1-5-21-1-2-3-1004",
+                    scope="domain",
+                    domain="corp.example.com",
+                ),
+            },
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        principals = (
+            ("ORDINARY-WS$", "10.0.0.20"),
+            ("ordinary.user", "10.0.0.21"),
+            ("legacy.user@CORP.EXAMPLE.COM", "10.0.0.22"),
+            ("LEGACY-WS$@CORP.EXAMPLE.COM", "10.0.0.23"),
+        )
+        for offset, (principal, source_ip) in enumerate(principals):
+            activity_gen.generate_kerberos_tgt(
+                username=principal,
+                source_ip=source_ip,
+                dc_hostname="DC-01",
+                time=timestamp + timedelta(seconds=offset),
+            )
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "kerberos_tgt"
+        ]
+        type_zero_principals = {
+            event.kerberos.target_username for event in events if event.kerberos.pre_auth_type == 0
+        }
+        assert type_zero_principals == {
+            "legacy.user@CORP.EXAMPLE.COM",
+            "LEGACY-WS$@CORP.EXAMPLE.COM",
+        }
+        assert all(
+            event.kerberos.pre_auth_type == 2
+            for event in events
+            if event.kerberos.target_username in {"ORDINARY-WS$", "ordinary.user"}
+        )
 
     def test_kerberos_preauth_failed_can_emit_matching_dc_flow(
         self, activity_gen, test_user, state_manager, mock_emitters
@@ -7389,7 +9564,7 @@ class TestActivityGenerator:
         ]
         event = process_events[-1]
         assert event.process.integrity_level == "High"
-        assert event.process.token_elevation == "%%1936"
+        assert event.process.token_elevation == "%%1937"
         assert event.process.mandatory_label == "S-1-16-12288"
 
     def test_windows_singleton_process_uses_seeded_pid_without_create_event(
@@ -7998,8 +10173,8 @@ class TestActivityGenerator:
         assert connection_event.network.protocol == "udp"
         assert connection_event.network.ip_proto == 17
         assert connection_event.network.duration <= 0.16
-        assert connection_event.network.orig_bytes <= 1300
-        assert connection_event.network.resp_bytes <= 1400
+        assert connection_event.network.orig_bytes <= 1300 * connection_event.network.orig_pkts
+        assert connection_event.network.resp_bytes <= 1400 * connection_event.network.resp_pkts
         assert connection_event.network.conn_state == "SF"
         wfp_event = next(
             call.args[0]
@@ -8062,6 +10237,15 @@ class TestActivityGenerator:
         assert target_wfp.network.dst_ip == dc_system.ip
         assert target_wfp.network.responding_pid == lsass_pid
         assert target_wfp.process.image.endswith("lsass.exe")
+        assert target_wfp.network_endpoint is not None
+        assert target_wfp.network_endpoint.role == "responder"
+        assert target_wfp.network_endpoint.initiated is False
+        assert target_wfp.network_endpoint.local_hostname == dc_system.hostname
+        assert target_wfp.network_endpoint.local_ip == dc_system.ip
+        assert target_wfp.network_endpoint.process.pid == lsass_pid
+        assert target_wfp.network_endpoint.transaction_id == target_wfp.network.stable_id
+        assert target_wfp.identity_plan is not None
+        assert target_wfp.identity_plan.actor == target_wfp.network_endpoint.process
         connection_event = next(
             call.args[0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
@@ -8070,6 +10254,86 @@ class TestActivityGenerator:
         assert target_wfp.lifecycle is not None
         assert target_wfp.lifecycle.parent_group_id is None
         assert target_wfp.lifecycle.group_id == connection_event.network.stable_id
+
+    def test_inbound_windows_service_connection_omits_target_wfp_after_transport_close(
+        self,
+        activity_gen,
+        test_system,
+        state_manager,
+        mock_emitters,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A late responder-process source bound must not move 5156 past transport close."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        lsass_pid = state_manager.create_process(
+            system=dc_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {dc_system.hostname: {"lsass": lsass_pid}}
+        state_manager.set_current_time(timestamp)
+
+        clamp_after_create = activity_gen._clamp_after_visible_process_create
+
+        def late_target_process_bound(
+            system: System,
+            pid: int,
+            candidate: datetime,
+            relationship: str,
+            **kwargs: object,
+        ) -> datetime:
+            if system.hostname == dc_system.hostname:
+                return candidate + timedelta(seconds=1)
+            return clamp_after_create(system, pid, candidate, relationship, **kwargs)
+
+        monkeypatch.setattr(
+            activity_gen,
+            "_clamp_after_visible_process_create",
+            late_target_process_bound,
+        )
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=389,
+            proto="tcp",
+            service="ldap",
+            duration=0.18,
+            orig_bytes=800,
+            resp_bytes=1200,
+            conn_state="SF",
+            emit_dns=False,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        )
+        assert (
+            connection_event.network.closed_at - connection_event.network.started_at
+            == timedelta(milliseconds=180)
+        )
+        assert not any(
+            call.args[0].event_type == "wfp_connection"
+            and call.args[0].src_host.hostname == dc_system.hostname
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        )
 
     def test_failed_inbound_windows_probe_does_not_emit_target_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -8322,6 +10586,80 @@ class TestActivityGenerator:
             )
 
         assert allocated == 45653
+
+    def test_ephemeral_allocator_skips_authoritative_runtime_interval(
+        self,
+        activity_gen,
+    ):
+        """Preview allocation must honor leases not exposed through compatibility state."""
+
+        event_time = datetime(2024, 3, 18, 17, 50, tzinfo=UTC)
+        opened_at = event_time - timedelta(seconds=1)
+        closed_at = event_time + timedelta(seconds=10)
+        runtime = activity_gen._network_transaction_runtime
+        preparation = runtime.begin(
+            owner_rng=random.Random(19),
+            stable_id="existing-ldap-transport",
+            linearization_time=opened_at,
+        )
+        preparation.reserve_transport_tuple(
+            intent_stable_id="existing-ldap-transport",
+            src_ip="10.10.4.10",
+            source_port=52_000,
+            dst_ip="10.10.2.10",
+            dst_port=389,
+            protocol="tcp",
+            opened_at=opened_at,
+            closed_at=closed_at,
+            source_os_category="windows",
+        )
+
+        candidates = iter([52_000, 52_001])
+        try:
+            with patch.object(
+                generator_module,
+                "_ephemeral_port",
+                side_effect=lambda rng, os_category="windows": next(candidates),
+            ):
+                allocated = activity_gen._allocate_ephemeral_port(
+                    "10.10.4.10",
+                    "10.10.2.10",
+                    389,
+                    "tcp",
+                    event_time,
+                    "windows",
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                )
+        finally:
+            preparation.cancel()
+
+        assert allocated == 52_001
+
+    def test_machine_account_port_preview_covers_remote_auth_interval(
+        self,
+        activity_gen,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Machine LDAP/SMB port previews must cover their complete transport window."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        allocator = Mock(side_effect=[51_000, 52_000])
+        monkeypatch.setattr(activity_gen, "_allocate_ephemeral_port", allocator)
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        service_call = next(call for call in allocator.call_args_list if call.args[2] in {389, 445})
+        assert service_call.kwargs["opened_at"] == timestamp - timedelta(seconds=1)
+        assert service_call.kwargs["closed_at"] > timestamp
 
     def test_recent_connection_tuple_cache_prunes_stale_entries(self, activity_gen):
         """Tuple reservations older than the reuse window should be removed by event time."""
@@ -8739,6 +11077,163 @@ class TestActivityGenerator:
             timedelta(seconds=1) < terminated.timestamp - explicit.timestamp < timedelta(seconds=8)
         )
 
+    def test_runas_netonly_owns_strict_new_credentials_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """runas /netonly should clone local identity without creating a desktop."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        new_credentials = next(
+            event for event in emitted if event.event_type == "logon" and event.auth.logon_type == 9
+        )
+        session = state_manager.get_session_at(
+            new_credentials.auth.logon_id,
+            new_credentials.timestamp,
+        )
+
+        assert session is not None
+        assert session.username == test_user.username
+        assert session.session_kind == "new_credentials"
+        assert session.session_id == 0
+        assert new_credentials.auth.source_ip == "-"
+        assert new_credentials.auth.subject_username == test_user.username
+        assert new_credentials.auth.subject_logon_id == explicit.auth.subject_logon_id
+        assert new_credentials.auth.username == test_user.username
+        assert new_credentials.auth.outbound_username == "admin01"
+        assert new_credentials.auth.outbound_domain == "CORP"
+        assert new_credentials.auth.process_pid != explicit.auth.process_pid
+        assert new_credentials.auth.process_name.endswith("svchost.exe")
+        assert new_credentials.auth.logon_process == "seclogo"
+        assert new_credentials.auth.auth_package == "Negotiate"
+
+        shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        assert not any(
+            event.event_type == "process_create"
+            and event.auth is not None
+            and event.auth.logon_id == new_credentials.auth.logon_id
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].casefold() in shell_names
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
+        )
+        assert any(
+            event.event_type == "logoff"
+            and event.auth.logon_id == new_credentials.auth.logon_id
+            and event.auth.logon_type == 9
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
+        )
+
+    def test_direct_type9_logon_rejects_missing_new_credentials_facts(
+        self, activity_gen, test_user, test_system
+    ):
+        """The generic logon API must not invent a NewCredentials caller."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with pytest.raises(StateError, match="explicit_credentials event"):
+            activity_gen.generate_logon(
+                test_user,
+                test_system,
+                timestamp,
+                logon_type=9,
+                source_ip=test_system.ip,
+            )
+
+    def test_non_runas_explicit_credentials_do_not_create_type9(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 from other tools must not imply a NewCredentials token clone."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\mmc.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "explicit_credentials" for event in emitted)
+        assert all(event.event_type != "logon" or event.auth.logon_type != 9 for event in emitted)
+
+    @pytest.mark.parametrize("logon_type", [4, 7, 8, 9])
+    def test_non_desktop_logon_siblings_never_lazy_bootstrap_shell(
+        self,
+        logon_type,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+    ):
+        """Batch, unlock, and NetworkCleartext sessions cannot acquire Explorer lazily."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        if logon_type == 9:
+            state_manager.set_current_time(timestamp)
+            logon_id = state_manager.create_session(
+                username=test_user.username,
+                system=test_system.hostname,
+                logon_type=9,
+                source_ip="-",
+                session_kind="new_credentials",
+            )
+        else:
+            source_ip = "192.0.2.50" if logon_type == 8 else None
+            logon_id = activity_gen.generate_logon(
+                test_user,
+                test_system,
+                timestamp,
+                logon_type=logon_type,
+                source_ip=source_ip,
+            )
+
+        activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(seconds=10),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c whoami",
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is None
+        shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
+        assert not any(
+            event.event_type == "process_create"
+            and event.auth is not None
+            and event.auth.logon_id == logon_id
+            and event.process is not None
+            and event.process.image.rsplit("\\", 1)[-1].casefold() in shell_names
+            for event in (
+                call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            )
+        )
+
     def test_generate_explicit_credentials_handles_missing_caller_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -8797,6 +11292,102 @@ class TestActivityGenerator:
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
         assert explicit.auth.process_pid != mmc_pid
         assert explicit.auth.process_name.endswith("runas.exe")
+
+    def test_generate_explicit_credentials_ignores_newer_expired_subject_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A materialized 4648 caller must bind a session valid at the event time."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        valid_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=timestamp - timedelta(hours=2),
+        )
+        expired_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.99",
+            start_time=timestamp - timedelta(hours=1),
+        )
+        state_manager.plan_session_end(
+            expired_logon_id,
+            SessionEndPlan(
+                timestamp - timedelta(seconds=30),
+                "explicit_storyline",
+                "expired-rdp-session",
+            ),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line=r"C:\Windows\explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=valid_logon_id,
+        )
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\msra.exe",
+            process_pid=explorer_pid,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.subject_logon_id == valid_logon_id
+        assert process.process.logon_id == valid_logon_id
+        assert explicit.auth.process_pid == process.process.pid
+
+    def test_generate_explicit_credentials_never_uses_type3_subject_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A Type 3 network token must not own a desktop explicit-credential caller."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="10.0.0.50",
+            start_time=timestamp - timedelta(seconds=1),
+            session_kind="network",
+        )
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        logon = next(event for event in emitted if event.event_type == "logon")
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        session = state_manager.get_session(explicit.auth.subject_logon_id)
+
+        assert explicit.auth.subject_logon_id != network_logon_id
+        assert session is not None
+        assert session.logon_type == 2
+        assert process.auth.logon_id == explicit.auth.subject_logon_id
+        assert logon.auth.logon_id == explicit.auth.subject_logon_id
+        assert logon.timestamp < process.timestamp < explicit.timestamp
 
     def test_generate_explicit_credentials_bootstraps_subject_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -9257,6 +11848,60 @@ class TestActivityGenerator:
         child = process_events[-1]
         assert child.process.parent_pid != one_shot_parent_pid
 
+    def test_generate_process_preserves_required_exact_storyline_parent(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Authored lineage bypasses heuristics that reject unrelated one-shot parents."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x33333"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=20))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        authored_parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=explorer_pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line='powershell.exe -NoProfile -Command "Get-LocalUser"',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Windows\System32\schtasks.exe",
+            'schtasks /create /tn "BillingSyncService" /sc onlogon',
+            parent_pid=authored_parent_pid,
+            require_exact_parent=True,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid == authored_parent_pid
+
     def test_generate_process_spaces_bare_shell_child_commands(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -9455,32 +12100,75 @@ class TestActivityGenerator:
         assert event.process is None
         assert event.network.initiating_pid == -1
 
+    def test_generate_connection_extends_process_hold_through_transport_close(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Every process-attributed connection must retain its owner through close."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Java\bin\java.exe",
+            command_line="java.exe -jar service-healthcheck.jar",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=8.5,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=r"C:\Program Files\Java\bin\java.exe",
+            emit_dns=False,
+        )
+
+        process = state_manager.get_process(test_system.hostname, pid)
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert process is not None
+        assert process.last_activity_time == event.network.closed_at
+        assert (
+            activity_gen._process_connection_hold_until[
+                activity_gen._process_instance_key(test_system.hostname, pid)
+            ]
+            == event.network.closed_at
+        )
+
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,
         state_manager,
     ):
         """Explicit public-hostname traffic should keep the caller's inbound VIP."""
-        captured = []
-
-        class _Visibility:
-            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
-
-            @staticmethod
-            def is_connection_visible(_src_ip, _dst_ip):
-                return True
-
-        class _Dispatcher:
-            visibility_engine = _Visibility()
-
-            @staticmethod
-            def dispatch_builder(event):
-                captured.append(event)
-
-            @staticmethod
-            def record_filtered_network_observation():
-                return None
-
-        generator = ActivityGenerator(state_manager, {}, dispatcher=_Dispatcher())
+        zeek_emitter = Mock()
+        visibility = NetworkVisibilityEngine(None, [])
+        visibility._vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+        emitters = {"zeek_conn": zeek_emitter}
+        dispatcher = EventDispatcher(
+            state_manager=state_manager,
+            emitters=emitters,
+            visibility_engine=visibility,
+        )
+        generator = ActivityGenerator(
+            state_manager,
+            emitters,
+            dispatcher=dispatcher,
+            network_visibility=visibility,
+        )
         web_server = System(
             hostname="WEB-EXT-01",
             ip="10.10.3.10",
@@ -9519,7 +12207,7 @@ class TestActivityGenerator:
             preserve_dst_ip=True,
         )
 
-        event = captured[-1]
+        event = zeek_emitter.emit.call_args[0][0]
         assert event.network.dst_ip == "203.14.220.10"
         assert event.dst_host is not None
         assert event.dst_host.hostname == "WEB-EXT-01"
@@ -9532,7 +12220,6 @@ class TestActivityGenerator:
         state_manager,
     ):
         """Topology without sensors should not suppress canonical connection activity."""
-        captured = []
         visibility = NetworkVisibilityEngine(
             NetworkConfig(
                 segments=[
@@ -9552,22 +12239,16 @@ class TestActivityGenerator:
             ),
             [],
         )
-
-        class _Dispatcher:
-            visibility_engine = visibility
-
-            @staticmethod
-            def dispatch_builder(event):
-                captured.append(event)
-
-            @staticmethod
-            def record_filtered_network_observation():
-                raise AssertionError("connection generation should not pre-filter by sensors")
+        dispatcher = EventDispatcher(
+            state_manager=state_manager,
+            emitters={},
+            visibility_engine=visibility,
+        )
 
         generator = ActivityGenerator(
             state_manager,
             {},
-            dispatcher=_Dispatcher(),
+            dispatcher=dispatcher,
             network_visibility=visibility,
         )
         timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
@@ -9586,33 +12267,22 @@ class TestActivityGenerator:
         )
 
         assert uid
-        assert captured
-        assert captured[-1].network.src_ip == "10.10.10.5"
-        assert captured[-1].network.dst_ip == "10.10.20.10"
+        connection = state_manager.get_connection_by_zeek_uid(uid)
+        assert connection is not None
+        assert connection.src_ip == "10.10.10.5"
+        assert connection.dst_ip == "10.10.20.10"
 
     def test_generate_connection_finalizes_one_source_visible_interval(
         self,
+        activity_gen,
         state_manager,
+        mock_emitters,
     ):
         """Canonical context and state should share the finalized transport interval."""
-        captured: list[OccurrenceBuilder] = []
-
-        class _Dispatcher:
-            visibility_engine = None
-
-            @staticmethod
-            def dispatch_builder(event):
-                captured.append(event)
-
-            @staticmethod
-            def record_filtered_network_observation():
-                return None
-
-        generator = ActivityGenerator(state_manager, {}, dispatcher=_Dispatcher())
         timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
-        generator.generate_connection(
+        activity_gen.generate_connection(
             src_ip="10.10.10.5",
             dst_ip="10.10.20.53",
             time=timestamp,
@@ -9625,7 +12295,7 @@ class TestActivityGenerator:
             conn_state="SF",
         )
 
-        event = captured[-1]
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         connection = state_manager.get_connection(event.network.conn_id)
         assert event.network is not None
         assert event.network.started_at == event.timestamp
@@ -9636,7 +12306,11 @@ class TestActivityGenerator:
             event.timestamp,
         )
         assert event.network.started_at == event.timestamp
-        assert event.network.closed_at == event.timestamp + timedelta(seconds=0.04)
+        assert event.network.duration is not None
+        assert event.network.duration > 0.0
+        assert event.network.closed_at == event.timestamp + timedelta(
+            seconds=event.network.duration
+        )
         assert connection is not None
         assert connection.start_time == event.network.started_at
         assert connection.close_time == event.network.closed_at
@@ -10589,6 +13263,7 @@ class TestActivityGenerator:
                 event_timestamp=event.timestamp,
                 fuid=cert.fuid,
                 position=idx,
+                timing_runtime=activity_gen.timing_runtime,
             )
             for idx, cert in enumerate(event.protocol.x509_chain)
         )
@@ -11241,6 +13916,358 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == bash_pid
 
+    def test_generate_bash_command_rejects_session_past_planned_logoff(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A retained shell cannot own history or children after its planned logoff."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc125"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="interactive",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.plan_session_end(
+            logon_id,
+            SessionEndPlan(
+                canonical_end=command_time - timedelta(seconds=1),
+                authority="generated",
+            ),
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        assert bash_pid == 33383
+        assert state_manager.get_process(linux.hostname, bash_pid) is not None
+        assert not state_manager.is_process_active_at(linux.hostname, bash_pid, command_time)
+        before_processes = tuple(
+            (process.pid, process.start_time)
+            for process in state_manager.get_processes_on_system(linux.hostname)
+        )
+        before_scheduler_state = (
+            dict(activity_gen._bash_history_next_time),
+            dict(activity_gen._bash_history_user_seconds),
+            dict(activity_gen._bash_history_command_counts),
+            dict(activity_gen._bash_history_quick_streaks),
+            dict(activity_gen._foreground_shell_next_time),
+        )
+        before_session_state = (
+            session.last_activity_time,
+            session.session_shell_pid,
+            session.end_plan,
+        )
+        before_emits = {name: emitter.emit.call_count for name, emitter in mock_emitters.items()}
+
+        scheduled = [
+            activity_gen.generate_bash_command(
+                test_user,
+                linux,
+                command_time,
+                "git status",
+            )
+            for _attempt in range(2)
+        ]
+
+        assert scheduled == [None, None]
+        assert {
+            name: emitter.emit.call_count for name, emitter in mock_emitters.items()
+        } == before_emits
+        assert (
+            dict(activity_gen._bash_history_next_time),
+            dict(activity_gen._bash_history_user_seconds),
+            dict(activity_gen._bash_history_command_counts),
+            dict(activity_gen._bash_history_quick_streaks),
+            dict(activity_gen._foreground_shell_next_time),
+        ) == before_scheduler_state
+        assert (
+            session.last_activity_time,
+            session.session_shell_pid,
+            session.end_plan,
+        ) == before_session_state
+        assert (
+            tuple(
+                (process.pid, process.start_time)
+                for process in state_manager.get_processes_on_system(linux.hostname)
+            )
+            == before_processes
+        )
+        assert state_manager.get_process(linux.hostname, bash_pid) is not None
+
+    def test_generate_bash_command_finishes_before_future_planned_logoff(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A live planned session still owns one complete shell-process lifecycle."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        planned_logoff = command_time + timedelta(minutes=5)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc126"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="interactive",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.plan_session_end(
+            logon_id,
+            SessionEndPlan(canonical_end=planned_logoff, authority="generated"),
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+
+        scheduled = activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+        )
+
+        assert scheduled == command_time
+        emitted_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_create = next(
+            event
+            for event in emitted_events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "git status"
+        )
+        process_terminate = next(
+            event
+            for event in emitted_events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == process_create.process.pid
+        )
+        assert process_create.process.parent_pid == bash_pid
+        assert process_create.timestamp < process_terminate.timestamp < planned_logoff
+        assert session.last_activity_time is not None
+        assert session.last_activity_time < planned_logoff
+
+    def test_serialized_bash_process_is_omitted_after_ssh_transport_close(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A queued command cannot attach process telemetry to a closed SSH session."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        close_time = command_time + timedelta(seconds=2)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = "0xabc126a"
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="ssh",
+        )
+        session.session_shell_pid = bash_pid
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = close_time + timedelta(seconds=1)
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen._maybe_emit_bash_process_telemetry(
+            test_user,
+            linux,
+            command_time,
+            "scp /tmp/report.csv backup@archive:/srv/report.csv",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert not any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/scp"
+            for event in events
+        )
+
+    def test_generate_bash_command_collision_rejection_is_retry_neutral(self, test_user):
+        """A collision shifted past a session fence cannot consume later cadence state."""
+        command_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        initial_fence = command_time + timedelta(milliseconds=1500)
+        moved_fence = command_time + timedelta(minutes=10)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc127"
+        collision_key = (test_user.username.lower(), int(command_time.timestamp()))
+
+        def _build_generator() -> tuple[StateManager, ActivityGenerator, ActiveSession, Mock]:
+            state = StateManager()
+            bash_emitter = Mock()
+            bash_emitter.can_handle.return_value = True
+            emitters = {"bash_history": bash_emitter}
+            dispatcher = EventDispatcher(state_manager=state, emitters=emitters)
+            generator = ActivityGenerator(state, emitters, dispatcher=dispatcher)
+            state.set_current_time(command_time - timedelta(minutes=30))
+            session = state.register_session(
+                logon_id=logon_id,
+                username=test_user.username,
+                system=linux.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=command_time - timedelta(minutes=20),
+                session_kind="interactive",
+            )
+            state.plan_session_end(
+                logon_id,
+                SessionEndPlan(canonical_end=initial_fence, authority="generated"),
+            )
+            generator._bash_history_user_seconds = {collision_key: 1}
+            return state, generator, session, bash_emitter
+
+        clean_state, clean_generator, clean_session, clean_emitter = _build_generator()
+        attempted_state, attempted_generator, attempted_session, attempted_emitter = (
+            _build_generator()
+        )
+        before_rejection = dict(attempted_generator._bash_history_user_seconds)
+
+        rejected = attempted_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+
+        assert rejected is None
+        assert attempted_generator._bash_history_user_seconds == before_rejection
+        assert attempted_emitter.emit.call_count == 0
+
+        moved_plan = SessionEndPlan(canonical_end=moved_fence, authority="generated")
+        assert clean_state.plan_session_end(logon_id, moved_plan)
+        assert attempted_state.plan_session_end(logon_id, moved_plan)
+        clean_scheduled = clean_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+        attempted_scheduled = attempted_generator.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "git status",
+            emit_process_telemetry=False,
+        )
+
+        assert clean_scheduled is not None
+        assert clean_scheduled == command_time + timedelta(seconds=23)
+        assert attempted_scheduled == clean_scheduled
+        assert attempted_generator._bash_history_user_seconds == (
+            clean_generator._bash_history_user_seconds
+        )
+        assert (
+            attempted_generator._bash_history_next_time == clean_generator._bash_history_next_time
+        )
+        assert attempted_generator._bash_history_command_counts == (
+            clean_generator._bash_history_command_counts
+        )
+        assert attempted_generator._bash_history_quick_streaks == (
+            clean_generator._bash_history_quick_streaks
+        )
+        assert attempted_session.last_activity_time == clean_session.last_activity_time
+        assert attempted_emitter.emit.call_count == clean_emitter.emit.call_count == 1
+
     def test_workstation_bash_command_bootstraps_local_session_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -11298,10 +14325,10 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/git"
         assert process_events[-1].process.parent_pid == shell_events[-1].process.pid
 
-    def test_dropped_workstation_bash_command_does_not_bootstrap_local_session(
+    def test_post_collection_workstation_bash_command_does_not_bootstrap_local_session(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
-        """Rejected Linux workstation shell commands should not leave orphan logon evidence."""
+        """Post-collection commands should not leave orphan pre-cutoff logon evidence."""
         scenario_end = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         linux = System(
             hostname="WS-LNGUYEN-01",
@@ -11312,6 +14339,7 @@ class TestActivityGenerator:
         )
         activity_gen._scenario_start_time = scenario_end - timedelta(minutes=30)
         activity_gen._scenario_end_time = scenario_end
+        activity_gen.dispatcher.output_end_time = scenario_end
         state_manager.set_current_time(scenario_end - timedelta(minutes=30))
         systemd_pid = state_manager.create_process(
             linux.hostname,
@@ -11325,7 +14353,7 @@ class TestActivityGenerator:
 
         scheduled = activity_gen.generate_bash_command(test_user, linux, scenario_end, "git status")
 
-        assert scheduled is None
+        assert scheduled == scenario_end
         assert [
             session
             for session in state_manager.get_sessions_for_user(test_user.username)
@@ -11539,6 +14567,43 @@ class TestActivityGenerator:
         assert reserved > gzip_done
         assert scheduled_history > gzip_done
 
+    def test_linux_foreground_reservation_waits_for_unmaterialized_ssh_shell(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+    ) -> None:
+        """Authored commands reserve after SSH shell readiness before process creation."""
+        requested = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ready = requested + timedelta(seconds=1)
+        linux = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.1.34",
+            start_time=requested - timedelta(milliseconds=200),
+            session_kind="ssh",
+        )
+        state_manager.update_session_metadata(logon_id, source_ready_time=source_ready)
+
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=0,
+            requested_time=requested,
+            process_name="/usr/sbin/ip",
+            command_line="ip addr show",
+        )
+
+        assert reserved > source_ready
+
     def test_linux_process_activity_reserves_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -11614,6 +14679,190 @@ class TestActivityGenerator:
 
         assert npm_create.process.parent_pid == bash_pid
         assert npm_create.timestamp > blocked_until
+
+    @pytest.mark.parametrize(
+        ("activity_type", "process_image", "command_line"),
+        [
+            ("process_code", "/usr/bin/git", "git status"),
+            ("process_system", "/usr/bin/cat", "cat /etc/hosts"),
+        ],
+    )
+    def test_linux_baseline_process_rebinds_to_newest_scheduled_session(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        activity_type,
+        process_image,
+        command_line,
+    ):
+        """Delayed baseline processes, history, and close evidence share the newest session."""
+        activity_time = datetime(2024, 1, 15, 10, 4, 0, tzinfo=UTC)
+        old_close = activity_time + timedelta(minutes=1)
+        scheduled_floor = old_close + timedelta(seconds=10)
+        new_close = activity_time + timedelta(minutes=30)
+        linux = System(
+            hostname="LOG-SRV-01",
+            ip="10.50.20.40",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        old_logon_id = "0xabc790"
+        new_logon_id = "0xabc791"
+        state_manager.set_current_time(activity_time - timedelta(minutes=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        old_session = state_manager.register_session(
+            logon_id=old_logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.50.10.21",
+            start_time=activity_time - timedelta(minutes=5),
+            session_kind="ssh",
+        )
+        old_shell_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            old_logon_id,
+        )
+        old_session.session_shell_pid = old_shell_pid
+        state_manager.update_session_metadata(
+            old_logon_id,
+            network_close_time=old_close,
+        )
+        new_session = state_manager.register_session(
+            logon_id=new_logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=activity_time - timedelta(minutes=2),
+            session_kind="interactive",
+        )
+        new_shell_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            new_logon_id,
+        )
+        new_session.session_shell_pid = new_shell_pid
+        state_manager.update_session_metadata(
+            new_logon_id,
+            network_close_time=new_close,
+        )
+        state_manager.set_current_time(activity_time)
+        activity_gen._system_pids = {
+            linux.hostname: {
+                "systemd": systemd_pid,
+                "sshd": sshd_pid,
+                "bash": new_shell_pid,
+            }
+        }
+        old_key = (linux.hostname, test_user.username, old_logon_id)
+        new_key = (linux.hostname, test_user.username, new_logon_id)
+        activity_gen._bash_history_next_time[new_key] = scheduled_floor
+
+        from evidenceforge.generation.activity import application_catalog
+
+        with (
+            patch.object(
+                application_catalog,
+                "pick_app_and_command",
+                return_value=(process_image, command_line),
+            ),
+            patch.dict(
+                generator_module.PROCESS_TEMPLATES_LINUX,
+                {"process_system": [(process_image, command_line)]},
+            ),
+        ):
+            activity_gen.execute_baseline_activity(
+                test_user,
+                linux,
+                activity_time,
+                activity_type,
+            )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == process_image
+            and event.process.command_line == command_line
+        )
+        bash_event = next(
+            event
+            for event in events
+            if event.event_type == "bash_command"
+            and event.shell is not None
+            and event.shell.command == command_line
+        )
+        process_terminate = next(
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == process_create.process.pid
+        )
+        parent = state_manager.get_process_identity(
+            linux.hostname,
+            process_create.process.parent_pid,
+        )
+
+        assert process_create.timestamp >= scheduled_floor > old_close
+        assert process_create.timestamp == bash_event.timestamp
+        assert process_create.process.logon_id == new_logon_id
+        assert process_create.auth.logon_id == new_logon_id
+        assert parent is not None and parent.logon_id == new_logon_id
+        assert process_terminate.timestamp > process_create.timestamp
+        assert process_terminate.timestamp < new_close
+        assert process_terminate.process.logon_id == new_logon_id
+        assert process_terminate.auth.logon_id == new_logon_id
+        assert new_key in activity_gen._bash_history_command_counts
+        assert old_key not in activity_gen._bash_history_command_counts
+        assert old_session.last_activity_time is None
+        assert new_session.last_activity_time is not None
+        assert new_session.last_activity_time >= bash_event.timestamp
+
+        with pytest.raises(ExecutionEffectPlanError) as exc_info:
+            activity_gen.generate_process(
+                test_user,
+                linux,
+                old_close + timedelta(seconds=1),
+                old_logon_id,
+                process_image,
+                command_line,
+                parent_pid=old_shell_pid,
+            )
+
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
 
     def test_generate_bash_command_moves_history_with_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters
@@ -11704,10 +14953,10 @@ class TestActivityGenerator:
             timedelta(0) < hostname_create.timestamp - bash_event.timestamp < timedelta(seconds=1)
         )
 
-    def test_foreground_termination_uses_source_visible_release_time(
+    def test_foreground_termination_uses_canonical_release_time(
         self, activity_gen, test_user, state_manager, monkeypatch
     ):
-        """Foreground shell availability should follow rendered endpoint completion."""
+        """Foreground shell availability should ignore rendered endpoint delay."""
         command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         linux = System(
             hostname="WS-LNGUYEN-01",
@@ -11756,6 +15005,11 @@ class TestActivityGenerator:
             "process_source_terminate_time",
             source_terminate_time,
         )
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,
@@ -11785,8 +15039,8 @@ class TestActivityGenerator:
             command_line="hostname -f",
         )
 
-        assert release_time == source_visible_done
-        assert reserved > source_visible_done
+        assert release_time == command_time + timedelta(seconds=1)
+        assert release_time < reserved < source_visible_done
 
     def test_foreground_termination_respects_authoritative_session_deadline(
         self, activity_gen, test_user, state_manager, monkeypatch
@@ -11818,6 +15072,11 @@ class TestActivityGenerator:
             lambda **kwargs: generated.append(kwargs),
         )
         monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,
@@ -11830,7 +15089,7 @@ class TestActivityGenerator:
             rng=random.Random(7),
         )
 
-        assert release_time == deadline - timedelta(seconds=2)
+        assert release_time == deadline - timedelta(milliseconds=1_425)
         assert generated[0]["time"] == release_time
         assert generated[0]["session_end_plan"] == plan
 
@@ -11863,6 +15122,11 @@ class TestActivityGenerator:
             lambda **kwargs: generated.append(kwargs),
         )
         monkeypatch.setattr(activity_gen, "process_source_terminate_time", lambda *_args: None)
+        monkeypatch.setattr(
+            activity_gen,
+            "resolve_process_lifecycle_close_candidate",
+            lambda _hostname, _pid, close_at: close_at,
+        )
 
         release_time = activity_gen._generate_bounded_foreground_process_termination(
             user=test_user,
@@ -11875,7 +15139,7 @@ class TestActivityGenerator:
             rng=random.Random(7),
         )
 
-        assert release_time == transport_close - timedelta(seconds=2)
+        assert release_time == transport_close - timedelta(milliseconds=1_425)
         assert generated[0]["session_end_plan"] is None
 
     def test_linux_session_shell_reuses_user_manager_when_rebuilt(
@@ -12310,6 +15574,105 @@ class TestActivityGenerator:
             ("/usr/bin/wc", "wc -l"),
         ]
 
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("cat /tmp/a | grep x", True),
+            ("cat /tmp/a || grep x", False),
+            ("cat /tmp/a |& grep x", False),
+            ("cat /tmp/a && grep x", False),
+            ("cat /tmp/a ; grep x", False),
+            ("printf 'a|b'", False),
+            (r"printf a\|b", False),
+        ],
+    )
+    def test_contains_unquoted_shell_pipe_requires_true_single_pipe(self, command, expected):
+        """Only an unquoted, unescaped single pipe denotes concurrent pipeline stages."""
+        assert generator_module._contains_unquoted_shell_pipe(command) is expected
+
+    def test_linux_shell_process_groups_separate_control_operators(self):
+        """Control operators split foreground cohorts while a true pipeline stays grouped."""
+        groups = generator_module._linux_command_process_groups_from_shell(
+            "cat /tmp/a | grep x && sha256sum /tmp/a || cut -c1-8 ; wc -l",
+            max_processes=None,
+        )
+
+        assert groups == [
+            [("/usr/bin/cat", "cat /tmp/a"), ("/usr/bin/grep", "grep x")],
+            [("/usr/bin/sha256sum", "sha256sum /tmp/a")],
+            [("/usr/bin/cut", "cut -c1-8")],
+            [("/usr/bin/wc", "wc -l")],
+        ]
+
+    def test_generate_bash_command_serializes_control_after_pipeline(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """A sequential/control stage is admitted after, not inside, a pipeline cohort."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-OPERATORS-01",
+            ip="10.0.0.4",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xoperators",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = bash_pid
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "cat /tmp/a | grep x && sha256sum /tmp/a",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        creates = {
+            event.process.command_line: event
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        }
+        terminations = {
+            event.process.pid: event
+            for event in events
+            if event.event_type == "process_terminate" and event.process is not None
+        }
+        cat = creates["cat /tmp/a"]
+        grep = creates["grep x"]
+        sha256sum = creates["sha256sum /tmp/a"]
+        assert cat.process.concurrency_group_id == grep.process.concurrency_group_id
+        assert sha256sum.process.concurrency_group_id != cat.process.concurrency_group_id
+        assert cat.timestamp < grep.timestamp
+        assert sha256sum.timestamp > terminations[cat.process.pid].timestamp
+        assert sha256sum.timestamp > terminations[grep.process.pid].timestamp
+
     def test_linux_shell_redirection_removed_from_process_argv(self):
         """Redirection targets belong to the shell/file effect, not process argv."""
         process = generator_module._linux_command_process_from_shell(
@@ -12365,6 +15728,78 @@ class TestActivityGenerator:
 
         for command, processes in expected.items():
             assert generator_module._linux_command_processes_from_shell(command) == processes
+
+    def test_interactive_nginx_check_uses_exact_session_shell_parent(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """An interactive nginx diagnostic remains shell-owned while daemon startup does not."""
+        command_time = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        linux = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["nginx", "ssh"],
+            roles=["web_server"],
+        )
+        state_manager.set_current_time(command_time - timedelta(hours=1))
+        state_manager.register_process(
+            system=linux.hostname,
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+            os_category="linux",
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.10.1.50",
+            start_time=command_time - timedelta(minutes=10),
+            session_kind="ssh",
+        )
+        state_manager.set_current_time(command_time - timedelta(minutes=9))
+        shell_pid = state_manager.create_process(
+            linux.hostname,
+            1,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = shell_pid
+        activity_gen._system_pids = {linux.hostname: {"systemd": 1}}
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "nginx -t")
+        daemon_pid = activity_gen.generate_system_process(
+            system=linux,
+            time=command_time + timedelta(minutes=1),
+            process_name="/usr/sbin/nginx",
+            command_line="/usr/sbin/nginx -g 'daemon off;'",
+            parent_pid=1,
+            username="root",
+            emit_linux_syslog=False,
+        )
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].process is not None and call.args[0].process.image == "/usr/sbin/nginx"
+        ]
+        interactive = next(event for event in events if event.process.command_line == "nginx -t")
+        daemon = state_manager.get_process(linux.hostname, daemon_pid)
+        assert interactive.auth.username == test_user.username
+        assert interactive.process.logon_id == session.logon_id
+        assert interactive.process.parent_pid == shell_pid
+        assert interactive.process.parent_image == "/bin/bash"
+        assert daemon is not None
+        assert daemon.username == "root"
+        assert daemon.parent_pid == 1
 
     def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
         """Background markers belong to shell history, not child process argv."""
@@ -12589,6 +16024,154 @@ class TestActivityGenerator:
         assert "cat /etc/shadow" in command_lines
         assert "head -5" in command_lines
         assert all("|" not in command for command in command_lines)
+        pipeline_events = [
+            event
+            for event in process_events
+            if event.process.command_line in {"cat /etc/shadow", "head -5"}
+        ]
+        assert len(pipeline_events) == 2
+        assert pipeline_events[0].process.parent_pid == pipeline_events[1].process.parent_pid
+        assert (
+            pipeline_events[0].process.concurrency_group_id
+            == pipeline_events[1].process.concurrency_group_id
+        )
+        gap = pipeline_events[1].timestamp - pipeline_events[0].timestamp
+        assert timedelta(milliseconds=6) <= gap <= timedelta(milliseconds=115)
+
+    def test_linux_pipeline_stage_planner_is_deterministic_varied_and_load_sensitive(self):
+        """Pipeline stages use scoped continuous texture instead of one fixed gap."""
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        runtime = TimingRuntime(reference_time=base, namespace="activity-linux-pipeline")
+        first = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=4,
+            scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
+            active_process_count=8,
+            timing_runtime=runtime,
+        )
+        repeated = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=4,
+            scope_parts=("LNX-01", "alice", "0xabc", "pipeline-a"),
+            active_process_count=8,
+            timing_runtime=runtime,
+        )
+
+        assert first == repeated
+        assert first[0] == base
+        assert all(first[index] < first[index + 1] for index in range(len(first) - 1))
+
+        gaps = []
+        for index in range(128):
+            stage_times = plan_linux_pipeline_stage_times(
+                base,
+                stage_count=2,
+                scope_parts=(f"LNX-{index:03d}", "alice", "0xabc", f"pipeline-{index}"),
+                active_process_count=index % 32,
+                timing_runtime=runtime,
+            )
+            gaps.append(stage_times[1] - stage_times[0])
+
+        assert min(gaps) >= timedelta(milliseconds=6)
+        assert max(gaps) <= timedelta(milliseconds=115)
+        assert len(set(gaps)) > 110
+        rounded_ms = [round(gap.total_seconds() * 1_000) for gap in gaps]
+        assert max(rounded_ms.count(value) for value in set(rounded_ms)) < 8
+
+        idle = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=2,
+            scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
+            active_process_count=0,
+            timing_runtime=runtime,
+        )
+        busy = plan_linux_pipeline_stage_times(
+            base,
+            stage_count=2,
+            scope_parts=("LNX-LOAD", "alice", "0xabc", "pipeline-load"),
+            active_process_count=96,
+            timing_runtime=runtime,
+        )
+        assert busy[1] - busy[0] > idle[1] - idle[0]
+
+    def test_linux_catalog_pipeline_uses_shared_stage_planner(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Legacy catalog generation adapts into the action-owned stage schedule."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-CATALOG-01",
+            ip="10.0.0.3",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xcatalog",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=2,
+            source_ip=linux.ip,
+            start_time=command_time - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(command_time - timedelta(minutes=4))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.application_catalog.pick_app_and_command",
+            lambda *_args, **_kwargs: (
+                "/usr/bin/sha256sum",
+                "sha256sum /tmp/rpt.sql.gz | cut -c1-16",
+            ),
+        )
+
+        activity_gen.execute_baseline_activity(
+            test_user,
+            linux,
+            command_time,
+            "process_code",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        pipeline_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line in {"sha256sum /tmp/rpt.sql.gz", "cut -c1-16"}
+        ]
+        assert len(pipeline_events) == 2
+        assert pipeline_events[0].process.parent_pid == bash_pid
+        assert pipeline_events[1].process.parent_pid == bash_pid
+        assert (
+            pipeline_events[0].process.concurrency_group_id
+            == pipeline_events[1].process.concurrency_group_id
+        )
+        gap = pipeline_events[1].timestamp - pipeline_events[0].timestamp
+        assert timedelta(milliseconds=6) <= gap <= timedelta(milliseconds=115)
 
     def test_parameterize_command_uses_scenario_internal_domain(self, activity_gen, test_user):
         """Internal URL placeholders should not leak default corp.local vocabulary."""

@@ -1,0 +1,11 @@
+destination_catalog:
+  artifact-registry:
+    description: "Synthetic package and container registry destination family."
+    data:
+      tags: [dev, storage]
+      endpoints:
+        - domain: registry.technology.example
+          ips: [203.0.113.80]
+      services:
+        web:
+          protocol: https

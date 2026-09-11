@@ -1,0 +1,20 @@
+traffic_catalog:
+  clinical-shift:
+    description: "Shift-oriented clinical application traffic shape."
+    data:
+      audience: [clinical_coordinator]
+      applications:
+        - application: clinical-portal
+          connection: claims
+          weight: 20
+      outbound: []
+      cadence:
+        pattern: burst
+        days: [mon, tue, wed, thu, fri]
+        windows:
+          - start: "07:00"
+            end: "09:00"
+          - start: "15:00"
+            end: "17:00"
+        jitter_minutes: 10
+        burst_count: [2, 5]

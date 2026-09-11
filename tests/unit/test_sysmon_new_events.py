@@ -4,12 +4,18 @@
 """Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
 
 import re
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import (
+    BinaryReleaseIdentity,
+    BinaryReleaseKey,
+    PeVersionInfo,
+)
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
@@ -20,9 +26,10 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     RegistryContext,
 )
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.network import NetworkEndpointObservationPlan
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.dll_load_profiles import get_module_pe_metadata
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import SysmonEventEmitter
 from tests.network_factories import network_plan
 
@@ -49,6 +56,68 @@ def _linux_host():
         system_type="server",
         domain="corp.local",
         fqdn="SRV-01.corp.local",
+    )
+
+
+def _responder_wfp_event(*, application_only: bool = False):
+    timestamp = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+    host = HostContext(
+        hostname="DC-01",
+        ip="10.0.2.20",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="domain_controller",
+        domain="corp.local",
+        fqdn="DC-01.corp.local",
+        netbios_domain="CORP",
+    )
+    identity = ProcessIdentity(
+        hostname=host.hostname,
+        object_id="process:dc-01:684",
+        pid=684,
+        parent_pid=500,
+        image=r"C:\Windows\System32\lsass.exe",
+        command_line="lsass.exe",
+        principal="SYSTEM",
+        logon_id="0x3e7",
+        started_at=timestamp - timedelta(minutes=30),
+        lifecycle_group_id="process-lsass",
+    )
+    network = network_plan(
+        src_ip="10.0.1.10",
+        src_port=49152,
+        dst_ip=host.ip,
+        dst_port=88,
+        protocol="tcp",
+        conn_state="SF",
+        initiating_pid=4567,
+        responding_pid=identity.pid,
+        application_layer_only=application_only,
+    )
+    return OccurrenceBuilder(
+        timestamp=timestamp,
+        event_type="wfp_connection",
+        src_host=host,
+        process=ProcessContext(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            logon_id=identity.logon_id,
+            start_time=identity.started_at,
+        ),
+        identity_plan=EventIdentityPlan(actor=identity),
+        network=network,
+        network_endpoint=NetworkEndpointObservationPlan(
+            role="responder",
+            local_hostname=host.hostname,
+            local_ip=host.ip,
+            process=identity,
+            initiated=False,
+            observed_at=timestamp,
+            transaction_id=network.stable_id,
+        ),
     )
 
 
@@ -84,6 +153,24 @@ class TestCanHandle:
             network=network_plan(
                 src_ip="10.0.2.10", dst_ip="10.0.1.10", src_port=49152, dst_port=22, protocol="tcp"
             ),
+        )
+        assert emitter.can_handle(event) is False
+
+    def test_responder_wfp_on_windows(self, emitter):
+        assert emitter.can_handle(_responder_wfp_event()) is True
+
+    def test_responder_wfp_rejects_denied_or_application_only_traffic(self, emitter):
+        denied = _responder_wfp_event()
+        denied.network = replace(denied.network, outcome="denied")
+        assert emitter.can_handle(denied) is False
+        assert emitter.can_handle(_responder_wfp_event(application_only=True)) is False
+
+    def test_initiator_wfp_does_not_duplicate_connection_event3(self, emitter):
+        event = _responder_wfp_event()
+        event.network_endpoint = replace(
+            event.network_endpoint,
+            role="initiator",
+            initiated=True,
         )
         assert emitter.can_handle(event) is False
 
@@ -466,6 +553,23 @@ class TestRenderEvent3:
         assert "4444" in content
         assert "tcp" in content
 
+    def test_renders_responder_event3_with_local_process_and_inbound_direction(self, emitter):
+        event = _responder_wfp_event()
+
+        emitter.emit(event)
+
+        assert len(emitter._event_dicts) == 1
+        rendered = emitter._event_dicts[0]
+        assert rendered["EventID"] == 3
+        assert rendered["Initiated"] == "false"
+        assert rendered["ProcessId"] == 684
+        assert rendered["Image"].endswith("lsass.exe")
+        assert rendered["SourceIp"] == "10.0.1.10"
+        assert rendered["SourcePort"] == 49152
+        assert rendered["DestinationIp"] == "10.0.2.20"
+        assert rendered["DestinationPort"] == 88
+        assert rendered["DestinationHostname"] == "DC-01.corp.local"
+
     def test_event3_uses_source_native_timestamp_offset(self, emitter):
         event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
         event = OccurrenceBuilder(
@@ -491,16 +595,13 @@ class TestRenderEvent3:
 
         emitter.emit(event)
 
-        expected_delta = sample_timing_delta(
-            "source.sysmon_network_connection",
-            seed_parts=("WKS-01", 4567, "10.0.1.10", 49152, "10.0.2.20", 4444, event_time),
-        )
-        expected_time = event_time + expected_delta
-        assert emitter._event_dicts[0]["TimeCreated"] > expected_time
-        assert emitter._event_dicts[0]["_SysmonNativeTime"] == expected_time
+        native_time = emitter._event_dicts[0]["_SysmonNativeTime"]
+        assert event_time + timedelta(milliseconds=35) <= native_time
+        assert native_time <= event_time + timedelta(milliseconds=750)
+        assert native_time.microsecond % 1_000 != 0
+        assert emitter._event_dicts[0]["TimeCreated"] > native_time
         assert (
-            emitter._event_dicts[0]["UtcTime"]
-            == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            emitter._event_dicts[0]["UtcTime"] == native_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         )
 
     def test_event3_normalizes_mail_hostname_to_port_family(self, emitter):
@@ -715,6 +816,54 @@ class TestRenderEvent7:
         assert '<Data Name="Signed">false</Data>' in content
         assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
 
+    def test_image_load_hashes_follow_attached_release_not_install_path(self, emitter):
+        """Event 7 renders exact module content independently of user placement."""
+        release = BinaryReleaseIdentity(
+            key=BinaryReleaseKey(
+                product_id="slack",
+                version="4.38.125",
+                build="4.38.125",
+                architecture="x64",
+                platform="windows",
+                artifact_name="slack_elf.dll",
+            ),
+            pe_version_info=PeVersionInfo(
+                file_version="4.38.125",
+                description="Slack ELF module",
+                product="Slack",
+                company="Slack Technologies, LLC",
+                original_filename="slack_elf.dll",
+            ),
+        )
+        for ordinal, username in enumerate(("alice", "bob")):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                event_type="image_load",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=1234 + ordinal,
+                    parent_pid=1,
+                    image=rf"C:\Users\{username}\AppData\Local\slack\slack.exe",
+                    command_line="slack.exe",
+                    username=username,
+                ),
+                image_load=ImageLoadContext(
+                    image_loaded=(rf"C:\Users\{username}\AppData\Local\slack\slack_elf.dll"),
+                    signed=True,
+                    signature="Slack Technologies, LLC",
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_image_loaded(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] == emitter._event_dicts[1]["Hashes"]
+        assert emitter._event_dicts[0]["Hashes"] == (
+            f"SHA1={release.digests.sha1},MD5={release.digests.md5},"
+            f"SHA256={release.digests.sha256},IMPHASH={release.digests.imphash}"
+        )
+        assert emitter._event_dicts[0]["FileVersion"] == "4.38.125"
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
@@ -821,6 +970,36 @@ class TestRenderEventRegistry:
         assert "SetValue" in content
         assert "evil.exe" in content
         assert "CurrentVersion\\Run" in content
+
+    def test_binary_value_renders_source_native_opaque_details(self, emitter):
+        event = OccurrenceBuilder(
+            timestamp=datetime(2027, 8, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="explorer.exe",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=(
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+                    r"\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count\HRZR_EHACNGU"
+                ),
+                value="00 01 02 03",
+                value_type="binary",
+                action="modify",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="Details">Binary Data</Data>' in content
+        assert "00 01 02 03" not in content
 
     def test_delete_renders_event12(self, emitter):
         event = OccurrenceBuilder(
@@ -980,6 +1159,100 @@ class TestProcessCreateMetadata:
         assert SysmonEventEmitter._generate_hashes(
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
+
+    def test_process_hashes_follow_attached_release_not_user_install_path(self, emitter):
+        """One installed release keeps one hash set across user-scoped placements."""
+        release = BinaryReleaseIdentity(
+            key=BinaryReleaseKey(
+                product_id="slack",
+                version="4.38.125",
+                build="4.38.125",
+                architecture="x64",
+                platform="windows",
+                artifact_name="slack.exe",
+            ),
+            pe_version_info=PeVersionInfo(
+                file_version="4.38.125",
+                description="Slack",
+                product="Slack",
+                company="Slack Technologies, LLC",
+                original_filename="slack.exe",
+            ),
+        )
+        paths = (
+            r"C:\Users\alice\AppData\Local\slack\slack.exe",
+            r"C:\Users\bob\AppData\Local\slack\slack.exe",
+        )
+        for ordinal, path in enumerate(paths):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                event_type="process_create",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=4100 + ordinal,
+                    parent_pid=500,
+                    image=path,
+                    command_line=path,
+                    username=("alice", "bob")[ordinal],
+                    start_time=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_process_create(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] == emitter._event_dicts[1]["Hashes"]
+        assert emitter._event_dicts[0]["Hashes"] == (
+            f"SHA1={release.digests.sha1},MD5={release.digests.md5},"
+            f"SHA256={release.digests.sha256},IMPHASH={release.digests.imphash}"
+        )
+        assert emitter._event_dicts[0]["FileVersion"] == "4.38.125"
+
+    def test_process_hashes_and_metadata_separate_os_build_releases(self, emitter):
+        """Build-distinct Windows binaries retain distinct canonical content truth."""
+        releases = tuple(
+            BinaryReleaseIdentity(
+                key=BinaryReleaseKey(
+                    product_id="microsoft-windows",
+                    version=build,
+                    build=build,
+                    architecture="x64",
+                    platform="windows",
+                    artifact_name="winlogon.exe",
+                ),
+                pe_version_info=PeVersionInfo(
+                    file_version=build,
+                    description="Windows Logon Application",
+                    product="Microsoft Windows Operating System",
+                    company="Microsoft Corporation",
+                    original_filename="winlogon.exe",
+                ),
+            )
+            for build in ("10.0.19041.1", "10.0.20348.1")
+        )
+        for ordinal, release in enumerate(releases):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 31, ordinal, tzinfo=UTC),
+                event_type="process_create",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=4200 + ordinal,
+                    parent_pid=500,
+                    image=r"C:\Windows\System32\winlogon.exe",
+                    command_line="winlogon.exe",
+                    username="SYSTEM",
+                    start_time=datetime(2024, 1, 15, 10, 31, ordinal, tzinfo=UTC),
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_process_create(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] != emitter._event_dicts[1]["Hashes"]
+        assert [row["FileVersion"] for row in emitter._event_dicts] == [
+            "10.0.19041.1",
+            "10.0.20348.1",
+        ]
 
     def test_tiworker_metadata_uses_servicing_stack_component_version(self):
         """WinSxS TiWorker metadata should match the rendered component path."""
@@ -1197,13 +1470,11 @@ class TestRenderEvent22:
 
         emitter._render_sysmon_dns_query(event)
 
-        expected_delta = sample_timing_delta(
-            "source.sysmon_dns_query",
-            seed_parts=("WKS-01", "example.com", "A", event_time),
-        )
-        native_time = event_time + expected_delta
+        native_time = emitter._event_dicts[0]["_SysmonNativeTime"]
+        assert event_time + timedelta(milliseconds=25) <= native_time
+        assert native_time <= event_time + timedelta(milliseconds=420)
+        assert native_time.microsecond % 1_000 != 0
         assert emitter._event_dicts[0]["TimeCreated"] > native_time
-        assert emitter._event_dicts[0]["_SysmonNativeTime"] == native_time
 
     def test_nxdomain_query_status(self, emitter):
         event = OccurrenceBuilder(
@@ -1561,6 +1832,31 @@ class TestUserFieldFormatting:
         assert "<EventID>1</EventID>" in content
         assert "<Version>5</Version>" in content
         assert '<Data Name="ParentUser">CORP\\admin</Data>' in content
+
+    def test_event1_prefers_canonical_parent_principal(self, emitter):
+        """A retained parent identity overrides the child's security context."""
+        event = OccurrenceBuilder(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin", logon_id="0x46a3f"),
+            process=ProcessContext(
+                pid=4101,
+                parent_pid=4001,
+                image=r"C:\Windows\System32\userinit.exe",
+                command_line="userinit.exe",
+                username="admin",
+                parent_image=r"C:\Windows\System32\winlogon.exe",
+                parent_command_line="winlogon.exe",
+                parent_username="SYSTEM",
+            ),
+        )
+
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+
+        assert '<Data Name="ParentUser">NT AUTHORITY\\SYSTEM</Data>' in content
 
     def test_process_access_target_user_gets_domain(self, emitter):
         """Sysmon Event 10 target user should use source-native domain formatting."""

@@ -341,6 +341,7 @@ def test_splunk_runtime_mounts_apps_without_overriding_splunk_etc(
         "find_compose_runtime",
         lambda _runtime: ComposeCommand(runtime="docker", command=("docker", "compose")),
     )
+    monkeypatch.setattr(splunk_runtime, "_free_tcp_port", lambda: 18089)
 
     compose_run = create_splunk_compose_run(
         work_dir=tmp_path,

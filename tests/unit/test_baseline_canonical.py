@@ -26,6 +26,7 @@ Verifies that baseline activities dispatch through OccurrenceBuilder to
 multiple emitters, producing correlated cross-source records.
 """
 
+import inspect
 import random
 import re
 from datetime import UTC, datetime, timedelta
@@ -35,6 +36,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
+from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
@@ -145,6 +148,14 @@ def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
     assert len(set(commands)) == 4
     assert commands.count("gpupdate.exe") > 300
     assert sum("/force" in command for command in commands) < 80
+
+
+def test_gpo_refresh_termination_requires_admitted_process() -> None:
+    """A source-timing-rejected gpupdate process must not receive a termination."""
+
+    source = inspect.getsource(BaselineMixin._generate_system_traffic)
+
+    assert "if gpupdate_pid and end_ts is not None:" in source
 
 
 def test_interactive_startup_activity_pacing_spreads_early_baseline_events():
@@ -260,6 +271,35 @@ def test_planned_baseline_logoff_is_published_to_all_session_consumers():
     assert state_manager.get_session_at(logon_id, current_hour + timedelta(minutes=16)) is None
 
 
+def test_planned_baseline_logoff_preserves_action_bundle_deadline():
+    """Generic baseline planning cannot replace an action-owned session fence."""
+
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    state_manager = StateManager()
+    state_manager.set_current_time(current_hour - timedelta(hours=2))
+    logon_id = state_manager.create_session(
+        "analyst",
+        "WS-01",
+        2,
+        "-",
+        logon_guid_required=False,
+    )
+    action_deadline = SessionEndPlan(
+        canonical_end=current_hour + timedelta(hours=2),
+        authority="action_bundle",
+    )
+    state_manager.plan_session_end(logon_id, action_deadline)
+    engine = object.__new__(BaselineMixin)
+    engine.state_manager = state_manager
+
+    engine._publish_planned_session_end_plans(
+        current_hour,
+        {("WS-01", logon_id): 15 * 60},
+    )
+
+    assert state_manager.get_session_end_plan(logon_id) == action_deadline
+
+
 def test_locked_workstation_activity_defers_until_after_unlock():
     """Foreground baseline activity should not occur while the workstation is visibly locked."""
     engine = object.__new__(BaselineMixin)
@@ -372,12 +412,46 @@ def test_pending_workstation_unlock_emits_independent_of_new_lock_path():
     engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
     engine._emit_unlock = Mock()
 
-    engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
+    emitted = engine._emit_pending_workstation_unlock(user, current_hour, planned_logoffs=None)
 
+    assert emitted
     assert engine._pending_unlocks == {}
     engine._emit_unlock.assert_called_once()
     args = engine._emit_unlock.call_args.args
     assert args[:4] == (user, system, unlock_time, logon_id)
+
+
+def test_due_pending_unlock_reserves_hour_when_session_is_no_longer_active():
+    """A suppressed deferred transition must not permit a replacement baseline lock."""
+    engine = object.__new__(BaselineMixin)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    current_hour = datetime(2026, 4, 13, 16, 0, 0, tzinfo=UTC)
+    engine._pending_unlocks = {user.username: (current_hour + timedelta(minutes=5), "0x12345")}
+    engine.state_manager = SimpleNamespace(get_session=Mock(return_value=None))
+    engine._emit_unlock = Mock()
+
+    owned = engine._emit_pending_workstation_unlock(user, current_hour)
+
+    assert owned
+    assert engine._pending_unlocks == {}
+    engine._emit_unlock.assert_not_called()
+
+
+def test_authored_workstation_transition_owns_baseline_hour():
+    """Baseline lock scheduling should yield to authored same-session state transitions."""
+    engine = object.__new__(BaselineMixin)
+    current_hour = datetime(2026, 4, 13, 17, 0, 0, tzinfo=UTC)
+    user = User(username="analyst", full_name="Analyst User", email="analyst@example.com")
+    storyline_event = SimpleNamespace(
+        actor=user.username,
+        system="WS-01",
+        events=[SimpleNamespace(type="workstation_lock")],
+    )
+    engine.scenario = SimpleNamespace(storyline=[storyline_event])
+    engine._storyline_by_hour = {int(current_hour.timestamp()): [(current_hour, 0)]}
+
+    assert engine._authored_workstation_transition_in_hour(user, "WS-01", current_hour)
+    assert not engine._authored_workstation_transition_in_hour(user, "WS-02", current_hour)
 
 
 def test_linux_baseline_session_initiator_creates_pam_session_message():
@@ -627,6 +701,35 @@ def test_linux_sudo_command_runtime_varies_by_command_family():
     assert package_runtime > quick_runtime
     assert journal_runtime > timedelta(seconds=1)
     assert quick_runtime > timedelta(milliseconds=300)
+
+
+def test_linux_baseline_sudo_user_uses_workstation_owner():
+    """Ambient workstation sudo must not bootstrap a configured service identity."""
+    owner = User(
+        username="lina.nguyen",
+        full_name="Lina Nguyen",
+        email="lina@example.com",
+        persona="developer",
+    )
+    system = System(
+        hostname="WS-LNGUYEN-01",
+        ip="10.0.0.21",
+        os="Ubuntu 22.04",
+        type="workstation",
+        assigned_user=owner.username,
+    )
+    engine = SimpleNamespace(
+        scenario=SimpleNamespace(environment=SimpleNamespace(users=[owner])),
+        state_manager=Mock(),
+    )
+    engine._linux_baseline_sudo_user = BaselineMixin._linux_baseline_sudo_user.__get__(engine)
+
+    selected = engine._linux_baseline_sudo_user(
+        system,
+        datetime(2024, 3, 18, 12, tzinfo=UTC),
+    )
+
+    assert selected == owner.username
 
 
 def test_linux_transient_syslog_pid_uses_host_pid_allocator():
@@ -1141,6 +1244,14 @@ class TestForegroundProcessTermination:
         user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.com")
         system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
         start_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+        canonical_start = start_time + timedelta(seconds=1)
+        engine.state_manager = Mock()
+        engine.state_manager.get_process.return_value = SimpleNamespace(
+            image=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery user -limit 0",
+            start_time=canonical_start,
+            logon_id="0x1234",
+        )
 
         engine._schedule_foreground_process_termination(
             user=user,
@@ -1155,7 +1266,7 @@ class TestForegroundProcessTermination:
 
         engine.activity_generator.generate_process_termination.assert_called_once()
         kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
-        assert kwargs["time"] == start_time + timedelta(seconds=3.5)
+        assert kwargs["time"] == canonical_start + timedelta(seconds=3.5)
         assert kwargs["pid"] == 4242
 
 
@@ -1321,7 +1432,11 @@ class TestWebAccessCorrelation:
             "pick_proxy_uri",
             lambda *args, **kwargs: ("/favicon.ico", "image/x-icon", "GET", "", "none"),
         )
-        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1369,7 +1484,11 @@ class TestWebAccessCorrelation:
             "pick_proxy_uri",
             lambda *args, **kwargs: ("/", "text/html", "GET", "", "none"),
         )
-        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip=dc.ip,
@@ -1401,12 +1520,12 @@ class TestWebAccessCorrelation:
 
 
 class TestSmbFileTransferCorrelation:
-    """SMB data transfers should produce Zeek files.log context when substantial."""
+    """Generic TCP/445 connections remain transport-only after the direct cutover."""
 
-    def test_large_smb_read_adds_file_transfer_context(
+    def test_large_smb_connection_does_not_infer_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """Large successful SMB downloads should be observable in files.log."""
+        """Byte volume cannot turn an opaque SMB transport into a file operation."""
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
             dst_ip="10.0.20.5",
@@ -1421,16 +1540,8 @@ class TestSmbFileTransferCorrelation:
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
-        assert event.protocol.primary_file_transfer is not None
-        assert event.protocol.primary_file_transfer.source == "SMB"
-        assert event.protocol.primary_file_transfer.fuid.startswith("F")
-        assert event.protocol.primary_file_transfer.is_orig is False
-        assert event.protocol.primary_file_transfer.seen_bytes > 0
-        assert (
-            event.protocol.primary_file_transfer.seen_bytes
-            == event.protocol.primary_file_transfer.total_bytes
-        )
-        assert event.network.resp_bytes > event.protocol.primary_file_transfer.total_bytes
+        assert event.protocol.primary_file_transfer is None
+        assert event.network.resp_bytes >= 250000
 
     def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2096,17 +2207,142 @@ class TestDhcpLease:
         assert syslog_messages == [
             f"DHCPREQUEST for 10.0.10.2 on {interface} to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
-            "bound to 10.0.10.2 -- renewal in 3422 seconds.",
+            "bound to 10.0.10.2 -- renewal in 3425 seconds.",
         ]
-        gaps = [
-            syslog_events[idx].timestamp - syslog_events[idx - 1].timestamp
-            for idx in range(1, len(syslog_events))
+        assert all(
+            earlier.timestamp < later.timestamp
+            for earlier, later in zip(syslog_events, syslog_events[1:], strict=False)
+        )
+        assert len({event.timestamp.microsecond % 1000 for event in syslog_events}) > 1
+        dhcp_event = next(
+            call[0][0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call[0][0].event_type == "dhcp_lease"
+        )
+        assert dhcp_event.network is not None
+        assert all(event.lifecycle is not None for event in syslog_events)
+        assert {event.lifecycle.group_id for event in syslog_events} == {
+            dhcp_event.network.stable_id
+        }
+        observation_decisions = [
+            ObservationPolicy("enterprise_standard").decide("syslog", event)
+            for event in syslog_events
         ]
-        assert min(gaps) >= timedelta(milliseconds=1500)
+        assert len({(decision.status, decision.delay) for decision in observation_decisions}) == 1
+        assert dhcp_event.network.closed_at <= syslog_events[1].timestamp
+        assert syslog_events[1].timestamp - dhcp_event.network.closed_at < timedelta(
+            milliseconds=200
+        )
+
+    def test_initial_dhcp_acquisition_uses_one_ordered_source_timeline(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ) -> None:
+        """Acquisition phases preserve order without fixed-offset timestamp suffixes."""
+        linux = System(hostname="LNX-02", ip="10.0.10.3", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:f0",
+            server_addr="10.0.0.1",
+            lease_time=3600.0,
+        )
+
+        events = [
+            call[0][0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call[0][0].event_type == "syslog"
+            and call[0][0].syslog is not None
+            and call[0][0].syslog.app_name == "dhclient"
+        ]
+        assert len(events) == 5
+        assert all(
+            earlier.timestamp < later.timestamp
+            for earlier, later in zip(events, events[1:], strict=False)
+        )
+        assert len({event.timestamp.microsecond % 1000 for event in events}) > 1
 
 
 class TestAnonymousLogon:
     """Anonymous logons use a complete short-lived session lifecycle."""
+
+    def test_anonymous_logon_registration_fail_before_preserves_logon_id(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        timestamp,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A rejected registration must not consume the previewed LogonID."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id(dc.hostname, timestamp)
+
+        def reject_registration(**kwargs: object) -> None:
+            assert kwargs["logon_id"] == expected_logon_id
+            raise StateError("injected anonymous registration failure")
+
+        monkeypatch.setattr(state_manager, "register_session", reject_registration)
+        state_before = state_manager.materialization_digest()
+
+        with pytest.raises(StateError, match="injected anonymous registration failure"):
+            activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        assert state_manager.materialization_digest() == state_before
+        assert state_manager.get_session_identity(expected_logon_id) is None
+        assert state_manager.preview_logon_id(dc.hostname, timestamp) == expected_logon_id
+        assert not mock_emitters["windows_event_security"].emit.called
+
+    def test_anonymous_logon_registration_lost_return_reuses_exact_session(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        timestamp,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A committed registration with a lost return must not allocate a sibling session."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        expected_logon_id = state_manager.preview_logon_id(dc.hostname, timestamp)
+        assert expected_logon_id == "0x176341f"
+        sessions_before = len(state_manager.state.active_sessions)
+        register_session = state_manager.register_session
+
+        def commit_then_raise(**kwargs: object) -> None:
+            registered = register_session(**kwargs)
+            assert registered.logon_id == expected_logon_id
+            raise RuntimeError("injected anonymous registration lost return")
+
+        monkeypatch.setattr(state_manager, "register_session", commit_then_raise)
+
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type in {"logon", "logoff"}
+        ]
+        assert [event.event_type for event in events] == ["logon", "logoff"]
+        assert {event.auth.logon_id for event in events} == {expected_logon_id}
+        assert len(state_manager.state.active_sessions) == sessions_before
+        identity = state_manager.get_session_identity(expected_logon_id)
+        assert identity is not None
+        assert identity.object_id == events[0].identity_plan.object_id
+        assert state_manager.preview_logon_id(dc.hostname, timestamp) != expected_logon_id
 
     def test_generate_anonymous_logon_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -2378,6 +2614,15 @@ class TestBaselineRegistryRealism:
 
         assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
 
+    def test_ambient_registry_uses_occurrence_aware_canonical_materializer(self):
+        """Baseline registry effects must supply time and type before dispatch."""
+        import inspect
+
+        source = inspect.getsource(BaselineMixin)
+        assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
+        assert "_template_user,\n                        _reg_ts," in source
+        assert "value_type=_value_type" in source
+
     def test_registry_writer_candidates_preserve_native_ownership(self):
         from evidenceforge.generation.engine.baseline import _registry_writer_candidates
 
@@ -2470,7 +2715,7 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
-        assert "materialize_edr_template_group" in source
+        assert "materialize_registry_effect" in source
 
     def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
         """Static infrastructure should not emit DHCP registry churn as ambient noise."""

@@ -95,8 +95,9 @@ def get_persona_connections(persona: str, os_category: str) -> list[dict[str, An
     """Get outbound connection entries for a user persona, filtered by OS.
 
     Args:
-        persona: User persona name (e.g., "developer", "executive").
-                 Falls back to "_default" if persona not found.
+        persona: User persona name (e.g., "developer", "executive"). Unqualified unknown
+            personas fall back to ``_default``. Qualified pack personas use only their
+            explicitly authored pack traffic groups.
         os_category: Host OS where the user has an active session.
 
     Returns:
@@ -104,9 +105,31 @@ def get_persona_connections(persona: str, os_category: str) -> list[dict[str, An
     """
     data = load_traffic_profiles()
     persona_data = data.get("persona_traffic", {})
-    profile = persona_data.get(persona) or persona_data.get("_default", {})
+    profile = persona_data.get(persona)
+    if profile is None:
+        profile = {} if ":" in persona else persona_data.get("_default", {})
     connections = profile.get("outbound", [])
     return [c for c in connections if _os_matches(c, os_category)]
+
+
+def get_pack_persona_traffic_groups(
+    persona: str,
+    os_category: str,
+) -> list[dict[str, Any]]:
+    """Return pack-authored traffic groups without flattening cadence or provenance."""
+
+    data = load_traffic_profiles()
+    persona_groups = data.get("pack_persona_traffic", {}).get(persona, {})
+    groups: list[dict[str, Any]] = []
+    for group in persona_groups.values():
+        outbound = [
+            connection
+            for connection in group.get("outbound", [])
+            if _os_matches(connection, os_category)
+        ]
+        if outbound:
+            groups.append({**group, "outbound": outbound})
+    return groups
 
 
 def _os_matches(entry: dict[str, Any], os_category: str) -> bool:

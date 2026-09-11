@@ -1174,7 +1174,7 @@ or follow-up batch is needed.
   the existing 16 warnings, and the full `uv run pytest --no-cov -q` suite passed
   (`4519 passed, 19 skipped`). Automated eval passed at 97.49445666259291 over
   78191 records. The loop-292 hard probe artifact
-  `scenarios/iteration-test/blind-test/loop-292/post_probe_host_edr_root_causes.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-292/post_probe_host_edr_root_causes.json`
   found 0 Prefetch bad actions, 0 Prefetch process-name mismatches, 0 server-like
   workstation-tool eCAR PROCESS hits, and 0 server-like workstation-tool eCAR FLOW
   hits; Windows 4624 Type 10 and Type 7 subjects now show real user/session
@@ -1203,6 +1203,305 @@ or follow-up batch is needed.
   agreement, perfect chronological ordering texture, and eCAR collection-window
   shape. The browser App Paths issue was not repeated in the Host findings.
 
+## 2026-08-14 Major-Version Assessment Reset
+
+- V2 loop 1 intentionally ignored every prior-major-version finding and began with a fresh
+  validate/generate/eval/blind-panel baseline on `scenarios/iteration-test`. Automated evaluation
+  passed at 97.29272962466797 over 77,558 records. Standalone blind synthetic-confidence scores
+  were 29/68/64/93, average 63.5; deliberation triggered on verdict disagreement and converged at
+  86.5. The highest-leverage new-baseline findings are a Type 3 Windows network logon incorrectly
+  bootstrapping an interactive explorer/PowerShell chain before session login, same-stream HTTP
+  transaction-depth reversal mirrored across sensors, same-UID SMB file-open-before-tree-mapping,
+  and repeated 1.2-second TLS duration texture. V2 loop 2 starts with the Windows session-bootstrap
+  family; no pre-v2 finding is eligible for target selection.
+
+- V2 loop 2 family contract — **Windows explicit-credential subject-session ownership**.
+  Owning abstraction: canonical session lookup plus the explicit-credential action bundle.
+  Invariant: a human 4648 caller must use an active Type 2/10/11 interactive session; Type 3
+  network and Type 5 service sessions can never bootstrap or own explorer/GUI caller processes,
+  and all caller processes must be visible after their owning login. Entry paths: baseline
+  persona-driven RunAs/help-desk actions, storyline explicit-credential actions, and direct bundle
+  calls. Consumers: StateManager, Windows Security 4624/4648/4688, Sysmon Event 1, eCAR
+  USER_SESSION/PROCESS, and timing probes. Layer rationale: the subject-session selector owns which
+  token the bundle may use; renderer changes would only hide the invalid canonical relationship.
+  Sibling risk: account-management audit subjects may legitimately use Type 3 and remain out of
+  scope; the regression test covers a non-sample RunAs caller with an active Type 3 sibling.
+
+- V2 loop 2 fixed explicit-credential subject-session selection at the canonical session lookup
+  boundary (`a6baf82a`). Human callers now reuse only active Type 2/10/11 interactive sessions; an
+  active Type 3 sibling forces a new Type 2 login before caller-process creation. Focused tests,
+  Ruff, and the full suite passed (`5950 passed, 22 skipped`). The regenerated bundle passed
+  automated eval at 97.39987957570209 over 75,940 records, and the targeted hard probe found no
+  Type 3-owned process chains. The clean 90-file blind panel scored 56/66/86/82 (average 72.5) and
+  passed the before/after aggregate SHA-256 check. Deliberation triggered on verdict disagreement
+  and converged unanimously on Synthetic at 85.75. The prior Type 3 desktop defect did not recur.
+  The next target is the newly discovered explicit-proxy tunnel accumulator defect: 179/275
+  inspected tunnels undercount visible child responses and 245/275 equal child one exactly.
+
+- V2 loop 3 family contract — **explicit-proxy tunnel lifecycle and accounting**. Owning
+  abstraction: the durable explicit-proxy tunnel plus its source-native proxy summary projection.
+  Invariant: every inspected child assigned to a tunnel contributes its client/server byte counts
+  exactly once, CONNECT control bytes remain separately scoped, and a declared tunnel duration and
+  byte total cannot exclude a visible child inside that duration. Entry paths: first inspected
+  HTTPS request, reused same-host tunnel, timeout/new-tunnel replacement, explicit CONNECT, deny or
+  cache terminal, and final generation close. Consumers: proxy access text/Splunk output, client
+  transport accounting, evaluator parsers, and blind arithmetic probes. Layer rationale: the
+  existing projection finalizes an aggregate from the first canonical connection before later
+  children are known; formatting changes alone cannot make that lifecycle total true. Sibling risk:
+  overlapping same-host tunnels, single-child tunnels, denied CONNECTs, and hour-boundary flushes
+  must not merge or prematurely finalize state.
+
+- V2 loop 3 fixed the original explicit-proxy visible-child accounting defect at the source-native
+  summary projection (`8726fa4d`). The hard probe found zero undercounts and zero aggregate
+  mismatches across 277 successful inspected tunnels. Focused tests and Ruff passed; the substantive
+  grouping implementation passed the full suite twice (`5950 passed, 22 skipped`). The regenerated
+  bundle passed automated evaluation at 97.3998795496898 over 75,935 records. The clean 90-file
+  blind panel retained SHA-256
+  `05764bd702e0a68ae18754e45832d3e44aff630af66ed9d47b6115650d3ffa5c` and scored
+  74/86/76/92 (average 82.0), with four Synthetic verdicts and no deliberation trigger. The prior
+  proxy-byte undercount did not recur, but the projection introduced a related identity regression:
+  40/515 strict proxy/client joins declared a tunnel more than five seconds longer than the sole
+  corroborated Zeek and ASA client flow because distinct canonical connections could be grouped
+  together. The panel's Type 5 well-known-LUID hard label was rejected as overbroad after checking
+  native Windows built-in-session semantics; it is not a canonical P0.
+
+- V2 loop 4 family contract — **explicit-proxy tunnel-to-transport identity**. Owning abstraction:
+  the durable proxy tunnel identity shared by canonical client transport state and the source-native
+  CONNECT/inspection projection. Invariant: one proxy tunnel summary maps to exactly one canonical
+  client TCP connection; every visible inspected child is assigned exactly once to that tunnel;
+  simultaneous same-host/user-agent tunnels remain distinguishable; and declared duration never
+  exceeds the parent client transport interval except documented source precision. Entry paths:
+  first HTTPS request, reused child, parallel same-host tunnel, idle timeout and replacement,
+  explicit CONNECT, denied/cache terminal, and generation close. Consumers: proxy text and Splunk
+  output, canonical Zeek/ASA/eCAR client transport, proxy parser/evaluator, and blind arithmetic and
+  cross-source probes. Layer rationale: the Loop 3 projection discarded canonical UID identity
+  while reconstructing visible groups; adjusting duration alone would preserve the false merge.
+  Sibling risk: Zeek UID is sensor-local and must not be exposed as a proxy-native ID, source ports
+  may be absent on reused application events, second-resolution proxy timestamps need bounded
+  tolerance, and denied or single-child summaries must retain current semantics.
+
+- V2 loop 4 fixed explicit-proxy tunnel-to-transport identity in two commits (`91a78286`,
+  `d0636f24`). Reuse now requires the planned child response to finish before the canonical client
+  transport closes; source-port identity is retained across reused events; proxy CONNECT and
+  inspection rows share a proxy-native tunnel ID plus client source port; and declared tunnel
+  duration comes from the parent transport. Focused tests, config validation, Ruff, and two full
+  suites passed (`5950 passed, 22 skipped`). The definitive bundle passed automated evaluation at
+  96.68474179062726 over 80,556 records. Its hard probe found 574 tunnel identities, 1,588 children,
+  zero summary/byte/identity/duration mismatches, and three source-observation gaps. The clean
+  89-file panel retained SHA-256
+  `a84450f9eba61adef013e2cd131683ec3230bd7a19c0aba85ef5310086ca1dea` and scored
+  88/69/74/99 (average 82.5), unanimously Synthetic with no deliberation trigger. The prior
+  duration/identity regression did not recur. Network review exposed the next ledger boundary:
+  438/573 joined inspected tunnels have less Zeek payload than their assigned proxy children
+  because the immutable parent transport accounted only for the first request.
+
+- V2 loop 5 family contract — **explicit-proxy client-tunnel payload capacity**. Owning
+  abstraction: the canonical client transport ledger plus its durable active-tunnel reuse state.
+  Invariant: CONNECT setup plus every assigned child byte must fit within the single parent
+  transport's directional payload ledger; a live tunnel without sufficient remaining capacity is
+  not reusable; every admitted child consumes capacity exactly once; and rendered Zeek/ASA/eCAR
+  and proxy views remain layer-compatible. Entry paths: first inspected request, reused request,
+  parallel same-host tunnel, large response/download, upload, cache/deny terminal, idle timeout,
+  transport close, and source-observation loss. Consumers: proxy action bundle/cache, canonical
+  NetworkTrafficLedger, proxy summary/children, Zeek conn, ASA, eCAR FLOW, and cross-source probes.
+  Layer rationale: proxy summary arithmetic is already exact; changing its totals would hide child
+  evidence. The defect is reuse admission against an immutable parent ledger. Sibling risk:
+  disabling all reuse is physically safe but reduces realistic multi-request tunnels; any retained
+  reuse must be backed by preplanned spare capacity or a finalize-before-render bundle rather than
+  invented post-render bytes.
+
+- V2 loop 5 fixed explicit-proxy client-tunnel payload capacity (`ff80bbdc`). Active tunnel state
+  now records remaining directional capacity; each reused child must fit and consumes its capacity
+  exactly once, while ordinary fully consumed connections open a new transport. Focused tests,
+  Ruff, and the full suite passed (`5950 passed, 22 skipped`). The regenerated bundle passed
+  automated evaluation at 96.48945883523132 over 97,583 records. Its hard probe found 1,403
+  inspected tunnels, zero material parent byte undercounts, zero proxy aggregate/identity/duration
+  mismatches, 149 small capture-texture differences, and three source-observation gaps. The clean
+  89-file panel retained SHA-256
+  `de853765a7c0acdc60c595e6541ce77edfc4f417b0f3a3de8bdac5e6d5400fc1` and initially scored
+  68/28/13/84 (average 48.25). Verdict disagreement and a 71-point spread triggered deliberation,
+  which confirmed the prior capacity defect absent and revised to 72/47/34/76 (average 57.25),
+  Inconclusive leaning Synthetic. The next P0 is Linux local-login chronology: 24/24 matched PIDs
+  across seven hosts emit PAM/logind evidence 3.9-9.3 seconds before their eCAR process create.
+
+- V2 loop 6 family contract — **Linux local-login process and authentication lifecycle**. Owning
+  abstraction: the local interactive session action bundle coordinating terminal/getty process,
+  `/bin/login`, PAM, logind, shell, and eCAR process/session evidence. Invariant: the canonical
+  login process and its source-visible creation precede every PAM/logind row naming its PID; the
+  login process has role-compatible terminal/getty/display-manager ancestry rather than universal
+  PID-1 parentage; shell readiness follows PAM/session open; and close/termination order remains
+  lifecycle-compatible. Entry paths: baseline local console login, GDM login, server console noise,
+  user workstation session, pre-window process, right-boundary session, and source-observation
+  delay/drop. Consumers: canonical process/session state, Linux syslog PAM/logind, eCAR
+  PROCESS/USER_SESSION, bash history, and timing probes. Layer rationale: syslog and eCAR agree on
+  PID but source timing is inverted, so neither renderer should rewrite timestamps independently.
+  Sibling risk: SSH and sudo PAM paths already have good ordering and must remain unchanged;
+  bounded-window sessions may legitimately lack one edge; getty/display-manager processes need
+  data-driven OS/role defaults.
+
+- V2 loop 6 fixed Linux local-login lifecycle ownership and rendered ordering in three commits
+  (`0ca725c7`, `80579d55`, `3546655e`). The definitive full suite passed (`5950 passed, 22
+  skipped`), Ruff/config validation passed, and automated evaluation passed at
+  96.69428408443474 over 90,250 records. The rendered probe found 22/22 visible matching eCAR
+  `/bin/login` creates before PAM by 0.66-4.53 seconds, all root-owned under `/sbin/agetty`, with
+  system logon identity and later shell children; four absent eCAR rows match configured source
+  loss. The clean 90-file corpus retained SHA-256
+  `ceb0a9db94ef542050243aaca342db5a43fefbfe69d757a7493dd268bb57099b`. Deliberation revised the
+  panel to 60/70/62/78, average 67.50, likely Synthetic, with no hard contradictions. The prior
+  Linux inversion and PID-1 ancestry defect did not recur. The next target is fleet call-trace
+  partitioning: 587 PROCESS/OPEN rows use 66 traces, with every trace confined to one host.
+
+- V2 loop 7 family contract — **process-access call-site and build identity texture**. Owning
+  abstraction: canonical process-access metadata selection shared by eCAR PROCESS/OPEN and Sysmon
+  Event 10. Invariant: call traces are selected from OS/build, source executable, target executable,
+  access intent, and call-site families; compatible hosts may share common traces, repeated calls on
+  one host may vary across legitimate call sites, and the same canonical access occurrence remains
+  identical across eCAR and Sysmon. Entry paths: baseline service inspection, Defender/security
+  tooling, browser/application access, authored credential-access behavior, remote-thread/process
+  access, repeated bursts, and host build variation. Consumers: ProcessAccessContext, eCAR
+  PROCESS/OPEN, Sysmon Event 10, evaluator parsers, and blind distribution probes. Layer rationale:
+  both endpoint sources agree on the current metadata, so renderer-local randomization would break
+  parity while preserving the host-partition fingerprint. Sibling risk: real build-specific module
+  offsets must remain stable enough for repeated identical call sites; LSASS/access-mask semantics,
+  source/target identity, and event ordering must not change.
+
+- V2 loop 7 fixed process-access call-trace host partitioning (`da5a8c48`). Focused tests,
+  config validation, Ruff, and the full suite passed (`5952 passed, 22 skipped`); evaluation passed
+  unchanged at 96.69428408443474 over 90,250 records. The probe found 170 traces across 587
+  PROCESS/OPEN rows, with 72 traces and 383 rows shared across hosts while each host retained 18-45
+  traces. The clean 90-file corpus retained SHA-256
+  `7dea1e677cc6b4a1f9c5fcae5316e526f19aea99ebad903f28908470eae763bf`. Deliberation revised the
+  panel to 40/35/22/65, average 40.50, guarded Real, and downgraded the sole proposed hard
+  contradiction for lack of durable incompatible ownership. The call-trace partition finding did
+  not recur. Next target: Linux local-interactive account eligibility and cadence.
+
+- V2 loop 8 family contract — **Linux local-interactive account eligibility and placement**.
+  Owning abstraction: world-model persona/account eligibility plus the baseline local-session
+  scheduler. Invariant: workstation GDM sessions normally belong to the assigned/named human user;
+  server console sessions use a bounded role-compatible administrative pool; service identities
+  (`svc_*`, backup, deploy, application principals) do not receive successful local graphical
+  sessions unless explicitly authored; and repeated local sessions observe per-host/user cooldowns.
+  Entry paths: persona login, Linux workstation baseline, server console noise, root/admin
+  maintenance, carried-in pre-window sessions, explicit authored logon, SSH/sudo/service activity,
+  and hosts without assigned users. Consumers: WorldModel placement, baseline planner, local-login
+  bundle, PAM/GDM/login syslog, logind, eCAR USER_SESSION/PROCESS, bash history, and process trees.
+  Layer rationale: source-native PAM/eCAR rows correctly render the selected identity, so changing
+  renderers would only hide invalid account placement. Sibling risk: preserve assigned-user
+  activity volume, rare legitimate shared-console/admin use, server-local maintenance, SSH/sudo
+  account diversity, and bounded-window lifecycle behavior.
+
+- V2 loop 8 implementation moved ambient sudo identity selection into the baseline/world-model
+  boundary and compatible-session reuse into the Linux sudo process path. Workstation commands
+  now use the modeled assigned owner; servers prefer a live role-compatible modeled administrator
+  and otherwise select one stable modeled administrator per host/day. Sudo activity on another TTY
+  reuses a live interactive/SSH session for that user instead of creating another local login.
+  Template rendering still consumes its original data-driven choices before canonical eligibility
+  is applied, preserving deterministic sibling output. Focused Linux sudo/baseline and Linux SMB
+  integration tests passed, the definitive full suite passed (`5954 passed, 22 skipped`), all 92
+  config files validated cleanly, and repository-wide Ruff checks passed. Regeneration, evaluation,
+  rendered probing, and blind review remain the next Loop 8 steps.
+
+- V2 loop 8 completed at commit `4cd242cd`. Fresh generation produced 89,844 records; automated
+  evaluation scored 96.38912449067922 but narrowly failed acceptance because temporal integrity was
+  84.7826 against the 85.0 hard threshold. The targeted rendered probe reduced successful local
+  logins from 26 to 5, with zero unmodeled/service identities and zero workstation non-owner
+  successes. The frozen 89-file corpus retained SHA-256
+  `53f9b8df1e7971f482285922c50048a0afc421b82e79296f661a83c5dc6d80c2`. Initial blind scores were
+  88/74/72/52 (average 71.5, spread 36); mandatory deliberation revised them to 92/84/80/74
+  (average 82.5), final Synthetic. The prior generic/service local-login pattern did not recur.
+  The confirmed top finding is same-session Windows 4800/4801 state alternation within one to three
+  milliseconds on two hosts.
+
+- V2 loop 9 family contract — **Windows workstation lock-state lifecycle ownership**. Owning
+  abstraction: the canonical interactive-session/workstation-state machine plus causal companion
+  expansion. Invariant: one session has one coherent ordered lock state; Event 4800 transitions an
+  unlocked session to locked, Event 4801 transitions a locked session to unlocked, and neither an
+  authored unlock nor Type-7 reauthentication may recursively fabricate an immediate lock/unlock
+  pair. Repeated transitions require human-scale dwell time except explicitly modeled automation,
+  and Security/eCAR companion identity must retain the durable session LUID without duplicating the
+  state transition. Entry paths: baseline idle lock, explicit lock/unlock storyline events,
+  Type-7 unlock reauthentication, RDP/local interactive session bootstrap, causal supplementary
+  audit expansion, boundary-carried sessions, and source observation delay/drop. Consumers:
+  canonical session state, Windows Security 4800/4801 and 4624 Type 7, eCAR USER_SESSION records,
+  evaluator timing/pivot logic, and endpoint lifecycle probes. Layer rationale: the contradiction
+  is positive same-channel state evidence, so renderer filtering would hide duplicate canonical
+  ownership rather than repair it. Sibling risk: preserve legitimate 4624 Type-7 unlock evidence,
+  correct LUID/object reuse, ordinary multi-minute lock duration, RDP disconnect/reconnect semantics,
+  and source-local observation coherence.
+
+- V2 loop 9 implementation assigns each baseline hour a single lock-state owner. A deferred unlock
+  now reports that it owns the hour so the scheduler cannot emit a chronologically earlier new lock
+  after dispatching it. Baseline lock scheduling also yields when the same user/host/hour contains
+  an authored workstation lock or unlock, preventing later-dispatched authored transitions from
+  being compressed against a baseline future transition by source timing. Existing canonical
+  lock/unlock bundles, Type-7 reauthentication, durable LUID/session ID reuse, and human-scale
+  duration sampling remain unchanged. The first regenerated probe removed four of five sub-two-ms
+  transitions and exposed one suppressed deferred unlock that relinquished hour ownership after its
+  active-session check failed; due deferred transitions now reserve the hour even when no source
+  row is emitted. Focused lock-state tests passed, the definitive post-probe full suite passed
+  (`5956 passed, 22 skipped`), all 92 config files validated cleanly, and repository-wide Ruff
+  checks passed. A second regeneration left one 1 ms pair on `WS-SMARTINEZ-01`; direct record
+  tracing showed an earlier flush's long-lived `ssh.exe` termination had advanced the rendered
+  host clock beyond both canonical transitions. Windows source timing now shifts a clamped
+  4800/4801 lifecycle as a unit, preserving its canonical human-scale dwell interval instead of
+  independently compressing both records. The new regression and focused state-machine tests pass,
+  as do all 92 config files, repository-wide Ruff, and the definitive full suite (`5957 passed, 22
+  skipped`). Regeneration then passed deterministic evaluation at `97.18870689794775` over 90,553
+  records, but the hard probe correctly rejected it because the Sophia pair still arrived at the
+  Security boundary pre-compressed to 1 ms. The renderer now also enforces the configured minimum
+  visible dwell for each matching session after timestamp normalization, retaining the source clock
+  and state-machine ownership while preventing an impossible rendered transition. Five focused
+  tests and the definitive full suite pass (`5958 passed, 22 skipped`); all 92 config files and
+  repository-wide Ruff remain clean. Final regeneration produced 90,553 records and passed the
+  hard probe with zero alternating transitions under 30 seconds; Sophia's visible dwell is now 127
+  seconds. Deterministic evaluation passed at `97.18870689794775`. The frozen 86-file corpus hash
+  is `7921245c4cadf65a1767075017901d44d1d7a0ddb65e566f15b6d93cb79d0b24`.
+
+- V2 loop 9 blind review initially scored synthetic-confidence at TH 84, Detection 82, Network 73,
+  and Host 47. Verdict disagreement and the 37-point spread triggered neutral deliberation; revised
+  scores were 86, 85, 79, and 65, averaging 78.75 with a unanimous Synthetic stance. No hard
+  contradiction survived challenge. The strongest positive statistical defect is the exact 1 ms
+  DC Security 4769-to-machine-Type-3-4624 delay in at least 222 lifecycles. Other ranked families
+  were universal one-request inspected proxy tunnels, destination-owner-shaped workstation SMB
+  authentication, and doubled Windows path separators. Loop 10 will own the Windows domain-auth
+  causal/source-timing family.
+
+- V2 loop 10 family contract — **Windows machine-authentication ticket-to-logon source timing**.
+  The domain-auth action bundle owns one canonical machine-account lifecycle; the source-timing
+  planner must render an admitted matching 4769 before its Type 3 4624 with a deterministic but
+  population-varied, data-configured source-native delay. Exact 1 ms remains possible only as
+  natural tail texture, never as the fallback for most lifecycles. Entry paths include ambient
+  machine-account authentication, LDAP/CIFS service choice, visible or filtered target-service
+  transport, and direct machine-logon compatibility calls. Preserve principal/source/DC matching,
+  4768-before-4769 ordering, transport-before-auth ordering when visible, session/logoff identity,
+  deterministic replay, and bounded source-local observation. The source-timing planner and timing
+  profile own the fix; emitter-local jitter would fragment shared lifecycle truth. Sibling risk is
+  medium-high because moving 4624 can invert transport, privilege, dependent-process, or logoff
+  evidence, so focused tests must cover bounds, ordering, and distribution diversity.
+
+- V2 loop 10 implementation adds the data-configured
+  `windows.machine_logon_after_service_ticket` source-latency relationship (3–135 ms). When a
+  machine logon has an admitted matching 4769, the source-timing planner samples this delay once
+  from lifecycle identity and applies it as a floor alongside any later visible transport anchor.
+  It no longer exposes the generic 1 ms causal epsilon as the population default. Focused tests
+  preserve ticket/transport ordering and require at least 24 distinct delays across 64 lifecycles.
+  All 92 config files validate cleanly, repository-wide Ruff passes, and the definitive full suite
+  passes (`5959 passed, 22 skipped`). Commit `7e5914a6` regenerated 90,553 records. The rendered
+  hard probe found zero exact-1-ms pairs, 112 distinct delays, and a 3–135 ms range across 229
+  matched machine lifecycles. Deterministic evaluation passed at `97.18870689794775`; the frozen
+  86-file corpus hash is `b849b331cefb5c6ffb8a0134d542b43f2bc9b5320c87c65e0c0534739d1af87c`.
+
+- V2 loop 10 blind review initially scored synthetic-confidence at TH 76, Detection 78, Network
+  81, and Host 25. Verdict disagreement and the 56-point spread triggered final neutral
+  deliberation. Revised scores were 87, 92, 91, and 83, averaging 88.25 with a unanimous Synthetic
+  stance. The fixed Kerberos point mass did not recur. Three narrower positive contradictions now
+  lead the residual backlog: 8/8 visible `winlogon.exe` terminations combine SYSTEM SID/name with a
+  human LUID; three local-session Linux browser creates use the root master `sshd -D` as direct
+  actor; and 12 Zeek TCP histories require more observed origin packets than `orig_pkts` reports.
+  Universal one-request inspected proxy tunnels remain a pervasive statistical signature, not a
+  hard contradiction. The ten-loop dashboard is stored at
+  `scenarios/iteration-test/blind-test/V2-ASSESSMENT-DASHBOARD.md`.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
@@ -1224,11 +1523,11 @@ or follow-up batch is needed.
   those cron-correlated rows; and PROCESS/CREATE TID normalization keeps
   `tid == pid`. Focused regression tests passed, generation completed, and the
   automated eval passed at 97.03278661249382 over 79007 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-295/hard_probe_linux_cron_ecar_identity.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-295/hard_probe_linux_cron_ecar_identity.json`
   found 0 cron nonzero-second rows, 0 syslog/eCAR shell PID mismatches, and 0
   Linux PROCESS/CREATE TID mismatches across 65 cron sysstat rows. The full
   blind panel plus deliberation is saved under
-  `scenarios/iteration-test/blind-test/loop-295/`; initial synthetic-confidence
+  `scenarios/iteration-test-1_0/blind-test/loop-295/`; initial synthetic-confidence
   scores were Threat Hunter 32, Detection Engineer 34, Network Forensics 68,
   and Host/EDR 56. Deliberation prioritized proxy-origin DNS causality as the
   next P0: multiple proxy-origin TLS handshakes precede first visible proxy DNS
@@ -1240,7 +1539,7 @@ or follow-up batch is needed.
   prerequisites before origin egress, and forward-proxy-origin external HTTP/TLS
   connections force visible DNS even when callers suppress client-side DNS.
   Automated eval passed at 96.69940951837162 over 95401 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-296/hard_probe_proxy_dns_causality.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-296/hard_probe_proxy_dns_causality.json`
   found 0 origin TLS rows without prior proxy DNS evidence across 1118 origin TLS
   rows, and CONNECT-to-origin TLS p50/p90 gaps of 5.25s/10.43s. Blind initial
   synthetic-confidence scores were Threat Hunter 43, Detection Engineer 48,
@@ -1253,13 +1552,13 @@ or follow-up batch is needed.
   now get user-session/terminal/login parents; and HTTP process-network mapping
   was added to data-driven config. Automated eval passed at 96.63103924384974
   over 102592 records. The hard probe
-  `scenarios/iteration-test/blind-test/loop-297/hard_probe_linux_ecar_flow_shell_parentage.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-297/hard_probe_linux_ecar_flow_shell_parentage.json`
   showed bash-owned FLOW rows dropped from 50 to 1 explicit reverse-shell payload
   and local `-bash` direct PID1/systemd parentage dropped to 0. Blind initial
   synthetic-confidence scores were Threat Hunter 34, Detection Engineer 29,
   Network Forensics 67, and Host/EDR 64; deliberation average was 61.5. A
   follow-up probe
-  `scenarios/iteration-test/blind-test/loop-297/hard_probe_zeek_client_first_rstr_byte_direction.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-297/hard_probe_zeek_client_first_rstr_byte_direction.json`
   confirmed the next P0: 42 client-first TCP `RSTR`/`ShAdr` rows with
   `orig_bytes=0`, `resp_bytes>0`, and `missed_bytes=0` across SMB, LDAP, HTTP,
   TLS, PostgreSQL, MySQL, and TDS. The next loop should fix this at the canonical
@@ -1269,7 +1568,7 @@ or follow-up batch is needed.
   `uv run pytest --no-cov -q` (`4553 passed, 19 skipped`).
 
 - Loops 298-307 continued the dev-branch assessment loop and archived all
-  artifacts under `scenarios/iteration-test/blind-test/loop-298/` through
+  artifacts under `scenarios/iteration-test-1_0/blind-test/loop-298/` through
   `loop-307/`. Loop 298 fixed client-first TCP byte/history ordering for Zeek
   reset rows; loop 299 fixed explicit proxy CONNECT origin companions; loop 300
   fixed DNS resolver/proxy cache texture; loop 301 fixed inbound
@@ -1300,7 +1599,7 @@ or follow-up batch is needed.
   96.47478843254147 over 84585 records, and the locked-session hard probe found
   0 violations. The next P0 is source-local session lifecycle ordering:
   loop-310 blind review and
-  `scenarios/iteration-test/blind-test/loop-310/hard_probe_session_lifecycle_ordering.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-310/hard_probe_session_lifecycle_ordering.json`
   found one Windows Security 4634-before-4624 group and one eCAR USER_SESSION
   LOGOUT-before-LOGIN group for short network logons.
 
@@ -1311,7 +1610,7 @@ or follow-up batch is needed.
   84585 records, full local verification passed (`4704 passed, 19 skipped`),
   and hard probes found 0 session lifecycle, locked-session, SSH failed-auth, or
   SSH username violations. Blind review selected proxy-origin DNS causality as
-  the next P0: `scenarios/iteration-test/blind-test/loop-311/hard_probe_proxy_origin_dns_causality.json`
+  the next P0: `scenarios/iteration-test-1_0/blind-test/loop-311/hard_probe_proxy_origin_dns_causality.json`
   found 18 proxy-origin TLS rows whose SNI/IP had no prior visible Zeek A answer.
 
 - Loop 312 partially fixed proxy-origin DNS causality/cache state. Explicit proxy
@@ -1320,7 +1619,7 @@ or follow-up batch is needed.
   cache observations no longer suppress the first visible forced lookup. Automated
   eval passed at 96.5498460793631 over 90768 records, repo-wide Ruff checks passed,
   and full local verification passed (`4707 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-312/hard_probe_proxy_origin_dns_causality.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-312/hard_probe_proxy_origin_dns_causality.json`
   improved from 18 broad no-prior rows to 9 across 1120 proxy-origin TLS rows.
   Blind review no longer prioritized proxy DNS: initial synthetic-confidence
   scores were Threat Hunter 62, Detection Engineer 32, Network Forensics 31, and
@@ -1335,7 +1634,7 @@ or follow-up batch is needed.
   PID/image provenance no longer flips independently from known principal evidence.
   Automated eval passed at 96.31130005616335 over 90768 records, full local
   verification passed (`4708 passed, 19 skipped`), and
-  `scenarios/iteration-test/blind-test/loop-313/hard_probe_ecar_flow_principal_attribution.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-313/hard_probe_ecar_flow_principal_attribution.json`
   found 0 FLOW rows retaining PID/image while omitting principal when the same
   host/PID/image had principal-bearing activity (down from 2865 on pre-fix data).
   Blind scores were Threat Hunter 44, Detection Engineer 43, Network Forensics 18,
@@ -1355,7 +1654,7 @@ or follow-up batch is needed.
   passed at 95.74878158737843 over 95168 records, focused EDR pool tests passed
   (`58 passed`), config validation passed, and full local verification passed
   (`4711 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-314/hard_probe_ecar_group_policy_registry_guid_reuse.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-314/hard_probe_ecar_group_policy_registry_guid_reuse.json`
   checked 293 Group Policy `Extension-List` rows and found 0 invalid GUIDs, 0
   hosts with one unique GUID per row, and a maximum of 5 unique GUIDs per host from
   a configured pool of 6. Blind scores were Threat Hunter 46, Detection Engineer
@@ -1375,7 +1674,7 @@ or follow-up batch is needed.
   overlay checks were extended for the new config section. Automated eval passed at
   96.28554535209074 over 92587 records, focused auth-noise tests passed, config validation
   passed, and full local verification passed (`4714 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-315/hard_probe_service_account_4648_callers.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-315/hard_probe_service_account_4648_callers.json`
   checked 28 service-account 4648 rows and found 0 `services.exe` callers across 6
   distinct caller images. Blind scores were Threat Hunter 37, Detection Engineer 34,
   Network Forensics 43, and Host/EDR 36, average 37.5; deliberation was not triggered.
@@ -1392,7 +1691,7 @@ or follow-up batch is needed.
   CONNECT setup row. Automated eval passed at 96/100 over 92630 records, parseability
   remained 100/100, focused proxy/parser tests passed (`75 passed`), config validation
   passed, and full local verification passed (`4717 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-316/hard_probe_proxy_https_inspection_metadata.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-316/hard_probe_proxy_https_inspection_metadata.json`
   found 1497 inspected HTTPS rows with 0 missing `ssl-inspect`/`bump`, 340 CONNECT setup
   rows with 0 missing `peek`, 0 inspected rows without recent setup, and 0 proxy parse
   errors. Blind scores were Threat Hunter 43, Detection Engineer 44, Network Forensics
@@ -1409,7 +1708,7 @@ or follow-up batch is needed.
   over 92398 records, parseability remained 100/100, focused proxy/baseline tests
   passed (`205 passed, 1 skipped`), and full local verification passed
   (`4723 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-317/hard_probe_proxy_user_agent_stability.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-317/hard_probe_proxy_user_agent_stability.json`
   found 2699 proxy rows, 0 parse errors, 26 source/second groups with multiple
   User-Agents, 2 groups with more than two UA families, and max 3 distinct UA
   families in one source/second. Blind scores were Threat Hunter 38, Detection
@@ -1429,7 +1728,7 @@ or follow-up batch is needed.
   95.95333291230318 over 188044 records, parseability remained 100/100, focused
   lifecycle tests passed (`174 passed`), and full local verification passed
   (`4724 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-318/hard_probe_ecar_ssh_session_lifecycle.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-318/hard_probe_ecar_ssh_session_lifecycle.json`
   found 135 SSH `USER_SESSION` rows with 0 missing LOGIN/LOGOUT `logon_id`, 0 missing
   LOGIN/LOGOUT `session_id`, 0 paired field mismatches, and 0 multi-value identity
   groups; 6 complete identity-bearing LOGOUT rows remained unmatched by in-window
@@ -1450,7 +1749,7 @@ or follow-up batch is needed.
   remained 100/100, focused Linux system-traffic tests passed (`61 passed`), Ruff
   checks passed, and full local verification passed (`4726 passed, 19 skipped`).
   The hard probe
-  `scenarios/iteration-test/blind-test/loop-319/hard_probe_linux_dbus_polkit_companions.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-319/hard_probe_linux_dbus_polkit_companions.json`
   found 51 dbus activation rows, 0 dbus burst groups, 12 polkit action rows with
   process paths, and 0 missing eCAR process companions. Blind scores were Threat
   Hunter 28, Detection Engineer 24, Network Forensics 34, and Host/EDR 28, average
@@ -1469,7 +1768,7 @@ or follow-up batch is needed.
   remained 100/100, focused HTTP/session tests passed (`65 passed` plus targeted
   baseline/proxy tests), Ruff checks passed, and full local verification passed
   (`4728 passed, 19 skipped`). The hard probe
-  `scenarios/iteration-test/blind-test/loop-320/hard_probe_proxy_http_transaction_texture.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-320/hard_probe_proxy_http_transaction_texture.json`
   reduced the max exact non-health page-document response-size cluster from 44 to
   4 while preserving static asset reuse. The first blind-panel attempt was
   invalidated after a reviewer accidentally modified generated data; reports were
@@ -1488,7 +1787,7 @@ or follow-up batch is needed.
   FLOW visibility; tuple responder processes are materialized from the same
   deterministic connection-start jitter as the canonical transport. The hard
   probe
-  `scenarios/iteration-test/blind-test/loop-321/hard_probe_ssh_destination_timing.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-321/hard_probe_ssh_destination_timing.json`
   reduced negative eCAR sshd-process-vs-syslog-connection offsets from 68/72
   matched rows to 0/68. Automated eval passed at 96.08943284310241 over 183974
   records, parseability remained 100/100, focused SSH tests passed (`22 passed`),
@@ -1508,7 +1807,7 @@ or follow-up batch is needed.
   parent when it is still a matching `/usr/sbin/sshd` `sshd: <user> [priv]`
   process, instead of always materializing a second near-identical SSH priv
   child. The hard probe
-  `scenarios/iteration-test/blind-test/loop-322/hard_probe_duplicate_ssh_priv_children.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-322/hard_probe_duplicate_ssh_priv_children.json`
   reduced duplicate SSH priv clusters with shell children from 12 to 0. Automated
   eval passed at 96.02516303602455 over 188589 records, parseability remained
   100/100, focused SSH/world-model tests passed, Ruff checks passed, and full
@@ -1527,7 +1826,7 @@ or follow-up batch is needed.
   offsets after the planned session deadline instead of clamping them to logout,
   and proxy username attribution requires an active same-host interactive/RDP/SSH
   session at request time. The hard probe
-  `scenarios/iteration-test/blind-test/loop-323/hard_probe_post_logout_user_activity.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-323/hard_probe_post_logout_user_activity.json`
   reduced authenticated proxy rows after visible logout from 96 to 0 and eCAR
   same-user flow rows from 22 to 2; the remaining two rows are SSH FLOW lifecycle
   texture, not proxy auth. Automated eval passed at 96.21349513015599 over
@@ -1547,7 +1846,7 @@ or follow-up batch is needed.
   service inventory, database profile traffic is filtered to engines actually
   supported by the target host, and seeded DB daemons are protected from stale
   termination. The hard probe
-  `scenarios/iteration-test/blind-test/loop-324/hard_probe_db_listener_ecar_attribution.json`
+  `scenarios/iteration-test-1_0/blind-test/loop-324/hard_probe_db_listener_ecar_attribution.json`
   reduced DB-PROD-01 successful inbound DB eCAR FLOW rows from 539 bare rows
   across ports 1433/3306/5432 to 300 current-data rows on port 3306, with 298
   attributed and 2 bare. Automated eval passed at 95.59008216061706 over 91227
@@ -1561,6 +1860,24 @@ or follow-up batch is needed.
   policy enforcement and denied-path rendering: ASA/Zeek currently show built
   paths that scenario policy says should be denied, and explicit denied direct
   DC-to-C2 attempts are absent.
+
+## 2026-08-14 Scenario composition boundary
+
+The monolithic Scenario 1.0 assessment source and all of its existing generated history moved
+atomically to `scenarios/iteration-test-1_0/`. Its authored `name` and output destination now use
+`iteration-test-1_0` so an archival rerun cannot overwrite the current assessment scenario; the
+historical generated evidence itself was not rewritten.
+
+Future assessment runs use the Scenario 2.0 wrapper at `scenarios/iteration-test/scenario.yaml`.
+It selects exact project organization pack
+`project:organization:meridian-healthcare-solutions@1.0.0`, which pins
+`package:evidenceforge:industry:technology@1.0.0`. The organization pack owns reusable Meridian environment and
+baseline configuration. The scenario continues to own the attack narrative, red herrings,
+assessment-only external identities, output selection, and email corpus.
+Pack validation and both scenario validations pass with the pre-existing advisories. The resolved
+environment, baseline, storyline, red herrings, time/output configuration, and embedded corpus are
+identical to the saved pre-migration model. Fixed-seed generation of eCAR, Zeek, and syslog from
+the saved pre-pack resolved artifact and the new wrapper produced byte-identical event artifacts.
 
 ## How to Continue
 

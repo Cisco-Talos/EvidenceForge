@@ -44,6 +44,8 @@ class ProxyTransactionPlan:
     tunnel_setup_cs_bytes: int = 0
     tunnel_setup_sc_bytes: int = 0
     tunnel_setup_time_taken_ms: int = 0
+    client_transport_cs_bytes: int | None = None
+    client_transport_sc_bytes: int | None = None
 
     def __post_init__(self) -> None:
         """Validate conditional phase ordering and terminal semantics."""
@@ -109,11 +111,9 @@ class ProxyTransactionPlan:
             if self.resolver_mode is not None or self.origin_connect_at is not None:
                 raise ValueError("Terminal proxy-only outcomes cannot contain origin activity")
         if self.reused_transport and (
-            self.terminal_outcome != "success"
-            or self.resolver_mode is not None
-            or self.origin_connect_at is not None
+            self.resolver_mode is not None or self.origin_connect_at is not None
         ):
-            raise ValueError("Reused proxy transports cannot open another origin transport")
+            raise ValueError("Reused proxy transports cannot resolve or open an origin")
         if self.terminal_outcome == "gateway_failure" and self.origin_response_at is not None:
             raise ValueError("Gateway failures cannot claim an origin response")
         if (
@@ -125,6 +125,14 @@ class ProxyTransactionPlan:
             < 0
         ):
             raise ValueError("Proxy tunnel setup accounting must be non-negative")
+        if any(
+            value is not None and value < 0
+            for value in (
+                self.client_transport_cs_bytes,
+                self.client_transport_sc_bytes,
+            )
+        ):
+            raise ValueError("Proxy client transport accounting must be non-negative")
 
     @property
     def time_taken_ms(self) -> int:
@@ -137,6 +145,17 @@ class ProxyTransactionPlan:
         """Return the complete client-to-proxy transport lifetime."""
 
         return max(0.000001, (self.close_at - self.client_connect_at).total_seconds())
+
+    @property
+    def tunnel_duration_seconds(self) -> float | None:
+        """Return the successful nested CONNECT tunnel lifetime when modeled."""
+
+        if self.tunnel_request_at is None or self.terminal_outcome != "success":
+            return None
+        established_at = (
+            self.request_at if self.tunnel_request_at < self.request_at else self.decision_at
+        )
+        return max(0.0, (self.close_at - established_at).total_seconds())
 
     @property
     def origin_duration_seconds(self) -> float | None:

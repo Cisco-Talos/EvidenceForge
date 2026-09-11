@@ -22,16 +22,13 @@
 
 """Zeek pe.log emitter."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.generation.emitters.zeek_files import (
-    _bounded_file_transfer_observation,
-    _related_http_analyzer_timestamp,
-)
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.generation.emitters.zeek_files import _frozen_source_time
+from evidenceforge.generation.network_observation import network_source_timing_key
 
 
 class ZeekPeEmitter(SensorMultiplexEmitter):
@@ -68,6 +65,7 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
                 "has_cert_table": pe.has_cert_table,
                 "has_debug_data": pe.has_debug_data,
                 "section_names": pe.section_names,
+                "_source_timing_key": network_source_timing_key("zeek_pe", pe.id),
                 **self._sensor_metadata(
                     event,
                     self.format_def.name if self.format_def else "zeek_pe",
@@ -85,26 +83,14 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
 
 
 def _pe_analyzer_timestamp(event: CanonicalOccurrence, pe: Any | None = None) -> datetime:
-    """Return a PE analyzer time after the owning files.log artifact."""
+    """Return a planner-frozen PE analyzer timestamp."""
+
     pe = pe or event.protocol.pe
     if pe is None:
         return event.timestamp
-    owning_transfer = next(
-        (transfer for transfer in event.protocol.file_transfers if transfer.fuid == pe.id),
-        None,
+    fallback = event.network.started_at if event.network is not None else event.timestamp
+    return _frozen_source_time(
+        event,
+        network_source_timing_key("zeek_pe", pe.id),
+        fallback,
     )
-    if event.network is not None and owning_transfer is not None:
-        file_ts, file_duration = _bounded_file_transfer_observation(
-            event,
-            min_start=_related_http_analyzer_timestamp(event, owning_transfer),
-            file_transfer=owning_transfer,
-        )
-        duration_us = max(0, int(file_duration * 1_000_000))
-        if duration_us <= 1:
-            return file_ts
-        max_offset_us = min(duration_us - 1, 250_000)
-        offset_us = 1 + (
-            _stable_seed(f"zeek_pe_ts:{pe.id}:{event.network.zeek_uid}") % max_offset_us
-        )
-        return file_ts + timedelta(microseconds=offset_us)
-    return event.timestamp + timedelta(milliseconds=1)

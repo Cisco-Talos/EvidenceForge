@@ -204,6 +204,62 @@ def test_upload_signature_requires_successful_body_bearing_http_method() -> None
     assert ids_alert_matches_transaction(alert, _planned_transaction(), http=post)
 
 
+def test_user_agent_signature_requires_exact_visible_http_value() -> None:
+    """A named User-Agent alert cannot survive a contradictory HTTP record."""
+
+    signature = signature_by_sid(2013028)
+    assert signature is not None
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=80,
+            proto="tcp",
+            rng=random.Random(14),
+        )
+    ).execute()
+
+    assert alert.predicate is not None
+    assert alert.predicate.http_user_agents == ("curl/8.4.0",)
+    assert ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(),
+        http=HttpContext(method="GET", user_agent="curl/8.4.0"),
+    )
+    assert not ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(),
+        http=HttpContext(method="GET", user_agent="Wget/1.21.3"),
+    )
+
+
+def test_python_urllib_signature_requires_cleartext_http_visibility() -> None:
+    """An origin-side opaque TLS flow cannot expose an HTTP User-Agent rule."""
+
+    signature = signature_by_sid(2023672)
+    assert signature is not None
+    assert signature["baseline_fp_allowed"] is False
+    alert = IdsAlertActionBundle(
+        IdsAlertRequest(
+            signature=signature,
+            time=T0,
+            src_ip="10.0.0.8",
+            dst_ip="198.51.100.20",
+            dst_port=443,
+            proto="tcp",
+            rng=random.Random(15),
+        )
+    ).execute()
+
+    assert not ids_alert_matches_transaction(
+        alert,
+        _planned_transaction(service="ssl", dst_port=443),
+        http=HttpContext(method="GET", user_agent="Python-urllib/3.12"),
+    )
+
+
 def test_response_and_scan_predicates_distinguish_payload_free_attempts() -> None:
     """Response claims require response evidence while scan metadata may fire on S0."""
 
@@ -1075,7 +1131,9 @@ def test_snort_sensor_filter_counters_are_independent(tmp_path) -> None:
         assert summary["policy_filtered"] == 1
 
 
-def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch) -> None:
+def test_snort_spool_is_retained_until_failed_final_rendering_retries(
+    tmp_path, monkeypatch
+) -> None:
     emitter = SnortEmitter(
         format_def=load_format("snort_alert"),
         output_path=tmp_path / "snort.log",
@@ -1096,13 +1154,20 @@ def test_snort_spool_is_removed_when_final_rendering_fails(tmp_path, monkeypatch
     spool_path = emitter._spool_path
     assert spool_path is not None and spool_path.exists()
 
+    original_renderer = emitter._render_alert
+
     def fail_render(_event_data):
         raise RuntimeError("render failed")
 
     monkeypatch.setattr(emitter, "_render_alert", fail_render)
     with pytest.raises(RuntimeError, match="render failed"):
         emitter.close()
+    assert spool_path.exists()
+
+    monkeypatch.setattr(emitter, "_render_alert", original_renderer)
+    emitter.close()
     assert not spool_path.exists()
+    assert "test" in (tmp_path / "snort.log").read_text()
 
 
 def test_no_ids_sensor_creates_no_candidate_totals_or_output(tmp_path) -> None:
@@ -1194,19 +1259,26 @@ def test_multi_day_candidates_remain_out_of_memory_buffers(tmp_path) -> None:
 
 
 def test_ids_documentation_and_skill_reference_stay_in_parity() -> None:
-    paths = (
+    schema_paths = (
         PROJECT_ROOT / "docs" / "reference" / "scenario-reference.md",
-        PROJECT_ROOT / "commands" / "eforge" / "references" / "scenario-reference.md",
-        PROJECT_ROOT / "docs" / "reference" / "EVIDENCE_FORMATS.md",
-        PROJECT_ROOT / "commands" / "eforge" / "references" / "evidence-formats.md",
+        PROJECT_ROOT / "commands" / "eforge" / "references" / "scenario-events-network.md",
     )
-    for path in paths:
+    for path in schema_paths:
+        content = path.read_text(encoding="utf-8")
+        assert "ids_alerts" in content
+        assert "policy" in content
+        assert "dhcp_lease" in content
+        assert "dns_tunnel" in content
+
+    evidence_paths = (
+        PROJECT_ROOT / "docs" / "reference" / "EVIDENCE_FORMATS.md",
+        PROJECT_ROOT / "commands" / "eforge" / "references" / "evidence-network-ids.md",
+    )
+    for path in evidence_paths:
         content = path.read_text(encoding="utf-8")
         assert "ids_alerts" in content
         assert "policy" in content
         assert "does not" in content
         assert "dhcp_lease" in content
         assert "dns_tunnel" in content
-        assert "email" in content
-        if "evidence" in path.name.lower():
-            assert "ids_evaluation" in content
+        assert "ids_evaluation" in content

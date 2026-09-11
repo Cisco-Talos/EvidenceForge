@@ -32,6 +32,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import HostCapability, WorldModel, WorldPlanner
@@ -41,6 +42,8 @@ from evidenceforge.models.scenario import (
     Group,
     OutputSpec,
     Scenario,
+    StorageConfig,
+    StorageServerConfig,
     StorylineEvent,
     System,
     TimeWindow,
@@ -155,6 +158,138 @@ def test_dns_client_services_do_not_make_workstations_dns_servers(world_model: W
 
     assert "DC-01" in dns_hostnames
     assert "WKS-02" not in dns_hostnames
+
+
+@pytest.mark.parametrize("service", ["cifs-utils", "smbclient"])
+def test_linux_smb_client_packages_do_not_imply_server_role(service: str) -> None:
+    """Linux client packages must not be mistaken for Samba server services."""
+    scenario = _make_scenario()
+    client = System(
+        hostname="LINUX-CLIENT",
+        ip="10.10.10.61",
+        os="Ubuntu 24.04",
+        type="workstation",
+        services=[service],
+    )
+    scenario.environment.systems = [client]
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[client.hostname]
+
+    assert host.supports(HostCapability.SMB_CLIENT)
+    assert not host.supports(HostCapability.SMB_SERVER)
+    assert "file_server" not in host.canonical_roles
+
+
+def test_linux_gvfs_is_transport_texture_not_canonical_smb_capability() -> None:
+    """GVFS may own opaque TCP/445 but must not schedule typed SMB activity."""
+    scenario = _make_scenario()
+    client = System(
+        hostname="LINUX-DESKTOP",
+        ip="10.10.10.62",
+        os="Ubuntu 24.04",
+        type="workstation",
+        services=["gvfs-smb"],
+    )
+    scenario.environment.systems = [client]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert not model.hosts[client.hostname].supports(HostCapability.SMB_CLIENT)
+    assert not model.hosts[client.hostname].supports(HostCapability.SMB_SERVER)
+
+
+@pytest.mark.parametrize("service", ["samba", "smbd", "smb-server"])
+def test_linux_samba_services_imply_server_not_client(service: str) -> None:
+    """Samba daemon labels should declare only the Linux SMB server capability."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="SAMBA-01",
+        ip="10.10.20.61",
+        os="Ubuntu 24.04",
+        type="server",
+        services=[service],
+    )
+    scenario.environment.systems = [server]
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[server.hostname]
+
+    assert host.supports(HostCapability.SMB_SERVER)
+    assert not host.supports(HostCapability.SMB_CLIENT)
+    assert "file_server" in host.canonical_roles
+
+
+def test_generic_linux_file_server_role_does_not_imply_samba() -> None:
+    """A Linux file-server label alone must not invent a Samba deployment."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="LINUX-FILES-01",
+        ip="10.10.20.63",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["file_server"],
+        services=["nfs"],
+    )
+    scenario.environment.systems = [server]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert not model.hosts[server.hostname].supports(HostCapability.SMB_SERVER)
+
+
+def test_generic_linux_smb_label_does_not_choose_client_or_server_capability() -> None:
+    """An ambiguous Linux SMB label must be replaced by an explicit client or server marker."""
+    scenario = _make_scenario()
+    system = System(
+        hostname="LINUX-SMB-01",
+        ip="10.10.20.64",
+        os="Ubuntu 24.04",
+        type="server",
+        services=["smb"],
+    )
+    scenario.environment.systems = [system]
+
+    host = WorldModel(scenario, "corp.local").hosts[system.hostname]
+
+    assert not host.supports(HostCapability.SMB_CLIENT)
+    assert not host.supports(HostCapability.SMB_SERVER)
+
+
+def test_storage_server_reference_implies_smb_server_capability() -> None:
+    """Explicit storage topology should make a Linux host an SMB server."""
+    scenario = _make_scenario()
+    server = System(
+        hostname="STORAGE-01",
+        ip="10.10.20.62",
+        os="Rocky Linux 9",
+        type="server",
+    )
+    scenario.environment.systems = [server]
+    scenario.environment.storage = StorageConfig(
+        servers=[StorageServerConfig(system=server.hostname, presets=["collaboration"])]
+    )
+
+    model = WorldModel(scenario, "corp.local")
+    host = model.hosts[server.hostname]
+
+    assert host.supports(HostCapability.SMB_SERVER)
+    assert "file_server" in host.canonical_roles
+    assert "smb-server" in model.service_defaults_by_host[server.hostname]
+
+
+def test_windows_smb_capability_defaults_are_role_aware() -> None:
+    """Windows clients are universal while server capability follows host type."""
+    scenario = _make_scenario()
+    workstation, server = scenario.environment.systems[0], scenario.environment.systems[2]
+    scenario.environment.systems = [workstation, server]
+
+    model = WorldModel(scenario, "corp.local")
+
+    assert model.hosts[workstation.hostname].supports(HostCapability.SMB_CLIENT)
+    assert not model.hosts[workstation.hostname].supports(HostCapability.SMB_SERVER)
+    assert model.hosts[server.hostname].supports(HostCapability.SMB_CLIENT)
+    assert model.hosts[server.hostname].supports(HostCapability.SMB_SERVER)
 
 
 @pytest.fixture
@@ -505,6 +640,39 @@ def test_world_planner_does_not_resurrect_session_ended_during_logon_backdate(
     assert state_manager.get_session(result.session.logon_id) is result.session
 
 
+def test_find_windows_interactive_does_not_return_historical_ended_owner(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Non-monotonic Windows lookup must not reuse an already-retired owner."""
+
+    session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    activity_time = session_start + timedelta(minutes=30)
+    state_manager.set_current_time(session_start)
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        session_kind="interactive",
+    )
+    historical = state_manager.get_session(logon_id)
+    assert historical is not None
+    state_manager.end_session(logon_id, session_start + timedelta(hours=1))
+    historical_activity = historical.last_activity_time
+
+    selected = planner._find_windows_interactive_session(
+        users["alice.admin"].username,
+        systems["WKS-01"],
+        activity_time,
+    )
+
+    assert selected is None
+    assert historical.last_activity_time == historical_activity
+
+
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,
@@ -519,7 +687,19 @@ def test_world_planner_bootstraps_ssh_session(
         systems["DB-01"].hostname,
         datetime(2024, 1, 6, 10, 15, 0, tzinfo=UTC),
     )
+    state_manager.register_boot_time(
+        systems["WKS-01"].hostname,
+        datetime(2024, 1, 15, 9, 50, 0, tzinfo=UTC),
+    )
     state_manager.set_current_time(seed_time)
+    smss_pid = state_manager.create_process(
+        systems["WKS-01"].hostname,
+        0,
+        r"C:\Windows\System32\smss.exe",
+        r"C:\Windows\System32\smss.exe",
+        "SYSTEM",
+        "System",
+    )
     systemd_pid = state_manager.create_process(
         systems["DB-01"].hostname,
         0,
@@ -537,7 +717,8 @@ def test_world_planner_bootstraps_ssh_session(
         "System",
     )
     activity_generator._system_pids = {
-        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
+        systems["WKS-01"].hostname: {"smss": smss_pid},
+        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid},
     }
     activity_generator._users_by_username = {users["alice.admin"].username: users["alice.admin"]}
     state_manager.create_session(
@@ -566,6 +747,7 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_ip == systems["WKS-01"].ip
     assert session.source_port > 0
     assert session.transport_pid is not None
+    responder_pid = session.transport_pid
     assert session.session_shell_pid is not None
     assert session.source_ready_time is not None
     assert session.network_close_time is not None
@@ -615,7 +797,9 @@ def test_world_planner_bootstraps_ssh_session(
         and event.process.command_line == f"sshd: {users['alice.admin'].username} [priv]"
     ]
     assert len(sshd_events) == 1
-    assert sshd_events[0].process.pid == session.transport_pid
+    assert sshd_events[0].process.pid == responder_pid
+    assert sshd_events[0].auth.logon_id == "0x3e7"
+    assert sshd_events[0].auth.session_id == 0
     assert bash_events[0].process.parent_image == "/usr/sbin/sshd"
     assert session.transport_pid > 180_000
     assert result.network_uid
@@ -624,9 +808,20 @@ def test_world_planner_bootstraps_ssh_session(
     connection = state_manager.get_connection_by_zeek_uid(result.network_uid)
     assert connection is not None
     assert connection.close_time is not None
-    # A late endpoint client observation must not move the bundle-owned TCP
-    # transport behind authentication. In that case attribution is omitted.
-    assert connection.initiating_pid == -1
+    # The SSH bundle now owns a causally prior source client. It remains safe to
+    # attribute the transport without moving TCP open behind authentication.
+    assert connection.initiating_pid > 0
+    source_client_events = [
+        event
+        for event in process_events
+        if event.src_host is not None
+        and event.src_host.hostname == systems["WKS-01"].hostname
+        and event.process is not None
+        and event.process.pid == connection.initiating_pid
+    ]
+    assert len(source_client_events) == 1
+    assert source_client_events[0].process.image.lower().endswith(("ssh", "ssh.exe"))
+    assert source_client_events[0].process.start_time < connection.start_time
     source_terminate_events = [
         call.args[0]
         for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -657,6 +852,13 @@ def test_world_planner_bootstraps_ssh_session(
         and call.args[0].process is not None
         and call.args[0].process.pid == session_shell_pid
     )
+    responder_terminate_event = next(
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "process_terminate"
+        and call.args[0].process is not None
+        and call.args[0].process.pid == responder_pid
+    )
     session_close_event = next(
         call.args[0]
         for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -665,6 +867,8 @@ def test_world_planner_bootstraps_ssh_session(
         and call.args[0].auth.logon_id == session.logon_id
     )
     assert shell_terminate_event.timestamp < session_close_event.timestamp
+    assert responder_terminate_event.auth.logon_id == sshd_events[0].auth.logon_id
+    assert responder_terminate_event.auth.session_id == sshd_events[0].auth.session_id
 
 
 def test_world_planner_materializes_visible_shell_for_reused_ssh_session(
@@ -951,14 +1155,114 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
+def test_world_planner_preserves_authored_linux_rdp_source_as_network_only(
+    scenario: Scenario,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """An authored Linux source IP must not become a fabricated Windows RDP client."""
+
+    linux_source = System(
+        hostname="LT-MRIVERA-02",
+        ip="10.10.1.99",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+    scenario.environment.systems.append(linux_source)
+    world_model = WorldModel(scenario, "corp.local")
+    state_manager = StateManager()
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    target = world_model.hosts["APP-01"].system
+    user = world_model.users["alice.admin"].user
+
+    plan = world_model.plan_session(
+        user=user,
+        target_system=target,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=linux_source,
+        source_ip_override=linux_source.ip,
+    )
+    assert plan.source_ip == "10.10.1.99"
+    assert plan.source_system is None
+
+    result = planner.bootstrap_user_session(
+        user=user,
+        target_system=target,
+        time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=linux_source,
+        source_ip_override=linux_source.ip,
+        allow_existing=False,
+    )
+
+    session = state_manager.get_session(result.session.logon_id)
+    assert session is not None
+    assert session.source_ip == "10.10.1.99"
+    assert session.transport_pid is None
+    rdp_connections = [
+        connection
+        for connection in state_manager.list_open_connections()
+        if connection.dst_port == 3389
+    ]
+    assert len(rdp_connections) == 1
+    assert rdp_connections[0].src_ip == "10.10.1.99"
+    assert rdp_connections[0].initiating_pid == -1
+    assert not any(
+        process.image.casefold().endswith("mstsc.exe")
+        for process in state_manager.list_running_processes()
+    )
+    assert not any(connection.source_system.startswith("WKS-") for connection in rdp_connections)
+
+
+def test_rdp_preserved_network_only_source_skips_modeled_host_rediscovery(
+    scenario: Scenario,
+) -> None:
+    """The RDP bundle must retain the planner's deliberate source-host absence."""
+
+    linux_source = System(
+        hostname="LT-MRIVERA-02",
+        ip="10.10.1.99",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+    target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
+    user = next(user for user in scenario.environment.users if user.username == "alice.admin")
+    executor = Mock()
+    executor._ip_to_system = {linux_source.ip: linux_source, target.ip: target}
+    bundle = RdpSessionActionBundle(
+        executor=executor,
+        request=RdpSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+            source_ip=linux_source.ip,
+            source_system=None,
+            source_pid=-1,
+            preserve_explicit_source=True,
+        ),
+    )
+
+    assert bundle._resolve_source(random.Random(11), user) == (linux_source.ip, None, -1)
+
+
 def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
-    """RDP canonical authentication should not absorb source-observation latency."""
+    """RDP auth without a modeled source should use only the transport phase gap."""
     scenario = _make_scenario()
     target = next(system for system in scenario.environment.systems if system.hostname == "APP-01")
     user = scenario.environment.users[0]
     base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    executor = Mock()
+    executor._ip_to_system = {}
     bundle = RdpSessionActionBundle(
-        executor=Mock(),
+        executor=executor,
         request=RdpSessionRequest(
             user=user,
             target_system=target,
@@ -967,7 +1271,6 @@ def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
         ),
     )
     logon_time = bundle._target_logon_time(
-        rng=random.Random(7),
         source_ip="10.10.10.50",
         src_port=52875,
         transport_start_time=base_time,
@@ -977,8 +1280,8 @@ def test_rdp_target_logon_uses_canonical_transport_phase_gap() -> None:
     assert logon_time <= base_time + timedelta(milliseconds=1600)
 
 
-def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
-    """Dispatcher source timing, not canonical RDP time, owns endpoint delay."""
+def test_rdp_target_logon_reserves_modeled_source_flow_and_clock_headroom() -> None:
+    """Modeled RDP auth must remain after source FLOW across valid endpoint clocks."""
 
     scenario = _make_scenario()
     source = next(system for system in scenario.environment.systems if system.hostname == "WKS-01")
@@ -987,7 +1290,10 @@ def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
     base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
     executor = Mock()
     executor.dispatcher.observation_policy = ObservationPolicy("enterprise_standard")
-    executor._source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    source_timing_planner = SourceTimingPlanner("enterprise_standard")
+    executor._source_timing_planner = source_timing_planner
+    executor.dispatcher.source_timing_planner = source_timing_planner
+    executor._ip_to_system = {source.ip: source, target.ip: target}
     bundle = RdpSessionActionBundle(
         executor=executor,
         request=RdpSessionRequest(
@@ -1000,14 +1306,32 @@ def test_rdp_target_logon_is_independent_of_observation_profile() -> None:
     )
 
     logon_time = bundle._target_logon_time(
-        rng=random.Random(7),
         source_ip=source.ip,
         src_port=52875,
         transport_start_time=base_time,
     )
 
-    assert base_time + timedelta(milliseconds=900) <= logon_time
-    assert logon_time <= base_time + timedelta(milliseconds=1600)
+    source_clock_headroom = source_timing_planner.endpoint_clock_positive_headroom(
+        base_time,
+        "windows",
+    )
+    target_clock_headroom = source_timing_planner.endpoint_clock_negative_headroom(
+        base_time + source_clock_headroom,
+        "windows",
+    )
+    flow_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=180,
+        default_max_ms=1800,
+        default_position="after",
+        default_class="source_latency",
+    )
+    assert logon_time > (
+        base_time
+        + source_clock_headroom
+        + target_clock_headroom
+        + timedelta(milliseconds=flow_window.max_ms + 25)
+    )
 
 
 def test_world_planner_moves_rdp_source_after_future_workstation_session(
@@ -1109,6 +1433,67 @@ def test_connection_owner_process_uses_scenario_internal_urls(
     assert proc is not None
     assert "meridianhcs.local" in proc.command_line
     assert "corp.local" not in proc.command_line
+
+
+def test_exact_custom_application_without_system_types_is_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+    planner: WorldPlanner,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+) -> None:
+    """Omitted custom-process system types allow every supported host type."""
+
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    system = systems["WKS-02"]
+    user = users["dev.user"]
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=2,
+        source_ip=system.ip,
+        session_kind="interactive",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    exact_application = {
+        "id": "custom:case-client",
+        "personas": [user.persona],
+        "platforms": {
+            "windows": {
+                "image_path": r"C:\Program Files\Case Client\case-client.exe",
+                "command_templates": ["case-client.exe --review"],
+            }
+        },
+        "categories": ["user_app"],
+        "system_types": None,
+        "selection_weight": 7,
+        "singleton_per_session": False,
+    }
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.application_catalog.get_applications_for_ids",
+        lambda _application_ids, _os_category: [exact_application],
+    )
+    monkeypatch.setattr(
+        "evidenceforge.generation.activity.application_catalog.get_executables_for_application_ids",
+        lambda _application_ids, _os_category: ["case-client.exe"],
+    )
+
+    pid = planner.ensure_connection_process(
+        user=user,
+        system=system,
+        session=session,
+        time=session_time,
+        service="ssl",
+        rng=random.Random(11),
+        application_ids=["custom:case-client"],
+    )
+
+    process = state_manager.get_process(system.hostname, pid)
+    assert process is not None
+    assert process.image == r"C:\Program Files\Case Client\case-client.exe"
+    assert process.command_line == "case-client.exe --review"
 
 
 def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
@@ -1310,11 +1695,24 @@ def test_linux_local_session_shell_has_visible_terminal_parent(
     assert session is not None
     assert parent_proc.lifecycle_group_id == session.lifecycle_group_id
     assert shell_proc.lifecycle_group_id == session.lifecycle_group_id
+    assert (
+        activity_generator.foreground_process_termination_time(system.hostname, parent_proc.pid)
+        is None
+    )
+    assert (
+        activity_generator.foreground_process_termination_time(system.hostname, shell_proc.pid)
+        is None
+    )
     if parent_proc.image == "/bin/login":
         assert user_manager.image in {"/sbin/init", "/usr/lib/systemd/systemd"}
         assert user_manager.lifecycle_group_id != session.lifecycle_group_id
     else:
         assert user_manager.lifecycle_group_id == session.lifecycle_group_id
+
+    activity_generator.finalize_foreground_process_lifetimes(activity_time + timedelta(minutes=1))
+
+    assert state_manager.get_process(system.hostname, parent_proc.pid) is parent_proc
+    assert state_manager.get_process(system.hostname, shell_proc.pid) is shell_proc
 
 
 def test_pre_window_linux_session_keeps_login_parent_before_collection(
@@ -1406,6 +1804,62 @@ def test_find_user_session_ignores_sessions_starting_after_activity_time(
     )
 
     assert selected is None
+
+
+def test_ssh_bootstrap_does_not_attach_to_historical_ended_owner(
+    world_model: WorldModel,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Session bootstrap cannot attach new state to an already-closed owner."""
+
+    start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(start_time)
+    logon_id = state_manager.create_session(
+        username="alice.admin",
+        system=systems["DB-01"].hostname,
+        logon_type=10,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="ssh",
+    )
+    historical = state_manager.get_session(logon_id)
+    assert historical is not None
+    state_manager.end_session(logon_id, start_time + timedelta(hours=1))
+    historical_activity = historical.last_activity_time
+
+    activity_generator = Mock()
+
+    def execute_ssh_session_bundle(**kwargs):
+        replacement_logon_id = state_manager.create_session(
+            username=kwargs["user"].username,
+            system=kwargs["target_system"].hostname,
+            logon_type=10,
+            source_ip=kwargs["source_ip"],
+            start_time=kwargs["time"],
+            session_kind="ssh",
+        )
+        return "replacement-network-uid", replacement_logon_id
+
+    activity_generator._execute_ssh_session_bundle.side_effect = execute_ssh_session_bundle
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+
+    selected = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["DB-01"],
+        source_system=systems["WKS-01"],
+        time=start_time + timedelta(minutes=30),
+        rng=random.Random(31),
+        session_kind="ssh",
+    )
+
+    assert selected.session.logon_id != logon_id
+    assert historical.last_activity_time == historical_activity
+    activity_generator.ensure_linux_ssh_session_shell.assert_called_once()
+    assert (
+        activity_generator.ensure_linux_ssh_session_shell.call_args.kwargs["logon_id"]
+        == selected.session.logon_id
+    )
 
 
 def test_align_rdp_source_after_future_session_preserves_naive_time_awareness(

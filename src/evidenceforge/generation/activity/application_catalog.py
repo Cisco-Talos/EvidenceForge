@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import random
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.config.schemas import ApplicationCatalogConfig
 from evidenceforge.generation.activity.system_processes import (
     get_system_binary_path,
 )
@@ -25,6 +28,9 @@ _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
 _CACHED_PE: dict[str, tuple[str, str, str, str, str]] | None = None
 _CACHED_PATH_INDEX: dict[str, dict[str, str]] | None = None
+_CACHED_APPLICATION_BY_ID: dict[str, dict[str, Any]] | None = None
+_CACHED_APPLICATION_ORDINAL_BY_ID: dict[str, int] | None = None
+_CACHED_APPLICATION_IDS_BY_EXECUTABLE: dict[str, dict[str, tuple[str, ...]]] | None = None
 
 # System binaries are now data-driven from system_processes.yaml.
 # See get_system_binary_exes() and get_system_binary_path() in system_processes.py.
@@ -33,10 +39,35 @@ _CACHED_PATH_INDEX: dict[str, dict[str, str]] | None = None
 def _merge_catalog(default: dict, overlay: dict) -> dict:
     """Merge application catalog overlay with package defaults."""
     result = dict(default)
+    overlay_version = overlay.get("schema_version")
+    if overlay_version is not None:
+        result["schema_version"] = overlay_version
+    overlay_default = overlay.get("default_deployment")
+    if overlay_default is not None:
+        result["default_deployment"] = overlay_default
     if "applications" in overlay:
+        overlay_entries = overlay["applications"]
+        if not isinstance(overlay_entries, list):
+            result["applications"] = merge_keyed_list(
+                default.get("applications", []),
+                overlay_entries,
+                key_field="id",
+            )
+            return result
+        overlay_is_current = overlay_version == 2 and isinstance(overlay_default, dict)
+        overlay_applications = []
+        for entry in overlay_entries:
+            if not overlay_is_current and isinstance(entry, dict):
+                application_id = str(entry.get("id") or "<unknown>")
+                warn_legacy_config(
+                    f"application_catalog overlay applications[{application_id}] unversioned entry",
+                    "schema_version: 2 and default_deployment: {kind: legacy_static}",
+                    stacklevel=4,
+                )
+            overlay_applications.append(entry)
         result["applications"] = merge_keyed_list(
             default.get("applications", []),
-            overlay["applications"],
+            overlay_applications,
             key_field="id",
         )
     return result
@@ -48,12 +79,133 @@ def load_catalog() -> dict[str, Any]:
     if _CACHED_CATALOG is not None:
         return _CACHED_CATALOG
 
-    _CACHED_CATALOG = load_with_overlay(
+    merged = load_with_overlay(
         _CATALOG_PATH,
         "activity/application_catalog.yaml",
         _merge_catalog,
     )
+    _CACHED_CATALOG = ApplicationCatalogConfig.model_validate(merged).model_dump(
+        mode="python",
+        exclude_none=True,
+        exclude_unset=True,
+    )
     return _CACHED_CATALOG
+
+
+def _application_index() -> dict[str, dict[str, Any]]:
+    """Build the exact application-ID index once at the catalog boundary."""
+
+    global _CACHED_APPLICATION_BY_ID
+    global _CACHED_APPLICATION_IDS_BY_EXECUTABLE
+    global _CACHED_APPLICATION_ORDINAL_BY_ID
+    if _CACHED_APPLICATION_BY_ID is None:
+        by_id: dict[str, dict[str, Any]] = {}
+        ordinal_by_id: dict[str, int] = {}
+        ids_by_executable: dict[str, dict[str, list[str]]] = {}
+        for ordinal, application in enumerate(load_catalog().get("applications", ())):
+            application_id = str(application.get("id") or "").strip().casefold()
+            if not application_id:
+                raise ValueError("application catalog entries require a stable id")
+            if application_id in by_id:
+                raise ValueError(f"duplicate application catalog id {application_id!r}")
+            by_id[application_id] = application
+            ordinal_by_id[application_id] = ordinal
+            for platform_name, platform in application.get("platforms", {}).items():
+                image_path = str(platform.get("image_path") or "")
+                executable = image_path.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                if executable:
+                    ids_by_executable.setdefault(str(platform_name), {}).setdefault(
+                        executable,
+                        [],
+                    ).append(application_id)
+        _CACHED_APPLICATION_BY_ID = by_id
+        _CACHED_APPLICATION_ORDINAL_BY_ID = ordinal_by_id
+        _CACHED_APPLICATION_IDS_BY_EXECUTABLE = {
+            platform: {
+                executable: tuple(application_ids)
+                for executable, application_ids in executable_map.items()
+            }
+            for platform, executable_map in ids_by_executable.items()
+        }
+    return _CACHED_APPLICATION_BY_ID
+
+
+def application_descriptor(application_id: str) -> dict[str, Any] | None:
+    """Return one exact application descriptor without scanning the catalog."""
+
+    return _application_index().get(application_id.strip().casefold())
+
+
+def application_ids_for_executables(
+    executables: Iterable[str],
+    os_category: str,
+) -> tuple[str, ...]:
+    """Return catalog-ordered IDs from the exact executable index."""
+
+    _application_index()
+    assert _CACHED_APPLICATION_IDS_BY_EXECUTABLE is not None
+    matched: set[str] = set()
+    executable_index = _CACHED_APPLICATION_IDS_BY_EXECUTABLE.get(os_category, {})
+    for executable in executables:
+        basename = str(executable).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        matched.update(executable_index.get(basename, ()))
+    assert _CACHED_APPLICATION_ORDINAL_BY_ID is not None
+    return tuple(
+        sorted(
+            matched,
+            key=_CACHED_APPLICATION_ORDINAL_BY_ID.__getitem__,
+        )
+    )
+
+
+def ordered_application_ids(application_ids: Iterable[str]) -> tuple[str, ...]:
+    """Return known exact application IDs in stable catalog order."""
+
+    _application_index()
+    assert _CACHED_APPLICATION_ORDINAL_BY_ID is not None
+    requested = {
+        application_id.strip().casefold()
+        for application_id in application_ids
+        if application_id.strip()
+    }
+    return tuple(
+        sorted(
+            (
+                application_id
+                for application_id in requested
+                if application_id in _application_index()
+            ),
+            key=_CACHED_APPLICATION_ORDINAL_BY_ID.__getitem__,
+        )
+    )
+
+
+def materialize_application_command(
+    rng: random.Random,
+    application_id: str,
+    os_category: str,
+    *,
+    username: str = "",
+    category: str | None = None,
+) -> tuple[str, str] | None:
+    """Materialize one exact compiled application without candidate-list construction."""
+
+    application = application_descriptor(application_id)
+    if application is None:
+        return None
+    if category is not None and category not in application.get("categories", ()):
+        return None
+    platform = application.get("platforms", {}).get(os_category)
+    if platform is None:
+        return None
+    image_path = str(platform["image_path"])
+    if "{username}" in image_path:
+        image_path = image_path.replace("{username}", username)
+    templates = platform.get("command_templates") or ()
+    if not templates:
+        return None
+    command_line = rng.choice(templates)
+    return image_path, parameterize_scoped_command(rng, command_line, platform)
 
 
 _ALL_SYSTEM_TYPES = ["workstation", "server", "domain_controller"]
@@ -98,7 +250,9 @@ def get_apps_for_persona(
             continue
         # Must be available on this system type (if filtering)
         if system_type:
-            allowed_types = app.get("system_types", _ALL_SYSTEM_TYPES)
+            allowed_types = app.get("system_types")
+            if allowed_types is None:
+                allowed_types = _ALL_SYSTEM_TYPES
             if system_type not in allowed_types:
                 continue
         results.append(app)
@@ -194,7 +348,8 @@ def is_system_type_allowed(
             or (lower + ".exe") == basename
             or basename.replace(".exe", "") == lower
         ):
-            return system_type in app.get("system_types", _ALL_SYSTEM_TYPES)
+            allowed_types = app.get("system_types")
+            return system_type in (_ALL_SYSTEM_TYPES if allowed_types is None else allowed_types)
     return True
 
 
@@ -242,7 +397,7 @@ def _build_pe_index() -> dict[str, tuple[str, str, str, str, str]]:
     data = load_catalog()
     index: dict[str, tuple[str, str, str, str, str]] = {}
     for app in data["applications"]:
-        win = app.get("platforms", {}).get("windows", {})
+        win = app.get("platforms", {}).get("windows") or {}
         pe = win.get("pe_metadata")
         if not pe:
             continue
@@ -400,7 +555,17 @@ def _child_image_from_command(
     return fallback_image_path
 
 
-def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str]]:
+def child_image_from_command(
+    os_category: str,
+    command_line: str,
+    fallback_image_path: str,
+) -> str:
+    """Return the exact configured child image without scanning the catalog."""
+
+    return _child_image_from_command(os_category, command_line, fallback_image_path)
+
+
+def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, Any]]:
     """Get child process definitions for a given parent executable.
 
     Children use the executable named by their command line when it is present,
@@ -434,12 +599,15 @@ def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str
             {
                 "image": _child_image_from_command(os_category, cmd, image_path),
                 "command_line": cmd,
+                "command_parameter_pools": platform.get("command_parameter_pools", {}),
             }
             for cmd in children
         ]
     return []
 
 
+# Compatibility-only inspection surface. Browser affinity is a pure function
+# for legacy callers and compiled per user profile in DeploymentContentRegistry.
 _USER_BROWSER_AFFINITY: dict[str, str] = {}
 
 _BROWSER_IDS = frozenset({"chrome", "firefox", "edge"})
@@ -460,13 +628,7 @@ def _apply_browser_affinity(
     if len(browser_apps) <= 1:
         return selected_app
 
-    if username not in _USER_BROWSER_AFFINITY:
-        from evidenceforge.utils.rng import _stable_seed
-
-        idx = _stable_seed(f"browser_{username}") % len(browser_apps)
-        _USER_BROWSER_AFFINITY[username] = browser_apps[idx]["id"]
-
-    primary_id = _USER_BROWSER_AFFINITY[username]
+    primary_id = browser_apps[_stable_seed(f"browser_{username}") % len(browser_apps)]["id"]
     if rng.random() < 0.90:
         return next((app for app in browser_apps if app["id"] == primary_id), selected_app)
 
@@ -482,6 +644,7 @@ def pick_app_and_command(
     username: str = "",
     system_type: str | None = None,
     deployment_key: str = "default",
+    application_ids: Iterable[str] | None = None,
 ) -> tuple[str, str] | None:
     """Pick a random app for the persona and return (image_path, command_template).
 
@@ -491,7 +654,21 @@ def pick_app_and_command(
     For browser-category apps, applies per-user browser affinity: each user
     has a primary browser (90% of the time) with occasional secondary use (10%).
     """
-    apps = get_apps_for_persona(persona, os_category, category, system_type, deployment_key)
+    if application_ids is None:
+        apps = get_apps_for_persona(persona, os_category, category, system_type, deployment_key)
+    else:
+        persona_lower = persona.casefold() if persona else "default"
+        apps = [
+            app
+            for app in get_applications_for_ids(application_ids, os_category)
+            if category in app.get("categories", ())
+            and persona_lower in app.get("personas", ())
+            and (
+                system_type is None
+                or app.get("system_types") is None
+                or system_type in app["system_types"]
+            )
+        ]
     if not apps:
         return None
 
@@ -504,7 +681,87 @@ def pick_app_and_command(
     if "{username}" in image_path:
         image_path = image_path.replace("{username}", username)
     command_line = rng.choice(platform["command_templates"])
+    command_line = parameterize_scoped_command(rng, command_line, platform)
     return image_path, command_line
+
+
+def parameterize_scoped_command(
+    rng: random.Random,
+    command_line: str,
+    platform: dict[str, Any],
+) -> str:
+    """Expand only the parameter pools attached to the selected process platform."""
+
+    pools = platform.get("command_parameter_pools", {})
+    if not isinstance(pools, dict):
+        return command_line
+    for _pass in range(3):
+        changed = False
+        for key, raw_values in pools.items():
+            if not isinstance(raw_values, list):
+                continue
+            values = [str(value) for value in raw_values if str(value)]
+            if not values:
+                continue
+            placeholder = "{" + str(key) + "}"
+            while placeholder in command_line:
+                command_line = command_line.replace(placeholder, rng.choice(values), 1)
+                changed = True
+        if not changed:
+            break
+    return command_line
+
+
+def get_applications_for_ids(
+    application_ids: Iterable[str],
+    os_category: str,
+) -> list[dict[str, Any]]:
+    """Return exact OS-compatible catalog entries for pack application bindings."""
+
+    by_id = _application_index()
+    assert _CACHED_APPLICATION_ORDINAL_BY_ID is not None
+    requested = {application_id.strip().casefold() for application_id in application_ids}
+    return sorted(
+        (
+            by_id[application_id]
+            for application_id in requested
+            if application_id in by_id and os_category in by_id[application_id].get("platforms", {})
+        ),
+        key=lambda app: _CACHED_APPLICATION_ORDINAL_BY_ID[str(app["id"]).casefold()],
+    )
+
+
+def get_executables_for_application_ids(
+    application_ids: list[str],
+    os_category: str,
+) -> list[str]:
+    """Return exact executable basenames for public pack application bindings."""
+
+    executables: list[str] = []
+    for app in get_applications_for_ids(application_ids, os_category):
+        image_path = str(app["platforms"][os_category].get("image_path") or "")
+        basename = image_path.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if basename:
+            executables.append(basename)
+    return list(dict.fromkeys(executables))
+
+
+def is_browser_application_process(
+    application_ids: list[str],
+    os_category: str,
+    process_image: str,
+) -> bool:
+    """Return whether the selected exact process is cataloged as a browser."""
+
+    selected_executable = process_image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for app in get_applications_for_ids(application_ids, os_category):
+        platform = app["platforms"][os_category]
+        executable = (
+            str(platform.get("image_path") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        )
+        if executable == selected_executable and "browser" in app.get("categories", []):
+            return True
+    return False
 
 
 def is_singleton_application_image(image_path: str, os_category: str) -> bool:

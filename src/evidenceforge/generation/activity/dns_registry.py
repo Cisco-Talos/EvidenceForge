@@ -60,6 +60,7 @@ def load_dns_registry() -> dict[str, Any]:
         "activity/dns_registry.yaml",
         _merge_dns_registry,
     )
+    _CACHED_DATA["cdn_ranges"] = get_cdn_ranges()
     return _CACHED_DATA
 
 
@@ -125,11 +126,32 @@ def get_domains_by_tag(*tags: str) -> list[dict]:
     Returns:
         List of domain entry dicts with keys: domain, ips, tags.
     """
-    index = _build_tag_index()
     if not tags:
         return []
 
+    data = load_dns_registry()
+    raw_exact_destinations = data.get("_pack_exact_destination_domains", {})
+    exact_destinations = raw_exact_destinations if isinstance(raw_exact_destinations, dict) else {}
+    exact_domains = {
+        str(tag): {str(domain) for domain in domains}
+        for tag, domains in exact_destinations.items()
+        if isinstance(domains, list)
+    }
+    if any(tag in exact_domains for tag in tags):
+        tag_set = set(tags)
+        return [
+            entry
+            for entry in data.get("domains", [])
+            if all(
+                entry.get("domain") in exact_domains[tag]
+                if tag in exact_domains
+                else tag in entry.get("tags", [])
+                for tag in tag_set
+            )
+        ]
+
     # Start with entries matching first tag, intersect with remaining tags
+    index = _build_tag_index()
     tag_set = set(tags)
     candidates = index.get(tags[0], [])
     return [entry for entry in candidates if tag_set.issubset(set(entry.get("tags", [])))]
@@ -251,8 +273,7 @@ def _domain_to_ip(domain: str) -> str:
     Uses a hash to map the domain to an IP in a realistic CDN range.
     Same domain always produces the same IP.
     """
-    data = load_dns_registry()
-    ranges = data.get("cdn_ranges", [[104, 16]])
+    ranges = get_cdn_ranges() or [[104, 16]]
 
     h = int(hashlib.sha256(domain.encode()).hexdigest()[:8], 16)
     prefix = ranges[h % len(ranges)]
@@ -283,6 +304,15 @@ def get_domain_tags(domain: str) -> list[str]:
 
 
 def get_cdn_ranges() -> list[list[int]]:
-    """Get CDN IP ranges for random IP generation."""
-    data = load_dns_registry()
-    return data.get("cdn_ranges", [])
+    """Get canonical CDN IP ranges through the retained helper shape."""
+
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        default_public_identity_registry,
+    )
+
+    return [
+        [first, second]
+        for first, second, _third_min, _third_max in (
+            default_public_identity_registry().provider_prefixes("cdn")
+        )
+    ]

@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from evidenceforge.config.provider import _register_trusted_derived_cache
 from evidenceforge.evaluation.rules import load_rules_file
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,14 @@ def load_thresholds() -> EvalThresholds:
         overall_aspirational=float(overall.get("aspirational", 85.0)),
         pillars=pillars,
     )
+
+
+_register_trusted_derived_cache(
+    __name__,
+    "load_thresholds",
+    globals(),
+    load_thresholds,
+)
 
 
 def _defaults() -> EvalThresholds:

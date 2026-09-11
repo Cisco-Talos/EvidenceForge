@@ -3,7 +3,7 @@
 ## Scope
 
 Completed ten counted `eforge-assess` loops (60 through 69) against
-`scenarios/iteration-test/scenario.yaml`. Each loop used deterministic scenario/config validation,
+`scenarios/iteration-test-1_0/scenario.yaml`. Each loop used deterministic scenario/config validation,
 the default non-slow regression suite before generation, forced generation into a new immutable
 loop directory, quantitative evaluation, targeted hard probes, four fresh isolated blind experts,
 and a family-level fix selected from the blind findings. Loop 68 and loop 69 exceeded the mandatory
@@ -93,6 +93,6 @@ lifecycle behavior. The initial network synthetic-confidence score was 28.
 4. Correct the isolated explicit-credential source-context leak and addressless KDC 4771 request.
 5. Continue reducing local-console density on Linux server roles.
 
-Artifacts are under `scenarios/iteration-test/blind-test/loop-60` through `loop-69`; the aggregate
-report is `scenarios/iteration-test/blind-test/REPORT.md`, and the trend visualization is
-`scenarios/iteration-test/blind-test/assessment-effectiveness-dashboard-last-20-loops.svg`.
+Artifacts are under `scenarios/iteration-test-1_0/blind-test/loop-60` through `loop-69`; the
+aggregate report is `scenarios/iteration-test-1_0/blind-test/REPORT.md`, and the trend visualization
+is `scenarios/iteration-test-1_0/blind-test/assessment-effectiveness-dashboard-last-20-loops.svg`.

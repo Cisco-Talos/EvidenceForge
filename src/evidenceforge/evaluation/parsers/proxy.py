@@ -74,12 +74,15 @@ def _parse_proxy_metadata(metadata: str) -> dict[str, str]:
             fields["ssl_bump_action"] = value
         elif key == "byte_scope":
             fields[key] = value
+        elif key == "tunnel_id":
+            fields[key] = value
         elif key in {
             "cs_bytes",
             "sc_bytes",
             "tunnel_cs_bytes",
             "tunnel_sc_bytes",
             "tunnel_duration_ms",
+            "client_src_port",
         }:
             try:
                 fields[key] = int(value)

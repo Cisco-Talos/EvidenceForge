@@ -26,6 +26,8 @@ from evidenceforge.generation.activity.ssh_identity import (
     baseline_ssh_auth_method,
     baseline_ssh_client_key,
 )
+from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -73,7 +75,7 @@ _SERVICE_ROLE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("exchange", "postfix", "smtp", "dovecot"), "mail_server"),
     (("splunk", "elasticsearch", "logstash", "syslog"), "log_server"),
     (("nfs",), "nfs_server"),
-    (("smb", "cifs", "fileshare"), "file_server"),
+    (("fileshare", "lanmanserver", "samba", "smbd"), "file_server"),
     (("squid", "proxy"), "forward_proxy"),
 )
 
@@ -115,6 +117,35 @@ _DHCP_SERVER_SERVICES = {
 
 _SSH_RECEIVER_SERVICES = {"ssh", "sshd", "openssh-server"}
 _RDP_RECEIVER_SERVICES = {"rdp", "remote-desktop", "remote_desktop", "termservice"}
+SSH_REQUIRED_UNTIL_MIN_TAIL_SECONDS = 20.0
+SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS = 90.0
+RDP_BOOTSTRAP_MIN_LEAD_SECONDS = 0.5
+RDP_BOOTSTRAP_MAX_LEAD_SECONDS = 5.0
+RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS = 1.799999
+RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS = 3.200001
+_SMB_CLIENT_SERVICES = {
+    "cifs-client",
+    "cifs-utils",
+    "smb-client",
+    "smbclient",
+}
+_SMB_SERVER_SERVICES = {
+    "lanmanserver",
+    "samba",
+    "smb-server",
+    "smbd",
+}
+_SMB_GENERIC_SERVICES = {"cifs", "fileshare", "smb"}
+
+
+def _sample_rdp_bootstrap_lead_seconds(rng: random.Random) -> float:
+    """Sample the existing RDP lead with Random.uniform's exact arithmetic."""
+
+    return (
+        RDP_BOOTSTRAP_MIN_LEAD_SECONDS
+        + (RDP_BOOTSTRAP_MAX_LEAD_SECONDS - RDP_BOOTSTRAP_MIN_LEAD_SECONDS) * rng.random()
+    )
+
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
 _LINUX_SSH_ADMIN_PERSONAS = {"sysadmin"}
@@ -237,6 +268,8 @@ class HostCapability(StrEnum):
     FORWARD_PROXY = "forward_proxy"
     RDP_CLIENT = "rdp_client"
     RDP_RECEIVER = "rdp_receiver"
+    SMB_CLIENT = "smb_client"
+    SMB_SERVER = "smb_server"
     SSH_RECEIVER = "ssh_receiver"
 
 
@@ -308,12 +341,27 @@ class SessionBootstrapResult:
     network_uid: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedRdpSessionBootstrap:
+    """Resolved RDP bootstrap facts that must retain one lifecycle ordering key."""
+
+    session_plan: SessionPlan
+    username: str
+    requested_activity_time: datetime
+    transport_time: datetime
+    activity_time: datetime
+    source_process_time: datetime | None
+
+
 class WorldModel:
     """Compiled environment model used by baseline and storyline generation."""
 
     def __init__(self, scenario: Scenario, ad_domain: str) -> None:
         self.scenario = scenario
         self.ad_domain = ad_domain
+        self._explicit_storage_servers = {
+            server.system.casefold() for server in scenario.environment.storage.servers
+        }
         self.systems_by_hostname: dict[str, System] = {
             system.hostname: system for system in scenario.environment.systems
         }
@@ -339,6 +387,8 @@ class WorldModel:
         self.dhcp_servers = self._collect_capability_systems(HostCapability.DHCP_SERVER)
         self.dns_servers = self._collect_capability_systems(HostCapability.DNS_RESOLVER)
         self.domain_controllers = self._collect_capability_systems(HostCapability.DOMAIN_CONTROLLER)
+        self.smb_clients = self._collect_capability_systems(HostCapability.SMB_CLIENT)
+        self.smb_servers = self._collect_capability_systems(HostCapability.SMB_SERVER)
         self.mail_servers: list[System] = self._collect_role_systems("mail_server")
         self.ntp_ips: list[str] = self._resolve_ntp_ips()
 
@@ -384,6 +434,7 @@ class WorldModel:
             capabilities.add(HostCapability.DHCP_SERVER)
         if os_category == "windows":
             capabilities.add(HostCapability.RDP_CLIENT)
+            capabilities.add(HostCapability.SMB_CLIENT)
         if os_category == "linux" and (
             system.type in ("server", "domain_controller")
             or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
@@ -394,6 +445,30 @@ class WorldModel:
             or normalized_services.intersection(_RDP_RECEIVER_SERVICES)
         ):
             capabilities.add(HostCapability.RDP_RECEIVER)
+
+        has_explicit_smb_client = bool(normalized_services & _SMB_CLIENT_SERVICES)
+        has_explicit_smb_server = bool(normalized_services & _SMB_SERVER_SERVICES)
+        has_generic_smb_service = bool(normalized_services & _SMB_GENERIC_SERVICES)
+        is_file_server = "file_server" in roles
+        is_explicit_storage_server = system.hostname.casefold() in self._explicit_storage_servers
+
+        if has_explicit_smb_client:
+            capabilities.add(HostCapability.SMB_CLIENT)
+        if (
+            has_explicit_smb_server
+            or is_explicit_storage_server
+            or (os_category == "windows" and is_file_server)
+        ):
+            capabilities.add(HostCapability.SMB_SERVER)
+            roles.add("file_server")
+        if has_generic_smb_service:
+            if os_category == "windows" and (
+                system.type in ("server", "domain_controller") or is_file_server
+            ):
+                capabilities.add(HostCapability.SMB_SERVER)
+                roles.add("file_server")
+        if os_category == "windows" and system.type in ("server", "domain_controller"):
+            capabilities.add(HostCapability.SMB_SERVER)
 
         return HostWorld(
             system=system,
@@ -426,6 +501,8 @@ class WorldModel:
             if host.is_server:
                 services.append("smb-server")
             return services
+        if host.supports(HostCapability.SMB_SERVER):
+            return ["dns-client", "ntp-client", "syslog", "smb-server"]
         return ["dns-client", "ntp-client", "syslog"]
 
     def _build_proxy_routes(self) -> dict[str, list[System]]:
@@ -914,6 +991,192 @@ class WorldPlanner:
         self.state_manager = state_manager
         self.activity_generator = activity_generator
 
+    def _timing_planner(self, source: str = "world-planner") -> BaselineTimingPlanner:
+        """Return the engine runtime or one stateless direct-test adapter."""
+
+        runtime = getattr(self.activity_generator, "timing_runtime", None)
+        return BaselineTimingPlanner(
+            runtime
+            if isinstance(runtime, TimingRuntime)
+            else TimingRuntime.compatibility_default(),
+            source=source,
+        )
+
+    @staticmethod
+    def _canonical_aware_time(value: datetime, *, field_name: str) -> datetime:
+        """Validate one public bootstrap time and return its canonical UTC value."""
+
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field_name} must be timezone-aware")
+        return value.astimezone(UTC)
+
+    def _prepare_rdp_session_bootstrap(
+        self,
+        *,
+        user: User,
+        target_system: System,
+        time: datetime,
+        rng: random.Random,
+        source_system: System | None = None,
+        source_ip_override: str | None = None,
+    ) -> _PreparedRdpSessionBootstrap:
+        """Freeze the exact RDP bundle timing facts before lifecycle ordering.
+
+        This preparation is intentionally specific to RDP. It resolves the
+        session plan, the ordinary bootstrap lead, and any source-workstation
+        alignment exactly once so later global scheduling can sort on the same
+        transport time that the RDP action bundle will consume.
+        """
+
+        requested_activity_time = self._canonical_aware_time(time, field_name="time")
+        session_plan = self.world_model.plan_session(
+            user=user,
+            target_system=target_system,
+            rng=rng,
+            session_kind="rdp",
+            source_system=source_system,
+            source_ip_override=source_ip_override,
+        )
+        if (
+            session_plan.session_kind != "rdp"
+            or session_plan.logon_type != 10
+            or not session_plan.requires_transport
+        ):
+            raise ValueError(
+                "Prepared RDP bootstrap requires a resolvable remote interactive "
+                f"session for {user.username} on {target_system.hostname}"
+            )
+
+        transport_time = requested_activity_time - timedelta(
+            seconds=_sample_rdp_bootstrap_lead_seconds(rng)
+        )
+        activity_time = requested_activity_time
+        source_process_time = self._rdp_source_process_time(
+            user=user,
+            plan=session_plan,
+            logon_time=transport_time,
+        )
+        if session_plan.source_system is not None:
+            assert source_process_time is not None
+            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                username=user.username,
+                source_system=session_plan.source_system,
+                source_process_time=source_process_time,
+                rng=rng,
+            )
+            if aligned_source_time > source_process_time:
+                shift = aligned_source_time - source_process_time
+                source_process_time = aligned_source_time
+                transport_time += shift
+                activity_time += shift
+
+        prepared = _PreparedRdpSessionBootstrap(
+            session_plan=session_plan,
+            username=user.username,
+            requested_activity_time=requested_activity_time,
+            transport_time=transport_time,
+            activity_time=activity_time,
+            source_process_time=source_process_time,
+        )
+        self._validate_prepared_rdp_session_bootstrap(
+            prepared,
+            user=user,
+            target_system=target_system,
+            time=requested_activity_time,
+            source_system=source_system,
+            source_ip_override=source_ip_override,
+            session_kind="rdp",
+        )
+        return prepared
+
+    def _bootstrap_prepared_rdp_session(
+        self,
+        *,
+        user: User,
+        prepared: _PreparedRdpSessionBootstrap,
+        rng: random.Random,
+        allow_existing: bool = True,
+    ) -> SessionBootstrapResult:
+        """Consume one planner-issued RDP timing carrier without resampling it."""
+
+        return self.bootstrap_user_session(
+            user=user,
+            target_system=prepared.session_plan.target_system,
+            time=prepared.requested_activity_time,
+            rng=rng,
+            session_kind="rdp",
+            source_system=prepared.session_plan.source_system,
+            allow_existing=allow_existing,
+            _prepared_rdp_bootstrap=prepared,
+        )
+
+    def _validate_prepared_rdp_session_bootstrap(
+        self,
+        prepared: _PreparedRdpSessionBootstrap,
+        *,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_system: System | None,
+        source_ip_override: str | None,
+        session_kind: str | None,
+    ) -> None:
+        """Reject stale or semantically mismatched prepared RDP facts."""
+
+        if session_kind != "rdp":
+            raise ValueError("Prepared RDP bootstrap requires session_kind='rdp'")
+
+        plan = prepared.session_plan
+        if plan.session_kind != "rdp" or plan.logon_type != 10 or not plan.requires_transport:
+            raise ValueError("Prepared RDP bootstrap must contain a Type 10 transport plan")
+        if prepared.username != user.username:
+            raise ValueError("Prepared RDP bootstrap username does not match the request")
+        if (
+            plan.target_system.hostname != target_system.hostname
+            or plan.target_system.ip != target_system.ip
+        ):
+            raise ValueError("Prepared RDP bootstrap target does not match the request")
+
+        prepared_source = plan.source_system
+        if source_system is not None:
+            source_matches = (
+                prepared_source is not None
+                and prepared_source.hostname == source_system.hostname
+                and prepared_source.ip == source_system.ip
+            )
+            if not source_matches:
+                raise ValueError("Prepared RDP bootstrap source does not match the request")
+        if source_ip_override is not None and plan.source_ip != source_ip_override:
+            raise ValueError("Prepared RDP bootstrap source IP does not match the request")
+
+        requested_time = self._canonical_aware_time(time, field_name="time")
+        if prepared.requested_activity_time != requested_time:
+            raise ValueError("Prepared RDP bootstrap activity time does not match the request")
+        for field_name, value in (
+            ("requested_activity_time", prepared.requested_activity_time),
+            ("transport_time", prepared.transport_time),
+            ("activity_time", prepared.activity_time),
+        ):
+            if value.tzinfo is not UTC:
+                raise ValueError(f"Prepared RDP bootstrap {field_name} must be canonical UTC")
+        if prepared.transport_time > prepared.activity_time:
+            raise ValueError("Prepared RDP transport time must not follow its activity time")
+        if prepared.activity_time < prepared.requested_activity_time:
+            raise ValueError("Prepared RDP activity time must not precede its requested time")
+
+        if prepared_source is None:
+            if prepared.source_process_time is not None:
+                raise ValueError("External RDP bootstrap cannot contain a source process time")
+        else:
+            if _get_os_category(prepared_source.os) != "windows":
+                raise ValueError("Prepared RDP bootstrap requires a Windows source system")
+            if prepared.source_process_time is None:
+                raise ValueError("Modeled RDP source requires a source process time")
+            if prepared.source_process_time.tzinfo is not UTC:
+                raise ValueError("Prepared RDP bootstrap source_process_time must be canonical UTC")
+            if prepared.source_process_time >= prepared.transport_time:
+                raise ValueError("Prepared RDP source process must precede transport")
+
     def ensure_user_session(
         self,
         user: User,
@@ -954,7 +1217,7 @@ class WorldPlanner:
         cutoff = at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user_at(username, at_time)
+            for session in self.state_manager.get_active_sessions_for_user_at(username, at_time)
             if session.system == target_system.hostname
             and session.logon_type in {2, 10, 11}
             and session.session_kind not in {"network", "service"}
@@ -978,7 +1241,19 @@ class WorldPlanner:
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        _prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
+        if _prepared_rdp_bootstrap is not None:
+            self._validate_prepared_rdp_session_bootstrap(
+                _prepared_rdp_bootstrap,
+                user=user,
+                target_system=target_system,
+                time=time,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+                session_kind=session_kind,
+            )
+
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
                 user.username,
@@ -1047,39 +1322,34 @@ class WorldPlanner:
                     existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
 
-        plan = self.world_model.plan_session(
-            user=user,
-            target_system=target_system,
-            rng=rng,
-            session_kind=session_kind,
-            source_system=source_system,
-            source_ip_override=source_ip_override,
-        )
-        if plan.session_kind == "ssh":
-            # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
-            # process evidence. Give that source-native sequence room before
-            # the first user-visible command tied to the session.
-            logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
-        elif plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux":
-            logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
+        if _prepared_rdp_bootstrap is not None:
+            plan = _prepared_rdp_bootstrap.session_plan
+            logon_time = _prepared_rdp_bootstrap.transport_time
+            activity_time = _prepared_rdp_bootstrap.activity_time
         else:
-            logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
+            plan = self.world_model.plan_session(
+                user=user,
+                target_system=target_system,
+                rng=rng,
+                session_kind=session_kind,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+            )
+            if plan.session_kind == "ssh":
+                # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
+                # process evidence. Give that source-native sequence room before
+                # the first user-visible command tied to the session.
+                logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+            elif (
+                plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux"
+            ):
+                logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
+            else:
+                logon_time = time - timedelta(seconds=_sample_rdp_bootstrap_lead_seconds(rng))
+            activity_time = time
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
-            if storyline_protected and session_end_plan is None and required_until is None:
-                scenario_end = getattr(self.activity_generator, "_scenario_end_time", None)
-                if isinstance(scenario_end, datetime):
-                    close_margin_seconds = 180 + (
-                        _stable_seed(
-                            "storyline_ssh_close_margin:"
-                            f"{user.username}:{target_system.hostname}:{logon_time.isoformat()}"
-                        )
-                        % 421
-                    )
-                    required_until = ensure_utc(scenario_end) - timedelta(
-                        seconds=close_margin_seconds
-                    )
             result = self._bootstrap_ssh_session(
                 user,
                 plan,
@@ -1098,10 +1368,11 @@ class WorldPlanner:
                 user,
                 plan,
                 logon_time,
-                time,
+                activity_time,
                 rng,
                 session_end_plan=session_end_plan,
                 ids_alerts=ids_alerts,
+                prepared_rdp_bootstrap=_prepared_rdp_bootstrap,
             )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
@@ -1134,6 +1405,7 @@ class WorldPlanner:
         rng: random.Random,
         effective_persona: str | None = None,
         destination_hostname: str | None = None,
+        application_ids: list[str] | None = None,
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
@@ -1143,8 +1415,299 @@ class WorldPlanner:
                 cataloged for this persona instead of the user's normal one.
             destination_hostname: Optional resolved destination hostname used to
                 select a plausible owning app for generic services like SSL.
+            application_ids: Exact application-catalog IDs compiled from a pack
+                application binding. When supplied, these replace the legacy
+                service-to-executable inference.
         """
-        compatible_exes = get_service_to_exes().get(service, [])
+        os_cat = self.world_model.hosts[system.hostname].os_category
+        persona = (user.persona or "default").lower()
+        deployment_registry = getattr(
+            getattr(self.activity_generator, "dispatcher", None),
+            "deployment_registry",
+            None,
+        )
+        if deployment_registry is not None:
+            host_deployment = deployment_registry.host_deployment(system.hostname)
+            if host_deployment is None:
+                return -1
+            deployment_platform = host_deployment.platform
+            user_profile = deployment_registry.user_profile_for(
+                system.hostname,
+                user.username,
+                deployment_platform,
+            )
+            if user_profile is None:
+                return -1
+
+            explicit_applications = application_ids is not None
+            if explicit_applications:
+                requested_application_ids = tuple(
+                    sorted(
+                        {
+                            application_id.strip().casefold()
+                            for application_id in application_ids
+                            if application_id.strip()
+                        }
+                    )
+                )
+            else:
+                compatible_executables = get_service_to_exes().get(service, ())
+                requested_ids: set[str] = set()
+                for executable in sorted(
+                    set(compatible_executables),
+                    key=lambda value: (value.casefold(), value),
+                ):
+                    requested_ids.update(
+                        deployment_registry.application_ids_for_executable(
+                            deployment_platform,
+                            executable,
+                        )
+                    )
+                requested_application_ids = tuple(sorted(requested_ids))
+            if not requested_application_ids:
+                return -1
+
+            is_server_admin = effective_persona == "_server_admin"
+            server_excluded_categories = {"browser", "office", "code", "build"}
+            candidates = []
+            for application_id in requested_application_ids:
+                assignment = deployment_registry.user_application_assignment_for_application(
+                    user_profile.profile_id,
+                    application_id,
+                )
+                if assignment is None:
+                    continue
+                descriptor = deployment_registry.application_descriptor_for_assignment(assignment)
+                image = deployment_registry.application_executable_for_assignment(assignment)
+                if descriptor is None or image is None:
+                    continue
+                if descriptor.executable.casefold() in _SHELL_EXES:
+                    continue
+                if is_server_admin and server_excluded_categories.intersection(
+                    descriptor.categories
+                ):
+                    continue
+                candidates.append((assignment, descriptor, image))
+            candidates.sort(
+                key=lambda candidate: (
+                    candidate[1].selection_ordinal,
+                    candidate[1].application_id,
+                )
+            )
+            if not candidates:
+                return -1
+
+            lock_time = getattr(self.activity_generator, "_last_workstation_lock_time", {}).get(
+                (system.hostname, user.username, session.logon_id)
+            )
+            if lock_time is not None and ensure_utc(lock_time) <= ensure_utc(time):
+                return -1
+
+            destination_tags: set[str] = set()
+            exe_tag_index: dict[str, set[str]] = {}
+            if not explicit_applications and destination_hostname:
+                from evidenceforge.generation.activity.dns_registry import get_domain_tags
+                from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+                destination_tags = set(get_domain_tags(destination_hostname))
+                exe_tag_index = {
+                    exe.casefold(): set(info.get("dns_tags") or ())
+                    for exe, info in get_exe_to_service().items()
+                }
+
+            broad_tags = {
+                "web",
+                "saas",
+                "cdn",
+                "social",
+                "background",
+                "windows",
+                "linux",
+            }
+
+            def _compiled_destination_score(executable: str) -> int:
+                if not destination_tags:
+                    return 1
+                executable_tags = exe_tag_index.get(executable.casefold(), set())
+                if not executable_tags:
+                    return 0
+                specific = destination_tags - broad_tags
+                specific_hits = len(executable_tags & specific)
+                broad_hits = len(executable_tags & destination_tags & broad_tags)
+                return specific_hits * 100 + broad_hits
+
+            if destination_tags:
+                scored_candidates = [
+                    (candidate, _compiled_destination_score(candidate[1].executable))
+                    for candidate in candidates
+                ]
+                maximum_score = max(
+                    (score for _candidate, score in scored_candidates),
+                    default=0,
+                )
+                if maximum_score <= 0:
+                    return -1
+                candidates = [
+                    candidate for candidate, score in scored_candidates if score == maximum_score
+                ]
+
+            def _compiled_image_key(image_path: str) -> str:
+                if os_cat == "windows":
+                    return image_path.replace("/", "\\").casefold()
+                return image_path
+
+            candidate_image_keys = {_compiled_image_key(candidate[2]) for candidate in candidates}
+            effective_time = ensure_utc(time)
+            if explicit_applications:
+                active_exact_processes = [
+                    process
+                    for process in self.state_manager.get_processes_for_session(
+                        session.logon_id,
+                        system.hostname,
+                    )
+                    if process.username.casefold() == user.username.casefold()
+                    and ensure_utc(process.start_time) <= effective_time
+                    and _compiled_image_key(process.image) in candidate_image_keys
+                ]
+                if active_exact_processes:
+                    return max(
+                        active_exact_processes,
+                        key=lambda process: (ensure_utc(process.start_time), process.pid),
+                    ).pid
+            else:
+                history_key = (system.hostname, user.username)
+                history = self.activity_generator._user_process_history.get(history_key, ())[-10:]
+                for pid, _recorded_image in reversed(history):
+                    process = self.state_manager.get_process(system.hostname, pid)
+                    if process is None or ensure_utc(process.start_time) > effective_time:
+                        continue
+                    if process.logon_id and process.logon_id != session.logon_id:
+                        continue
+                    if process.username.casefold() != user.username.casefold():
+                        continue
+                    if _compiled_image_key(process.image) in candidate_image_keys:
+                        return pid
+
+            if len(candidates) == 1:
+                selected_assignment = candidates[0][0]
+            else:
+                selected_assignment = (
+                    deployment_registry.select_user_application_assignment_for_applications(
+                        user_profile.profile_id,
+                        tuple(candidate[0].application_id for candidate in candidates),
+                        unit_interval=rng.random(),
+                    )
+                )
+                if selected_assignment is None:
+                    return -1
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate[0].assignment_id == selected_assignment.assignment_id
+                ),
+                None,
+            )
+            if selected is None:
+                return -1
+            _registered_assignment, selected_descriptor, _registered_image = selected
+            materialized = deployment_registry.materialize_application_command(
+                rng,
+                selected_assignment,
+                username=user.username,
+            )
+            if materialized is None:
+                return -1
+            image, command_line = materialized
+            command_line = self.activity_generator._parameterize_command_for_system(
+                rng,
+                command_line,
+                username=user.username,
+                system=system,
+            )
+            target_exe = selected_descriptor.executable
+
+            singleton_key = None
+            if selected_descriptor.singleton_per_session:
+                singleton_key = self.activity_generator._singleton_application_key(
+                    system,
+                    user.username,
+                    session.logon_id,
+                    image,
+                )
+
+            proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
+            min_proc_time = session.start_time + timedelta(milliseconds=100)
+            if proc_time < min_proc_time:
+                proc_time = min_proc_time
+            if singleton_key is not None:
+                interval_end = (
+                    self.state_manager.get_session_end_time(session.logon_id)
+                    or self.activity_generator._scenario_end_time
+                )
+                if not self.activity_generator.claim_singleton_application_interval(
+                    singleton_key,
+                    proc_time,
+                    interval_end,
+                ):
+                    return -1
+            self.state_manager.set_current_time(proc_time)
+            parent_pid = self.activity_generator._resolve_parent(
+                system,
+                user,
+                proc_time,
+                session.logon_id,
+                image,
+            )
+            pid = self.activity_generator.generate_process(
+                user=user,
+                system=system,
+                time=proc_time,
+                logon_id=session.logon_id,
+                process_name=image,
+                command_line=command_line,
+                parent_pid=parent_pid,
+            )
+            if target_exe.casefold() == "ldapsearch":
+                lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
+                termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
+                self.activity_generator._remember_foreground_process_finalizer(
+                    system=system,
+                    user=user,
+                    pid=pid,
+                    process_name=image,
+                    logon_id=session.logon_id,
+                    termination_time=termination_time,
+                )
+            self.activity_generator._record_user_process(system, user, pid, image)
+            return pid
+
+        exact_applications: list[dict[str, Any]] = []
+        if application_ids:
+            from evidenceforge.generation.activity.application_catalog import (
+                get_applications_for_ids,
+            )
+
+            system_type = getattr(system, "type", None)
+            exact_applications = [
+                app
+                for app in get_applications_for_ids(application_ids, os_cat)
+                if persona in app.get("personas", [])
+                and (
+                    app.get("system_types") is None
+                    or system_type is None
+                    or system_type in app["system_types"]
+                )
+            ]
+            compatible_exes = [
+                str(app["platforms"][os_cat]["image_path"])
+                .replace("\\", "/")
+                .rsplit("/", 1)[-1]
+                .lower()
+                for app in exact_applications
+            ]
+        else:
+            compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
         compatible_exes = [
@@ -1184,24 +1747,49 @@ class WorldPlanner:
             broad_hits = len(exe_tags & destination_tags & broad_tags)
             return specific_hits * 100 + broad_hits
 
-        history_key = (system.hostname, user.username)
-        history = self.activity_generator._user_process_history.get(history_key, [])
-        best_existing: tuple[int, int, int] | None = None
-        for idx, (pid, image) in enumerate(reversed(history)):
-            proc = self.state_manager.get_process(system.hostname, pid)
-            if proc is None or proc.start_time > time:
-                continue
-            if proc.logon_id and proc.logon_id != session.logon_id:
-                continue
-            exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if exe in _SHELL_EXES:
-                continue
-            if exe in compatible_exes:
-                score = _destination_score(exe)
-                if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):
-                    best_existing = (score, -idx, pid)
-        if best_existing is not None:
-            return best_existing[2]
+        if exact_applications:
+            compatible_exact_images = {
+                str(app["platforms"][os_cat]["image_path"])
+                .replace("{username}", user.username)
+                .replace("/", "\\")
+                .casefold()
+                for app in exact_applications
+            }
+            effective_time = ensure_utc(time)
+            active_exact_processes = [
+                process
+                for process in self.state_manager.get_processes_for_session(
+                    session.logon_id,
+                    system.hostname,
+                )
+                if process.username.casefold() == user.username.casefold()
+                and ensure_utc(process.start_time) <= effective_time
+                and process.image.replace("/", "\\").casefold() in compatible_exact_images
+            ]
+            if active_exact_processes:
+                return max(
+                    active_exact_processes,
+                    key=lambda process: (ensure_utc(process.start_time), process.pid),
+                ).pid
+        else:
+            history_key = (system.hostname, user.username)
+            history = self.activity_generator._user_process_history.get(history_key, [])
+            best_existing: tuple[int, int, int] | None = None
+            for idx, (pid, image) in enumerate(reversed(history)):
+                proc = self.state_manager.get_process(system.hostname, pid)
+                if proc is None or proc.start_time > time:
+                    continue
+                if proc.logon_id and proc.logon_id != session.logon_id:
+                    continue
+                exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if exe in _SHELL_EXES:
+                    continue
+                if exe in compatible_exes:
+                    score = _destination_score(exe)
+                    if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):
+                        best_existing = (score, -idx, pid)
+            if best_existing is not None:
+                return best_existing[2]
 
         from evidenceforge.generation.activity.application_catalog import (
             get_app_categories,
@@ -1211,10 +1799,10 @@ class WorldPlanner:
             is_singleton_application_image,
             is_system_type_allowed,
             load_catalog,
+            parameterize_scoped_command,
             resolve_image_path,
         )
 
-        os_cat = self.world_model.hosts[system.hostname].os_category
         # _server_admin is a policy overlay: use the user's real persona for
         # catalog eligibility, then exclude browser/office categories that
         # are inappropriate on servers (no Chrome/Outlook on DC via RDP).
@@ -1222,7 +1810,6 @@ class WorldPlanner:
         # security_analyst) can use admin tools (dsquery, ldapsearch) when
         # doing remote server administration.
         is_server_admin = effective_persona == "_server_admin"
-        persona = (user.persona or "default").lower()
         _SERVER_EXCLUDED_CATEGORIES = {"browser", "office", "code", "build"}
 
         def _is_allowed(exe: str) -> bool:
@@ -1247,24 +1834,38 @@ class WorldPlanner:
                     return False
             return allowed
 
-        os_exes = [e for e in compatible_exes if _is_allowed(e)]
-        if destination_tags:
-            scored_exes = [(e, _destination_score(e)) for e in os_exes]
-            os_exes = [e for e, score in scored_exes if score > 0]
-        if not os_exes:
-            # No persona-approved executable for this service — don't
-            # relax past the allowlist (that would spawn forbidden tools
-            # like sqlcmd.exe for accountants).  Return -1 (no owning process).
-            return -1
-        if destination_tags:
-            weights = [_destination_score(e) for e in os_exes]
-            target_exe = rng.choices(os_exes, weights=weights, k=1)[0]
+        selected_platform: dict[str, Any] | None = None
+        selected_singleton = False
+        if exact_applications:
+            selected_app = rng.choices(
+                exact_applications,
+                weights=[int(app.get("selection_weight", 10)) for app in exact_applications],
+                k=1,
+            )[0]
+            selected_platform = selected_app["platforms"][os_cat]
+            image = str(selected_platform["image_path"]).replace("{username}", user.username)
+            target_exe = image.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            selected_singleton = bool(selected_app.get("singleton_per_session"))
         else:
-            target_exe = rng.choice(os_exes)
-        image = resolve_image_path(target_exe, os_cat, username=user.username)
+            os_exes = [e for e in compatible_exes if _is_allowed(e)]
+            if destination_tags:
+                scored_exes = [(e, _destination_score(e)) for e in os_exes]
+                os_exes = [e for e, score in scored_exes if score > 0]
+            if not os_exes:
+                # No persona-approved executable for this service — don't
+                # relax past the allowlist (that would spawn forbidden tools
+                # like sqlcmd.exe for accountants). Return no owning process.
+                return -1
+            if destination_tags:
+                weights = [_destination_score(e) for e in os_exes]
+                target_exe = rng.choices(os_exes, weights=weights, k=1)[0]
+            else:
+                target_exe = rng.choice(os_exes)
+            image = resolve_image_path(target_exe, os_cat, username=user.username)
+            selected_singleton = is_singleton_application_image(image, os_cat)
 
         singleton_key = None
-        if is_singleton_application_image(image, os_cat):
+        if selected_singleton:
             singleton_key = self.activity_generator._singleton_application_key(
                 system,
                 user.username,
@@ -1275,24 +1876,40 @@ class WorldPlanner:
         # Build a realistic command line from the catalog template when
         # available, instead of emitting the bare executable name.
         command_line = target_exe
-        catalog = load_catalog()
-        for app in catalog.get("applications", []):
-            plat = app.get("platforms", {}).get(os_cat)
-            if not plat:
-                continue
-            plat_image = plat.get("image_path", "")
-            plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if plat_exe == target_exe.lower() or plat_exe.replace(".exe", "") == target_exe.lower():
-                templates = plat.get("command_templates", [])
-                if templates:
-                    command_line = rng.choice(templates)
-                    command_line = self.activity_generator._parameterize_command_for_system(
-                        rng,
-                        command_line,
-                        username=user.username,
-                        system=system,
-                    )
-                break
+        if selected_platform is not None:
+            templates = selected_platform.get("command_templates", [])
+            if templates:
+                command_line = rng.choice(templates)
+                command_line = parameterize_scoped_command(rng, command_line, selected_platform)
+                command_line = self.activity_generator._parameterize_command_for_system(
+                    rng,
+                    command_line,
+                    username=user.username,
+                    system=system,
+                )
+        else:
+            catalog = load_catalog()
+            for app in catalog.get("applications", []):
+                plat = app.get("platforms", {}).get(os_cat)
+                if not plat:
+                    continue
+                plat_image = plat.get("image_path", "")
+                plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if (
+                    plat_exe == target_exe.lower()
+                    or plat_exe.replace(".exe", "") == target_exe.lower()
+                ):
+                    templates = plat.get("command_templates", [])
+                    if templates:
+                        command_line = rng.choice(templates)
+                        command_line = parameterize_scoped_command(rng, command_line, plat)
+                        command_line = self.activity_generator._parameterize_command_for_system(
+                            rng,
+                            command_line,
+                            username=user.username,
+                            system=system,
+                        )
+                    break
 
         # Backdate the process slightly, but never before the session started
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
@@ -1351,7 +1968,7 @@ class WorldPlanner:
         stale network sessions over newer SSH/RDP ones.
         """
         sessions = (
-            self.state_manager.get_sessions_for_user_at(username, at_time)
+            self.state_manager.get_active_sessions_for_user_at(username, at_time)
             if at_time is not None
             else self.state_manager.get_sessions_for_user(username)
         )
@@ -1398,7 +2015,9 @@ class WorldPlanner:
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
         )
-        if required_until is not None and session_end_plan is None:
+        if required_until is not None and (
+            session_end_plan is None or not session_end_plan.is_authoritative
+        ):
             required_until = (
                 required_until.replace(tzinfo=UTC)
                 if required_until.tzinfo is None
@@ -1406,7 +2025,11 @@ class WorldPlanner:
             )
             min_duration = max(
                 min_duration,
-                (required_until - logon_time).total_seconds() + rng.uniform(20.0, 90.0),
+                (required_until - logon_time).total_seconds()
+                + rng.uniform(
+                    SSH_REQUIRED_UNTIL_MIN_TAIL_SECONDS,
+                    SSH_REQUIRED_UNTIL_MAX_TAIL_SECONDS,
+                ),
             )
         auth_method = baseline_ssh_auth_method(plan.source_ip, plan.target_system.ip, user.username)
         key_type, key_hash = baseline_ssh_client_key(plan.source_ip, user.username)
@@ -1460,22 +2083,32 @@ class WorldPlanner:
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
-        source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
+        if prepared_rdp_bootstrap is not None:
+            source_process_time = prepared_rdp_bootstrap.source_process_time
+        else:
+            source_process_time = self._rdp_source_process_time(
+                user=user,
+                plan=plan,
+                logon_time=logon_time,
+            )
         source_process_factory = None
         if plan.source_system is not None:
-            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
-                username=user.username,
-                source_system=plan.source_system,
-                source_process_time=source_process_time,
-                rng=rng,
-            )
-            if aligned_source_time > source_process_time:
-                shift = aligned_source_time - source_process_time
-                source_process_time = aligned_source_time
-                logon_time += shift
-                activity_time += shift
+            assert source_process_time is not None
+            if prepared_rdp_bootstrap is None:
+                aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                    username=user.username,
+                    source_system=plan.source_system,
+                    source_process_time=source_process_time,
+                    rng=rng,
+                )
+                if aligned_source_time > source_process_time:
+                    shift = aligned_source_time - source_process_time
+                    source_process_time = aligned_source_time
+                    logon_time += shift
+                    activity_time += shift
             source_process_factory = self._rdp_source_process_factory(rng)
         uid, logon_id = self.activity_generator._execute_rdp_session_bundle(
             user=user,
@@ -1484,8 +2117,9 @@ class WorldPlanner:
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_pid=source_pid,
-            source_process_time=source_process_time if plan.source_system is not None else None,
+            source_process_time=source_process_time,
             source_process_factory=source_process_factory,
+            preserve_explicit_source=plan.source_system is None,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,
         )
@@ -1496,6 +2130,36 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _rdp_source_process_time(
+        self,
+        *,
+        user: User,
+        plan: SessionPlan,
+        logon_time: datetime,
+    ) -> datetime | None:
+        """Place source-side mstsc.exe through the engine-owned timing runtime."""
+
+        source_system = plan.source_system
+        if source_system is None:
+            return None
+
+        canonical_logon_time = ensure_utc(logon_time)
+        lifecycle_id = (
+            f"rdp:{user.username}:{source_system.hostname}:{plan.target_system.hostname}:"
+            f"{canonical_logon_time.isoformat()}"
+        )
+        lead_seconds = self._timing_planner("rdp-bootstrap").triangular_seconds(
+            relationship_key="world.rdp.source_process_create_lead",
+            stable_id=lifecycle_id,
+            minimum=RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS,
+            mode=2.5,
+            maximum=RDP_SOURCE_PROCESS_MAX_LEAD_SECONDS,
+            host=source_system.hostname,
+            lifecycle_id=lifecycle_id,
+            sample_key="source-process-lead",
+        )
+        return logon_time - timedelta(seconds=lead_seconds)
 
     def _rdp_source_process_factory(self, rng: random.Random) -> Callable[..., int]:
         """Return a callback that materializes source-side mstsc.exe inside the bundle."""

@@ -91,6 +91,11 @@ pillars:
         aspirational: 100
         hard_gate: true
         # Every authored typed event must remain accounted for independently of generation.
+      effect_reconciliation:
+        minimum: 100
+        aspirational: 100
+        hard_gate: true
+        # Generated bundles must report zero missing, duplicate, or cardinality-invalid effects.
       indicator_accuracy:
         minimum: 85
         aspirational: 95

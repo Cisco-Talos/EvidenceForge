@@ -16,9 +16,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Self
 
+from evidenceforge.generation.timing.distributions import (
+    TimingDistributionError,
+    TimingScope,
+    TruncatedLognormalDistribution,
+)
+from evidenceforge.generation.timing.runtime import TimingRuntime
 from evidenceforge.models.exceptions import GenerationError
 
 _DEFAULT_GAP = timedelta(milliseconds=1)
+_DEFAULT_REPAIR_MAX_US = 25_001
 
 
 class TemporalConstraintError(GenerationError):
@@ -54,9 +61,20 @@ class TemporalNode:
 class TemporalConstraintGraph:
     """Resolve deterministic source or lifecycle timestamps from constraints."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        timing_runtime: TimingRuntime | None = None,
+        scope: TimingScope | None = None,
+        relationship_key: str = "temporal.constraint.repair",
+    ) -> None:
+        if not relationship_key:
+            raise TemporalConstraintError("Temporal repair relationship key must not be empty")
         self._nodes: dict[str, TemporalNode] = {}
         self._constraints: list[TemporalConstraint] = []
+        self._timing_runtime = timing_runtime or TimingRuntime.compatibility_default()
+        self._scope = scope
+        self._relationship_key = relationship_key
         self._resolved = False
 
     def add_node(
@@ -123,8 +141,8 @@ class TemporalConstraintGraph:
                     )
                 edge_lower = before_time + constraint.normalized_gap
                 lower = edge_lower if lower is None else max(lower, edge_lower)
-            node.resolved_time = self._clamp(
-                node.preferred_time,
+            node.resolved_time = self._resolve_node(
+                node,
                 not_before=lower,
                 not_after=node.not_after,
             )
@@ -190,20 +208,96 @@ class TemporalConstraintGraph:
             incoming[constraint.after_key].append(constraint)
         return incoming
 
-    @staticmethod
-    def _clamp(
-        preferred_time: datetime,
+    def _resolve_node(
+        self,
+        node: TemporalNode,
         *,
         not_before: datetime | None,
         not_after: datetime | None,
     ) -> datetime:
-        """Clamp preferred time to hard bounds; lower wins on conflicts."""
+        """Resolve one node, sampling interior slack when a bound repairs it."""
 
+        preferred_time = node.preferred_time
         if not_before is not None and not_after is not None and not_after < not_before:
-            return not_before
-        result = preferred_time
-        if not_before is not None and result < not_before:
-            result = not_before
-        if not_after is not None and result > not_after:
-            result = not_after
-        return result
+            self._raise_saturated_window(node.key, not_before, not_after)
+        if not_before is not None and preferred_time < not_before:
+            return self._sample_inside_bound(
+                node,
+                anchor=not_before,
+                opposite_bound=not_after,
+                direction="after",
+            )
+        if not_after is not None and preferred_time > not_after:
+            return self._sample_inside_bound(
+                node,
+                anchor=not_after,
+                opposite_bound=not_before,
+                direction="before",
+            )
+        return preferred_time
+
+    def _sample_inside_bound(
+        self,
+        node: TemporalNode,
+        *,
+        anchor: datetime,
+        opposite_bound: datetime | None,
+        direction: str,
+    ) -> datetime:
+        """Sample deterministic microsecond slack strictly inside an admissible window."""
+
+        available_us = _DEFAULT_REPAIR_MAX_US
+        if opposite_bound is not None:
+            available_us = round(abs((opposite_bound - anchor).total_seconds()) * 1_000_000)
+            if available_us <= 1:
+                lower = anchor if direction == "after" else opposite_bound
+                upper = opposite_bound if direction == "after" else anchor
+                self._raise_saturated_window(node.key, lower, upper)
+
+        maximum_us = float(min(_DEFAULT_REPAIR_MAX_US, available_us))
+        median_us = min(2_400.0, max(1.5, maximum_us * 0.18))
+        distribution = TruncatedLognormalDistribution(
+            median=median_us,
+            sigma=0.78,
+            minimum=0.0,
+            maximum=maximum_us,
+        )
+        scope = self._scope or TimingScope(
+            stable_id=(
+                f"constraint:{node.key}:{node.preferred_time.isoformat()}:"
+                f"{anchor.isoformat()}:{opposite_bound.isoformat() if opposite_bound else ''}"
+            ),
+            lifecycle_id=node.key,
+        )
+        sample_key = (
+            f"{node.key}:{direction}:{anchor.isoformat()}:"
+            f"{opposite_bound.isoformat() if opposite_bound else ''}"
+        )
+        try:
+            slack = self._timing_runtime.sampler.sample_timedelta(
+                distribution,
+                relationship_key=self._relationship_key,
+                scope=scope,
+                sample_key=sample_key,
+            )
+        except TimingDistributionError as exc:
+            self._timing_runtime.audit.record_saturation(self._relationship_key)
+            raise TemporalConstraintError(
+                f"Temporal node '{node.key}' has no sampleable interior repair window"
+            ) from exc
+        self._timing_runtime.audit.record_repair(self._relationship_key)
+        return anchor + slack if direction == "after" else anchor - slack
+
+    def _raise_saturated_window(
+        self,
+        key: str,
+        lower: datetime | None,
+        upper: datetime | None,
+    ) -> None:
+        """Record and reject one impossible temporal window."""
+
+        self._timing_runtime.audit.record_saturation(self._relationship_key)
+        raise TemporalConstraintError(
+            f"Temporal node '{key}' has an impossible window: "
+            f"not_before={lower!r}, not_after={upper!r}"
+        )

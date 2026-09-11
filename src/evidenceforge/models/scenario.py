@@ -35,7 +35,8 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import math
 import re
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 import pytz
@@ -49,6 +50,7 @@ from pydantic import (
     model_validator,
 )
 
+from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
 
@@ -57,6 +59,84 @@ MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
 _HOSTNAME_RE = re.compile(
     r"^(?!-)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$"
 )
+
+_WINDOWS_RESERVED_PATH_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+def _normalize_smb_relative_path(value: str, field_name: str, *, allow_empty: bool) -> str:
+    """Normalize and validate a case-insensitive Windows share-relative path."""
+
+    normalized = value.replace("/", "\\").strip("\\")
+    if not normalized:
+        if allow_empty:
+            return ""
+        raise ValueError(f"{field_name} must name a share-relative path")
+    if re.match(r"^[a-zA-Z]:", value) or value.startswith(("\\", "/")):
+        raise ValueError(f"{field_name} must be relative to its share")
+    parts = normalized.split("\\")
+    for part in parts:
+        if not part or part in {".", ".."}:
+            raise ValueError(f"{field_name} cannot contain empty, '.' or '..' components")
+        if ":" in part:
+            raise ValueError(f"{field_name} cannot contain alternate data streams")
+        if part.endswith((" ", ".")):
+            raise ValueError(f"{field_name} components cannot end in a space or period")
+        stem = part.split(".", 1)[0].upper()
+        if stem in _WINDOWS_RESERVED_PATH_NAMES:
+            raise ValueError(f"{field_name} contains reserved Windows name {part!r}")
+    return "\\".join(parts)
+
+
+def _validate_windows_absolute_path(value: str, field_name: str) -> str:
+    """Validate an absolute Windows drive path and normalize separators."""
+
+    normalized = value.replace("/", "\\")
+    if not re.match(r"^[a-zA-Z]:\\", normalized):
+        raise ValueError(f"{field_name} must be an absolute Windows drive path")
+    suffix = normalized[3:]
+    if suffix:
+        _normalize_smb_relative_path(suffix, field_name, allow_empty=True)
+    return normalized
+
+
+def _validate_posix_absolute_path(value: str, field_name: str) -> str:
+    """Validate an absolute POSIX path while preserving a trailing directory marker."""
+
+    if not value.startswith("/"):
+        raise ValueError(f"{field_name} must be an absolute POSIX path")
+    if "\\" in value:
+        raise ValueError(f"{field_name} cannot contain Windows path separators")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{field_name} cannot contain control characters")
+    if value == "/":
+        return value
+    trailing_separator = value.endswith("/") and value != "/"
+    components = value.split("/")[1:]
+    if trailing_separator:
+        components = components[:-1]
+    if any(not component or component in {".", ".."} for component in components):
+        raise ValueError(f"{field_name} cannot contain empty, '.' or '..' components")
+    normalized = "/" + "/".join(components)
+    if trailing_separator:
+        normalized += "/"
+    return normalized
+
+
+def _validate_platform_absolute_path(value: str, field_name: str) -> str:
+    """Validate either an absolute Windows drive path or an absolute POSIX path."""
+
+    if re.match(r"^[a-zA-Z]:[\\/]", value):
+        return _validate_windows_absolute_path(value, field_name)
+    if value.startswith("/"):
+        return _validate_posix_absolute_path(value, field_name)
+    raise ValueError(f"{field_name} must be an absolute Windows drive or POSIX path")
 
 
 def _validate_hostname(v: str, field_name: str = "hostname") -> str:
@@ -195,6 +275,8 @@ class System(BaseModel):
         ip: IPv4 or IPv6 address
         os: Operating system name/version (e.g., "Windows 10", "Linux Ubuntu 20.04")
         type: System type (workstation|server|domain_controller)
+        os_build: Optional exact OS build identity
+        architecture: Optional host CPU architecture
         assigned_user: Username of assigned user (for workstations)
         services: List of running services (e.g., ["IIS", "SSH", "SQL Server"])
     """
@@ -202,6 +284,18 @@ class System(BaseModel):
     hostname: str = Field(..., pattern="^[a-zA-Z0-9][a-zA-Z0-9.-]*$")
     ip: str
     os: str
+    os_build: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Optional exact OS build identity, such as '10.0.22631.3880' or '6.8.0-45-generic'."
+        ),
+    )
+    architecture: Literal["x86", "x64", "arm64"] | None = Field(
+        default=None,
+        description="Optional host CPU architecture used for deployment and binary identity.",
+    )
     type: str = Field(..., pattern="^(workstation|server|domain_controller)$")
     assigned_user: str | None = None
     services: list[str] = Field(default_factory=list)
@@ -230,6 +324,18 @@ class System(BaseModel):
     def validate_public_hostnames(cls, v: list[str]) -> list[str]:
         """Validate each public hostname is a bare FQDN."""
         return [_validate_hostname(h, "public_hostnames") for h in v]
+
+    @field_validator("os_build")
+    @classmethod
+    def normalize_os_build(cls, value: str | None) -> str | None:
+        """Normalize an optional exact build without interpreting vendor syntax."""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("os_build must not be empty")
+        return normalized
 
 
 class Group(BaseModel):
@@ -285,17 +391,21 @@ class IdentityConfig(BaseModel):
 
     windows_default_scope: Literal["auto", "domain", "local"] = Field(default="auto")
     linux_default_scope: Literal["directory", "local"] = Field(default="directory")
+    windows_account_control: dict[str, set[Literal["DONT_REQUIRE_PREAUTH"]]] = Field(
+        default_factory=dict,
+        description=(
+            "Explicit Windows account-control flags keyed by user, machine, or service principal"
+        ),
+    )
     users: dict[str, UserIdentityOverride] = Field(default_factory=dict)
 
-    @field_validator("users")
+    @field_validator("users", "windows_account_control")
     @classmethod
-    def override_usernames_are_simple(
-        cls, v: dict[str, UserIdentityOverride]
-    ) -> dict[str, UserIdentityOverride]:
-        """Reject identity override keys that cannot be logical usernames."""
+    def override_account_names_are_simple(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject identity/account-control keys that cannot be simple principals."""
         invalid = sorted(name for name in v if not re.match(r"^[a-zA-Z0-9._$-]+$", name))
         if invalid:
-            raise ValueError(f"invalid identity override usernames: {', '.join(invalid)}")
+            raise ValueError(f"invalid identity override account names: {', '.join(invalid)}")
         return v
 
 
@@ -801,7 +911,11 @@ class ProcessEventSpec(_EventSpecBase):
 
 
 class LogonEventSpec(_EventSpecBase):
-    """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN)."""
+    """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN).
+
+    A storyline Type 9 uses the host's active local desktop user as the caller/local
+    token identity and the storyline actor as the outbound credential identity.
+    """
 
     type: Literal["logon"] = "logon"
     logon_type: int = 3
@@ -819,6 +933,18 @@ class FailedLogonEventSpec(_EventSpecBase):
     source_ip: str | None = None
     logon_type: int = 3
     target_username: str | None = None
+
+    @field_validator("logon_type")
+    @classmethod
+    def reject_new_credentials_failure(cls, v: int) -> int:
+        """Reject NewCredentials as an inbound authentication failure."""
+
+        if v == 9:
+            raise ValueError(
+                "failed logon_type 9 is not a remote authentication attempt; "
+                "model the outbound authentication failure instead"
+            )
+        return v
 
 
 class LogoffEventSpec(_EventSpecBase):
@@ -862,6 +988,283 @@ class ConnectionEventSpec(_IdsAttachableEventSpec):
         if v is not None:
             _validate_hostname(v, "connection.hostname")
         return v
+
+
+class SmbFileSelector(BaseModel):
+    """AND-combined selector over a compiled share catalog."""
+
+    path_glob: str | None = None
+    extensions: list[str] = Field(default_factory=list)
+    tags_any: list[str] = Field(default_factory=list)
+    min_size_bytes: int | None = Field(default=None, ge=0)
+    max_size_bytes: int | None = Field(default=None, ge=0)
+
+    @field_validator("extensions")
+    @classmethod
+    def normalize_extensions(cls, value: list[str]) -> list[str]:
+        normalized = [
+            item.lower() if item.startswith(".") else f".{item.lower()}" for item in value
+        ]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("selector extensions must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "SmbFileSelector":
+        if not any(
+            (
+                self.path_glob,
+                self.extensions,
+                self.tags_any,
+                self.min_size_bytes is not None,
+                self.max_size_bytes is not None,
+            )
+        ):
+            raise ValueError("SMB selector must define at least one criterion")
+        if (
+            self.min_size_bytes is not None
+            and self.max_size_bytes is not None
+            and self.min_size_bytes > self.max_size_bytes
+        ):
+            raise ValueError("selector min_size_bytes must be <= max_size_bytes")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbShareLocation(BaseModel):
+    """A location inside a modeled SMB disk share."""
+
+    type: Literal["share"] = "share"
+    share: str = Field(
+        ...,
+        description=(
+            "Exact case-insensitive compiled <system>.<share-id> reference; bare share IDs "
+            "and display names are not valid."
+        ),
+    )
+    file_ref: str | None = None
+    path: str | None = None
+    directory: str | None = None
+    selector: SmbFileSelector | None = None
+
+    @field_validator("path", "directory")
+    @classmethod
+    def normalize_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_smb_relative_path(value, "SMB share path", allow_empty=False)
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> "SmbShareLocation":
+        locator_count = sum(
+            value is not None for value in (self.file_ref, self.path, self.directory, self.selector)
+        )
+        if locator_count > 1:
+            raise ValueError(
+                "share location accepts at most one of file_ref, path, directory, or selector"
+            )
+        if self.file_ref == "auto" or self.path == "auto" or self.directory == "auto":
+            raise ValueError("omit the SMB locator to request automatic selection")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbClientLocation(BaseModel):
+    """An OS-native local path on the initiating modeled client."""
+
+    type: Literal["client"] = "client"
+    path: str | None = None
+    directory: str | None = None
+    file_set: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+        description="Exact case-insensitive environment.storage.file_sets ID.",
+    )
+    file_ref: str | None = None
+    selector: SmbFileSelector | None = None
+
+    @field_validator("path", "directory")
+    @classmethod
+    def validate_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_platform_absolute_path(value, "SMB client path")
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> "SmbClientLocation":
+        if self.path is not None and self.directory is not None:
+            raise ValueError("client location accepts only one of path or directory")
+        if self.file_ref is not None and self.selector is not None:
+            raise ValueError("client file-set location accepts only one of file_ref or selector")
+        if (self.file_ref is not None or self.selector is not None) and self.file_set is None:
+            raise ValueError("client file_ref and selector require file_set")
+        if self.file_set is not None and self.path is not None:
+            raise ValueError("client file_set cannot be combined with one standalone path")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+SmbLocation = Annotated[SmbShareLocation | SmbClientLocation, Discriminator("type")]
+
+
+class SmbExternalClient(BaseModel):
+    """Unmodeled SMB initiator that produces no client-host telemetry."""
+
+    type: Literal["external"] = "external"
+    ip: str
+    hostname: str | None = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError(f"SMB external client IP is invalid: {value!r}") from exc
+        return value
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, value: str | None) -> str | None:
+        if value is not None:
+            return _validate_hostname(value, "smb_activity.client.hostname")
+        return value
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbBatchSpec(BaseModel):
+    """Bounded selection controls for one SMB activity burst."""
+
+    count: int | None = Field(default=None, gt=0, le=64)
+    fraction: float | None = Field(default=None, gt=0.0, le=1.0)
+    all: bool | None = None
+    duration: str | None = None
+
+    @field_validator("duration")
+    @classmethod
+    def validate_duration(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"(\d+(?:ms|[dhms]))+", value):
+            raise ValueError("SMB batch duration must be a duration like '4m' or '30s'")
+        return value
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> "SmbBatchSpec":
+        selected = sum(
+            (
+                self.count is not None,
+                self.fraction is not None,
+                self.all is True,
+            )
+        )
+        if selected != 1:
+            raise ValueError("SMB batch requires exactly one of count, fraction, or all: true")
+        if self.all is False:
+            raise ValueError("omit SMB batch all instead of setting it to false")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SmbActivityEventSpec(_IdsAttachableEventSpec):
+    """Canonical SMB disk-share activity."""
+
+    type: Literal["smb_activity"] = "smb_activity"
+    operation: Literal["browse", "read", "create", "update", "copy", "move", "delete"]
+    purpose: Literal[
+        "auto",
+        "interactive",
+        "administrative",
+        "software",
+        "backup",
+        "collection",
+        "ransomware",
+    ] = "auto"
+    target: SmbShareLocation | None = None
+    source: SmbLocation | None = None
+    destination: SmbLocation | None = None
+    batch: SmbBatchSpec | None = None
+    outcome: Literal["auto", "success", "access_denied", "not_found", "sharing_violation"] = "auto"
+    path_style: Literal["auto", "unc", "mapped", "mounted"] = "auto"
+    mapping: str | None = None
+    client: SmbExternalClient | None = None
+    client_access: Literal["auto", "windows_native", "cifs_mount", "smbclient"] = "auto"
+    auth_protocol: Literal["auto", "kerberos", "ntlmssp"] = "auto"
+    smb_principal: str | None = None
+
+    @field_validator("smb_principal")
+    @classmethod
+    def validate_smb_principal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("SMB principal cannot be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "SmbActivityEventSpec":
+        if self.operation in {"copy", "move"}:
+            if self.target is not None or self.source is None or self.destination is None:
+                raise ValueError(
+                    f"SMB {self.operation} requires source and destination and forbids target"
+                )
+            if not isinstance(self.source, SmbShareLocation) and not isinstance(
+                self.destination, SmbShareLocation
+            ):
+                raise ValueError(f"SMB {self.operation} requires at least one share location")
+            if isinstance(self.destination, SmbShareLocation) and (
+                self.destination.file_ref is not None or self.destination.selector is not None
+            ):
+                raise ValueError("SMB destinations cannot use file_ref or selector")
+            if isinstance(self.destination, SmbClientLocation) and (
+                self.destination.file_ref is not None or self.destination.selector is not None
+            ):
+                raise ValueError("SMB destinations cannot use file_ref or selector")
+            if (
+                self.batch is not None
+                and isinstance(self.destination, (SmbShareLocation, SmbClientLocation))
+                and self.destination.path is not None
+            ):
+                raise ValueError("batched SMB destinations cannot use one explicit file path")
+            if self.batch is not None and isinstance(self.source, SmbClientLocation):
+                if self.source.file_set is None:
+                    raise ValueError(
+                        "batched SMB client sources require environment.storage.file_sets"
+                    )
+            if isinstance(self.source, (SmbShareLocation, SmbClientLocation)) and (
+                self.source.directory is not None
+            ):
+                raise ValueError("SMB sources cannot use destination directory")
+            if isinstance(self.destination, SmbClientLocation) and (
+                self.destination.file_set is not None
+            ):
+                raise ValueError("SMB client destinations cannot select a source file_set")
+        elif self.target is None or self.source is not None or self.destination is not None:
+            raise ValueError(f"SMB {self.operation} requires target and forbids source/destination")
+
+        if self.target is not None and self.target.directory is not None:
+            raise ValueError("SMB operation targets cannot use destination directory")
+
+        if self.operation == "create" and self.target is not None:
+            if self.target.file_ref is not None or self.target.selector is not None:
+                raise ValueError("SMB create target must use a missing path or automatic selection")
+        if self.operation == "create" and self.outcome == "sharing_violation":
+            raise ValueError("SMB create cannot assert sharing_violation on a missing path")
+        if self.outcome == "not_found" and (self.target is None or self.target.path is None):
+            raise ValueError("SMB not_found requires an explicit target path")
+        if self.path_style in {"mapped", "mounted"} and self.client is not None:
+            raise ValueError("external SMB clients cannot use mapped or mounted path presentation")
+        if self.client is not None and self.client_access != "auto":
+            raise ValueError("external SMB clients require client_access: auto")
+        if self.client is not None and self.mapping is not None:
+            raise ValueError("external SMB clients cannot use storage mappings")
+        if self.mapping is not None and self.path_style == "unc":
+            raise ValueError("SMB mapping cannot be combined with path_style: unc")
+        return self
 
 
 class SshSessionEventSpec(_IdsAttachableEventSpec):
@@ -910,6 +1313,7 @@ class ServiceInstalledEventSpec(_EventSpecBase):
     service_name: str
     service_file_name: str
     service_account: str = "LocalSystem"
+    source_ip: str | None = None
 
 
 class ScheduledTaskCreatedEventSpec(_EventSpecBase):
@@ -1384,6 +1788,18 @@ class CredentialSprayEventSpec(_PeriodicEventBase):
     logon_type: int = 3
     success: dict[str, Any] | None = None  # {"account": str, "after": int}
 
+    @field_validator("logon_type")
+    @classmethod
+    def reject_new_credentials_spray(cls, v: int) -> int:
+        """Reject NewCredentials as a credential-spray transport."""
+
+        if v == 9:
+            raise ValueError(
+                "credential_spray logon_type 9 has no remote authentication target; "
+                "use a network-capable logon type such as 3 or 10"
+            )
+        return v
+
     @model_validator(mode="after")
     def credential_spray_requires_interval(self) -> "CredentialSprayEventSpec":
         """Credential spray uses interval-based timing."""
@@ -1514,6 +1930,8 @@ class ExplicitCredentialsEventSpec(_EventSpecBase):
 
     Models RunAs, pass-the-hash, service account delegation, and other
     scenarios where credentials are explicitly provided for authentication.
+    A materialized ``runas.exe /netonly`` caller also owns the correlated
+    NewCredentials Type 9 token-clone session.
     """
 
     type: Literal["explicit_credentials"] = "explicit_credentials"
@@ -1707,7 +2125,13 @@ class EmailReadEventSpec(_EventSpecBase):
         description="Optional message/artifact IDs documented for storyline correlation only.",
     )
     count: int = Field(default=1, ge=1, le=500)
-    duration: float | None = Field(default=None, gt=0.0)
+    duration: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Positive mailbox access duration in numeric seconds; duration strings are not valid."
+        ),
+    )
     user_agent: str | None = None
 
     @field_validator("mailbox")
@@ -1740,6 +2164,7 @@ EventSpec = Annotated[
     | FailedLogonEventSpec
     | LogoffEventSpec
     | ConnectionEventSpec
+    | SmbActivityEventSpec
     | SshSessionEventSpec
     | RdpSessionEventSpec
     | AccountCreatedEventSpec
@@ -2087,10 +2512,12 @@ class NetworkSensor(BaseModel):
 
         network_observation = load_timing_profiles().get("network_sensor_observation", {})
         profiles = (
-            network_observation.get("profiles", {}) if isinstance(network_observation, dict) else {}
+            network_observation.get("profiles", {})
+            if isinstance(network_observation, Mapping)
+            else {}
         )
-        if not isinstance(profiles, dict) or profile_name not in profiles:
-            available = sorted(profiles) if isinstance(profiles, dict) else []
+        if not isinstance(profiles, Mapping) or profile_name not in profiles:
+            available = sorted(profiles) if isinstance(profiles, Mapping) else []
             raise ValueError(
                 f"Unknown network sensor capture_profile {profile_name!r}. "
                 f"Available profiles: {available}"
@@ -2204,6 +2631,20 @@ class ProxyAuthPolicyConfig(BaseModel):
     machine_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
     service_account_probability: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def warn_legacy_mode(cls, value: Any) -> Any:
+        """Keep legacy proxy attribution exact while directing authors to current policy."""
+
+        if isinstance(value, dict) and value.get("mode") == "legacy":
+            warn_legacy_config(
+                "environment.proxy.auth_policy.mode=legacy",
+                "auth_policy.mode: realistic (and explicit non_human_principals probabilities "
+                "when required)",
+                stacklevel=4,
+            )
+        return value
+
     @field_validator("allowlisted_domain_classes")
     @classmethod
     def validate_allowlisted_classes(cls, v: list[str]) -> list[str]:
@@ -2226,6 +2667,10 @@ class ProxyAuthPolicyConfig(BaseModel):
         return self
 
     model_config = ConfigDict(extra="forbid")
+
+
+# Resolve ProxyConfig.auth_policy after its forward-declared model is available.
+ProxyConfig.model_rebuild()
 
 
 class EmailArtifactsConfig(BaseModel):
@@ -2337,6 +2782,312 @@ class EmailConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class StorageVolumeConfig(BaseModel):
+    """One OS-native storage volume or folder-mounted volume."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    mount: str
+    filesystem: Literal["ntfs", "refs", "ext4", "xfs"] = "ntfs"
+    label: str | None = None
+
+    @field_validator("mount")
+    @classmethod
+    def validate_mount(cls, value: str) -> str:
+        return _validate_platform_absolute_path(value, "storage volume mount")
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageAccessConfig(BaseModel):
+    """Effective access groups for one share."""
+
+    read: list[str] = Field(default_factory=list)
+    modify: list[str] = Field(default_factory=list)
+    admin: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_entries(self) -> "StorageAccessConfig":
+        for field_name in ("read", "modify", "admin", "deny"):
+            values = getattr(self, field_name)
+            if len(values) != len({value.casefold() for value in values}):
+                raise ValueError(f"storage access {field_name} entries must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageSeedFileConfig(BaseModel):
+    """Explicit evidence-addressable seed file in one share."""
+
+    ref: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    path: str
+    size_bytes: int = Field(..., ge=0)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str) -> str:
+        return _normalize_smb_relative_path(value, "storage seed file path", allow_empty=False)
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageFileSetConfig(BaseModel):
+    """Bounded persistent file population rooted on one modeled host."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    system: str
+    root: str
+    preset: str = Field(default="homes", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:/_-]*$")
+    population: Literal["auto", "small", "medium", "large"] = "auto"
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("root")
+    @classmethod
+    def validate_root(cls, value: str) -> str:
+        return _validate_platform_absolute_path(value, "storage file-set root")
+
+    @model_validator(mode="after")
+    def validate_seed_files(self) -> "StorageFileSetConfig":
+        refs = [seed.ref.casefold() for seed in self.seed_files]
+        paths = [seed.path.casefold() for seed in self.seed_files]
+        if len(refs) != len(set(refs)):
+            raise ValueError("storage file-set seed refs must be unique")
+        if len(paths) != len(set(paths)):
+            raise ValueError("storage file-set seed paths must be case-insensitively unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageShareConfig(BaseModel):
+    """Explicit SMB disk share rooted on one configured volume."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    name: str
+    volume: str
+    root: str = ""
+    preset: str = Field(default="collaboration", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9:/_-]*$")
+    backing_file_set: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
+    )
+    population: Literal["auto", "small", "medium", "large"] | None = None
+    activity: Literal["low", "normal", "high"] | None = None
+    encryption: Literal["not_required", "required"] = "not_required"
+    smb_native_filesystem: str | None = None
+    access: StorageAccessConfig | None = None
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value or any(character in value for character in "\\/:"):
+            raise ValueError("storage share name cannot be empty or contain path separators")
+        return value
+
+    @field_validator("root")
+    @classmethod
+    def normalize_root(cls, value: str) -> str:
+        return _normalize_smb_relative_path(value, "storage share root", allow_empty=True)
+
+    @field_validator("smb_native_filesystem")
+    @classmethod
+    def validate_smb_native_filesystem(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._ -]{0,63}", normalized) is None:
+            raise ValueError("SMB native filesystem must be a nonempty safe label")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_seed_files(self) -> "StorageShareConfig":
+        refs = [seed.ref.casefold() for seed in self.seed_files]
+        paths = [seed.path.casefold() for seed in self.seed_files]
+        if len(refs) != len(set(refs)):
+            raise ValueError("storage seed file refs must be unique within a share")
+        if len(paths) != len(set(paths)):
+            raise ValueError("storage seed file paths must be case-insensitively unique")
+        if self.backing_file_set is not None:
+            conflicting = sorted(
+                field
+                for field in ("preset", "population", "seed_files")
+                if field in self.model_fields_set
+                and (field != "seed_files" or bool(self.seed_files))
+            )
+            if conflicting:
+                raise ValueError(
+                    "storage share backing_file_set owns its catalog; omit "
+                    + ", ".join(conflicting)
+                )
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageShareOverrideConfig(BaseModel):
+    """Partial override for a documented generated share reference."""
+
+    share: str
+    population: Literal["auto", "small", "medium", "large"] | None = None
+    activity: Literal["low", "normal", "high"] | None = None
+    encryption: Literal["not_required", "required"] | None = None
+    smb_native_filesystem: str | None = None
+    access: StorageAccessConfig | None = None
+    seed_files: list[StorageSeedFileConfig] = Field(default_factory=list)
+
+    @field_validator("smb_native_filesystem")
+    @classmethod
+    def validate_smb_native_filesystem(cls, value: str | None) -> str | None:
+        return StorageShareConfig.validate_smb_native_filesystem(value)
+
+    @model_validator(mode="after")
+    def require_override(self) -> "StorageShareOverrideConfig":
+        if not any(
+            (
+                self.population is not None,
+                self.activity is not None,
+                self.encryption is not None,
+                self.smb_native_filesystem is not None,
+                self.access is not None,
+                bool(self.seed_files),
+            )
+        ):
+            raise ValueError("storage share override must change at least one field")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageServerConfig(BaseModel):
+    """Storage configuration for one modeled Windows or Linux server."""
+
+    system: str
+    presets: list[Literal["collaboration", "homes", "software", "backup", "dc_policy"]] | None = (
+        None
+    )
+    audit: Literal["minimal", "standard", "high"] = "standard"
+    default_volume: str | None = None
+    volumes: list[StorageVolumeConfig] | None = None
+    shares: list[StorageShareConfig] = Field(default_factory=list)
+    share_overrides: list[StorageShareOverrideConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_server_storage(self) -> "StorageServerConfig":
+        if self.presets is not None and len(self.presets) != len(set(self.presets)):
+            raise ValueError("storage server presets must be unique")
+        if self.volumes is not None and not self.volumes:
+            raise ValueError("storage server volumes cannot be an empty list")
+        volumes = self.volumes or []
+        volume_ids = [volume.id.casefold() for volume in volumes]
+        mounts = [
+            volume.mount.casefold().rstrip("\\")
+            if re.match(r"^[a-zA-Z]:\\", volume.mount)
+            else volume.mount.rstrip("/") or "/"
+            for volume in volumes
+        ]
+        if len(volume_ids) != len(set(volume_ids)):
+            raise ValueError("storage volume IDs must be unique per server")
+        if len(mounts) != len(set(mounts)):
+            raise ValueError("storage volume mounts must be unique per server")
+        if len(volumes) > 1 and self.default_volume is None:
+            raise ValueError("storage server with multiple volumes requires default_volume")
+        if self.default_volume is not None and self.default_volume.casefold() not in set(
+            volume_ids
+        ):
+            raise ValueError("storage server default_volume must reference a configured volume")
+        share_ids = [share.id.casefold() for share in self.shares]
+        share_names = [share.name.casefold() for share in self.shares]
+        if len(share_ids) != len(set(share_ids)) or len(share_names) != len(set(share_names)):
+            raise ValueError("storage share IDs and names must be unique per server")
+        volume_id_set = set(volume_ids)
+        for share in self.shares:
+            if volumes is not None and share.volume.casefold() not in volume_id_set:
+                raise ValueError(
+                    f"storage share {share.id!r} references unknown volume {share.volume!r}"
+                )
+        override_refs = [override.share.casefold() for override in self.share_overrides]
+        if len(override_refs) != len(set(override_refs)):
+            raise ValueError("storage share override references must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageMappingConfig(BaseModel):
+    """OS-native share mapping available to an audience of modeled clients."""
+
+    id: str = Field(..., pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+    share: str
+    audience: TrafficAudience = Field(default_factory=TrafficAudience)
+    drive: str | None = None
+    mount: str | None = None
+    credential_mode: Literal["per_user", "fixed"] = "per_user"
+    principal: str | None = None
+    lifecycle: Literal["persistent", "on_demand"] = "persistent"
+
+    @field_validator("drive")
+    @classmethod
+    def validate_drive(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[D-Zd-z]:", value):
+            raise ValueError("storage mapping drive must be D: through Z:")
+        return value.upper() if value is not None else None
+
+    @field_validator("mount")
+    @classmethod
+    def validate_mount(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_posix_absolute_path(value, "storage mapping mount").rstrip("/") or "/"
+
+    @field_validator("principal")
+    @classmethod
+    def validate_principal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("storage mapping principal cannot be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "StorageMappingConfig":
+        if self.credential_mode == "fixed" and self.principal is None:
+            raise ValueError("fixed storage mapping credentials require principal")
+        if self.credential_mode == "per_user" and self.principal is not None:
+            raise ValueError("per_user storage mapping credentials forbid principal")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StorageConfig(BaseModel):
+    """Scenario storage topology and workload controls."""
+
+    population: Literal["auto", "small", "medium", "large"] = "auto"
+    activity: Literal["low", "normal", "high"] = "normal"
+    file_sets: list[StorageFileSetConfig] = Field(default_factory=list)
+    servers: list[StorageServerConfig] = Field(default_factory=list)
+    mappings: list[StorageMappingConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "StorageConfig":
+        file_sets = [file_set.id.casefold() for file_set in self.file_sets]
+        systems = [server.system.casefold() for server in self.servers]
+        mappings = [mapping.id.casefold() for mapping in self.mappings]
+        if len(file_sets) != len(set(file_sets)):
+            raise ValueError("environment.storage file-set IDs must be unique")
+        if len(systems) != len(set(systems)):
+            raise ValueError("environment.storage server systems must be unique")
+        if len(mappings) != len(set(mappings)):
+            raise ValueError("environment.storage mapping IDs must be unique")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class StaleAccount(BaseModel):
     """Stale/inactive account that generates background failed logon noise.
 
@@ -2357,6 +3108,452 @@ class StaleAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+CollectionCapabilityName = Literal[
+    "process",
+    "authentication",
+    "session",
+    "network",
+    "dns",
+    "tls",
+    "http",
+    "file",
+    "registry",
+    "service",
+    "task",
+    "account",
+    "smb",
+    "ssh",
+    "rdp",
+    "ids",
+    "source_endpoint",
+    "destination_endpoint",
+    "coherent_actor",
+    "dns_analyzer",
+    "tls_analyzer",
+    "http_analyzer",
+    "file_analyzer",
+    "smb_analyzer",
+    "optional_fields",
+    "collection_windows",
+    "batching",
+]
+
+ObservationSourceFamily = Literal[
+    "windows_security",
+    "sysmon",
+    "ecar",
+    "syslog",
+    "bash_history",
+    "zeek",
+    "proxy",
+    "web",
+    "asa",
+    "ids",
+]
+
+ObservationFormatName = Literal[
+    "windows_event_security",
+    "windows_event_sysmon",
+    "ecar",
+    "syslog",
+    "bash_history",
+    "zeek_conn",
+    "zeek_dns",
+    "zeek_http",
+    "zeek_smtp",
+    "zeek_ssl",
+    "zeek_files",
+    "zeek_smb_files",
+    "zeek_smb_mapping",
+    "zeek_x509",
+    "zeek_dhcp",
+    "zeek_ntp",
+    "zeek_weird",
+    "zeek_ocsp",
+    "zeek_pe",
+    "zeek_packet_filter",
+    "zeek_reporter",
+    "proxy_access",
+    "web_access",
+    "cisco_asa",
+    "snort_alert",
+]
+
+_OBSERVATION_FORMAT_FAMILIES: dict[str, str] = {
+    "windows_event_security": "windows_security",
+    "windows_event_sysmon": "sysmon",
+    "ecar": "ecar",
+    "syslog": "syslog",
+    "bash_history": "bash_history",
+    "zeek_conn": "zeek",
+    "zeek_dns": "zeek",
+    "zeek_http": "zeek",
+    "zeek_smtp": "zeek",
+    "zeek_ssl": "zeek",
+    "zeek_files": "zeek",
+    "zeek_smb_files": "zeek",
+    "zeek_smb_mapping": "zeek",
+    "zeek_x509": "zeek",
+    "zeek_dhcp": "zeek",
+    "zeek_ntp": "zeek",
+    "zeek_weird": "zeek",
+    "zeek_ocsp": "zeek",
+    "zeek_pe": "zeek",
+    "zeek_packet_filter": "zeek",
+    "zeek_reporter": "zeek",
+    "proxy_access": "proxy",
+    "web_access": "web",
+    "cisco_asa": "asa",
+    "snort_alert": "ids",
+}
+
+_EXACT_DEPLOYMENT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$")
+_EXACT_SOURCE_INSTANCE_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*"
+    r"(?::[a-zA-Z0-9][a-zA-Z0-9._-]*)*$"
+)
+
+
+def _normalize_exact_name_list(
+    values: list[str] | None,
+    field_name: str,
+    *,
+    simple_ids: bool,
+    case_sensitive: bool = False,
+) -> list[str] | None:
+    """Normalize one optional replacement list and reject aliases or patterns."""
+
+    if values is None:
+        return None
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            raise ValueError(f"{field_name} entries must not be empty")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError(f"{field_name} entries must not contain control characters")
+        if simple_ids and _EXACT_DEPLOYMENT_ID_RE.fullmatch(value) is None:
+            raise ValueError(
+                f"{field_name} entries must be exact IDs using letters, digits, '.', '_', ':', "
+                "or '-'"
+            )
+        if not simple_ids and any(character in value for character in "*?[]"):
+            raise ValueError(f"{field_name} entries must be exact names, not patterns")
+        identity = value if case_sensitive else value.casefold()
+        if identity in seen:
+            raise ValueError(f"{field_name} entries must be unique")
+        seen.add(identity)
+        normalized.append(value)
+    return normalized
+
+
+class DeploymentApplicationAssignmentOverride(BaseModel):
+    """Exact per-user application eligibility inside one host deployment patch."""
+
+    user: str = Field(pattern=r"^[a-zA-Z0-9._$-]+$")
+    applications: list[str] = Field(
+        description=(
+            "Exact replacement application IDs available to this user on the target system. "
+            "An empty list explicitly removes application eligibility at this layer."
+        )
+    )
+
+    @field_validator("applications")
+    @classmethod
+    def normalize_applications(cls, value: list[str]) -> list[str]:
+        """Require unique exact application catalog IDs."""
+
+        return (
+            _normalize_exact_name_list(
+                value,
+                "user application assignment applications",
+                simple_ids=True,
+            )
+            or []
+        )
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class HostDeploymentOverride(BaseModel):
+    """Partial scenario-layer deployment patch for one exact system."""
+
+    system: str = Field(
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+        description="Exact environment.systems hostname; wildcard selectors are not supported.",
+    )
+    applications: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of installed application catalog IDs.",
+    )
+    services: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed service identities.",
+    )
+    tasks: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed scheduled-task identities.",
+    )
+    modules: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of deployed module identities.",
+    )
+    cohorts: list[str] | None = Field(
+        default=None,
+        description="Optional replacement list of stable deployment cohort IDs.",
+    )
+    user_applications: list[DeploymentApplicationAssignmentOverride] | None = Field(
+        default=None,
+        description="Optional exact per-user application eligibility replacements.",
+    )
+
+    @field_validator("applications", "cohorts")
+    @classmethod
+    def normalize_catalog_ids(cls, value: list[str] | None) -> list[str] | None:
+        """Require exact catalog or cohort identifiers."""
+
+        return _normalize_exact_name_list(value, "deployment IDs", simple_ids=True)
+
+    @field_validator("services", "tasks", "modules")
+    @classmethod
+    def normalize_deployment_names(cls, value: list[str] | None) -> list[str] | None:
+        """Allow source-native names while forbidding wildcard selectors."""
+
+        return _normalize_exact_name_list(value, "deployment names", simple_ids=False)
+
+    @field_validator("user_applications")
+    @classmethod
+    def assignment_users_are_unique(
+        cls,
+        value: list[DeploymentApplicationAssignmentOverride] | None,
+    ) -> list[DeploymentApplicationAssignmentOverride] | None:
+        """Reject two replacement assignments for one logical user."""
+
+        if value is None:
+            return None
+        users = [assignment.user.casefold() for assignment in value]
+        if len(users) != len(set(users)):
+            raise ValueError("deployment user_applications users must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def require_patch_field(self) -> "HostDeploymentOverride":
+        """Reject a target-only entry that cannot affect deployment."""
+
+        if all(
+            value is None
+            for value in (
+                self.applications,
+                self.services,
+                self.tasks,
+                self.modules,
+                self.cohorts,
+                self.user_applications,
+            )
+        ):
+            raise ValueError("deployment override must provide at least one patch field")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ObservationCollectionWindowOverride(BaseModel):
+    """One UTC-normalized half-open source collection interval."""
+
+    start: datetime | None = Field(default=None, description="Inclusive interval start.")
+    end: datetime | None = Field(default=None, description="Exclusive interval end.")
+
+    @field_validator("start", "end")
+    @classmethod
+    def normalize_utc(cls, value: datetime | None) -> datetime | None:
+        """Require timezone-aware endpoints and normalize them to UTC."""
+
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("collection window endpoints must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def endpoints_are_ordered(self) -> "ObservationCollectionWindowOverride":
+        """Reject empty or inverted half-open intervals."""
+
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("collection window start must be earlier than end")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class ObservationBatchingOverride(BaseModel):
+    """Complete replacement for one source's collection batching policy."""
+
+    enabled: bool = False
+    interval_us: int = Field(default=0, ge=0)
+    max_records: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def enabled_batching_has_interval(self) -> "ObservationBatchingOverride":
+        """Require a positive interval for enabled batching."""
+
+        if self.enabled and self.interval_us < 1:
+            raise ValueError("enabled observation batching requires a positive interval_us")
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SourceObservationOverride(BaseModel):
+    """Partial scenario-layer observation patch for one exact source instance."""
+
+    source_instance: str = Field(
+        min_length=1,
+        max_length=255,
+        description=(
+            "Globally exact stable source instance ID. Wildcard, family, and host selectors are "
+            "not supported."
+        ),
+    )
+    system: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+        description="Optional exact system-identity guard; it does not select the source.",
+    )
+    family: ObservationSourceFamily | None = Field(
+        default=None,
+        description="Optional source-family guard; it does not select a family-wide group.",
+    )
+    enabled: bool | None = None
+    capabilities: list[CollectionCapabilityName] | None = Field(
+        default=None,
+        description="Optional replacement capability set; an empty list removes all capabilities.",
+    )
+    missingness: float | None = Field(default=None, ge=0.0, le=1.0)
+    format_missingness: dict[ObservationFormatName, float] | None = Field(
+        default=None,
+        description="Optional replacement per-format missingness probabilities.",
+    )
+    optional_fields: list[str] | None = Field(
+        default=None,
+        description="Optional replacement set of source-native optional field names.",
+    )
+    windows: list[ObservationCollectionWindowOverride] | None = Field(
+        default=None,
+        description=(
+            "Optional replacement collection windows. An explicit empty list means the source "
+            "has no active collection interval."
+        ),
+    )
+    batching: ObservationBatchingOverride | None = None
+
+    @field_validator("source_instance")
+    @classmethod
+    def normalize_source_instance(cls, value: str) -> str:
+        """Canonicalize exact source IDs and reject selector syntax."""
+
+        normalized = value.strip().casefold()
+        if _EXACT_SOURCE_INSTANCE_RE.fullmatch(normalized) is None:
+            raise ValueError(
+                "source_instance must use exact <family>:<owner>[:<local-name>] identity"
+            )
+        return normalized
+
+    @field_validator("capabilities")
+    @classmethod
+    def capabilities_are_unique(
+        cls,
+        value: list[CollectionCapabilityName] | None,
+    ) -> list[CollectionCapabilityName] | None:
+        """Reject duplicate capability words."""
+
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("observation override capabilities must be unique")
+        return value
+
+    @field_validator("format_missingness")
+    @classmethod
+    def format_probabilities_are_valid(
+        cls,
+        value: dict[ObservationFormatName, float] | None,
+    ) -> dict[ObservationFormatName, float] | None:
+        """Reject invalid source-format probabilities."""
+
+        if value is None:
+            return None
+        invalid = sorted(name for name, probability in value.items() if not 0 <= probability <= 1)
+        if invalid:
+            raise ValueError(
+                "format_missingness probabilities must be between 0 and 1 for: "
+                + ", ".join(invalid)
+            )
+        return value
+
+    @field_validator("optional_fields")
+    @classmethod
+    def optional_field_names_are_exact(cls, value: list[str] | None) -> list[str] | None:
+        """Require unique exact source-native field names."""
+
+        return _normalize_exact_name_list(
+            value,
+            "observation optional_fields",
+            simple_ids=False,
+            case_sensitive=True,
+        )
+
+    @field_validator("windows")
+    @classmethod
+    def windows_are_sorted_and_disjoint(
+        cls,
+        value: list[ObservationCollectionWindowOverride] | None,
+    ) -> list[ObservationCollectionWindowOverride] | None:
+        """Normalize collection windows and reject overlapping intervals."""
+
+        if value is None:
+            return None
+        ordered = sorted(value, key=lambda window: window.start or datetime.min.replace(tzinfo=UTC))
+        previous: ObservationCollectionWindowOverride | None = None
+        for window in ordered:
+            if previous is not None and (
+                previous.end is None or window.start is None or window.start < previous.end
+            ):
+                raise ValueError("observation override collection windows must not overlap")
+            previous = window
+        return ordered
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> "SourceObservationOverride":
+        """Require an effective patch and align guarded format identities."""
+
+        if all(
+            value is None
+            for value in (
+                self.enabled,
+                self.capabilities,
+                self.missingness,
+                self.format_missingness,
+                self.optional_fields,
+                self.windows,
+                self.batching,
+            )
+        ):
+            raise ValueError("observation override must provide at least one patch field")
+        if self.family is not None and self.format_missingness is not None:
+            wrong_family = sorted(
+                format_name
+                for format_name in self.format_missingness
+                if _OBSERVATION_FORMAT_FAMILIES[format_name] != self.family
+            )
+            if wrong_family:
+                raise ValueError(
+                    f"format_missingness entries do not belong to {self.family}: "
+                    + ", ".join(wrong_family)
+                )
+        return self
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 class Environment(BaseModel):
     """Environment definition.
 
@@ -2372,6 +3569,8 @@ class Environment(BaseModel):
         stale_accounts: Optional list of inactive accounts that generate failed logon noise
         groups: Optional list of groups
         network: Optional network topology and sensor configuration
+        deployment_overrides: Scenario-layer patches selected by exact system hostname
+        observation_overrides: Scenario-layer patches selected by exact source instance
     """
 
     description: str
@@ -2403,6 +3602,10 @@ class Environment(BaseModel):
     network: NetworkConfig | None = Field(
         None, description="Optional network topology and sensor config"
     )
+    storage: StorageConfig = Field(
+        default_factory=StorageConfig,
+        description="Deterministic Windows SMB2/3 disk-share topology and workload controls.",
+    )
     proxy: ProxyConfig = Field(
         default_factory=ProxyConfig,
         description="Forward proxy deployment semantics for proxy_access generation.",
@@ -2416,6 +3619,20 @@ class Environment(BaseModel):
         description=(
             "Optional logical-person to platform-account overrides. Omitted fields "
             "use deterministic defaults and existing scenario users remain valid."
+        ),
+    )
+    deployment_overrides: list[HostDeploymentOverride] = Field(
+        default_factory=list,
+        description=(
+            "Scenario 2.0 deployment patches selected by exact system hostname. Omitted patch "
+            "fields inherit from project/organization configuration, named profiles, and defaults."
+        ),
+    )
+    observation_overrides: list[SourceObservationOverride] = Field(
+        default_factory=list,
+        description=(
+            "Scenario 2.0 observation patches selected by globally exact source_instance. "
+            "Entries never mutate canonical activity."
         ),
     )
 
@@ -2460,12 +3677,134 @@ class Environment(BaseModel):
 
     @model_validator(mode="after")
     def validate_identity_overrides(self) -> "Environment":
-        """Validate optional identity overrides against the environment."""
+        """Validate exact override targets and optional identity overrides."""
+
+        systems_by_name = {system.hostname.casefold(): system.hostname for system in self.systems}
+        deployment_targets = [override.system.casefold() for override in self.deployment_overrides]
+        if len(deployment_targets) != len(set(deployment_targets)):
+            raise ValueError("environment.deployment_overrides systems must be unique")
+        unknown_deployment_systems = sorted(
+            override.system
+            for override in self.deployment_overrides
+            if override.system.casefold() not in systems_by_name
+        )
+        if unknown_deployment_systems:
+            raise ValueError(
+                "environment.deployment_overrides contains unknown systems: "
+                + ", ".join(unknown_deployment_systems)
+            )
+
+        observation_targets = [override.source_instance for override in self.observation_overrides]
+        if len(observation_targets) != len(set(observation_targets)):
+            raise ValueError(
+                "environment.observation_overrides source_instance values must be unique"
+            )
+
+        host_source_families = {
+            "windows_security",
+            "sysmon",
+            "ecar",
+            "syslog",
+            "bash_history",
+            "proxy",
+            "web",
+        }
+        sensor_source_families: dict[str, set[str]] = {}
+        if self.network is not None:
+            for sensor in self.network.sensors:
+                sensor_id = sensor.name.strip().casefold()
+                formats = {source_format.casefold() for source_format in sensor.log_formats}
+                families: set[str] = set()
+                if "zeek" in formats or any(name.startswith("zeek_") for name in formats):
+                    families.add("zeek")
+                if "snort_alert" in formats:
+                    families.add("ids")
+                if "cisco_asa" in formats:
+                    families.add("asa")
+                sensor_source_families.setdefault(sensor_id, set()).update(families)
+
+        invalid_observation_sources: list[str] = []
+        mismatched_observation_guards: list[str] = []
+        for override in self.observation_overrides:
+            source_parts = override.source_instance.split(":")
+            if len(source_parts) < 2:
+                invalid_observation_sources.append(override.source_instance)
+                continue
+            source_family, owner_id = source_parts[:2]
+            if override.family is not None and override.family != source_family:
+                mismatched_observation_guards.append(override.source_instance)
+                continue
+            if source_family in host_source_families:
+                if owner_id not in systems_by_name:
+                    invalid_observation_sources.append(override.source_instance)
+                    continue
+                if (
+                    override.system is not None
+                    and override.system.casefold() in systems_by_name
+                    and override.system.casefold() != owner_id
+                ):
+                    mismatched_observation_guards.append(override.source_instance)
+            elif source_family in {"zeek", "ids", "asa"}:
+                if source_family not in sensor_source_families.get(owner_id, set()):
+                    invalid_observation_sources.append(override.source_instance)
+            else:
+                invalid_observation_sources.append(override.source_instance)
+        if invalid_observation_sources:
+            raise ValueError(
+                "environment.observation_overrides contains unknown source instances: "
+                + ", ".join(sorted(invalid_observation_sources))
+            )
+        if mismatched_observation_guards:
+            raise ValueError(
+                "environment.observation_overrides identity guards do not match source_instance: "
+                + ", ".join(sorted(mismatched_observation_guards))
+            )
+
+        unknown_observation_systems = sorted(
+            override.system
+            for override in self.observation_overrides
+            if override.system is not None and override.system.casefold() not in systems_by_name
+        )
+        if unknown_observation_systems:
+            raise ValueError(
+                "environment.observation_overrides contains unknown system guards: "
+                + ", ".join(unknown_observation_systems)
+            )
+
         user_names = {user.username for user in self.users}
+        user_names_casefold = {name.casefold(): name for name in user_names}
+        unknown_assignment_users = sorted(
+            assignment.user
+            for override in self.deployment_overrides
+            for assignment in override.user_applications or []
+            if assignment.user.casefold() not in user_names_casefold
+        )
+        if unknown_assignment_users:
+            raise ValueError(
+                "environment.deployment_overrides contains unknown user application assignments: "
+                + ", ".join(unknown_assignment_users)
+            )
+
         unknown = sorted(set(self.identity.users) - user_names)
         if unknown:
             raise ValueError(
                 "environment.identity.users contains unknown scenario users: " + ", ".join(unknown)
+            )
+
+        known_windows_accounts = {
+            *(name.casefold() for name in user_names),
+            *(name.casefold() for name in self.service_accounts),
+            *(f"{system.hostname}$".casefold() for system in self.systems),
+        }
+        unknown_account_control = sorted(
+            name
+            for name in self.identity.windows_account_control
+            if name.casefold() not in known_windows_accounts
+        )
+        if unknown_account_control:
+            raise ValueError(
+                "environment.identity.windows_account_control contains unknown Windows accounts: "
+                + ", ".join(unknown_account_control)
             )
 
         explicit_sids: dict[str, str] = {}
@@ -2499,11 +3838,12 @@ class Environment(BaseModel):
 class OutputSpec(BaseModel):
     """Output specification.
 
-    Defines what log formats to generate and where to write them.
+    Defines what log formats to generate and retains the authored destination hint.
 
     Attributes:
         logs: List of log format specifications (format-specific dicts)
-        destination: Output directory path
+        destination: Authored output hint retained for compatibility and resolved provenance. The
+            CLI writes beside the scenario unless ``--output`` selects a different bundle root.
         compression: Whether to compress output files
     """
 

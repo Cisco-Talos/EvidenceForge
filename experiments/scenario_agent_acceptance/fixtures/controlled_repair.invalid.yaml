@@ -1,0 +1,104 @@
+scenario_version: "2.0"
+name: controlled-repair
+description: "Small Windows exercise used to measure bounded validator repair."
+environment:
+  description: "A two-workstation Windows environment with hosted email."
+  users:
+    - username: alex
+      full_name: "Alex Rivera"
+      email: alex@corp.invalid
+      primary_system: WS-01
+      enabled: true
+  service_accounts:
+    - name: svc-backup
+      description: "Backup automation"
+  systems:
+    - hostname: WS-01
+      ip: "10.0.1.10"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: alex
+    - hostname: WS-02
+      ip: "10.0.1.20"
+      os: "Windows 11"
+      type: workstation
+    - hostname: MAIL-01
+      ip: "10.0.2.10"
+      os: "Windows Server 2022"
+      type: server
+      roles: [mail_server]
+  network_identities:
+    - name: partner_portal
+      description: "External partner portal"
+      hostname: partner.example.test
+      ip: "203.0.113.60"
+  email:
+    accepted_domains: [corp.invalid]
+    mail_servers:
+      - name: primary
+        hostname: mail.corp.invalid
+        system: MAIL-01
+        platform: exchange
+        allow_inbound_starttls: true
+        attempt_outbound_starttls: true
+    default_mailbox_servers: [primary]
+    outbound_routes:
+      - name: default
+        servers: [primary]
+    inbound_route: [primary]
+    artifacts:
+      mode: storyline
+      selected_ids: []
+    background_messages_per_user_per_day: 0.0
+  network:
+    segments:
+      - name: workstations
+        cidr: "10.0.1.0/24"
+        systems: [WS-01, WS-02]
+        exposure: internal
+      - name: servers
+        cidr: "10.0.2.0/24"
+        systems: [MAIL-01]
+        exposure: internal
+    sensors:
+      - type: network
+        name: core-zeek
+        monitoring_segments: [workstations, servers]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+time_window:
+  start: "2026-08-27T13:00:00Z"
+  duration: "1h"
+  warmup: "1h"
+baseline_activity:
+  description: "Normal office work"
+  intensity: medium
+  variation: low
+storyline:
+  - id: read-message
+    time: "+10m"
+    actor: alex
+    system: WS-01
+    activity: "Alex reads a delivered message in OWA."
+    events:
+      - type: email_read
+        server: primary
+        protocol: owa
+        count: 1
+        duration: "45s"
+  - id: remote-support
+    time: "+20m"
+    actor: alex
+    system: WS-02
+    activity: "Alex opens an RDP support session."
+    events:
+      - type: rdp_session
+        source_ip: "10.0.1.10"
+output:
+  logs:
+    - format: windows
+    - format: ecar
+    - format: zeek
+  destination: "./output"
+  compression: false

@@ -1,0 +1,1074 @@
+# Iteration-Test Quality Expansion
+
+## Scope
+
+Expand the six-hour iteration benchmark around data-quality coverage: a second domain
+controller, a Linux Samba server, a centralized log/monitoring server, database SPAN
+visibility, cross-platform SMB activity, correlated remote administration, multipart
+archive exfiltration, and a late benign SSH investigation. Preserve the historical
+Meridian 1.0.0 pack and all prior blind-assessment reports.
+
+## Authored changes
+
+- Created project-local organization pack
+  `project:davidjbianco:organization:meridian-healthcare-solutions@1.1.0` by copying
+  the packaged 1.0.0 release.
+- Added `DC-02`, `FILE-LNX-01`, and `LOG-MON-01`, Linux SMB clients and mappings,
+  the XFS-backed `ClinicalResearch` Samba share, and `zeek-db`.
+- Added the planned malicious and benign storyline beats while retaining the six-hour
+  window, seed, warmup, observation profile, and output formats.
+- Updated the attack-free environment briefing and scenario pack reference.
+
+## Engine findings and fixes
+
+1. Linux SMB source-only eCAR projection failed generation because endpoint source
+   timing incorrectly required a target-local transport-close deadline. The source
+   timing planner now accepts its preferred timestamp when that target-local deadline
+   does not exist. A focused regression test covers the source-only projection.
+2. Explicit DC-01 to DC-02 remote service installation originally selected the user's
+   primary workstation for SMB/RPC. `service_installed` now accepts an optional
+   `source_ip`, resolves it through the world model, and passes the resulting system to
+   the Windows remote-service action bundle. The bundle remains the canonical owner of
+   the SMB/RPC transport. A focused test verifies that an authored source overrides the
+   user's primary system.
+
+## Validation and generation
+
+- Pack validation: valid. Meridian 1.1.0 digest:
+  `3cbe51326bbb8bab04b6936c5e2d853d76eafb2bf73ddf5a24994db2e29ebec4`.
+- Locked technology dependency unchanged:
+  `11e90fb8aa02c2a97d55b6a90fb9b7c192470215174f10f2832da6c253c62928`.
+- Scenario validation: 0 errors, 0 warnings, 24 informational pivot suggestions.
+- Resolved composition: 21 systems, 49 storyline events, 10 red herrings, six sensors.
+- Generation succeeded through hour 6 and atomically replaced the prior output.
+- Generated corpus: 111,598 records across 22 parsed source families.
+
+## Automated evaluation
+
+- Overall: 95.8753 (96 rounded).
+- Parseability: 99.9202.
+- Plausibility: 97.0032.
+- Causality: 92.2298.
+- Timing: 92.9550.
+- The requested overall threshold is met and no pillar is at or below 90.
+- The evaluator's independent hard gate remains failed for temporal integrity
+  (81.6327, threshold 85). Its reported misses are mainly pre-existing event-presence,
+  pivot, and timing behavior; retain this as follow-up engine-quality work rather than
+  expanding the current scenario-data effort.
+
+## Focused evidence verification
+
+- DC-01 to DC-02 now has Zeek SMB and DCE/RPC flows immediately before the target
+  network logon and `DirectoryCacheSvc` creation/process evidence. Cleanup commands
+  use the same target session context.
+- `zeek-db` observes application-to-database MySQL traffic.
+- Samba server syslog/eCAR and Zeek SMB records preserve Linux paths, XFS share
+  identity, principals, authentication protocols, outcomes, and cross-platform client
+  paths for mounted and direct clients.
+- The staged ZIP read is owned by the generated `curl.exe` PID; proxy and ground-truth
+  metadata agree on URI, multipart filename/MIME, decoded size 18,782,613 bytes, and
+  the 2,048-byte response body (proxy wire bytes include protocol overhead).
+- Priya's SSH transport/authentication precedes `journalctl`; no explicit authored
+  logoff exists, and the action-owned lifecycle closes at the collection boundary.
+
+## Assessment
+
+A new standalone blind assessment was saved as `v2-loop-31`; prior loops and reports
+remain unchanged. All four reviewers returned Synthetic verdicts with synthetic-confidence
+scores of 95, 88, 96, and 86 (average 91.25). Deliberation was not needed because the verdicts
+were unanimous and the score spread was only 10 points.
+
+Final acceptance is blocked by new P0/P1 contradictions in the expanded families: inconsistent
+Type 9 local-file principal ownership, Samba transfer effects attached to a directory-creation
+process, impossible bidirectional/zero-payload UDP syslog accounting, and destination-as-source
+Windows network-logon fields on the new DC. The full prioritized list is in
+`scenarios/iteration-test/blind-test/v2-loop-31/REPORT.md`; lower-severity findings remain for
+later engine-quality loops.
+
+## Assessment loop 32 — endpoint effect ownership
+
+### Family contract
+
+- **Owning abstraction:** canonical process/session state and the HTTP-upload and SMB action
+  bundles that attach endpoint file/network effects to a process.
+- **Invariant:** a local file effect uses the owning process's local token principal even when
+  the same process has outbound NewCredentials, and every SMB effect with PID/process identity
+  is owned by a process whose executable/command can perform that SMB operation.
+- **Entry paths:** storyline connection multipart staging, baseline and storyline HTTP uploads,
+  Windows-native SMB, mounted-CIFS SMB, direct `smbclient`, causal file effects, and raw
+  storyline process references.
+- **Consumers:** eCAR process/file/flow records, Windows Security/Sysmon process companions,
+  Samba audit, Zeek SMB/files/conn, ground truth, and endpoint ownership probes.
+- **Layer rationale:** process state owns the local token and action bundles own effect-causing
+  process selection. Renderer-only rewriting would leave sibling sources and future callers
+  contradictory.
+- **Sibling risks:** the fix must cover non-sample upload and SMB operations, avoid changing the
+  remote SMB credential/effective identity, and preserve explicit capable process ownership.
+  Broader actor-native Windows registry/file side effects remain outside this loop.
+
+### Result
+
+- Focused generated-data probe passed: local archive effects retain Aisha's local token,
+  outbound upload credentials remain Marcus, the Windows SMB client uses Explorer rather than
+  the unrelated `New-Item` PID, and Samba retains Marcus as the remote principal.
+- Automated evaluation was 95.8246 across 111,587 records; temporal integrity remained below
+  its hard gate.
+- The blind panel returned four Synthetic verdicts with scores 99, 97, 94, and 98 (average
+  97.0). The next dominant blocker is a repeated Sysmon native timestamp contradiction.
+
+## Assessment loop 33 — atomic Sysmon process timing
+
+### Family contract
+
+- **Owning abstraction:** `SourceTimingPlanner`'s host-shared Sysmon process lifecycle pair.
+- **Invariant:** Event 1 and Event 5 payload `UtcTime` and provider-envelope `TimeCreated` are
+  projections of the same exact occurrence; an instance-local retained envelope may not be
+  combined with a separately resolved native timestamp.
+- **Entry paths:** baseline process starts/stops, storyline processes, RDP/SSH client processes,
+  services, causal process companions, and collection-boundary finalization.
+- **Consumers:** Sysmon Event 1/5, Security 4688/4689 ordering, eCAR process correlation,
+  ProcessGuid identity, and dependent Sysmon Event 3/7/11/22 ordering.
+- **Layer rationale:** the planner owns both timestamps as one canonical source-native pair.
+  Repairing XML after rendering would leave ProcessGuid and sibling timing contracts stale.
+- **Sibling risks:** preserve parent-before-child and create-before-dependent ordering, provider
+  latency, deterministic rendering, exact-publication replay, and termination containment.
+
+### Result
+
+- The generated hard probe reduced Sysmon payload/envelope differences over one second from 132
+  to zero across 4,682 rows.
+- Automated evaluation remained 95.8248 across 111,587 records.
+- The blind panel returned four Synthetic verdicts with scores 98, 96, 95, and 94 (average
+  95.75). All endpoint reviewers converged on eCAR process dependents preceding exact creation.
+
+## Assessment loop 34 — process starts before session dependents
+
+### Family contract
+
+- **Owning abstraction:** source-timing process lifecycle and session dependency frontiers.
+- **Invariant:** a process creation follows its visible session login but precedes every module,
+  flow, file, registry, child-process, and termination event carrying its exact process identity.
+- **Entry paths:** baseline applications, SSH/RDP clients and receivers, storyline processes,
+  service processes, causal effects, PID reuse, and terminal lifecycle publication.
+- **Consumers:** eCAR PROCESS/dependent records, Sysmon ProcessGuid lifecycles, Security 4688/4689,
+  parent-child identity, and source-timing validation.
+- **Layer rationale:** process creation is a prerequisite, so session frontier logic must not
+  reorder it as if it were an ordinary dependent. Renderer sorting cannot repair identity state.
+- **Sibling risks:** retain login-before-process, termination-after-dependent, session closure,
+  parent-before-child, immutable PID-generation identity, and bounded cache behavior.
+
+### Result
+
+- The generated hard probe reduced eCAR exact-identity dependents preceding creation from 855
+  across 101 identities to zero across 31,615 records.
+- The same source-timing repair reduced live Sysmon PID-generation overlaps from 55 to zero.
+- Automated evaluation remained 95.8248 across 111,587 records.
+- The blind panel returned four Synthetic verdicts with scores 93, 84, 95, and 88 (average
+  90.0). All endpoint reviewers independently confirmed the repaired process/PID ordering.
+
+## Assessment loop 35 — Windows service execution identity
+
+### Family contract
+
+- **Owning abstraction:** authored Windows service definition plus canonical process/session
+  ownership for the SCM-launched service executable.
+- **Invariant:** a service process inherits the configured built-in service account, logon ID,
+  integrity, and `services.exe` parent; the remote installer remains the subject of installation
+  but never becomes the service process token.
+- **Entry paths:** service installation before process start, process intent before a later
+  same-cluster service definition, remote administration, arbitrary service executable names,
+  and LocalSystem/LocalService/NetworkService aliases.
+- **Consumers:** Security 4688/4689 and 4697, Sysmon Event 1/5 and module records, eCAR process and
+  dependent records, service lifecycle reconciliation, and ground truth.
+- **Layer rationale:** storyline intent binds an authored service definition to canonical process
+  identity. Rewriting only one emitter would preserve contradictory actor/session state elsewhere.
+- **Sibling risks:** preserve the remote installer on 4697, explicit network-logon continuity,
+  service payload ownership, lifecycle grouping, child-command inheritance, and non-built-in
+  domain service accounts.
+
+### Result
+
+- The generated hard probe confirmed `DirectoryCacheSvc` keeps Marcus Chen as the 4697 installer
+  while Security, Sysmon, and eCAR render the running process as LocalSystem with logon ID `0x3e7`,
+  System integrity, and `services.exe` parentage.
+- Automated evaluation was 95.8280 across 111,587 records; temporal integrity remained below its
+  hard gate.
+- The blind panel returned four Synthetic verdicts with scores 92, 90, 94, and 68 (average 86.0).
+  No reviewer repeated the repaired service-process identity finding.
+
+## Assessment loop 36 — immutable Windows logon-session identity
+
+### Family contract
+
+- **Owning abstraction:** canonical Windows authentication/session state, with local token identity
+  distinct from outbound NewCredentials identity.
+- **Invariant:** one Windows LUID is permanently bound to one local SID/account for its lifetime.
+  Type 9 credentials may change only outbound authentication fields; a process attributed locally
+  to another principal requires a distinct session and LUID.
+- **Entry paths:** `runas /netonly`, explicit credentials, stolen-session storyline actions,
+  Windows-native SMB, archive staging, HTTP upload, interactive bootstrap, and process inheritance.
+- **Consumers:** Security 4624/4688/4689, Sysmon Event 1/5, eCAR process/file/flow rows, outbound SMB
+  and proxy authentication, session lifecycle validation, and ground truth.
+- **Layer rationale:** the contradiction is shared by three endpoint sources, so the session/token
+  owner must be corrected in canonical state rather than rewritten independently by emitters.
+- **Sibling risks:** preserve Marcus as the outbound SMB/proxy principal where authored; retain
+  Aisha as the local `runas /netonly` token; allocate and close any distinct stolen-user session;
+  avoid changing service-account, RDP, SSH, or network-logon semantics.
+
+### Result
+
+- The generated probe found zero cross-principal uses of the Type 9 LUID. Aisha owns every attached
+  process and local profile path; Marcus remains the outbound credential principal.
+- Automated evaluation was 95.8281 across 111,625 records; temporal integrity remained below its
+  hard gate.
+- The blind panel returned four Synthetic verdicts with scores 88, 68, 84, and 64 (average 76.0).
+  No reviewer repeated the repaired LUID-ownership contradiction.
+
+## Assessment loop 37 — one-way UDP syslog accounting
+
+### Family contract
+
+- **Owning abstraction:** canonical role-profile connection intent and protocol-aware transport
+  accounting for one-way datagram services.
+- **Invariant:** a successful UDP/514 syslog delivery carries application payload only from sender
+  to collector. The collector contributes no responder application bytes or packets; any ICMP error
+  is a separate failed-network occurrence, never a bulk response on the syslog flow.
+- **Entry paths:** log-server inbound role profiles, direct role-profile connections, multi-sensor
+  observations, perimeter-denied attempts, and future explicit UDP syslog actions.
+- **Consumers:** Zeek conn rows on every observing sensor, eCAR FLOW, firewall projections, packet
+  and IP-byte accounting, protocol classifiers, and blind network review.
+- **Layer rationale:** reverse traffic is invented by generic baseline profile sizing before fan-out,
+  so the fix belongs at canonical connection intent rather than in Zeek or another renderer.
+- **Sibling risks:** preserve realistic nonzero sender bytes/packets, UDP header accounting, sensor
+  agreement, denied/S0 zero-payload behavior, TCP/514 semantics, and bidirectional UDP protocols such
+  as DNS, DHCP, and NTP.
+
+### Result
+
+- The generated hard probe found 263 UDP/514 observations across all three sensors with zero
+  responder payload bytes, packets, or IP bytes; 232 retained nonzero sender payload.
+- A generation-time RDP assertion exposed insufficient SSH-client teardown headroom. The SSH
+  transport clamp now reserves the full deterministic source-process termination tail before an
+  authoritative source-session end.
+- Automated evaluation increased to 96.4760 across 115,117 records and passed every hard gate; all
+  four pillars exceed 93.
+- The blind panel returned four Synthetic verdicts with scores 68, 84, 94, and 91 (average 84.25).
+  No reviewer repeated the repaired UDP/syslog contradiction.
+
+## Assessment loop 38 — exact multipart upload ownership
+
+### Family contract
+
+- **Owning abstraction:** explicit-proxy transaction action bundle plus canonical process identity
+  selected for an authored HTTP upload.
+- **Invariant:** one exact process owns the multipart command, local archive read, client-to-proxy
+  tuple, eCAR FLOW, Sysmon Event 3, proxy request, and process termination. A neighboring probe
+  process may not inherit the upload tuple merely because it shares executable, user, host, or URL.
+- **Entry paths:** authored multipart uploads, benign support uploads, explicit proxy CONNECT reuse,
+  curl/browser process discovery, existing process reuse, and source PID inference.
+- **Consumers:** eCAR PROCESS/FILE/FLOW, Sysmon Event 1/3/5/11, proxy access records, Zeek conn/http,
+  multipart and artifact metadata, ground truth, and upload hard probes.
+- **Layer rationale:** the proxy action bundle owns the logical request and must carry the authored
+  process identity into the canonical client leg. Renderer-side PID replacement would leave the
+  source process, endpoint effects, and lifecycle state contradictory.
+- **Sibling risks:** keep benign and malicious multipart uploads distinct, preserve tunnel reuse and
+  source-port identity, avoid duplicating process creation, retain local token versus outbound
+  credential semantics, and keep every process alive through its owned network/file dependents.
+
+### Result
+
+- The proxy transaction now treats a validated caller-owned PID as authoritative for its nested
+  client transport, so CONNECT semantics cannot replace the multipart upload process with a nearby
+  generic curl process. Anonymous multipart activity may still materialize a suitable owner.
+- The generated probe found PID `7140` and process object `c6e27dd8-a08d-4357-8d08-003808c23911`
+  consistently across the upload command, ZIP read, eCAR flow, Sysmon Event 3, proxy source port
+  `57936`, and later termination.
+- The routine suite passed 8,204 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation scored 95.8011 across 110,715 records. The four pillars remained above 91,
+  but pivot linkability and temporal integrity missed their hard thresholds, so acceptance failed.
+- The blind panel returned four Synthetic verdicts with scores 94, 66, 94, and 86 (average 85.0).
+  No reviewer repeated the upload-ownership contradiction; multiple reviewers explicitly praised
+  the repaired exfiltration correlation.
+
+## Assessment loop 39 — process-visible ordering for dependent endpoint effects
+
+### Family contract
+
+- **Owning abstraction:** canonical process lifecycle and source-timing planner for process-dependent
+  endpoint effects.
+- **Invariant:** when a process creation is visible in a source, every dependent event carrying that
+  exact process identity must render after the source-local create. No DNS, network, module, file,
+  registry, access, or remote-thread event may precede Event 1/PROCESS CREATE for the same identity.
+- **Entry paths:** RDP client startup and DNS prerequisites, ordinary process-to-network expansion,
+  explicit proxy and SSH clients, storyline processes, baseline applications, and observation delay.
+- **Consumers:** Sysmon Event 1/3/7/8/10/11/12-14/22, eCAR PROCESS and dependent objects, RDP and
+  network action bundles, process source bounds, and lifecycle validators.
+- **Layer rationale:** the inversion is created by independent source-time planning for a shared
+  canonical process and its dependent event. The source planner/lifecycle owner must enforce one
+  atomic frontier rather than patching Sysmon DNS output.
+- **Sibling risks:** preserve DNS-before-transport semantics, cross-source jitter, session readiness,
+  RDP transport-before-auth ordering, collection-boundary behavior, and valid pre-window processes
+  whose creation is intentionally absent.
+
+### Result
+
+- Sysmon dependent timing now keys DNS events to their exact query process and shares the Event 1
+  source frontier for every process-visible dependent family.
+- The generated hard probe checked 578 Event 3/7/8/10/11/12-14/22 records with visible matching
+  Event 1 identities and found zero inversions. The reported `mstsc.exe` PID `5380` Event 1 rendered
+  at `13:15:14.241643Z`; its first DNS event followed at `13:15:14.244244Z`.
+- The routine suite passed 8,205 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation remained 95.8011 across 110,715 records. All pillars exceeded 91, but pivot
+  linkability and temporal integrity remained below their hard thresholds.
+- The blind panel returned four Synthetic verdicts with scores 82, 64, 72, and 72 (average 72.5,
+  spread 18). Neither endpoint reviewer repeated the fixed process-ordering contradiction.
+
+## Assessment loop 40 — receiver file availability before SMB upload
+
+### Family contract
+
+- **Owning abstraction:** ordered storyline action execution and canonical file-transfer lifecycle.
+- **Invariant:** an SMB client may read a local source file only after that exact path has been
+  created on the client host. When SCP supplies the file, receiver creation must precede every
+  SMB process read, network transfer, and server-side write derived from it.
+- **Entry paths:** storyline SCP commands, receiver file materialization, direct `smbclient` writes,
+  mounted CIFS writes, HTTP multipart reads, and archive/staging chains.
+- **Consumers:** source-host eCAR file events, SMB client processes, Zeek SMB/file records, Samba or
+  Windows server audit, causal ordering, and ground-truth chronology.
+- **Layer rationale:** availability is shared canonical state owned by the transfer/storyline
+  lifecycle. Moving one rendered file row would leave the SMB transport and server mutation able to
+  consume a file that does not yet exist.
+- **Sibling risks:** preserve authored event order where feasible, do not duplicate SCP receiver
+  creation, keep process ownership and authentication identity distinct, and retain deterministic
+  explicit offsets for independent storyline events.
+
+### Result
+
+- SCP receiver publication now records the exact host/path availability frontier, and storyline SMB
+  uploads of that local path wait until the canonical receiver file exists.
+- The generated chain rendered the APP-INT-01 receiver create at `17:21:34.302Z`, SMB client read at
+  `17:21:36.765Z`, and FILE-LNX-01 server write at `17:21:36.853Z`.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files.
+- Automated evaluation rose to 95.8512 across 110,715 records. Pivot linkability reached 80.0 and
+  passed, leaving temporal integrity as the only failed hard gate.
+- The blind panel returned four Synthetic verdicts with scores 72, 91, 72, and 74 (average 77.25,
+  spread 19). No reviewer repeated the premature-read contradiction, and reviewers described Samba
+  timing and lifecycle correlation as especially strong.
+
+## Assessment loop 41 — protocol-independent Zeek file hash rendering
+
+### Family contract
+
+- **Owning abstraction:** Zeek Files-framework source renderer.
+- **Invariant:** one Zeek sensor renders MD5, SHA-1, and SHA-256 using the same lowercase hexadecimal
+  convention regardless of whether file analysis originated from SMB, HTTP, SMTP, or TLS.
+- **Entry paths:** SMB reads/writes, HTTP request and response bodies, SMTP attachments, TLS
+  certificate analysis, capture-loss projections, and repeated file observations.
+- **Consumers:** Zeek `files.log` JSON, FUID/content pivots, SMB durability checks, TLS fingerprint
+  agreement, deterministic evaluator field agreement, and blind network review.
+- **Layer rationale:** canonical content identity deliberately remains source-neutral; hexadecimal
+  presentation belongs to the source-native Zeek renderer and must not leak the capitalization used
+  by endpoint-oriented identity objects.
+- **Sibling risks:** preserve digest values and lengths, TLS SHA-1-to-x509 fingerprint agreement,
+  repeated-file stability, sparse/absent hashes, and all non-Zeek consumers of canonical digests.
+
+### Result
+
+- The Zeek Files renderer now normalizes every present MD5, SHA-1, and SHA-256 digest to lowercase
+  without changing canonical source-neutral content identities.
+- The generated hard probe inspected 1,941 Zeek files rows and 3,507 digest values across `zeek-db`,
+  `zeek-core`, and `zeek-dmz`. All 480 SMB and 3,027 non-SMB values were lowercase.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  checks passed across 753 files. The exact legacy slow SMB test remains independently red because
+  it assumes every observed row has hashes and every client read belongs to `robocopy.exe`; this
+  loop did not weaken that unrelated assertion.
+- Automated evaluation remained 95.8512 across 110,715 records. Temporal integrity at 83.67 is the
+  sole failed hard gate.
+- The blind panel returned four Synthetic verdicts with scores 99, 99, 99, and 97 (average 98.5,
+  spread 2). No reviewer repeated the hash-capitalization defect; the network reviewer explicitly
+  praised SMB hashes and complete Zeek joins.
+
+## Ten-loop assessment summary — loops 32–41
+
+The requested ten-loop run repaired ten bounded evidence-family contracts and produced one fresh,
+standalone four-reviewer panel per loop. Exact reports and per-loop scores are archived under
+`scenarios/iteration-test/blind-test/v2-loop-32` through `v2-loop-41`; the final directory also
+contains a 20-loop dashboard spanning loops 22–41.
+
+The strongest final capabilities are deterministic parseability, network/endpoint tuple agreement,
+IDS pivots, SMB auditing, attack-chain reconstruction, multipart exfiltration ownership, Windows
+service identity, and endpoint process ordering. Acceptance is not complete: temporal integrity
+remains below its hard threshold. Blind review also leaves systemic realism work in Sysmon session
+GUIDs, remote-execution attribution, proxy tunnel lifetimes, ASA ID chronology, one-shot Linux
+process duration, SSH observation coherence, collection-boundary handling, public DNS/PTR identity,
+TTL state, and SMB/SMTP reuse. These are follow-on engine-quality families, not scenario edits.
+
+## Assessment loop 42 — proxy tunnel lifetime ownership
+
+### Finding classification
+
+- Proxy setup rows ending before visible inspected children: `new_family`, confirmed across 114
+  tunnels by the loop-41 network reviewer.
+- Near-universal zero Sysmon `LogonGuid`: `false_positive_or_unproven`; native Microsoft examples
+  legitimately use the null GUID for local Negotiate, NTLM, and several RDP paths, and the current
+  generator already produces stable nonzero GUIDs for Kerberos-backed sessions.
+
+### Family contract
+
+- **Owning abstraction:** proxy emitter's bounded pending-tunnel summary, which owns the
+  source-native CONNECT lifetime after all visible child requests have been folded.
+- **Invariant:** `tunnel_duration_ms` must span both the canonical client transport and every
+  proxy-visible child transaction assigned to the CONNECT channel.
+- **Entry paths:** explicit HTTPS proxy transactions, reused CONNECT channels, raw compatibility
+  proxy events, incremental checkpoint finalization, and final emitter closure.
+- **Consumers:** combined proxy logs, Splunk proxy JSON, tunnel/child correlation probes, evaluator
+  proxy parsing, and blind network review.
+- **Layer rationale:** the canonical transport duration and visible child frontier are both known
+  only when the proxy source finalizes its summary; rendering either input alone can understate the
+  source-native channel lifetime.
+- **Sibling risks:** preserve exact child byte aggregation, inactivity-timeout channel splitting,
+  setup timing, denied/cache terminal actions, output-target parity, and collection-boundary rules.
+
+### Result
+
+- Proxy setup lifetime now spans both the canonical transport and the last visible child request.
+- The hard probe parsed 548 setup rows and 792 children; zero children ended after their owning
+  tunnel, eliminating the loop-41 contradiction.
+- The routine suite passed 8,206 tests with 5 skipped and 2,003 deselected; repository-wide Ruff
+  lint and format checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records. Temporal integrity at 83.67 remains
+  the only failed hard gate.
+- Standalone blind scores were 44, 88, 64, and 89 (average 71.25; spread 45). Verdict disagreement
+  triggered deliberation; after cross-specialty evidence was shared, all four positions were
+  Synthetic with an average revised synthetic confidence of 84.25.
+- No reviewer repeated the proxy-lifetime defect. The next highest proven root contract is durable
+  Sysmon process identity across create, terminate, PID 4, and dependent-event projections.
+
+## Assessment loop 43 — durable Sysmon process identity
+
+### Family contract
+
+- **Owning abstraction:** the host-shared Sysmon process-create timing anchor in
+  `SourceTimingPlanner`.
+- **Invariant:** one host/PID/start lifecycle renders one immutable `ProcessGuid` across Event 1,
+  Event 5, DNS, network, file, registry, module, process-access, and remote-thread projections.
+- **Entry paths:** direct process create/terminate, long-running baseline services, PID 4 dependent
+  activity, parent-before-child timing repair, dropped Event 1 collection, checkpointed batches, and
+  compatibility rendering.
+- **Consumers:** Sysmon lifecycle joins, eCAR-to-Sysmon process correlation, parent GUIDs, evaluator
+  causality checks, detection process graphs, and blind endpoint review.
+- **Layer rationale:** `ProcessGuid` encodes the visible Event 1 anchor. A parent-order repair changed
+  that anchor only in an instance-local cache, allowing later events to recover the unrepaired
+  host-shared value. The repaired anchor must be published by the timing owner, not rewritten by an
+  emitter.
+- **Sibling risks:** preserve native versus provider-envelope timestamps, PID reuse isolation,
+  cross-source Security 4688 ordering, parent identity, collection-dropped creates, cache retention,
+  checkpoint recovery, and deterministic replay.
+
+### Result
+
+- Parent-order repairs now update the host-shared Sysmon create anchor, and dependent renderers
+  prefer the durable canonical actor over a thinner same-PID process carrier.
+- The definitive hard probe joined 759 visible create/terminate lifecycles with zero ProcessGuid
+  mismatches. All seven hosts with PID 4 evidence retained one GUID.
+- Focused Sysmon tests passed twice while closing the discovered PID 4 sibling. The final routine
+  suite passed 8,208 tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format
+  checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records, with temporal integrity as the only
+  failed hard gate.
+- Blind scores were 84, 84, 76, and 78 (average 80.5; spread 8), all Synthetic. No deliberation was
+  required, and no reviewer repeated the immutable ProcessGuid contradiction.
+- Two reviewers independently retained ASA connection-ID chronology as a dataset-wide defect; it
+  is the next highest-leverage repeated source-native family.
+
+## Assessment loop 44 — ASA connection-ID chronology
+
+### Family contract
+
+- **Owning abstraction:** the ASA source finalizer over the appliance's timestamp-sorted build and
+  teardown stream.
+- **Invariant:** each appliance allocates one unique, monotonically increasing connection ID when a
+  built record enters final source chronology, and every teardown retains that exact ID.
+- **Entry paths:** baseline and storyline permits, TCP and UDP, NAT and identity-NAT paths, retries,
+  external sorted runs, incremental checkpoints, output-target year partitioning, and final close.
+- **Consumers:** ASA 302013/302014 and 302015/302016 joins, firewall hunting pivots, SIEM sequence
+  analytics, deterministic parsers, and blind network/detection review.
+- **Layer rationale:** canonical connection identity is generation-order truth, while an ASA counter
+  is source-local runtime order. The latter cannot be finalized until the appliance's rows are
+  globally sorted, so the source finalizer owns allocation and pair-preserving projection.
+- **Sibling risks:** retain build/teardown pairing across year-split files, deterministic retry,
+  atomic replacement, multiple appliance lanes, NAT companion ordering, explicit deny records,
+  checkpoint-restored runs, and byte-identical repeated close.
+
+### Result
+
+- Canonical ASA permits now receive appliance-local IDs only after the definitive source stream is
+  timestamp sorted. Raw caller-supplied records remain byte-faithful, and teardown rows retain their
+  build ID through atomic finalization.
+- The hard probe inspected 6,751 generated build/teardown lifecycles: build IDs were unique and
+  strictly consecutive, with zero orphaned build or teardown references.
+- Focused ASA, output-target, and constructor-bypass compatibility tests passed. The final routine
+  suite passed 8,208 tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format
+  checks passed across 753 files.
+- Automated evaluation remained 95.8512 across 110,715 records, with temporal integrity as the only
+  failed hard gate.
+- Blind scores were 72, 84, 67, and 78 (average 75.25; spread 17), all Synthetic. No deliberation
+  was required, and no reviewer repeated the backward ASA connection-ID defect.
+- Two reviewers independently prioritized operation-detached one-shot command lifetimes and
+  millisecond-scale retirement sweeps; this is the next family for loop 45.
+
+## Assessment loop 45 — operation-owned SMB client lifetime
+
+### Finding classification
+
+- Direct `smbclient -c` processes surviving completed SMB transports by tens of minutes or hours:
+  `new_family`, independently confirmed by threat-hunting and host-forensics review.
+- Millisecond-scale retirement sweeps: `same_family_sibling`; these are the delayed consequence of
+  leaving bounded operation processes in live State until a later stale/session drain.
+- Other bounded utilities (`git log`, `head`, and `cmd.exe /c`) with delayed exits:
+  `same_family_sibling`, retained for the hard probe and follow-on expansion if the SMB owner fix
+  does not remove their common lifecycle cause.
+
+### Family contract
+
+- **Owning abstraction:** the canonical SMB action bundle and its resolved client-process plan.
+- **Invariant:** a process profile marked as operation-lived remains active through its SMB
+  transport and file effects, then terminates independently within bounded jitter after transport
+  close; session-lived clients such as Explorer and mounted-kernel transport remain unaffected.
+- **Entry paths:** direct Linux `smbclient`, Windows-native access, mounted CIFS operations,
+  downloads, uploads, remote copies, multi-file channel reuse, denied operations, storyline and
+  baseline actions, and explicit preferred process ownership.
+- **Consumers:** client eCAR process lifecycle, endpoint FLOW actor joins, SMB source file effects,
+  Zeek transport close, session teardown, stale-process cleanup, shell serialization, and blind
+  host/threat review.
+- **Layer rationale:** executable lifetime is an action-bundle fact because only the SMB owner knows
+  both the profile's lifecycle class and the definitive transport/file completion frontier. A
+  generic hourly drain sees the process but not the completed operation it should follow.
+- **Sibling risks:** preserve source-process visibility through every dependent effect, do not
+  terminate persistent Explorer or mounted transport owners, keep client and server processes
+  distinct, respect authoritative session deadlines and collection bounds, and retain exact retry
+  behavior for persistent SMB publication.
+
+### Result
+
+- Operation-lived SMB clients now close after definitive publication, bounded foreground
+  finalizers run before their hourly watermark, and eCAR process termination remains governed by
+  the process's own dependent frontier rather than unrelated later session activity.
+- The hard probe joined 26 direct `smbclient -c` lifecycles with zero missing or duplicate endpoint
+  events, zero lifetimes over 60 seconds, and a 43.018-second maximum.
+- Focused source-timing and process-lifecycle tests passed. The final routine suite passed 8,211
+  tests with 5 skipped and 2,003 deselected; repository-wide Ruff lint and format checks passed
+  across 753 files.
+- Automated evaluation improved to 96.2822 across 123,124 records, and every hard acceptance gate
+  passed.
+- Initial blind scores were 43, 78, 72, and 84 (average 69.25; spread 41), with one Inconclusive
+  and three Synthetic verdicts. Deliberation revised all four to Synthetic with an average score
+  of 87.25. No reviewer repeated the SMB lifetime defect.
+- The next highest-impact independent contradiction is positive duration on unanswered one-packet
+  ICMP scan flows; this becomes the loop-46 family.
+
+## Assessment loop 46 — ICMP packet-observation semantics
+
+### Finding classification
+
+- Positive Zeek duration on unanswered one-packet ICMP probes: `new_family`, confirmed as a hard
+  contradiction by the loop-45 network reviewer and accepted by all four reviewers in deliberation.
+- Scan-only `service:icmp`: `same_family_sibling`; Zeek analyzer service inference must not depend
+  on whether ICMP came from a scanner or baseline ping.
+- Independently varied echo payload size per target in one discovery sweep: `same_family_sibling`;
+  invocation-level scanner settings should remain stable across targets.
+
+### Family contract
+
+- **Owning abstraction:** canonical ICMP transaction planning for invocation-level request shape,
+  followed by the Zeek conn renderer for packet-observed duration and analyzer service semantics.
+- **Invariant:** a one-packet ICMP observation has no positive first-to-last-packet duration; ICMP
+  does not claim a Zeek analyzer service; one nmap discovery invocation retains one payload size.
+- **Entry paths:** baseline ping, nmap discovery, modeled and unmodeled responders, multi-sensor
+  projection, storyline connection, direct compatibility generation, and collection boundaries.
+- **Consumers:** Zeek conn, ASA ICMP lifecycle, IDS tuple correlation, network evaluation, and blind
+  network/detection review.
+- **Layer rationale:** canonical planning owns the scanner's shared invocation parameters and
+  internal timeout interval, while only the Zeek renderer owns what packet capture can calculate
+  from actually observed packets.
+- **Sibling risks:** preserve canonical timeout/state closure, responding RTTs, packet and byte
+  accounting, sensor-local loss, tuple/UID correlation, IDS timing, and non-ICMP service inference.
+
+### Result
+
+- Zeek conn projection now omits duration when the sensor observed only one packet, and ICMP rows
+  no longer claim an analyzer service. Explicit ICMP payload sizes remain exact, allowing one nmap
+  discovery invocation to retain one request shape across its targets.
+- The hard probe inspected 725 ICMP rows: all 489 one-packet observations omitted duration, all 725
+  omitted service, and the 254-target discovery sweep used one 64-byte payload size.
+- Focused Zeek observation, format, multiplexing, ICMP-accounting, and exact slow nmap tests passed.
+  The final routine suite passed 8,213 tests with 5 skipped and 2,003 deselected; Ruff passed across
+  753 files.
+- Automated evaluation improved to 96.4266 across 120,631 records, with every hard gate passing.
+- Blind scores were 64, 69, 68, and 76 (average 69.25; spread 12), all Synthetic. No deliberation
+  was required, and no reviewer repeated the ICMP family defect.
+- The next highest-impact repeated hard contradiction is ordinary user Explorers parented by
+  `services.exe`, together with repeated desktop bootstraps under unchanged logon IDs.
+
+## Assessment loop 47 — historical Windows desktop-shell ownership
+
+### Finding classification
+
+- Ordinary user `explorer.exe` processes parented by `services.exe`: `existing_family_regression`,
+  reproduced 17 times across five workstations by the loop-46 host reviewer.
+- Repeated `userinit.exe`/Explorer bootstrap chains under one unchanged interactive Logon ID:
+  `same_family_sibling`; future-dated teardown removes the original shell from the mutable live map
+  even while its retained identity still spans the earlier activity timestamp.
+
+### Family contract
+
+- **Owning abstraction:** canonical Windows session/process interval state and the Explorer
+  reuse/parent-resolution boundary.
+- **Invariant:** one interactive Logon ID owns one initial `winlogon.exe` → `userinit.exe` →
+  `explorer.exe` bootstrap. Any later activity whose canonical timestamp falls inside that Explorer
+  identity's retained lifetime reuses the same shell identity; it must not emit another bootstrap
+  or create an ordinary user's Explorer beneath a service process.
+- **Entry paths:** Type 2/10/11 session bootstrap, baseline `process_system` selection, GUI-parent
+  resolution, late-planned activity evaluated before an eagerly applied logoff, explicit process
+  requests, and genuine post-termination shell repair.
+- **Consumers:** StateManager process identities, Windows 4688, Sysmon 1/5, eCAR PROCESS and
+  dependent actor joins, parent-image lookup, user-process history, and blind host/detection review.
+- **Layer rationale:** the original start/end interval is already canonical truth. The defect comes
+  from treating absence in a mutable live map as absence at an earlier event timestamp, so the fix
+  belongs in temporal process lookup and reuse rather than in any Windows emitter.
+- **Sibling risks:** preserve genuine shell repair after the recorded end, source-visible parent
+  ordering, retained parent snapshots for GUI children, PID-reuse identity isolation, network and
+  service logons that cannot own desktops, and deterministic out-of-order planning.
+
+### Result
+
+- Native SMB reuse no longer reclassifies a resident Explorer as operation-lived, and SMB process
+  attachment now requires a currently mutable session. Exact SSH publication also accepts valid
+  partial source observation when either eCAR or Syslog is independently dropped.
+- The hard probe found 14 Explorer creates, zero `services.exe` parents, zero duplicate bare
+  Explorers per session, and zero duplicate `userinit.exe` bootstraps per session.
+- Focused SMB/session/SSH tests passed. The final routine suite passed 8,218 tests with 5 skipped
+  and 2,003 deselected; repository-wide Ruff lint and format checks passed across 753 files.
+- Automated evaluation scored 96.2468 across 114,409 records, with all hard gates passing.
+- Initial blind scores were 52, 75, 62, and 74 (average 65.75), with one Inconclusive and three
+  Synthetic verdicts. Required deliberation revised all four to Synthetic at 73, 84, 77, and 80
+  (average 78.5). No reviewer repeated the desktop-shell defect.
+- The next hard contradiction is a Security 4688 child visibly preceding its exact parent after
+  source timing; this becomes the loop-48 family.
+
+## Assessment loop 48 — Windows source-local process ancestry timing
+
+### Finding classification
+
+- FILE-SRV-01 Security 4688 `userinit.exe` preceding its exact `winlogon.exe` parent by 223 ms:
+  `new_family`, a same-channel hard contradiction independently accepted by every reviewer during
+  deliberation.
+- Remote-session parent image/command loss despite visible exact parent identity:
+  `same_family_sibling`; canonical ancestry exists, but late construction and finalized source
+  timing can prevent the source-native fields from carrying it.
+
+### Family contract
+
+- **Owning abstraction:** `SourceTimingPlanner` process-create timing for Windows Security,
+  coordinated with canonical `ProcessIdentity` ancestry.
+- **Invariant:** for every source-visible Security 4688 parent/child pair, the parent's rendered
+  create precedes the child's rendered create. Finalized source timing must enforce this directly
+  and must not rely on an emitter post-fixup that is forbidden to move finalized rows.
+- **Entry paths:** local interactive and remote-interactive shell bootstraps, ordinary user process
+  creation, service children, baseline and storyline process generation, retained parent identity,
+  and collection-delayed endpoint projection.
+- **Consumers:** Windows Security 4688 ordering and parent fields, Sysmon Event 1 ancestry, eCAR
+  process joins, process termination floors, deterministic evaluation, and blind host/detection
+  review.
+- **Layer rationale:** canonical ancestry is correct and Sysmon renders the pair in order; only the
+  Windows Security source clock independently places the two rows incorrectly. The source timing
+  owner must therefore constrain the final source-native observations before rendering.
+- **Sibling risks:** preserve Security-after-Sysmon latency, stable per-process source timestamps,
+  parent recursion without cycles, PID-reuse isolation, collection missingness, process-close
+  dependents, and deterministic timing audit behavior.
+
+### Result
+
+- `SourceTimingPlanner` now recursively fixes each visible Windows Security parent's source time
+  before its child and records the adjustment in the timing audit relationship.
+- The hard probe joined 188 source-visible parent/child pairs with zero inversions.
+- Focused tests passed. The routine suite passed 8,219 tests with 5 skipped and 2,003 deselected;
+  repository-wide Ruff lint and format checks passed across 753 files.
+- Automated evaluation scored 96.2468 across 114,409 records, with all hard gates passing.
+- Initial blind scores were 29, 68, 38, and 69 (average 51; spread 40), with Real, Synthetic,
+  Inconclusive, and Synthetic verdicts. Required deliberation revised all four to Synthetic at 68,
+  74, 67, and 75 (average 71). No reviewer repeated the ancestry-timing inversion.
+- The next highest-impact repeated source-native defect is the malformed SMB Type 3 authentication
+  family; this becomes loop 49.
+
+## Assessment loop 49 — Windows SMB network-logon identity
+
+### Finding classification
+
+- 151 successful Type 3 logons with empty subject, GUID, logon-process, and LM-package fields:
+  `new_family`, repeated across DC-01, DC-02, and FILE-SRV-01.
+- Receiver-owned `WorkstationName` on those same records: `same_family_sibling`; modeled client
+  identity exists but is not carried into the logon occurrence.
+
+### Family contract
+
+- **Owning abstraction:** the canonical SMB action bundle's accepted authentication occurrence and
+  durable SMB session identity.
+- **Invariant:** each modeled Windows SMB acceptance renders one source-native Type 3 logon whose
+  SYSTEM subject, client workstation, authentication process/package, target SID, LUID, and GUID
+  are derived from the same canonical client/session truth used by transport and SMB effects.
+- **Entry paths:** persistent and one-shot SMB channels, Kerberos and NTLMSSP authentication,
+  Windows-native clients, Linux clients reaching Windows servers, baseline and storyline actions,
+  denied operations, channel reuse, and modeled or unavailable client hosts.
+- **Consumers:** Security 4624/4634, Sysmon/eCAR session joins, SMB tree/file auditing, transport
+  correlation, detection rules, deterministic evaluation, and blind host/detection review.
+- **Layer rationale:** the SMB action bundle owns the accepted protocol session, source endpoint,
+  authentication mechanism, and durable session identity before rendering. Emitters must project
+  that complete canonical truth rather than infer missing ownership from the destination host.
+- **Sibling risks:** preserve Samba-native authentication semantics, fixed-principal SMB use,
+  client-process ownership, session reuse and close timing, source-port correlation, null-GUID
+  policy, denied-auth behavior, and collection missingness.
+
+### Result
+
+- The persistent SMB owner now projects complete SYSTEM subject, client workstation, protocol-
+  specific authentication, target SID/LUID/GUID, and LSASS reporter identity into Type 3 logons.
+- The hard probe inspected all 433 Type 3 logons: every required field was populated, no remote
+  record named its receiver as the workstation, and only coherent Kerberos and NTLM combinations
+  remained.
+- Focused production tests passed. The routine suite passed 8,220 tests with 5 skipped and 2,003
+  deselected; Ruff lint and format checks passed across 753 files.
+- Automated evaluation improved to 96.2686 across 114,409 records, with all hard gates passing.
+- All four blind verdicts were Synthetic at 84, 66, 86, and 84 (average 80; spread 20), so no
+  deliberation was required. No reviewer repeated the prior SMB blank-field/receiver signature.
+- The next repeated cross-source contradiction is the RDP login identity, process ancestry,
+  terminal-session, and initializer-lifetime family; this becomes loop 50.
+
+## Assessment loop 50 — RDP login and desktop-bootstrap identity
+
+### Finding classification
+
+- Empty Type 10 target SID/GUID and SYSTEM creator fields: `new_family`, repeated for all four
+  visible RDP sessions.
+- Missing parent images and wrong parent principals across RDP process triplets:
+  `same_family_sibling`, despite exact parent process identities already existing canonically.
+- Session-0 `winlogon.exe`: `same_family_sibling`; terminal-session projection incorrectly follows
+  SYSTEM-account defaults despite an explicit nonzero RDP terminal session.
+- Session-long RDP `userinit.exe`: `adjacent_family`, reserved for a dedicated early process-close
+  loop because it requires a distinct lifecycle transition before disconnect.
+
+### Family contract
+
+- **Owning abstraction:** the deferred RDP action bundle's initial-session materialization batch and
+  dependent occurrence projection.
+- **Invariant:** one successful RDP session carries one immutable target SID/LUID/GUID and terminal
+  session ID through its 4624, `winlogon.exe`, `userinit.exe`, and Explorer evidence. Canonical
+  parent snapshots populate every source regardless of the owning account's privilege class.
+- **Entry paths:** RDP to workstation, member server, file server, and domain controller; local and
+  remote source hosts; elevated and standard users; reconnect, bounded-window, observation-drop,
+  exact-publication retry, and collection-boundary paths.
+- **Consumers:** Security 4624/4688/4689/4634/4779, Sysmon 1/5, eCAR process/session telemetry,
+  process and session registries, source timing, reconnect state, evaluation, and blind
+  detection/host review.
+- **Layer rationale:** the deferred RDP owner already allocates the complete session and bootstrap
+  process graph atomically. Identity, ancestry, and terminal session must be attached there before
+  source-native renderers consume the graph.
+- **Sibling risks:** preserve SYSTEM token ownership for `winlogon.exe`, user token ownership for
+  `userinit.exe` and Explorer, parent-before-child source ordering, reconnect continuity, exact
+  recovery, and end-window omission.
+
+### Result
+
+- Commit `a99cd68a4` makes deferred RDP login and bootstrap identity complete before source
+  projection: Type 10 logons receive canonical SID/GUID values, bootstrap processes carry their
+  frozen parent snapshots, and explicit nonzero terminal sessions override SYSTEM defaults.
+- The focused 63-test exact RDP production module and the full routine suite passed (8,220 passed,
+  5 skipped, 2,003 deselected); Ruff check and format gates passed.
+- Supported generation produced 114,409 records. The hard probe found four complete Type 10
+  sessions, four nonempty target SIDs/GUIDs, twelve correct bootstrap parent rows, and four
+  triplets with one shared nonzero terminal-session ID.
+- Automated evaluation scored 96.2705 with all hard gates passing.
+- The fresh blind panel returned four Synthetic verdicts with synthetic-confidence scores 74,
+  86, 58, and 74 (average 73; spread 28). No deliberation was required.
+- The eCAR Teams post-termination module-load contradiction repeated from loop 49 at P0 and
+  becomes loop 51.
+
+## Assessment loop 51 — process-dependent evidence before terminalization
+
+### Finding classification
+
+- Six eCAR `MODULE/LOAD` rows for one Teams utility process occur after the same durable process
+  object's eCAR `PROCESS/TERMINATE`: `same_family_sibling`, repeated in loops 49 and 50.
+- Sysmon observes the same process lifecycle without post-termination dependents, localizing the
+  defect to source-local eCAR timing/finalization rather than process identity allocation.
+- Other process-dependent families (flow, file, registry, process access, remote thread) share the
+  same terminal-ordering risk and are included as sibling paths.
+
+### Family contract
+
+- **Owning abstraction:** action-cohort source timing and the process lifecycle authority that
+  freezes source-visible dependent frontiers before process termination publication.
+- **Invariant:** for each durable process identity in one source, every visible dependent record
+  must render at or after its visible create and no later than its visible terminate. A terminal
+  projection must wait for the latest source-local dependent frontier; it must never rewrite a
+  dependent timestamp in an emitter.
+- **Entry paths:** baseline application launches, storyline processes, nested process trees,
+  foreground and background applications, short-lived processes, process/network and
+  process/file bundles, observation delay/drop, bounded-window, exact retry, and session drain.
+- **Consumers:** eCAR process/module/flow/file/registry/process-access/thread evidence, Sysmon
+  process/dependent/terminate evidence, Security process audit, lifecycle registry, source timing,
+  evaluation, and blind endpoint/detection review.
+- **Layer rationale:** the canonical process graph is correct and Sysmon already respects it. The
+  shared source-timing/finalization owner must enforce source-local dependent-before-terminal
+  ordering before renderers consume immutable projections.
+- **Sibling risks:** preserve canonical timestamps, cross-source latency texture, process GUID and
+  object identity, parent/child close barriers, observation-cohort coherence, retry neutrality,
+  collection-boundary omission, and bounded retained state.
+
+### Result
+
+- Commit `983a45cbf` removes the accidental Sysmon-style re-keying of eCAR process lifecycle
+  timing, so source-local dependents and terminalization now share the canonical process object.
+- Focused source-timing and eCAR integration suites passed (73 and 137 tests), followed by the
+  full routine gate (8,221 passed, 5 skipped, 2,003 deselected) and clean Ruff gates.
+- Supported generation produced 114,409 records. Across 32,914 eCAR rows, the hard probe found
+  19,765 process-attributed dependents with zero before create and zero after terminate. The cited
+  Teams object now terminates 5 ms after its last startup module.
+- Automated evaluation remained 96.2705 with every hard gate passing.
+- Initial blind verdicts were three Synthetic and one Real at 63, 56, 24, and 68 (average 52.75;
+  spread 44). Required deliberation ended at three Synthetic and one Inconclusive, with scores 71,
+  67, 45, and 75 (average 64.5).
+- The panel ranked successful proxy-upload payload non-conservation as its strongest remaining
+  shared-truth defect; this becomes loop 52.
+
+## Assessment loop 52 — explicit proxy upload payload conservation
+
+### Finding classification
+
+- A successful multipart upload carries approximately 44 MB on the client-to-proxy leg but only
+  18.8 MB on the proxy-to-origin leg, with zero reported loss: `same_family_sibling` in the
+  explicit proxy transaction's shared transfer accounting.
+- Proxy access and ASA independently corroborate the contradictory totals on both legs, making
+  this a four-source transaction contract rather than a single-renderer formatting defect.
+- Download accounting, cache/deny behavior, and direct HTTP transfers are sibling paths whose
+  existing semantics must remain unchanged.
+
+### Family contract
+
+- **Owning abstraction:** the explicit proxy transaction action bundle and its immutable transfer
+  accounting carried into both canonical network legs.
+- **Invariant:** one successful forwarded request has one canonical request-body truth. Client
+  upload, proxy ingress, proxy access, proxy egress, origin request, and firewall observations may
+  add separately modeled framing/transport overhead, but their decoded payload cannot diverge.
+  Transformations, retries, truncation, denial, and capture loss require explicit outcomes.
+- **Entry paths:** cleartext HTTP and CONNECT/TLS proxying; GET/POST/PUT; multipart and raw body;
+  upload/download; keep-alive/tunnel reuse; cache hit/miss; deny/auth/error; partial capture;
+  observation delay/drop; exact retry; and collection boundaries.
+- **Consumers:** client/proxy eCAR FLOW and FILE evidence, proxy access logs, Zeek conn/http/files,
+  ASA build/teardown accounting, IDS, transfer evaluation, storyline reconciliation, and blind
+  threat/network review.
+- **Layer rationale:** the proxy bundle owns both transport legs and the logical request before any
+  source renderer. Payload size must be computed once there and carried to every consumer; no
+  emitter may independently invent a successful leg's body volume.
+- **Sibling risks:** preserve directional overhead, TLS framing, packet counts, loss accounting,
+  response bytes, tunnel reuse, multiple requests per connection, file hashes/FUIDs, proxy status,
+  deterministic identity, and bounded runtime state.
+
+### Result
+
+- Commit `58efa45c4` replaces stale generator-owned upload estimates at the proxy transaction
+  boundary while preserving the already-planned source-side overhead around the canonical HTTP
+  entity body.
+- The focused proxy suite passed 105 tests. The routine suite passed 8,222 tests with 5 skipped
+  and 2,003 deselected; repository-wide Ruff lint and format checks passed across 753 files.
+- Supported generation produced 114,409 records. The authored 18,782,613-byte multipart body is
+  conserved on both proxy legs with zero capture loss; the prior approximately 44 MB client leg
+  no longer exists.
+- Automated evaluation scored 96.2705 with every hard gate passing.
+- Initial blind verdicts were Real, Synthetic, Synthetic, and Synthetic at 32, 78, 84, and 93.
+  Required deliberation ended unanimously Synthetic at 79, 91, 92, and 96.
+- The panel's strongest remaining hard family is IDS alert identity and encrypted-content
+  visibility; this becomes loop 53.
+
+## Assessment loop 53 — IDS observable-trigger ownership
+
+### Finding classification
+
+- Five `curl` User-Agent alerts contradict the sole Zeek HTTP transaction on their tuples, which
+  renders Go or Wget instead: `new_family`, repeated across five perimeter observations.
+- One APT User-Agent alert contradicts a Go client and two Python-urllib content alerts are
+  attached to TLS-only origin flows without visible decryption: `same_family_sibling` visibility
+  and trigger-identity failures.
+- IDS latency texture is adjacent timing work and is reserved unless the trigger owner also proves
+  responsible for it.
+
+### Family contract
+
+- **Owning abstraction:** canonical IDS assertion planning attached to the network/application
+  occurrence that owns the observable trigger and sensor visibility.
+- **Invariant:** every content-specific IDS alert is derived from the exact source-visible payload
+  field rendered for that tuple. Encrypted traffic may carry content alerts only at a modeled
+  decryption observation point; otherwise assertions must use TLS-visible facts.
+- **Entry paths:** built-in and authored alerts; direct cleartext HTTP; explicit-proxy decrypted
+  HTTP; CONNECT passthrough and inspected TLS; origin-side TLS; User-Agent, URI, referrer, DNS,
+  JA3/TLS, threshold, and generic flow rules; multi-sensor routing; observation drop/delay; and
+  exact retry.
+- **Consumers:** Snort/Suricata rendering, Zeek HTTP/SSL/conn, proxy access, IDS correlation
+  evaluation, sensor visibility, detections, and blind network/detection review.
+- **Layer rationale:** only canonical application and visibility planning knows both the exact
+  trigger value and whether a sensor can observe it. Signature names must not be selected
+  independently in an emitter or baseline pool.
+- **Sibling risks:** preserve authored positive assertions, no-alert controls, DNS/TLS signature
+  semantics, packet-direction and tuple identity, proxy ingress versus origin egress, alert
+  timestamps, sensor-local filtering, deterministic signature selection, and duplicate
+  suppression.
+
+### Result
+
+- Commit `55dec82c0` adds exact HTTP User-Agent predicates, derives baseline HTTP evidence from the
+  same signature truth, and excludes plaintext Python-urllib assertions from opaque TLS baselines.
+- Focused IDS tests and all 93 config validations passed; the routine suite passed 8,224 tests with
+  5 skipped and 2,003 deselected; Ruff gates passed.
+- Generation produced 114,286 records. Five curl and two APT alerts match their exact Zeek HTTP
+  values; zero Python-urllib content alerts remain on opaque TLS. Evaluation passed at 96.1232.
+- Initial blind scores were 55, 78, 68, and 61. Deliberation ended unanimously Synthetic at 74,
+  84, 81, and 76.
+- The strongest new positive contradiction is HTTP error response artifact ownership; this becomes
+  loop 54.
+
+## Assessment loop 54 — HTTP terminal response artifact ownership
+
+### Finding classification
+
+- A 403 Citrix installer request renders a fully observed 1,474-byte PE with matching hash and
+  detailed PE analysis at two sensors: `new_family`, a terminal-outcome/content contradiction.
+- Error MIME, file transfer, hash, and analyzer projection are `same_family_sibling` consumers of
+  the same response artifact.
+
+### Family contract
+
+- **Owning abstraction:** canonical HTTP response terminal outcome and response-artifact builder.
+- **Invariant:** status, body size, MIME, file identity, hash, and analyzer metadata describe one
+  response body. Error outcomes cannot retain requested-success PE identity unless the authored
+  error body is independently modeled as that executable.
+- **Entry paths:** direct and proxied HTTP/HTTPS; success, redirect, 304, 403, 407, and 5xx; GET and
+  download responses; multi-sensor projection; capture loss; cache outcomes; and explicit files.
+- **Consumers:** Zeek HTTP/files/PE, proxy access, connection bytes, hashes, IDS content rules,
+  evaluation, and blind network/detection review.
+- **Layer rationale:** terminal HTTP planning owns the response before file/analyzer companions are
+  created. Renderers must consume that frozen response artifact.
+- **Sibling risks:** preserve successful downloads, partial captures, FUID locality, hash agreement,
+  MIME normalization, redirects/HEAD/304 bodylessness, proxy error templates, and deterministic
+  multi-sensor identity.
+
+### Result
+
+- Commits `536ee7ad9` and `928f24929` bind proxied HTTP artifacts to the terminal outcome and
+  sanitize download-scale MIME on error responses at canonical HTTP normalization.
+- Focused HTTP/proxy tests passed, followed by 8,225 routine tests with 5 skipped and 2,003
+  deselected; repository-wide Ruff lint and format checks passed.
+- Supported generation produced 114,284 records. Both Zeek sensors render the denied Citrix
+  response as a 1,474-byte `text/html` file, and neither emits a PE companion for its response
+  FUID. Automated evaluation remained 96.1232 with every hard gate passing.
+- Initial blind verdicts were one Real and three Synthetic. Required deliberation ended unanimously
+  Synthetic with an average 94.25 verdict confidence and mean realism score of 62.
+- The panel ranked SCP-to-SMB physical availability, byte causality, and file provenance as the
+  strongest remaining defect; this becomes loop 55.
+
+## Assessment loop 55 — chained file-transfer lifecycle ownership
+
+### Finding classification
+
+- A complete 794,475-byte archive is relayed over SMB before its upstream SCP flow could have
+  delivered it, while that flow carries only 30,675 originator payload bytes: `new_family`, a hard
+  physical-causality failure.
+- The APP receive object changes identity before its local read, loses actor/PID ownership, and the
+  replacement identity is reused on the destination: `same_family_sibling` provenance failures.
+
+### Family contract
+
+- **Owning abstraction:** canonical file-transfer action lifecycle and its immutable artifact
+  lineage, composed across SCP reception and dependent SMB transfer.
+- **Invariant:** a dependent transfer may consume an artifact only after the upstream transfer has
+  made the required bytes available. Transport payload must cover the transferred object plus
+  modeled protocol overhead; each host-local file version keeps stable identity and process
+  ownership, with explicit lineage linking copies across hosts.
+- **Entry paths:** SCP and SFTP receive/send; SMB client/server copy; chained transfers; full and
+  partial files; compressed content; success, failure, interruption, and retry; direct and mounted
+  clients; observation delay/drop; multi-sensor visibility; and collection boundaries.
+- **Consumers:** source/destination eCAR FILE and FLOW, SSH/PAM/syslog, Zeek conn/files/SMB,
+  Samba audit, hashes/FUIDs, transfer reconciliation, evaluation, and blind incident/hunt review.
+- **Layer rationale:** only the transfer lifecycle owns object availability, byte completion, and
+  derivation before network and endpoint projections split. Timing or identity must not be patched
+  independently in an emitter or downstream storyline event.
+- **Sibling risks:** preserve streamable transfers, encryption overhead, independent sensor timing,
+  local versus remote object authority, source process lifetime, content hashes, file sizes,
+  destination service identity, retry neutrality, and bounded retained state.
+
+### Result
+
+- Commits `372ad0e2b`, `0ee1c37dd`, `9843b327c`, `4acf035a2`, `ac3bda9e2`, and
+  `a09169084` move SCP completion and receiver-placement identity into the canonical transfer
+  lifecycle, then hand that exact artifact to the dependent SMB action even when no runtime
+  artifact registry is installed.
+- Focused SCP, SMB, and storyline tests passed (157 tests), followed by the routine suite (8,228
+  passed, 5 skipped, 2,003 deselected) and clean Ruff gates.
+- Generation produced 114,250 evaluated records. The 823,965-byte archive is covered by 833,491
+  SCP originator bytes and 826,794 SMB originator bytes; SCP closes before SMB starts, and the APP
+  receiver's create/read preserve object `0c591283-7383-4f9b-9575-a5abc466dcd9`.
+- Automated evaluation passed at 96.1262. Initial blind scores were 65, 72, 30, and 74. Required
+  deliberation retained a 3-1 Synthetic majority at 76, 82, 44, and 82.
+- The panel ranked the repeated Type-10 RDP process identity, ordering, parentage, and userinit
+  lifetime contradictions first; this becomes loop 56.
+
+## Assessment loop 56 — exact RDP bootstrap identity and lifecycle
+
+### Finding classification
+
+- All four visible Type-10 logons name a different ProcessId than their session winlogon; three
+  logons render before that process, and two overlapping sessions reuse one caller PID:
+  `same_family_sibling`, a repeated hard RDP identity and ordering contradiction.
+- Every RDP winlogon is parented directly by System and four userinit processes survive for 30
+  minutes to 2.7 hours: `same_family_sibling` bootstrap-parent and child-lifetime defects.
+
+### Family contract
+
+- **Owning abstraction:** the exact RDP session action bundle, its deferred session materialization
+  graph, and the shared source-timing cohort for bootstrap dependents.
+- **Invariant:** one Type-10 session owns one distinct winlogon identity created through the
+  host's live smss process before authentication; 4624 names that exact PID. Userinit is a
+  short-lived bootstrap child that terminates seconds after launching explorer, independently of
+  the RDP session or desktop lifetime.
+- **Entry paths:** first RDP logon, overlapping sessions, reconnect/disconnect/logoff, modeled and
+  unmodeled clients, elevated and ordinary users, source observation delay/drop, collection
+  boundaries, exact publication recovery, and compatibility paths.
+- **Consumers:** Security 4624/4688/4689, Sysmon 1/5, eCAR PROCESS and USER_SESSION, State session
+  role links, RDP application state, lifecycle finalizers, source timing, and blind host/detection
+  review.
+- **Layer rationale:** the RDP bundle allocates the session and bootstrap graph before renderers
+  see it. It must attach the exact winlogon identity to authentication and assign parent/lifetime
+  semantics before source-specific timing and rendering split.
+- **Sibling risks:** preserve transport-before-auth, per-session PID/GUID uniqueness, local Type-2
+  behavior, reconnect reuse, explorer/session lifetime, parent visibility, observation-cohort
+  integrity, exact retry neutrality, and bounded terminal state.
+
+### Result
+
+- Commit `1597c6436` gives each deferred Type-10 authentication canonical headroom after its exact
+  session winlogon, resolves 4624 caller identity from that session-specific process, and parents
+  RDP winlogon through the live target `smss.exe` when available.
+- Two slow production-path tests and 258 focused routine tests passed. The full routine suite
+  passed 8,228 tests with 5 skipped and 2,004 deselected; Ruff lint and format checks passed across
+  753 files.
+- Supported generation produced 114,255 records. The hard probe found four exact 4624-to-winlogon
+  PID matches, four process-before-logon orderings, distinct PIDs for overlapping sessions, and
+  `smss.exe` parentage on every RDP winlogon.
+- Automated evaluation passed at 96.1263, with all four pillars above 93. Initial blind scores were
+  86, 54, 74, and 74. Required calibration ended unanimously Synthetic at 88, 76, 81, and 82.
+- The repaired PID/order family held under blind review. The panel's strongest adjacent findings
+  are RDP `ParentUser`/`userinit.exe` lifecycle, DHCP timestamp and completion semantics,
+  per-sensor DNS RTT ownership, and TLS analyzer lifecycle coverage. These are retained as the
+  prioritized starting findings for a future loop rather than extending this 15-loop run.

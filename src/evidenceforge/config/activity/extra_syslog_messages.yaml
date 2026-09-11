@@ -14,7 +14,7 @@
 # Depended on by: generation engine (syslog baseline diversity)
 # Depends on: nothing — standalone (distro/role filters are soft matches)
 #
-# Full schema: see commands/eforge/references/config-extra-syslog-messages.md
+# Authoring reference: commands/eforge/references/config-host-activity.md
 
 programs:
   - app: NetworkManager
@@ -263,6 +263,7 @@ programs:
       process_path:
         - /usr/bin/systemctl
         - /usr/lib/packagekit/packagekitd
+        - /usr/bin/pkcon
         - /usr/bin/nmcli
         - /usr/bin/timedatectl
       agent_process_path:
@@ -307,6 +308,7 @@ programs:
       process_path:
         - /usr/bin/systemctl
         - /usr/lib/packagekit/packagekitd
+        - /usr/bin/pkcon
     messages:
       - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
       - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"

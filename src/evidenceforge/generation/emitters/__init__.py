@@ -43,6 +43,10 @@ from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_packet_filter import ZeekPacketFilterEmitter
 from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
 from evidenceforge.generation.emitters.zeek_reporter import ZeekReporterEmitter
+from evidenceforge.generation.emitters.zeek_smb import (
+    ZeekSmbFilesEmitter,
+    ZeekSmbMappingEmitter,
+)
 from evidenceforge.generation.emitters.zeek_smtp import ZeekSmtpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_weird import ZeekWeirdEmitter
@@ -57,6 +61,8 @@ __all__ = [
     "ZeekDnsEmitter",
     "ZeekHttpEmitter",
     "ZeekSmtpEmitter",
+    "ZeekSmbFilesEmitter",
+    "ZeekSmbMappingEmitter",
     "ZeekSslEmitter",
     "ZeekFilesEmitter",
     "ZeekDhcpEmitter",

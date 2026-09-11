@@ -131,6 +131,7 @@ class TestLoadThresholds:
             "causal_ordering",
             "event_presence",
             "intent_reconciliation",
+            "effect_reconciliation",
             "indicator_accuracy",
             "pivot_linkability",
             "temporal_integrity",

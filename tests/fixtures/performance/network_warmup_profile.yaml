@@ -1,0 +1,936 @@
+# Anonymized performance fixture. Generated output is not a golden realism dataset.
+version: '1.0'
+name: network-warmup-performance-profile
+description: An anonymized two-hour, network-heavy baseline used only for deterministic performance profiling.
+  It preserves a large mixed-role topology and multi-sensor Zeek workload without storyline activity.
+environment:
+  description: A synthetic multi-segment organization with infrastructure, perimeter services, operations
+    systems, and a large client population. Names and identities are intentionally generic because this
+    file is a reusable performance fixture.
+  timezone:
+    default: America/New_York
+  service_accounts:
+  - svc_archive
+  network_identities:
+  - id: external-service-a
+    hosts:
+    - metrics-api.example.net
+    ips:
+    - 203.0.113.10
+    tags:
+    - web
+    - telemetry
+    dns: true
+  - id: external-service-b
+    hosts:
+    - asset-sync.example.org
+    ips:
+    - 198.51.100.20
+    tags:
+    - web
+    - cloud-storage
+    dns: true
+  - id: external-service-c
+    hosts:
+    - relay.example.com
+    ips:
+    - 192.0.2.30
+    tags:
+    - web
+    dns: true
+  network:
+    segments:
+    - name: perimeter
+      cidr: 192.168.101.0/24
+      exposure: internal
+      description: Synthetic perimeter segment for performance profiling
+      systems:
+      - perimeter-web-a
+      - perimeter-web-b
+      - perimeter-web-c
+    - name: infrastructure
+      cidr: 192.168.1.0/24
+      exposure: internal
+      description: Synthetic infrastructure segment for performance profiling
+      systems:
+      - infra-dc-a
+      - infra-dc-b
+      - infra-dns
+      - edge-proxy
+      - mail-gateway
+      - update-service
+      - file-service-a
+      - file-service-b
+      - internal-portal
+      - restricted-files
+      - archive-service
+    - name: operations
+      cidr: 192.168.3.0/24
+      exposure: internal
+      description: Synthetic operations segment for performance profiling
+      systems:
+      - directory-console
+      - admin-client-a
+      - admin-client-b
+      - admin-client-c
+      - network-console
+      - support-client-a
+      - support-client-b
+      - soc-client-a
+      - soc-client-b
+      - analysis-client
+    - name: clients
+      cidr: 192.168.2.0/24
+      exposure: internal
+      description: Synthetic clients segment for performance profiling
+      systems:
+      - client-001
+      - client-002
+      - client-003
+      - client-004
+      - client-005
+      - client-006
+      - client-007
+      - client-008
+      - client-009
+      - client-010
+      - client-011
+      - client-012
+      - client-013
+      - client-014
+      - client-015
+      - client-016
+      - client-017
+      - client-018
+      - client-019
+      - client-020
+      - client-021
+      - client-022
+      - client-023
+      - client-024
+      - client-025
+      - client-026
+      - client-027
+      - client-028
+      - client-029
+      - client-030
+      - client-031
+      - client-032
+      - client-033
+      - client-034
+      - client-035
+      - client-036
+      - client-037
+      - client-038
+      - client-039
+      - client-040
+      - client-041
+      - client-042
+      - client-043
+      - client-044
+      - client-045
+      - mobile-01
+      - mobile-02
+      - mobile-03
+      - mobile-04
+      - mobile-05
+      - mobile-06
+      - mobile-07
+      - mobile-08
+      - unmanaged-client
+    sensors:
+    - type: network
+      name: sensor-a
+      hostname: sensor-a
+      monitoring_segments:
+      - perimeter
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - zeek_conn
+      - zeek_dns
+      - zeek_http
+      - zeek_ssl
+      - zeek_x509
+      - zeek_files
+    - type: network
+      name: sensor-b
+      hostname: sensor-b
+      monitoring_segments:
+      - infrastructure
+      - operations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - zeek_conn
+      - zeek_dns
+      - zeek_http
+      - zeek_ssl
+      - zeek_x509
+      - zeek_files
+    - type: network
+      name: sensor-c
+      hostname: sensor-c
+      monitoring_segments:
+      - clients
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek_conn
+      - zeek_dns
+      - zeek_http
+      - zeek_ssl
+      - zeek_x509
+      - zeek_files
+      - zeek_dhcp
+  systems:
+  - hostname: infra-dc-a
+    ip: 192.168.1.10
+    os: Windows Server 2022
+    type: domain_controller
+    roles:
+    - domain_controller
+    - dns_server
+    - dhcp_server
+  - hostname: infra-dc-b
+    ip: 192.168.1.11
+    os: Windows Server 2022
+    type: domain_controller
+    roles:
+    - domain_controller
+    - dns_server
+  - hostname: infra-dns
+    ip: 192.168.1.12
+    os: Ubuntu 24.04
+    type: server
+    roles:
+    - dns_server
+  - hostname: edge-proxy
+    ip: 192.168.1.20
+    os: Ubuntu 24.04
+    type: server
+  - hostname: mail-gateway
+    ip: 192.168.1.25
+    os: Windows Server 2022
+    type: server
+    roles:
+    - mail_server
+  - hostname: update-service
+    ip: 192.168.1.37
+    os: Windows Server 2022
+    type: server
+  - hostname: file-service-a
+    ip: 192.168.1.45
+    os: Windows Server 2022
+    type: server
+    roles:
+    - file_server
+  - hostname: file-service-b
+    ip: 192.168.1.46
+    os: Windows Server 2022
+    type: server
+    roles:
+    - file_server
+  - hostname: internal-portal
+    ip: 192.168.1.51
+    os: Windows Server 2022
+    type: server
+    roles:
+    - web_server
+    services:
+    - http
+    - https
+  - hostname: restricted-files
+    ip: 192.168.1.55
+    os: Windows Server 2022
+    type: server
+    roles:
+    - file_server
+  - hostname: archive-service
+    ip: 192.168.1.60
+    os: Ubuntu 24.04
+    type: server
+  - hostname: perimeter-web-a
+    ip: 192.168.101.10
+    os: Ubuntu 24.04
+    type: server
+    roles:
+    - web_server
+    services:
+    - http
+    - https
+  - hostname: perimeter-web-b
+    ip: 192.168.101.11
+    os: Ubuntu 24.04
+    type: server
+    roles:
+    - web_server
+    services:
+    - http
+    - https
+  - hostname: perimeter-web-c
+    ip: 192.168.101.12
+    os: Ubuntu 24.04
+    type: server
+    roles:
+    - web_server
+    services:
+    - http
+    - https
+  - hostname: directory-console
+    ip: 192.168.3.10
+    os: Windows 11
+    type: workstation
+    assigned_user: user054
+  - hostname: admin-client-a
+    ip: 192.168.3.11
+    os: Windows 11
+    type: workstation
+    assigned_user: user055
+  - hostname: admin-client-b
+    ip: 192.168.3.12
+    os: Windows 11
+    type: workstation
+    assigned_user: user056
+  - hostname: admin-client-c
+    ip: 192.168.3.13
+    os: Windows 11
+    type: workstation
+    assigned_user: user057
+  - hostname: network-console
+    ip: 192.168.3.14
+    os: Windows 11
+    type: workstation
+    assigned_user: user058
+  - hostname: support-client-a
+    ip: 192.168.3.15
+    os: Windows 11
+    type: workstation
+    assigned_user: user059
+  - hostname: support-client-b
+    ip: 192.168.3.16
+    os: Windows 11
+    type: workstation
+    assigned_user: user060
+  - hostname: soc-client-a
+    ip: 192.168.3.17
+    os: Windows 11
+    type: workstation
+    assigned_user: user061
+  - hostname: soc-client-b
+    ip: 192.168.3.18
+    os: Windows 11
+    type: workstation
+    assigned_user: user062
+  - hostname: analysis-client
+    ip: 192.168.3.19
+    os: Windows 11
+    type: workstation
+    assigned_user: user063
+  - hostname: client-001
+    ip: 192.168.2.101
+    os: Windows 11
+    type: workstation
+    assigned_user: user005
+  - hostname: client-002
+    ip: 192.168.2.102
+    os: Windows 11
+    type: workstation
+    assigned_user: user006
+  - hostname: client-003
+    ip: 192.168.2.103
+    os: Windows 11
+    type: workstation
+    assigned_user: user007
+  - hostname: client-004
+    ip: 192.168.2.104
+    os: Windows 11
+    type: workstation
+    assigned_user: user008
+  - hostname: client-005
+    ip: 192.168.2.105
+    os: Windows 11
+    type: workstation
+    assigned_user: user010
+  - hostname: client-006
+    ip: 192.168.2.106
+    os: Windows 11
+    type: workstation
+    assigned_user: user011
+  - hostname: client-007
+    ip: 192.168.2.107
+    os: Windows 11
+    type: workstation
+    assigned_user: user012
+  - hostname: client-008
+    ip: 192.168.2.108
+    os: Windows 11
+    type: workstation
+    assigned_user: user013
+  - hostname: client-009
+    ip: 192.168.2.109
+    os: Windows 11
+    type: workstation
+    assigned_user: user014
+  - hostname: client-010
+    ip: 192.168.2.110
+    os: Windows 11
+    type: workstation
+    assigned_user: user015
+  - hostname: client-011
+    ip: 192.168.2.111
+    os: Windows 11
+    type: workstation
+    assigned_user: user016
+  - hostname: client-012
+    ip: 192.168.2.112
+    os: Windows 11
+    type: workstation
+    assigned_user: user017
+  - hostname: client-013
+    ip: 192.168.2.113
+    os: Windows 11
+    type: workstation
+    assigned_user: user018
+  - hostname: client-014
+    ip: 192.168.2.114
+    os: Windows 11
+    type: workstation
+    assigned_user: user019
+  - hostname: client-015
+    ip: 192.168.2.115
+    os: Windows 11
+    type: workstation
+    assigned_user: user020
+  - hostname: client-016
+    ip: 192.168.2.116
+    os: Windows 11
+    type: workstation
+    assigned_user: user021
+  - hostname: client-017
+    ip: 192.168.2.117
+    os: Windows 11
+    type: workstation
+    assigned_user: user022
+  - hostname: client-018
+    ip: 192.168.2.118
+    os: Windows 11
+    type: workstation
+    assigned_user: user024
+  - hostname: client-019
+    ip: 192.168.2.119
+    os: Windows 11
+    type: workstation
+    assigned_user: user025
+  - hostname: client-020
+    ip: 192.168.2.120
+    os: Windows 11
+    type: workstation
+    assigned_user: user026
+  - hostname: client-021
+    ip: 192.168.2.121
+    os: Windows 11
+    type: workstation
+    assigned_user: user027
+  - hostname: client-022
+    ip: 192.168.2.122
+    os: Windows 11
+    type: workstation
+    assigned_user: user028
+  - hostname: client-023
+    ip: 192.168.2.123
+    os: Windows 11
+    type: workstation
+    assigned_user: user029
+  - hostname: client-024
+    ip: 192.168.2.124
+    os: Windows 11
+    type: workstation
+    assigned_user: user030
+  - hostname: client-025
+    ip: 192.168.2.125
+    os: Windows 11
+    type: workstation
+    assigned_user: user031
+  - hostname: client-026
+    ip: 192.168.2.126
+    os: Windows 11
+    type: workstation
+    assigned_user: user032
+  - hostname: client-027
+    ip: 192.168.2.127
+    os: Windows 11
+    type: workstation
+    assigned_user: user033
+  - hostname: client-028
+    ip: 192.168.2.128
+    os: Windows 11
+    type: workstation
+    assigned_user: user034
+  - hostname: client-029
+    ip: 192.168.2.129
+    os: Windows 11
+    type: workstation
+    assigned_user: user035
+  - hostname: client-030
+    ip: 192.168.2.130
+    os: Windows 11
+    type: workstation
+    assigned_user: user036
+  - hostname: client-031
+    ip: 192.168.2.131
+    os: Windows 11
+    type: workstation
+    assigned_user: user037
+  - hostname: client-032
+    ip: 192.168.2.132
+    os: Windows 11
+    type: workstation
+    assigned_user: user038
+  - hostname: client-033
+    ip: 192.168.2.133
+    os: Windows 11
+    type: workstation
+    assigned_user: user039
+  - hostname: client-034
+    ip: 192.168.2.134
+    os: Windows 11
+    type: workstation
+    assigned_user: user040
+  - hostname: client-035
+    ip: 192.168.2.135
+    os: Windows 11
+    type: workstation
+    assigned_user: user041
+  - hostname: client-036
+    ip: 192.168.2.136
+    os: Windows 11
+    type: workstation
+    assigned_user: user043
+  - hostname: client-037
+    ip: 192.168.2.137
+    os: Windows 11
+    type: workstation
+    assigned_user: user044
+  - hostname: client-038
+    ip: 192.168.2.138
+    os: Windows 11
+    type: workstation
+    assigned_user: user045
+  - hostname: client-039
+    ip: 192.168.2.139
+    os: Windows 11
+    type: workstation
+    assigned_user: user046
+  - hostname: client-040
+    ip: 192.168.2.140
+    os: Windows 11
+    type: workstation
+    assigned_user: user047
+  - hostname: client-041
+    ip: 192.168.2.141
+    os: Windows 11
+    type: workstation
+    assigned_user: user048
+  - hostname: client-042
+    ip: 192.168.2.142
+    os: Windows 11
+    type: workstation
+    assigned_user: user049
+  - hostname: client-043
+    ip: 192.168.2.143
+    os: Windows 11
+    type: workstation
+    assigned_user: user051
+  - hostname: client-044
+    ip: 192.168.2.144
+    os: Windows 11
+    type: workstation
+    assigned_user: user052
+  - hostname: client-045
+    ip: 192.168.2.145
+    os: Windows 11
+    type: workstation
+    assigned_user: user053
+  - hostname: mobile-01
+    ip: 192.168.2.151
+    os: Windows 11
+    type: workstation
+    assigned_user: user001
+  - hostname: mobile-02
+    ip: 192.168.2.152
+    os: Windows 11
+    type: workstation
+    assigned_user: user002
+  - hostname: mobile-03
+    ip: 192.168.2.153
+    os: Windows 11
+    type: workstation
+    assigned_user: user003
+  - hostname: mobile-04
+    ip: 192.168.2.154
+    os: Windows 11
+    type: workstation
+    assigned_user: user004
+  - hostname: mobile-05
+    ip: 192.168.2.155
+    os: Windows 11
+    type: workstation
+    assigned_user: user009
+  - hostname: mobile-06
+    ip: 192.168.2.156
+    os: Windows 11
+    type: workstation
+    assigned_user: user023
+  - hostname: mobile-07
+    ip: 192.168.2.157
+    os: Windows 11
+    type: workstation
+    assigned_user: user042
+  - hostname: mobile-08
+    ip: 192.168.2.158
+    os: Windows 11
+    type: workstation
+    assigned_user: user050
+  - hostname: unmanaged-client
+    ip: 192.168.2.187
+    os: Windows 11
+    type: workstation
+  users:
+  - username: user001
+    full_name: Synthetic User 001
+    email: user001@example.org
+    persona: executive
+    primary_system: mobile-01
+  - username: user002
+    full_name: Synthetic User 002
+    email: user002@example.org
+    persona: executive
+    primary_system: mobile-02
+  - username: user003
+    full_name: Synthetic User 003
+    email: user003@example.org
+    persona: executive
+    primary_system: mobile-03
+  - username: user004
+    full_name: Synthetic User 004
+    email: user004@example.org
+    persona: executive
+    primary_system: mobile-04
+  - username: user005
+    full_name: Synthetic User 005
+    email: user005@example.org
+    persona: project_manager
+    primary_system: client-001
+  - username: user006
+    full_name: Synthetic User 006
+    email: user006@example.org
+    persona: project_manager
+    primary_system: client-002
+  - username: user007
+    full_name: Synthetic User 007
+    email: user007@example.org
+    persona: project_manager
+    primary_system: client-003
+  - username: user008
+    full_name: Synthetic User 008
+    email: user008@example.org
+    persona: project_manager
+    primary_system: client-004
+  - username: user009
+    full_name: Synthetic User 009
+    email: user009@example.org
+    persona: project_manager
+    primary_system: mobile-05
+  - username: user010
+    full_name: Synthetic User 010
+    email: user010@example.org
+    persona: project_manager
+    primary_system: client-005
+  - username: user011
+    full_name: Synthetic User 011
+    email: user011@example.org
+    persona: data_analyst
+    primary_system: client-006
+  - username: user012
+    full_name: Synthetic User 012
+    email: user012@example.org
+    persona: data_analyst
+    primary_system: client-007
+  - username: user013
+    full_name: Synthetic User 013
+    email: user013@example.org
+    persona: project_manager
+    primary_system: client-008
+  - username: user014
+    full_name: Synthetic User 014
+    email: user014@example.org
+    persona: intern
+    primary_system: client-009
+  - username: user015
+    full_name: Synthetic User 015
+    email: user015@example.org
+    persona: executive
+    primary_system: client-010
+  - username: user016
+    full_name: Synthetic User 016
+    email: user016@example.org
+    persona: accountant
+    primary_system: client-011
+  - username: user017
+    full_name: Synthetic User 017
+    email: user017@example.org
+    persona: accountant
+    primary_system: client-012
+  - username: user018
+    full_name: Synthetic User 018
+    email: user018@example.org
+    persona: accountant
+    primary_system: client-013
+  - username: user019
+    full_name: Synthetic User 019
+    email: user019@example.org
+    persona: accountant
+    primary_system: client-014
+  - username: user020
+    full_name: Synthetic User 020
+    email: user020@example.org
+    persona: accountant
+    primary_system: client-015
+  - username: user021
+    full_name: Synthetic User 021
+    email: user021@example.org
+    persona: data_analyst
+    primary_system: client-016
+  - username: user022
+    full_name: Synthetic User 022
+    email: user022@example.org
+    persona: accountant
+    primary_system: client-017
+  - username: user023
+    full_name: Synthetic User 023
+    email: user023@example.org
+    persona: executive
+    primary_system: mobile-06
+  - username: user024
+    full_name: Synthetic User 024
+    email: user024@example.org
+    persona: project_manager
+    primary_system: client-018
+  - username: user025
+    full_name: Synthetic User 025
+    email: user025@example.org
+    persona: project_manager
+    primary_system: client-019
+  - username: user026
+    full_name: Synthetic User 026
+    email: user026@example.org
+    persona: marketing
+    primary_system: client-020
+  - username: user027
+    full_name: Synthetic User 027
+    email: user027@example.org
+    persona: marketing
+    primary_system: client-021
+  - username: user028
+    full_name: Synthetic User 028
+    email: user028@example.org
+    persona: hr
+    primary_system: client-022
+  - username: user029
+    full_name: Synthetic User 029
+    email: user029@example.org
+    persona: hr
+    primary_system: client-023
+  - username: user030
+    full_name: Synthetic User 030
+    email: user030@example.org
+    persona: hr
+    primary_system: client-024
+  - username: user031
+    full_name: Synthetic User 031
+    email: user031@example.org
+    persona: hr
+    primary_system: client-025
+  - username: user032
+    full_name: Synthetic User 032
+    email: user032@example.org
+    persona: hr
+    primary_system: client-026
+  - username: user033
+    full_name: Synthetic User 033
+    email: user033@example.org
+    persona: legal_counsel
+    primary_system: client-027
+  - username: user034
+    full_name: Synthetic User 034
+    email: user034@example.org
+    persona: legal_counsel
+    primary_system: client-028
+  - username: user035
+    full_name: Synthetic User 035
+    email: user035@example.org
+    persona: legal_counsel
+    primary_system: client-029
+  - username: user036
+    full_name: Synthetic User 036
+    email: user036@example.org
+    persona: marketing
+    primary_system: client-030
+  - username: user037
+    full_name: Synthetic User 037
+    email: user037@example.org
+    persona: marketing
+    primary_system: client-031
+  - username: user038
+    full_name: Synthetic User 038
+    email: user038@example.org
+    persona: marketing
+    primary_system: client-032
+  - username: user039
+    full_name: Synthetic User 039
+    email: user039@example.org
+    persona: marketing
+    primary_system: client-033
+  - username: user040
+    full_name: Synthetic User 040
+    email: user040@example.org
+    persona: marketing
+    primary_system: client-034
+  - username: user041
+    full_name: Synthetic User 041
+    email: user041@example.org
+    persona: marketing
+    primary_system: client-035
+  - username: user042
+    full_name: Synthetic User 042
+    email: user042@example.org
+    persona: executive
+    primary_system: mobile-07
+  - username: user043
+    full_name: Synthetic User 043
+    email: user043@example.org
+    persona: project_manager
+    primary_system: client-036
+  - username: user044
+    full_name: Synthetic User 044
+    email: user044@example.org
+    persona: project_manager
+    primary_system: client-037
+  - username: user045
+    full_name: Synthetic User 045
+    email: user045@example.org
+    persona: project_manager
+    primary_system: client-038
+  - username: user046
+    full_name: Synthetic User 046
+    email: user046@example.org
+    persona: project_manager
+    primary_system: client-039
+  - username: user047
+    full_name: Synthetic User 047
+    email: user047@example.org
+    persona: sysadmin
+    primary_system: client-040
+  - username: user048
+    full_name: Synthetic User 048
+    email: user048@example.org
+    persona: data_analyst
+    primary_system: client-041
+  - username: user049
+    full_name: Synthetic User 049
+    email: user049@example.org
+    persona: data_analyst
+    primary_system: client-042
+  - username: user050
+    full_name: Synthetic User 050
+    email: user050@example.org
+    persona: executive
+    primary_system: mobile-08
+  - username: user051
+    full_name: Synthetic User 051
+    email: user051@example.org
+    persona: data_analyst
+    primary_system: client-043
+  - username: user052
+    full_name: Synthetic User 052
+    email: user052@example.org
+    persona: data_analyst
+    primary_system: client-044
+  - username: user053
+    full_name: Synthetic User 053
+    email: user053@example.org
+    persona: data_analyst
+    primary_system: client-045
+  - username: user054
+    full_name: Synthetic User 054
+    email: user054@example.org
+    persona: executive
+    primary_system: directory-console
+  - username: user055
+    full_name: Synthetic User 055
+    email: user055@example.org
+    persona: sysadmin
+    primary_system: admin-client-a
+  - username: user056
+    full_name: Synthetic User 056
+    email: user056@example.org
+    persona: sysadmin
+    primary_system: admin-client-b
+  - username: user057
+    full_name: Synthetic User 057
+    email: user057@example.org
+    persona: sysadmin
+    primary_system: admin-client-c
+  - username: user058
+    full_name: Synthetic User 058
+    email: user058@example.org
+    persona: sysadmin
+    primary_system: network-console
+  - username: user059
+    full_name: Synthetic User 059
+    email: user059@example.org
+    persona: help_desk
+    primary_system: support-client-a
+  - username: user060
+    full_name: Synthetic User 060
+    email: user060@example.org
+    persona: help_desk
+    primary_system: support-client-b
+  - username: user061
+    full_name: Synthetic User 061
+    email: user061@example.org
+    persona: security_analyst
+    primary_system: soc-client-a
+  - username: user062
+    full_name: Synthetic User 062
+    email: user062@example.org
+    persona: security_analyst
+    primary_system: soc-client-b
+  - username: user063
+    full_name: Synthetic User 063
+    email: user063@example.org
+    persona: security_analyst
+    primary_system: analysis-client
+time_window:
+  start: '2026-03-01T00:00:00Z'
+  duration: 2h
+  warmup: 1h
+baseline_activity:
+  description: Dense ordinary baseline activity across a large client and server population. This fixture
+    exercises warm-up planning, DNS, HTTP, TLS, file-analysis, DHCP, and connection-state paths without
+    authored storyline or red-herring events.
+  intensity: medium
+  variation: medium
+observation_profile: complete
+output:
+  logs:
+  - format: zeek_conn
+  - format: zeek_dns
+  - format: zeek_http
+  - format: zeek_ssl
+  - format: zeek_x509
+  - format: zeek_files
+  - format: zeek_dhcp
+  destination: .
+  compression: false

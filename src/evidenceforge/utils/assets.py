@@ -17,6 +17,16 @@ EMAIL_CORPUS_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 def load_email_corpus_yaml(scenario_root: Path, reference: str) -> Any:
     """Load one bounded email corpus below the scenario package root."""
 
+    if reference.startswith("embedded:"):
+        from evidenceforge.config.provider import current_effective_config
+
+        effective = current_effective_config()
+        asset_key = reference.removeprefix("embedded:")
+        if effective is None or asset_key not in effective.embedded_yaml_assets:
+            raise ValueError(f"embedded email corpus is unavailable: {asset_key}")
+        content = effective.embedded_yaml_assets[asset_key]
+        return load_yaml_text(content, source=reference)
+
     content = read_text_file_beneath(
         scenario_root,
         reference,

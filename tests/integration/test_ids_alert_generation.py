@@ -6,6 +6,8 @@
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from evidenceforge.evaluation.engine import EvaluationEngine
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
@@ -23,6 +25,7 @@ from evidenceforge.models.scenario import (
 )
 
 
+@pytest.mark.slow
 def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None:
     scenario = Scenario(
         version="1.0",
@@ -81,7 +84,7 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
                         "jitter": 0,
                         "ids_alerts": [
                             {
-                                "sid": 2028401,
+                                "sid": 2025331,
                                 "policy": {
                                     "event_filter": {
                                         "type": "threshold",
@@ -105,7 +108,7 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
         line
         for path in tmp_path.rglob("snort_alert.log")
         for line in path.read_text(encoding="utf-8").splitlines()
-        if "[1:2028401:1]" in line
+        if "[1:2025331:5]" in line
     ]
     assert len(alert_lines) == 1
 
@@ -117,14 +120,14 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     assert totals["policy_filtered"] == 2
     assert totals["candidate"] == totals["emitted"] + totals["policy_filtered"]
     ids_evaluation = ground_truth["ids_evaluation"]
-    sensor_summary = ids_evaluation["sensors"]["ids01"]["1:2028401"]
+    sensor_summary = ids_evaluation["sensors"]["ids01"]["1:2025331"]
     assert sensor_summary["candidate"] == 3
     assert sensor_summary["emitted"] == 1
     assert sensor_summary["policy_filtered"] == 2
     assert sensor_summary["origins"] == {"authored_attachment": 1}
     assert len(sensor_summary["emitted_sha256"]) == 64
     markdown = (tmp_path / "GROUND_TRUTH.md").read_text(encoding="utf-8")
-    assert "SID 2028401" in markdown
+    assert "SID 2025331" in markdown
     assert "candidates=3 emitted=1 filtered=2" in markdown
     assert "## IDS Evaluation Summary" in markdown
     assert sensor_summary["emitted_sha256"][:12] in markdown
@@ -148,9 +151,16 @@ def test_beacon_ids_policy_output_and_reporting_are_consistent(tmp_path) -> None
     assert report.generated_at == datetime.fromisoformat(ground_truth["generated_at"])
 
 
+@pytest.mark.soak
 def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(tmp_path) -> None:
     systems = [
-        System(hostname="ws01", ip="10.0.0.8", os="Windows 11", type="workstation"),
+        System(
+            hostname="ws01",
+            ip="10.0.0.8",
+            os="Windows 11",
+            type="workstation",
+            services=["dns-client", "ntp-client"],
+        ),
         System(
             hostname="linux01",
             ip="10.0.0.20",
@@ -287,11 +297,15 @@ def test_transport_owner_ids_attachments_emit_and_report_only_owned_transports(t
                         direction="bidirectional",
                         placement="span",
                         log_formats=["snort_alert"],
-                    )
+                    ),
                 ],
             ),
         ),
-        time_window=TimeWindow(start=datetime(2026, 8, 3, tzinfo=UTC), duration="1h", warmup=None),
+        time_window=TimeWindow(
+            start=datetime(2026, 8, 3, tzinfo=UTC),
+            duration="2h5m",
+            warmup=None,
+        ),
         baseline_activity=BaselineActivity(description="minimal", intensity="low", variation="low"),
         storyline=storyline,
         output=OutputSpec(logs=[{"format": "snort_alert"}], destination="./output"),

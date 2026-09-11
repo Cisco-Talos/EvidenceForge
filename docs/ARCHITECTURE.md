@@ -1,5 +1,37 @@
 # EvidenceForge Architecture
 
+## Trust Boundary
+
+EvidenceForge validates authored scenarios, composed packs, project configuration, payloads, and
+other external data before those values enter generation. Once validated and converted into exact
+engine-owned models, internal generation objects are trusted. The generator preserves ownership,
+version, lifecycle, RNG-drift, atomic commit, rollback, and recovery checks, but it does not attempt
+to defend against arbitrary Python code already executing inside the EvidenceForge process.
+
+This is not a supported public Python API boundary. In-process code can monkeypatch validators,
+invoke `object.__setattr__`, or otherwise rewrite interpreter state, so recursive graph validation
+and cryptographic authentication between engine-owned objects do not provide a meaningful security
+boundary. Internal plans therefore use constant-time owner and lifecycle fences; validation and
+copy isolation remain at external input boundaries.
+
+## Scenario compilation and authoritative inputs
+
+Authored Scenario 1.0 and Scenario 2.0 documents compile into a frozen per-run input containing the
+canonical `Scenario`, effective data configuration, embedded YAML assets, pack identities/digests,
+and portable provenance. Scenario 2.0 may remain monolithic or explicitly compose whole industry
+packs or one organization pack. Pack-safe public catalogs are adapted into internal configuration;
+project-only and engine-owned families remain separate.
+
+Generation runs inside the compiled configuration scope. Raw and derived legacy caches are cleared
+and restored under a compatibility lock so sequential and concurrent runs cannot observe another
+run's overlays. Successful bundles contain a generated `RESOLVED_SCENARIO.yaml` and a
+`GENERATION_MANIFEST.json` written last. Resolved loading bypasses includes, repositories, project
+discovery, installed YAML reads, and ambient caches. Pack/include traversal, duplicate YAML keys,
+symlink following, unbounded composition, executable hooks, policy overrides, and pack-granted OOB
+authorization are rejected at the compilation boundary.
+
+See [Scenario 2.0 and composable packs](reference/SCENARIO_PACKS.md) for the public contract.
+
 This document explains how EvidenceForge works — first at a high level for users, then in detail for contributors who want to extend it.
 
 ## Part 1: How It Works
@@ -327,6 +359,49 @@ typed storyline or red-herring specification, including rows that failed to plan
 event dictionary. Ground-truth schema v2 exposes semantic occurrence IDs and no longer exposes a
 dispatch-sequence identifier.
 
+### V2 Foundation Ownership and Scale
+
+Scenario 2.0 separates authored controls from engine-owned runtime truth. The current migration is
+incremental: a path becomes strict only after its callers use the canonical owner, while shadow
+diagnostics continue to expose parity defects on compatibility paths.
+
+| Runtime truth | Current owner | Boundary |
+|---|---|---|
+| Required/optional/external action consequences | `ExecutionEffectPlan` on migrated bundles | Allocation-free preflight, exact occurrence/sibling reconciliation, compact intent outcome |
+| Process/session holds, leases, transitions, and close barriers | `LifecycleRegistry` on migrated paths | Append-only logical lifecycle and exact indexed queries; emitters receive frozen identity |
+| Materialized live compatibility state and established ID allocation | `StateManager` | Compatibility projection for unmigrated paths, not an emitter repair source or second logical registry |
+| Host application/service/task/module placement and release/content identity | `HostDeployment` and `DeploymentContentRegistry` | Immutable host compilation, path-independent release identity, exact path binding, no payload bytes |
+| Source deployment and capability policy | `CompiledCollectionDeployment` | Immutable exact source instances and capability bitsets; ephemeral projection envelopes |
+| Persistent application transports and operations | `ApplicationChannelRegistry` plus protocol managers | Exact affinity/owner/binding indexes, immutable budgets, paged expiry |
+| Source clocks and migrated duration/latency sampling | `TimingRuntime` | Canonical timestamps remain immutable; finalized source timing is frozen before rendering |
+
+`ExecutionEffectPlan` is internal. Scenario authors continue to declare typed events; they never
+author effect nodes, lifecycle handles, leases, closure tickets, channel IDs, or content IDs. For a
+migrated bundle, preflight runs before PID, port, lifecycle, or StateManager allocation. Required
+nodes must become exact canonical occurrences, link to an explicit sibling/lifecycle identity, or
+fail with an actionable reason. Compact intent outcomes are retained instead of a duration-wide
+execution DAG.
+
+Binary release identity is independent of host, principal, and install path. A software
+installation places a release on a host/principal; module release, installed-software inventory,
+local artifact version, canonical file content, and source-native FUID remain separate identities.
+The dispatcher attaches resolved release/hash metadata to canonical process context before sealing,
+and Sysmon renders that frozen identity without a registry lookup.
+
+Collection projection runs in a fixed order: determine canonical targets, require an exact deployed
+source and capability bits, apply topology visibility, apply coherent missingness, finalize source
+timing/batching, then render. Projection envelopes are occurrence-local. The observation manifest
+retains aggregate diagnostics and, when applicable, the compiled source-deployment digest rather
+than every projection decision.
+
+The foundation indexes build on `CompactIndexedStore`, `SegmentedTemporalIndex`, and
+`ReferenceLeaseIndex`. Exact identity is amortized O(1), equality lookup is O(1 + returned rows),
+temporal lookup is O(log n + returned rows), and expiry/compaction is paged. Hot operations may not
+scan `values()`, sort an entire registry, rebuild a reverse index, or materialize an unbounded
+result. Lazy indexes keep small scenarios cheap; explicit retention horizons and leases make
+long-running retained counts plateau. Stable partition ownership and canonical commit ordering keep
+results independent of worker scheduling and hash seed.
+
 ### Action Bundles
 
 Action bundles sit between world/storyline/baseline intent and canonical
@@ -373,6 +448,12 @@ it would delay the transport observation past remote authentication. The SSH
 auth graph accounts for both the resolved network-sensor transport timestamp and
 the canonical connection event's eCAR/EDR source-latency window before placing
 syslog authentication rows.
+Application-channel watermarks may retire an SSH sidecar, but they transfer only an
+authenticated terminal-channel proof into the exact SSH close continuation. The proof is
+registry-keyed and remains verifiable after the compact closed-channel tombstone expires.
+Watermark advancement never renders endpoint process termination, PAM/logind close, or
+`USER_SESSION/LOGOUT` evidence; the installed SSH lifecycle continuation remains the sole
+renderer, and failed proof adoption is retained for bounded retry before another manager page.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
@@ -392,6 +473,11 @@ interactive logons rather than inventing self-sourced RDP evidence.
 Endpoint FLOW rendering keeps RDP transport observations near the connection
 open, dropping late process identity when necessary instead of moving FLOW rows
 past target authentication.
+If source publication raises after the canonical RDP network/application commit, recovery uses
+the retained full materialization graph: transport result, authenticated RDP application receipt,
+and durable identity capture. Recovery installs the exact close continuation without
+redispatching source rows. A reservation is cancelled only after non-commit is proven; an
+indeterminate recovery retains the reservation and reports the recovery failure.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
@@ -503,11 +589,59 @@ proxy legs never advance policy state. Raw Snort events remain an explicit
 source-local escape hatch.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
-`HttpFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
-build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
-byte counts, transfer direction, and optional PE analysis from one transfer
-description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
-staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
+`HttpFileTransferActionBundle` builds HTTP file-analysis metadata from one transfer
+description. `SmbActivityActionBundle` composes the canonical network and
+provider-selected authentication contracts, then owns SMB sessions, trees, handles,
+file operations, storage mutations, and directional file observations across Windows
+and Linux. Generic TCP/445 connections are transport-only.
+
+The SMB contract preserves three identities instead of collapsing them: the local application
+actor/process, the SMB credential principal, and the server-side effective identity. Per-user
+mappings resolve a principal through the identity directory; fixed mappings and event-level
+`smb_principal` overrides change the credential identity without rewriting the local process owner.
+Samba authentication may additionally resolve an effective UID/GID without inventing a Windows
+LUID or a Linux PAM login.
+
+The storage world compiles ordinary host file sets and share catalogs through one bounded catalog
+compiler. A host file set owns persistent local file/content identities without implying an SMB
+listener or server role. A share may bind the exact same-system, same-root file set as an exported
+alias; local and share mutations then address the same canonical objects and manifests/forecasts do
+not count the alias twice. Client/server roles are connection-relative rather than permanent host
+classifications.
+
+Storage owns one canonical SMB-relative object path, then derives independent presentations: UNC,
+Windows drive mapping, Linux mount path, and server-local Windows or POSIX path. The server's
+backing filesystem is also independent from its advertised SMB filesystem; this is required for
+Samba on ext4/XFS that advertises NTFS. `STORAGE_MANIFEST.json` schema v3 exposes those distinctions,
+bounded host file sets and share bindings alongside platform-aware mappings and resolved storyline
+targets.
+
+For a client-file-set upload, the SMB action bundle reuses the owning authored process, opens one
+authenticated transport/session/tree lifecycle, emits one operation per selected file, and commits
+the destination objects through the existing idempotent SMB mutation journal. Relative source
+paths are preserved beneath the authored destination directory. Destination file objects are
+distinct from their sources but retain the same content lineage and hashes. A move commits its
+destination before retiring its source; publication recovery remains the only retry owner.
+
+Client and server lifecycle morphology is data-driven by `config/activity/smb_profiles.yaml`.
+Windows native access keeps its system-owned transport. Linux mounted CIFS keeps application-owned
+local file effects while marking transport as kernel-owned and unavailable for process attribution;
+`mount.cifs` is not the actor for every later operation. Direct `smbclient` is operation-scoped,
+while GVFS remains resident background process/transport texture and does not enter the canonical
+typed SMB file/auth/session lifecycle. Samba uses one listener/service profile plus per-transport
+`smbd` workers, so inbound FLOW and server FILE evidence can reference the active worker. Audit
+policy stays on the server/share contract: minimal emits auth/connection
+lifecycle, standard adds selected VFS operations and failures, and high projects modeled
+full-audit operations through existing syslog. Windows Security output remains Windows-only.
+The version-sensitive behavior follows the upstream
+[`mount.cifs`](https://man7.org/linux/man-pages/man8/mount.cifs.8.html),
+[`smb.conf`](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html),
+[`vfs_full_audit`](https://www.samba.org/samba/docs/current/man-html/vfs_full_audit.8.html), and
+[Zeek SMB](https://docs.zeek.org/en/lts/logs/smb.html) contracts.
+
+`StagedArchiveSmbReadActionBundle` delegates the SMB
+read that moves a staged archive before exfiltration to that canonical bundle, and
+`ScpReceiverFileActionBundle` emits only
 the receiver-side endpoint file evidence after the SSH bundle owns transport,
 auth, and session timing. Every successfully transmitted, sensor-visible,
 nonempty plaintext/decrypted HTTP request or response entity attaches a
@@ -546,6 +680,12 @@ foreground process telemetry through existing process helpers. The current slice
 keeps command pools, lifecycle clamps, and process side-effect builders as
 adapter hooks while moving the orchestration boundary above individual canonical
 occurrences.
+For an exact two-token Linux `sleep <duration>` command, process planning models the bounded
+numeric duration rather than the generic short-command fallback. A foreground process close is
+clamped at least 1,425 ms before an owning session deadline: 1,400 ms for the maximum shell-release
+jitter plus a 25 ms lifecycle margin. Impossible action-cohort intervals are rejected before
+mutation; compatibility paths leave the close to the session owner instead of publishing an
+independent invalid termination.
 
 Process-execution callers supply one process create or process terminate intent.
 `ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the
@@ -627,8 +767,14 @@ The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) s
 
 - `WorldModel` compiles canonical host capabilities and user placement from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
 - Capabilities are typed and compiled once for DHCP servers, DNS resolvers, domain controllers,
-  forward proxies, SSH receivers, and RDP receivers; baseline and storyline consumers do not
-  independently reinterpret roles or services
+  forward proxies, SSH receivers, RDP receivers, SMB clients, and SMB servers; baseline and
+  storyline consumers do not independently reinterpret roles or services
+- Windows systems retain implicit native SMB-client capability, and Windows file servers/DCs
+  retain server capability. Linux Samba service markers or explicit storage topology provide server
+  capability; a generic Linux `file_server` role does not. Canonical Linux file activity requires a
+  CIFS-mount or `smbclient` marker. GVFS
+  markers provide opaque background transport/process texture only. Capability-driven baseline
+  selection connects only an eligible SMB client to an eligible server
 - Distinct-peer requests exclude the requesting host. Missing capability remains explicit:
   optional baseline families skip, authored DHCP intent fails validation, and neither path invents
   a hostname, address, or role
@@ -744,6 +890,67 @@ legacy/default during evaluation.
   causal occurrences
 - `dispatch_raw(RawProjectionRequest)` → `emit_raw(dict)` — explicitly source-local raw escape
   hatch; it cannot create sibling evidence or claim cross-source consistency
+
+### Generation Checkpoints
+
+Fresh CLI runs checkpoint every 24 completed simulated hours by default; `--checkpoint-hours 0`
+disables new recovery points. Cadence is continuous across warm-up and collection and does not add
+initialization, phase-boundary, or pre-finalization checkpoints. The engine offers a post-hour
+cursor only after emitter quiescence, lifecycle/network retirement, watermark advancement, and
+transient-owner validation.
+
+Checkpoint state is assembled from explicit participants. Each mutable owner classifies its fields
+as a bounded live head, immutable incremental records, deterministically rebuilt state, or
+transient state that must be empty. There is no generic object-graph fallback and no executable
+serialization. Pydantic validates small manifests while versioned stdlib-packed binary segments
+carry primitive state; RNG state uses an explicit numeric schema.
+
+`.eforge-generation/` contains a protected staged bundle, content-addressed immutable segments,
+the latest two recovery points, self-contained resolved input, and the run lock. Recovery manifests
+share unchanged segments through a size-tiered catalog. A cadence commit seals only new records and
+bounded heads; it never rereads, rehashes, or rewrites inherited segments. Active emitter spools
+remain in their runtime locations and expose append, SQLite-row, immutable-run, or protected-file
+incremental adapters.
+
+The protected workspace also exposes a small cooperative control plane. `eforge checkpoint status`
+reads and authenticates the recovery index, both retained generations, referenced content, runtime
+fingerprint, lock, and non-overlapping managed storage without probing or modifying the filesystem.
+`eforge checkpoint suspend` atomically publishes an idempotent request for an active controller.
+At the next completed-hour barrier, the engine performs the same quiescence, retirement, transient
+validation, and participant transaction as a cadence checkpoint, acknowledges the request only
+after manifest publication, and exits without terminal finalization. This explicit off-cadence
+commit does not alter the modulo-based cadence anchor.
+
+The foreground generator also installs a two-stage SIGINT controller during execution. Its first
+Ctrl+C latches a cooperative request instead of injecting `KeyboardInterrupt` into participant or
+publication transactions. At the next completed-hour barrier, checkpoint-enabled runs publish the
+same off-cadence suspension recovery; checkpoint-disabled runs enter ordinary abort cleanup without
+creating recovery state. A second Ctrl+C forces immediate process exit, leaving any previously
+published recovery authoritative.
+
+New objects and heads are written and synced before the manifest is written last. Atomic rename and
+directory sync publish the recovery, after which old unreferenced content may be collected. Restore
+validates ownership, containment, hashes, schemas, and fingerprints, hydrates semantic owners in
+dependency order, attaches immutable records, and rebuilds locks, workers, routes, and caches. A
+corrupt newest recovery falls back to the previous valid point. Successful bundle publication
+removes the hidden workspace and records no resume history in the final manifest. See
+[Generation Checkpoints and Resume](reference/GENERATION_CHECKPOINTS.md) for the user contract.
+
+Resume compatibility is modeled on orthogonal axes. Immutable run identity covers authoritative
+resolved input, seed, formats, output target, and OOB settings; explicit conflicts are rejected.
+State loadability is established only after every required participant and supported schema
+hydrates. Python/compiler/implementation, dependency, OS, architecture, cache-tag, and byte-order
+differences are portable restore attempts rather than static failures. They always remove the
+byte-equivalence guarantee.
+
+The packaged `config/generation_behavior.yaml` supplies a monotonic, gap-free revision history for
+output-affecting changes, including stable IDs, impact, and affected domains/formats. CI hashes the
+generation behavior surface and requires a manifest revision whenever that surface changes;
+checkpoint-control-only blocks are explicitly excluded. Behavior risk and runtime drift are stored
+with the accepted policy and confirmation state in same-cursor migration checkpoints and final
+manifest provenance. Read-only verification uses a scratch-disposal lifecycle that stops workers
+and closes database handles without terminal evidence, source sorting/merging, footer output, or
+checkpoint publication.
 
 ### Format Definition System
 
@@ -939,7 +1146,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
 
-**Data-driven identity pools:** Realism-sensitive fallback identities are owned by overlay-aware YAML files under `config/activity/`: baseline email domains/local-parts, public mail replacement domains, omitted storyline external IP pools, suspicious-benign DNS/connection targets, and command URL/host placeholder pools. Scenario-authored IPs/domains remain authoritative; config pools are used only for deterministic fallback and background generation.
+**Data-driven identity pools:** `public_identity_profiles.yaml` is the scenario-scoped canonical registry for generated Internet identities. Immutable bindings join semantic role, provider, IP, forward/PTR names, TLS profile, and persona/User-Agent traits once using stable semantic keys. Default scanner, authentication, C2, human, crawler, API-client, ordinary-responder, CDN, DNS, NTP, and mail pools are disjoint unless provider infrastructure is explicitly shared. Scenario-authored IPs/domains remain authoritative and contradictory cross-role reuse is diagnostic. Other overlay-aware YAML files continue to own baseline email local parts/domains, suspicious-benign targets, and command placeholders.
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
 

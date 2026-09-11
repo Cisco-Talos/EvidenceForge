@@ -8,14 +8,60 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.events.dispatcher import expand_formats
-from evidenceforge.models.scenario import Scenario
+from evidenceforge.models.scenario import Scenario, User
 
 _DURATION_PART = re.compile(r"(\d+)(ms|[dhms])")
+
+RegistryName = Literal[
+    "lifecycle",
+    "application_channels",
+    "local_artifacts",
+    "collection_deployment",
+    "deployment_content",
+]
+
+RetainedStateFamilyName = Literal[
+    "lifecycle",
+    "application_channels",
+    "local_artifacts",
+    "collection_deployment",
+    "deployment_content",
+    "process_runtime",
+    "timing_runtime",
+    "http",
+    "proxy",
+    "smb",
+    "rdp",
+    "ssh",
+]
+
+RETAINED_STATE_FAMILIES: tuple[RetainedStateFamilyName, ...] = (
+    "lifecycle",
+    "application_channels",
+    "local_artifacts",
+    "collection_deployment",
+    "deployment_content",
+    "process_runtime",
+    "timing_runtime",
+    "http",
+    "proxy",
+    "smb",
+    "rdp",
+    "ssh",
+)
+
+_REGISTRY_NAMES: tuple[RegistryName, ...] = (
+    "lifecycle",
+    "application_channels",
+    "local_artifacts",
+    "collection_deployment",
+    "deployment_content",
+)
 
 
 class WorkloadLimits(BaseModel):
@@ -34,6 +80,27 @@ class WorkloadLimits(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class RegistryWorkloadInput(BaseModel):
+    """Scenario-derived input drivers for one bounded registry forecast.
+
+    Counts here are workload drivers, not retained-row predictions. The
+    resource calibration owns conversion from effects and source-channel
+    observations into created, live, retained, and leased registry rows.
+    """
+
+    registry: RegistryName
+    scenario_seconds: int = Field(ge=0)
+    base_occurrences: int = Field(ge=0)
+    effect_occurrences: int = Field(ge=0)
+    channel_observations: int = Field(ge=0)
+    static_entries: int = Field(ge=0)
+    scenario_override_entries: int = Field(default=0, ge=0)
+    effect_fanout: float = Field(ge=0)
+    channel_fanout: float = Field(ge=0)
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class WorkloadEstimate(BaseModel):
     """Conservative pre-allocation estimate for one validated scenario."""
 
@@ -47,6 +114,12 @@ class WorkloadEstimate(BaseModel):
     attachment_payload_bytes: int
     email_artifact_bytes: int
     enabled_formats: int
+    smb_activity_events: int = 0
+    smb_catalog_files: int = 0
+    smb_selector_candidates: int = 0
+    smb_batch_operations: int = 0
+    smb_retained_mutations: int = 0
+    registry_inputs: tuple[RegistryWorkloadInput, ...] = ()
     limit_violations: tuple[str, ...] = ()
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -146,6 +219,269 @@ def _email_corpus_attachment_groups(
     return groups
 
 
+def _system_platform(os_name: str) -> str | None:
+    """Return the deployment platform represented by a scenario OS name."""
+
+    normalized = os_name.casefold()
+    if "windows" in normalized:
+        return "windows"
+    if any(token in normalized for token in ("linux", "ubuntu", "debian", "centos", "rhel")):
+        return "linux"
+    if any(token in normalized for token in ("macos", "mac os", "darwin")):
+        return "macos"
+    return None
+
+
+def _deployment_workload_entries(scenario: Scenario) -> tuple[int, int]:
+    """Project packed deployment bindings without compiling the full registry.
+
+    The projection mirrors the catalog's platform, system-type, architecture,
+    stable-prevalence, persona, and exact-host replacement gates. It deliberately
+    counts compact bindings rather than materializing deployment value objects.
+    """
+
+    from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.utils.rng import _stable_seed
+
+    overrides = {
+        override.system.casefold(): override
+        for override in scenario.environment.deployment_overrides
+    }
+    override_entries = sum(
+        len(values)
+        for override in overrides.values()
+        for values in (
+            override.applications,
+            override.services,
+            override.tasks,
+            override.modules,
+            override.cohorts,
+        )
+        if values is not None
+    ) + sum(
+        len(assignment.applications)
+        for override in overrides.values()
+        for assignment in (override.user_applications or ())
+    )
+    raw_applications = tuple(load_catalog().get("applications", ()))
+    known_personas = {
+        str(persona).casefold()
+        for application in raw_applications
+        for persona in application.get("personas", ())
+    }
+    enabled_users = tuple(
+        user for user in scenario.environment.users if user.enabled and user.persona
+    )
+    users_by_host: dict[str, list[User]] = {}
+    for user in enabled_users:
+        if user.primary_system:
+            users_by_host.setdefault(user.primary_system.casefold(), []).append(user)
+    for system in scenario.environment.systems:
+        if system.assigned_user:
+            assigned = next(
+                (
+                    user
+                    for user in enabled_users
+                    if user.username.casefold() == system.assigned_user.casefold()
+                ),
+                None,
+            )
+            if assigned is not None:
+                users = users_by_host.setdefault(system.hostname.casefold(), [])
+                if all(user.username.casefold() != assigned.username.casefold() for user in users):
+                    users.append(assigned)
+    placed_users = {user.username.casefold() for users in users_by_host.values() for user in users}
+    fallback_system = next(
+        (
+            system
+            for system in sorted(
+                scenario.environment.systems,
+                key=lambda value: value.hostname.casefold(),
+            )
+            if system.type == "workstation" and _system_platform(system.os) is not None
+        ),
+        None,
+    )
+    if fallback_system is not None:
+        fallback_users = users_by_host.setdefault(fallback_system.hostname.casefold(), [])
+        fallback_users.extend(
+            user for user in enabled_users if user.username.casefold() not in placed_users
+        )
+
+    static_entries = 0
+    profile_owners: set[tuple[str, str]] = set()
+    for system in sorted(
+        scenario.environment.systems,
+        key=lambda value: value.hostname.casefold(),
+    ):
+        platform = _system_platform(system.os)
+        if platform is None:
+            continue
+        # One host deployment plus the two path bindings used by the packed
+        # deployment-path calibration workload.
+        static_entries += 3
+        host_users = tuple(
+            sorted(
+                users_by_host.get(system.hostname.casefold(), ()),
+                key=lambda value: value.username.casefold(),
+            )
+        )
+        override = overrides.get(system.hostname.casefold())
+        replacement = (
+            None
+            if override is None or override.applications is None
+            else {application.casefold() for application in override.applications}
+        )
+        user_replacements = (
+            {
+                assignment.user.casefold(): {
+                    application.casefold() for application in assignment.applications
+                }
+                for assignment in (override.user_applications or ())
+            }
+            if override is not None
+            else {}
+        )
+
+        for application in sorted(
+            raw_applications,
+            key=lambda value: str(value.get("id", "")).casefold(),
+        ):
+            application_id = str(application.get("id", ""))
+            platform_config = application.get("platforms", {}).get(platform)
+            if not application_id or not isinstance(platform_config, dict):
+                continue
+            deployment = platform_config.get("deployment")
+            if not isinstance(deployment, dict):
+                continue
+            allowed_types = application.get("system_types")
+            if allowed_types is not None and system.type not in allowed_types:
+                continue
+            architecture = system.architecture or "x64"
+            architectures = deployment.get("architectures") or ("x64",)
+            if architecture not in architectures and "neutral" not in architectures:
+                continue
+            if replacement is not None:
+                if application_id.casefold() not in replacement:
+                    continue
+            else:
+                prevalence = float(deployment.get("fleet_prevalence", 1.0))
+                material = (
+                    f"application-deployment:{system.hostname.casefold()}:"
+                    f"{application_id.casefold()}:{deployment.get('version', '')}:"
+                    f"{deployment.get('build', '')}:{deployment.get('variant', 'stable')}"
+                )
+                if _stable_seed(material) % 1_000_000 >= int(prevalence * 1_000_000):
+                    continue
+
+            allowed_personas = {
+                str(persona).casefold() for persona in application.get("personas", ())
+            }
+            eligible_users = tuple(
+                user
+                for user in host_users
+                if (
+                    user.persona.casefold() in allowed_personas
+                    or (
+                        user.persona.casefold() not in known_personas
+                        and "default" in allowed_personas
+                    )
+                )
+                and application_id.casefold()
+                in user_replacements.get(
+                    user.username.casefold(),
+                    {application_id.casefold()},
+                )
+            )
+            if not eligible_users:
+                continue
+
+            module_selectors = (
+                None
+                if override is None or override.modules is None
+                else {selector.replace("/", "\\").casefold() for selector in override.modules}
+            )
+            module_count = sum(
+                isinstance(module, dict)
+                and module.get("pe_metadata") is not None
+                and (
+                    module_selectors is None
+                    or str(module.get("path", "")).replace("/", "\\").casefold() in module_selectors
+                    or str(module.get("path", "")).replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+                    in module_selectors
+                )
+                for module in (platform_config.get("loaded_modules") or ())
+            )
+            artifact_bindings = 1 + module_count
+            scope = deployment.get("scope", "machine")
+            installation_count = 1 if scope == "machine" else len(eligible_users)
+            static_entries += installation_count * (1 + artifact_bindings)
+            static_entries += len(eligible_users) * 2  # application profile + assignment
+            for user in eligible_users:
+                profile_owners.add((system.hostname.casefold(), user.username.casefold()))
+
+        services = (
+            override.services
+            if override is not None and override.services is not None
+            else system.services
+        )
+        tasks = override.tasks if override is not None and override.tasks is not None else ()
+        static_entries += len(services) + len(tasks)
+    static_entries += len(profile_owners)
+    return static_entries, override_entries
+
+
+def build_registry_workload_inputs(
+    scenario: Scenario,
+    *,
+    primary_seconds: int,
+    warmup_seconds: int,
+    baseline_occurrences: int,
+    explicit_occurrences: int,
+    canonical_occurrences: int,
+    rendered_records: int,
+    enabled_formats: int,
+) -> tuple[RegistryWorkloadInput, ...]:
+    """Build deterministic registry forecast drivers in canonical report order."""
+
+    scenario_seconds = primary_seconds + warmup_seconds
+    base_occurrences = baseline_occurrences + explicit_occurrences
+    effect_fanout = canonical_occurrences / max(1, base_occurrences)
+    channel_fanout = rendered_records / max(1, canonical_occurrences)
+    network_sensors = (
+        len(scenario.environment.network.sensors) if scenario.environment.network else 0
+    )
+    collection_entries = (
+        len(scenario.environment.systems) * max(1, enabled_formats) + network_sensors
+    )
+    deployment_entries, deployment_override_entries = _deployment_workload_entries(scenario)
+    observation_overrides = getattr(scenario.environment, "observation_overrides", ())
+    static_by_registry: dict[RegistryName, tuple[int, int]] = {
+        "lifecycle": (0, 0),
+        "application_channels": (0, 0),
+        "local_artifacts": (0, 0),
+        "collection_deployment": (
+            collection_entries,
+            len(observation_overrides),
+        ),
+        "deployment_content": (deployment_entries, deployment_override_entries),
+    }
+    return tuple(
+        RegistryWorkloadInput(
+            registry=registry,
+            scenario_seconds=scenario_seconds,
+            base_occurrences=base_occurrences,
+            effect_occurrences=canonical_occurrences,
+            channel_observations=rendered_records,
+            static_entries=static_by_registry[registry][0],
+            scenario_override_entries=static_by_registry[registry][1],
+            effect_fanout=effect_fanout,
+            channel_fanout=channel_fanout,
+        )
+        for registry in _REGISTRY_NAMES
+    )
+
+
 def estimate_workload(
     scenario: Scenario,
     *,
@@ -169,6 +505,18 @@ def estimate_workload(
     periodic_max = 0
     attachment_groups: list[tuple[str, list[int]]] = []
     corpus_groups = _email_corpus_attachment_groups(scenario, scenario_root)
+    try:
+        from evidenceforge.generation.storage_world import StorageWorldModel
+        from evidenceforge.models.scenario import SmbClientLocation, SmbShareLocation
+
+        storage_world = StorageWorldModel.compile(scenario)
+    except (KeyError, TypeError, ValueError):
+        storage_world = None
+    smb_selector_candidates = 0
+    smb_activity_events = 0
+    smb_catalog_files = len(storage_world.files_by_id) if storage_world is not None else 0
+    smb_batch_operations = 0
+    smb_retained_mutations = 0
     for authored in [*(scenario.storyline or []), *scenario.red_herrings]:
         for spec in authored.events:
             periodic = _periodic_occurrences(spec, primary_duration_seconds=primary_seconds)
@@ -179,12 +527,72 @@ def estimate_workload(
                 target_ips = getattr(spec, "target_ips", []) or []
                 target_count = len(target_ips) or int(getattr(spec, "target_count", 0) or 0)
                 occurrences = target_count * len(getattr(spec, "ports", []) or [])
+            elif getattr(spec, "type", "") == "process":
+                from evidenceforge.generation.actions.scanner_probe import (
+                    estimate_nmap_command_probe_occurrences,
+                )
+                from evidenceforge.generation.activity.network_params import (
+                    nmap_command_probe_config,
+                )
+
+                probe_occurrences = estimate_nmap_command_probe_occurrences(
+                    str(getattr(spec, "command_line", "") or ""),
+                    nmap_command_probe_config(),
+                )
+                occurrences = max(1, probe_occurrences)
+            elif getattr(spec, "type", "") == "smb_activity" and storage_world is not None:
+                location = spec.target or spec.source
+                if isinstance(location, SmbShareLocation):
+                    candidates = storage_world.select(
+                        location.share,
+                        file_ref=location.file_ref,
+                        path=location.path,
+                        selector=location.selector,
+                    )
+                    smb_selector_candidates += len(candidates)
+                    if spec.batch is None:
+                        occurrences = 1
+                    elif spec.batch.count is not None:
+                        occurrences = spec.batch.count
+                    elif spec.batch.fraction is not None:
+                        occurrences = max(1, round(len(candidates) * spec.batch.fraction))
+                    else:
+                        occurrences = len(candidates)
+                    smb_batch_operations += occurrences
+                    if spec.operation in {"create", "update", "copy", "move", "delete"}:
+                        smb_retained_mutations += occurrences
+                elif isinstance(location, SmbClientLocation) and location.file_set is not None:
+                    candidates = storage_world.select_file_set(
+                        location.file_set,
+                        file_ref=location.file_ref,
+                        selector=location.selector,
+                    )
+                    smb_selector_candidates += len(candidates)
+                    if spec.batch is None:
+                        occurrences = 1
+                    elif spec.batch.count is not None:
+                        occurrences = min(spec.batch.count, len(candidates))
+                    elif spec.batch.fraction is not None:
+                        occurrences = max(1, round(len(candidates) * spec.batch.fraction))
+                    else:
+                        occurrences = len(candidates)
+                    smb_batch_operations += occurrences
+                    if spec.operation in {"copy", "move"}:
+                        smb_retained_mutations += occurrences * (
+                            2 if spec.operation == "move" else 1
+                        )
+                else:
+                    occurrences = 1
             else:
                 occurrences = 1
             explicit_occurrences += occurrences
-            explicit_canonical_occurrences += occurrences * (
-                8 + len(getattr(spec, "ids_alerts", []) or [])
-            )
+            if getattr(spec, "type", "") == "smb_activity":
+                smb_activity_events += 1
+                explicit_canonical_occurrences += 5 + occurrences * 3
+            else:
+                explicit_canonical_occurrences += occurrences * (
+                    8 + len(getattr(spec, "ids_alerts", []) or [])
+                )
             if getattr(spec, "type", "") == "email_message":
                 corpus_id = getattr(spec, "corpus_id", None)
                 sizes = (
@@ -279,6 +687,17 @@ def estimate_workload(
             f"{effective_limits.max_email_payload_bytes}"
         )
 
+    registry_inputs = build_registry_workload_inputs(
+        scenario,
+        primary_seconds=primary_seconds,
+        warmup_seconds=warmup_seconds,
+        baseline_occurrences=baseline_occurrences,
+        explicit_occurrences=explicit_occurrences,
+        canonical_occurrences=canonical_occurrences,
+        rendered_records=rendered_records,
+        enabled_formats=enabled_formats,
+    )
+
     return WorkloadEstimate(
         primary_duration_seconds=primary_seconds,
         warmup_seconds=warmup_seconds,
@@ -290,6 +709,12 @@ def estimate_workload(
         attachment_payload_bytes=attachment_payload_bytes,
         email_artifact_bytes=email_artifact_bytes,
         enabled_formats=enabled_formats,
+        smb_activity_events=smb_activity_events,
+        smb_catalog_files=smb_catalog_files,
+        smb_selector_candidates=smb_selector_candidates,
+        smb_batch_operations=smb_batch_operations,
+        smb_retained_mutations=smb_retained_mutations,
+        registry_inputs=registry_inputs,
         limit_violations=tuple(violations),
     )
 

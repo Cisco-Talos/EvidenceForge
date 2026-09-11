@@ -33,6 +33,7 @@ Sub-scores (weights sum to 1.0):
 
 import ipaddress
 import logging
+import ntpath
 import re
 from collections import defaultdict
 from dataclasses import replace
@@ -98,13 +99,27 @@ class CausalityScorer(DimensionScorer):
     ) -> PillarScore:
         context = context or EvaluationContext()
         if context.observation_manifest is not None and not observation_manifest_matches_scenario(
-            context.observation_manifest, scenario
+            context.observation_manifest,
+            scenario,
+            effective_config=context.effective_config,
         ):
             context = replace(context, observation_manifest=None)
         # storyline_id -> rendered spillage values (from GROUND_TRUTH.json), used
         # by _spillage_record_matches to verify the credential landed in the logs.
         self._spillage_gt = context.spillage_ground_truth or {}
         self._email_gt = context.email_ground_truth or {}
+        self._smb_gt: dict[str, dict[str, Any]] = {}
+        storage = scenario.environment.storage
+        self._smb_mapping_principals = {
+            mapping.id.casefold(): mapping.principal
+            for mapping in (storage.mappings if storage is not None else [])
+            if mapping.principal
+        }
+        if context.ground_truth is not None:
+            for record in context.ground_truth.events:
+                if record.kind != "smb_activity" or not record.storyline_id:
+                    continue
+                self._smb_gt[record.storyline_id] = record.attributes.model_dump(mode="python")
         # storyline_id -> adversarial-payload labels (from the canonical GROUND_TRUTH.json)
         # + per-format searchable text (parsed fields + raw lines, newline-normalized)
         # so a labeled payload — including a CRLF split that spans two physical
@@ -145,6 +160,20 @@ class CausalityScorer(DimensionScorer):
                     if apgt.get("target_system"):
                         event.details["hostname"] = apgt["target_system"]
                         event.details["_anchor_host_adversarial_payload"] = apgt["target_system"]
+                smbgt = self._smb_gt.get(event.storyline_id)
+                if smbgt and "smb_activity" in event.event_types:
+                    matching = next(
+                        (
+                            record
+                            for record in context.ground_truth.events
+                            if record.storyline_id == event.storyline_id
+                            and record.kind == "smb_activity"
+                        ),
+                        None,
+                    )
+                    if matching is not None:
+                        event.time = matching.time
+                        event.details["_anchor_time_smb_activity"] = matching.time
             self._proxy_mode = scenario.environment.proxy.mode
             self._proxy_listener_port = scenario.environment.proxy.listener_port
             self._proxy_ips = {
@@ -188,35 +217,39 @@ class CausalityScorer(DimensionScorer):
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
-        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 7})
+        progress("sub_score_start", {"name": "Causal Ordering", "step": 1, "total": 8})
         s1 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s1.score})
 
-        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 7})
+        progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 8})
         s2 = self._score_event_presence(resolved, context)
         progress("sub_score_done", {"name": "Event Presence", "score": s2.score})
 
-        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 7})
+        progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 8})
         s3 = self._score_indicator_accuracy(resolved)
         progress("sub_score_done", {"name": "Indicator Accuracy", "score": s3.score})
 
-        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 7})
+        progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 8})
         s4 = self._score_pivot_linkability(resolved, context)
         progress("sub_score_done", {"name": "Pivot Linkability", "score": s4.score})
 
-        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 7})
+        progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 8})
         s5 = self._score_temporal_integrity(resolved, context)
         progress("sub_score_done", {"name": "Temporal Integrity", "score": s5.score})
 
-        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 7})
+        progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 8})
         s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index, context)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
-        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 7})
+        progress("sub_score_start", {"name": "Intent Reconciliation", "step": 7, "total": 8})
         s7 = self._score_intent_reconciliation(scenario, context)
         progress("sub_score_done", {"name": "Intent Reconciliation", "score": s7.score})
 
-        sub_scores = [s1, s2, s3, s4, s5, s6, s7]
+        progress("sub_score_start", {"name": "Effect Reconciliation", "step": 8, "total": 8})
+        s8 = self._score_effect_reconciliation(context)
+        progress("sub_score_done", {"name": "Effect Reconciliation", "score": s8.score})
+
+        sub_scores = [s1, s2, s3, s4, s5, s6, s7, s8]
         dim_score = aggregate_sub_scores(sub_scores)
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
@@ -337,6 +370,84 @@ class CausalityScorer(DimensionScorer):
             sample_failures=sorted(set(failures))[:10],
         )
 
+    @staticmethod
+    def _score_effect_reconciliation(context: EvaluationContext) -> SubScore:
+        """Apply an all-or-none gate to generated effect-plan reconciliation."""
+
+        ground_truth = context.ground_truth
+        if ground_truth is None or ground_truth.effect_reconciliation is None:
+            return SubScore(
+                name="Effect Reconciliation",
+                key="effect_reconciliation",
+                weight=0.0,
+                score=None,
+                skipped=True,
+                details="Legacy ground truth has no execution-effect reconciliation contract",
+            )
+        reconciliation = ground_truth.effect_reconciliation
+        failures = []
+        defect_fields = {
+            "failed_node_count": reconciliation.failed_node_count,
+            "missing_node_count": reconciliation.missing_node_count,
+            "missing_required_node_count": reconciliation.missing_required_node_count,
+            "unexpected_node_count": reconciliation.unexpected_node_count,
+            "unplanned_failure_count": reconciliation.unplanned_failure_count,
+            "invalid_outcome_node_count": reconciliation.invalid_outcome_node_count,
+            "policy_invalid_outcome_count": reconciliation.policy_invalid_outcome_count,
+            "cardinality_mismatch_count": reconciliation.cardinality_mismatch_count,
+            "duplicate_outcome_count": reconciliation.duplicate_outcome_count,
+            "incomplete_reconciliation_count": (reconciliation.incomplete_reconciliation_count),
+            "exempt_effect_occurrence_count": reconciliation.exempt_effect_occurrence_count,
+            "unprovenanced_effect_occurrence_count": (
+                reconciliation.unprovenanced_effect_occurrence_count
+            ),
+            "effect_publication_mismatch_count": (reconciliation.effect_publication_mismatch_count),
+        }
+        failures.extend(
+            f"Execution-effect reconciliation reports {field}={count}"
+            for field, count in defect_fields.items()
+            if count
+        )
+        if not reconciliation.complete:
+            failures.append("Execution-effect reconciliation reports complete=false")
+        if (
+            reconciliation.required_node_count
+            + reconciliation.optional_node_count
+            + reconciliation.externally_owned_node_count
+            != reconciliation.planned_node_count
+        ):
+            failures.append("Execution-effect requirement totals contradict planned nodes")
+        if (
+            reconciliation.realized_node_count
+            + reconciliation.linked_node_count
+            + reconciliation.suppressed_node_count
+            + reconciliation.failed_node_count
+            + reconciliation.missing_node_count
+            != reconciliation.planned_node_count
+        ):
+            failures.append("Execution-effect outcome totals contradict planned nodes")
+        if (
+            reconciliation.published_effect_occurrence_count
+            != reconciliation.reconciled_effect_occurrence_count
+        ):
+            failures.append(
+                "Published effect occurrences contradict realized reconciliation cardinality"
+            )
+        score = 0.0 if failures else 100.0
+        return SubScore(
+            name="Effect Reconciliation",
+            key="effect_reconciliation",
+            weight=0.0,
+            score=score,
+            details=(
+                f"{reconciliation.plan_count} effect plans, "
+                f"{reconciliation.owned_effect_plan_count} owned effect plans, "
+                f"{reconciliation.planned_node_count} planned nodes, "
+                f"digest {reconciliation.reconciliation_digest}"
+            ),
+            sample_failures=sorted(set(failures))[:10],
+        )
+
     # --- Host-time index ---
 
     @staticmethod
@@ -376,6 +487,7 @@ class CausalityScorer(DimensionScorer):
                     "client_addr",
                     "host",
                     "server_name",
+                    "IpAddress",
                 ):
                     ip_val = rec.fields.get(ip_field)
                     if ip_val and ip_val not in (hostname, ""):
@@ -391,6 +503,13 @@ class CausalityScorer(DimensionScorer):
         text = str(value).strip().lower()
         if not text or text == "-":
             return ""
+        try:
+            address = ipaddress.ip_address(text)
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+                return str(address.ipv4_mapped)
+            return str(address)
+        except ValueError:
+            pass
         return cls._normalize_beacon_host(text) or text
 
     # --- Trace finding ---
@@ -468,7 +587,7 @@ class CausalityScorer(DimensionScorer):
         context: EvaluationContext,
     ) -> ObservationManifestEvent | None:
         manifest = context.observation_manifest
-        if manifest is None or manifest.observation_profile == "complete":
+        if manifest is None:
             return None
         return manifest.storyline_by_id().get(event.storyline_id)
 
@@ -591,6 +710,9 @@ class CausalityScorer(DimensionScorer):
         explicit_dst = event.details.get("dst_ip")
         if explicit_dst:
             lookup_keys.append(str(explicit_dst))
+        client = event.details.get("client")
+        if isinstance(client, dict) and client.get("ip"):
+            lookup_keys.append(str(client["ip"]))
         # Per-type destination host (the spillage/adversarial web server) takes
         # precedence over the shared hostname slot when both types share a step.
         expected_hostname = event.details.get(f"_anchor_host_{event_type}") or event.details.get(
@@ -598,6 +720,8 @@ class CausalityScorer(DimensionScorer):
         )
         if expected_hostname:
             lookup_keys.append(str(expected_hostname).lower())
+        if event_type == "smb_activity":
+            lookup_keys.extend(host.casefold() for host in self._smb_expected_hosts(event))
 
         seen: set[int] = set()
         for hostname_key in lookup_keys:
@@ -741,6 +865,8 @@ class CausalityScorer(DimensionScorer):
                 return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
                     f, expected_hostname
                 )
+        elif event_type == "smb_activity":
+            return self._smb_record_matches(f, format_name, event)
         elif event_type == "process_terminate":
             if format_name == "windows_event_security":
                 return f.get("EventID") == 4689 and self._host_matches(
@@ -1057,6 +1183,222 @@ class CausalityScorer(DimensionScorer):
             return self._email_read_record_matches(f, format_name, event)
         elif event_type == "raw":
             return self._raw_record_matches(f, format_name, event)
+        return False
+
+    def _smb_record_matches(
+        self,
+        fields: dict[str, Any],
+        format_name: str,
+        event: ResolvedEvent,
+    ) -> bool:
+        """Match an SMB trace against its canonical ground-truth identities."""
+        ground_truth = self._smb_gt.get(event.storyline_id)
+        if ground_truth is None:
+            return False
+
+        operations = ground_truth.get("operations") or []
+        transport_uids = {str(uid) for uid in ground_truth.get("transport_uids") or [] if uid}
+        fuids = {str(operation.get("fuid")) for operation in operations if operation.get("fuid")}
+        relative_paths = {
+            self._normalize_smb_path(str(operation.get("path")))
+            for operation in operations
+            if operation.get("path")
+        }
+        basenames = {path.rsplit("\\", maxsplit=1)[-1] for path in relative_paths if path}
+        share_ids = {
+            str(operation.get("share", "")).rsplit(".", maxsplit=1)[-1].casefold()
+            for operation in operations
+            if operation.get("share")
+        }
+
+        if format_name == "zeek_conn":
+            return str(fields.get("uid") or "") in transport_uids
+        if format_name == "zeek_smb_mapping":
+            return str(
+                fields.get("uid") or ""
+            ) in transport_uids or self._smb_path_or_share_matches(
+                (fields.get("path"), fields.get("service")),
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+        if format_name == "zeek_smb_files":
+            combined_path = ntpath.join(
+                str(fields.get("path") or ""),
+                str(fields.get("name") or ""),
+            )
+            return str(
+                fields.get("uid") or ""
+            ) in transport_uids or self._smb_path_or_share_matches(
+                (combined_path,),
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+        if format_name == "zeek_files":
+            return str(fields.get("fuid") or "") in fuids
+
+        if format_name == "windows_event_security":
+            if fields.get("EventID") not in {4656, 4658, 4660, 4663, 5140, 5145}:
+                return False
+            if not self._smb_principal_matches(
+                fields.get("SubjectUserName"),
+                event,
+                server_side=True,
+            ):
+                return False
+            candidate_values = (
+                fields.get("RelativeTargetName"),
+                fields.get("ObjectName"),
+                fields.get("ShareName"),
+            )
+            return self._smb_path_or_share_matches(
+                candidate_values,
+                relative_paths,
+                basenames,
+                share_ids,
+            )
+
+        if format_name == "ecar":
+            hostname = fields.get("hostname")
+            server_side = any(
+                self._host_matches(hostname, expected_host)
+                for expected_host in self._smb_server_hosts(event)
+            )
+            return (
+                fields.get("object") == "FILE"
+                and self._smb_principal_matches(
+                    fields.get("principal"),
+                    event,
+                    server_side=server_side,
+                )
+                and self._smb_path_or_share_matches(
+                    (fields.get("file_path"),),
+                    relative_paths,
+                    basenames,
+                    share_ids,
+                )
+            )
+        if format_name == "syslog":
+            hostname = fields.get("hostname")
+            if not any(
+                self._host_matches(hostname, expected_host)
+                for expected_host in self._smb_server_hosts(event)
+            ):
+                return False
+
+            app_name = str(fields.get("app_name") or "").casefold()
+            message = str(fields.get("message") or "")
+            if app_name == "smbd_audit":
+                audit_fields = self._parse_samba_audit_message(message)
+                if audit_fields is None:
+                    return False
+                principal, _source_ip, share_name, _operation, _result, path = audit_fields
+                if not self._smb_principal_matches(principal, event, server_side=True):
+                    return False
+                if relative_paths:
+                    return self._smb_path_or_share_matches(
+                        (path,),
+                        relative_paths,
+                        basenames,
+                        set(),
+                    )
+                return self._smb_path_or_share_matches(
+                    (share_name,),
+                    set(),
+                    set(),
+                    share_ids,
+                )
+            if app_name == "smbd":
+                normalized_message = message.casefold()
+                share_matches = any(
+                    f"service {share_id}" in normalized_message for share_id in share_ids
+                )
+                lifecycle_principal = self._parse_samba_lifecycle_principal(message)
+                if lifecycle_principal is not None:
+                    principal_matches = self._smb_principal_matches(
+                        lifecycle_principal,
+                        event,
+                        server_side=True,
+                    )
+                    if "connect to service" in normalized_message:
+                        return share_matches and principal_matches
+                    return principal_matches
+                return share_matches and "closed connection to service" in normalized_message
+        return False
+
+    def _smb_server_principals(self, event: ResolvedEvent) -> set[str]:
+        """Return the resolved credential identity expected on the SMB server."""
+        explicit = event.details.get("smb_principal")
+        if explicit:
+            return {str(explicit)}
+        mapping_id = str(event.details.get("mapping") or "").casefold()
+        mapped = getattr(self, "_smb_mapping_principals", {}).get(mapping_id)
+        if mapped:
+            return {str(mapped)}
+        return {event.actor}
+
+    def _smb_principal_matches(
+        self,
+        actual: Any,
+        event: ResolvedEvent,
+        *,
+        server_side: bool,
+    ) -> bool:
+        """Match the source-native identity for a client- or server-side record."""
+        principals = self._smb_server_principals(event) if server_side else {event.actor}
+        return any(self._user_matches(actual, principal) for principal in principals)
+
+    @staticmethod
+    def _parse_samba_audit_message(message: str) -> tuple[str, str, str, str, str, str] | None:
+        """Parse the stable Samba text audit contract without creating a new source format."""
+        prefix = "smbd_audit:"
+        payload = message.strip()
+        if payload.casefold().startswith(prefix):
+            payload = payload[len(prefix) :].strip()
+        fields = tuple(part.strip() for part in payload.split("|", maxsplit=5))
+        if len(fields) != 6 or any(not part for part in fields):
+            return None
+        return fields
+
+    @staticmethod
+    def _parse_samba_lifecycle_principal(message: str) -> str | None:
+        """Extract the credential identity from stable Samba lifecycle text."""
+
+        authentication = re.search(r"authentication for user \[([^\]]+)]", message, re.I)
+        if authentication is not None:
+            return authentication.group(1).strip()
+        tree_connect = re.search(r"connect to service \S+ as user ([^\s(]+)", message, re.I)
+        if tree_connect is not None:
+            return tree_connect.group(1).strip()
+        return None
+
+    @staticmethod
+    def _normalize_smb_path(value: str) -> str:
+        """Normalize a Windows path for case-insensitive suffix comparison."""
+        return value.replace("/", "\\").strip("\\").casefold()
+
+    @classmethod
+    def _smb_path_or_share_matches(
+        cls,
+        candidates: tuple[Any, ...],
+        relative_paths: set[str],
+        basenames: set[str],
+        share_ids: set[str],
+    ) -> bool:
+        """Return whether source-native path/share text identifies the SMB object."""
+        for candidate in candidates:
+            normalized = cls._normalize_smb_path(str(candidate or ""))
+            if not normalized:
+                continue
+            if any(
+                normalized == path or normalized.endswith(f"\\{path}") for path in relative_paths
+            ):
+                return True
+            if normalized.rsplit("\\", maxsplit=1)[-1] in basenames:
+                return True
+            if normalized.rsplit("\\", maxsplit=1)[-1] in share_ids:
+                return True
         return False
 
     def _email_message_record_matches(
@@ -2214,7 +2556,20 @@ class CausalityScorer(DimensionScorer):
         else:
             for uf in ["TargetUserName", "SubjectUserName", "principal", "username"]:
                 if uf in f and f[uf]:
-                    if self._is_process_indicator_trace(f):
+                    if "smb_activity" in event.event_types:
+                        server_side = trace.source_format in {
+                            "windows_event_security",
+                            "syslog",
+                        } or any(
+                            self._host_matches(f.get("hostname"), expected_host)
+                            for expected_host in self._smb_server_hosts(event)
+                        )
+                        user_ok = self._smb_principal_matches(
+                            f[uf],
+                            event,
+                            server_side=server_side,
+                        )
+                    elif self._is_process_indicator_trace(f):
                         user_ok = self._user_matches(f[uf], event.actor)
                     else:
                         user_ok = self._username_indicator_matches(f[uf], event)
@@ -2223,7 +2578,15 @@ class CausalityScorer(DimensionScorer):
         if trace.source_format != "cisco_asa":
             for hf in ["Computer", "hostname"]:
                 if hf in f and f[hf]:
-                    checks.append(("hostname", self._host_matches(f[hf], event.system)))
+                    if "smb_activity" in event.event_types:
+                        expected_hosts = self._smb_expected_hosts(event)
+                        host_matches = any(
+                            self._host_matches(f[hf], expected_host)
+                            for expected_host in expected_hosts
+                        )
+                    else:
+                        host_matches = self._host_matches(f[hf], event.system)
+                    checks.append(("hostname", host_matches))
                     break
         if "source_ip" in details:
             for ipf in ["IpAddress", "id.orig_h", "src_ip"]:
@@ -2242,6 +2605,20 @@ class CausalityScorer(DimensionScorer):
                     checks.append(("dst_ip", dst_ok))
                     break
         return checks
+
+    def _smb_expected_hosts(self, event: ResolvedEvent) -> set[str]:
+        """Return legitimate client and server hosts for dual-view SMB evidence."""
+        return {event.system, *self._smb_server_hosts(event)}
+
+    def _smb_server_hosts(self, event: ResolvedEvent) -> set[str]:
+        """Return canonical server hosts from the generated SMB operation truth."""
+        expected: set[str] = set()
+        ground_truth = self._smb_gt.get(event.storyline_id) or {}
+        for operation in ground_truth.get("operations") or []:
+            share = str(operation.get("share") or "")
+            if "." in share:
+                expected.add(share.split(".", maxsplit=1)[0])
+        return expected
 
     @staticmethod
     def _ip_matches(actual: Any, expected: Any) -> bool:
@@ -2789,12 +3166,25 @@ class CausalityScorer(DimensionScorer):
                 event.event_types,
                 event.sub_details,
             )
+            if "smb_activity" in event.event_types:
+                for server_host in sorted(self._smb_server_hosts(event)):
+                    server_local = vis.get_expected_formats(server_host) & {
+                        "windows_event_security",
+                        "syslog",
+                        "ecar",
+                    }
+                    if server_local:
+                        groups.append((f"server_host_local:{server_host}", server_local))
             evt_time = _normalize_ts(event.time)
             evt_bucket = int(evt_time.timestamp()) // 60
 
             lookup_keys: list[str] = [event.system.lower()]
             if event.system_ip:
                 lookup_keys.append(event.system_ip)
+            if "smb_activity" in event.event_types:
+                lookup_keys.extend(
+                    host.casefold() for host in sorted(self._smb_expected_hosts(event))
+                )
             for sd in event.sub_details:
                 for k in ("source_ip", "dst_ip"):
                     val = sd.get(k)

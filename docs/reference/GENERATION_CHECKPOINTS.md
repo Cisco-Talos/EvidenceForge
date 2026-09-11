@@ -1,0 +1,182 @@
+# Generation Checkpoints and Resume
+
+`eforge generate` creates crash-safe recovery points every 24 completed simulated hours by
+default. The cadence counts continuously across warm-up and collection. Override it with
+`--checkpoint-hours N`, or pass `--checkpoint-hours 0` to disable new checkpoints.
+`eforge validate` accepts the same option so its peak-disk forecast matches the intended run.
+
+Checkpointing is cadence-only. Generation does not force recovery points after initialization, at
+phase boundaries, or before finalization. If a run ends before its first cadence point, it has no
+recovery point and must restart after interruption. Otherwise, recovery replays work after the
+latest committed point, including tail work or finalization when necessary. During hourly
+generation, the first Ctrl+C requests a cooperative stop at the end of the current simulated hour.
+When checkpointing is enabled, that safe boundary publishes a recovery point even when it is off
+cadence; with `--checkpoint-hours 0`, generation stops there without creating one. A second Ctrl+C
+forces immediate exit. Hard process termination never attempts an emergency checkpoint, so the
+last atomically published point remains authoritative. On interruption or an ordinary failure, the
+CLI reports whether a recovery point exists, its simulated hour and phase, and how to resume. A
+resumed run reports the selected recovery cursor and effective cadence before continuing.
+
+## Inspect or intentionally suspend a run
+
+Thoroughly validate an output root without starting or hydrating the generator:
+
+```bash
+eforge checkpoint status ./bundle
+eforge checkpoint status ./bundle --verbose
+eforge checkpoint status ./bundle --json
+```
+
+Status authenticates the stored recovery objects but deliberately does not instantiate the
+generator. To validate all participant schemas and deserialize every retained lifecycle, session,
+emitter, and RNG state into isolated scratch storage, run:
+
+```bash
+eforge checkpoint verify ./bundle
+eforge checkpoint verify ./bundle --verbose
+eforge checkpoint verify ./bundle --json
+```
+
+Verification never writes to the bundle and never runs normal generator finalization. It reports
+integrity, scratch initialization, participant `N/M` hydration, scratch cleanup, and completion so
+large restores do not appear stuck. Its report includes the selected recovery, run identity,
+loadability, behavior risk, output-equivalence status, and full-hydration result. Add `--verbose`
+for bounded aged-out-parent examples and detailed drift records. JSON output remains free of
+progress text.
+
+The positional path is the bundle root—the directory that contains `data/`—not the `data/`
+directory itself. When generation uses no explicit `--output`, the bundle root is the authored
+scenario's parent directory. If `data/` is supplied by mistake, the command returns immediately
+with the correct bundle-root command instead of scanning generated evidence.
+
+The default human report shows the operational state, last recoverable phase-local hour, continuous
+simulated-hour count, cadence, integrity and runtime compatibility, fallback warnings,
+generated-data size, recovery overhead, total known managed working footprint, and the exact resume
+command. For example, after a two-hour warm-up and one completed collection hour it reports
+`collection hour 1 of 6 (3 total simulated hours completed)`. `--verbose` adds both recovery
+generations, lock ownership, schema/run identities, participant and segment counts, fingerprint
+components, detailed storage categories, and validation work. `--json` always emits the complete
+structured report, independent of `--verbose`. Status is read-only and excludes unrelated files
+from all managed totals. Checkpoint storage includes durable spool content already imported into
+the hidden workspace.
+
+For every checkpoint-enabled run, the hidden workspace and controller marker are created before
+warm-up begins. Until the first cadence point commits, status reports
+`Checkpoint state: active — no checkpoint yet`; an interruption in that interval still requires a
+restart with `--overwrite`. A path with no checkpoint workspace reports
+`Checkpoint state: no checkpoints found` without presenting zero-byte validation and storage
+details as though they described a run.
+
+Request a planned stop from another terminal:
+
+```bash
+eforge checkpoint suspend ./bundle
+```
+
+Suspension is cooperative, not immediate. The command returns after publishing the request and
+reminds the operator that generation is still running. The generator finishes its current
+simulated hour, reaches the normal quiescent barrier, publishes an explicit recovery point even
+when that hour is off cadence, reports the suspended cursor, and exits successfully. An
+off-cadence suspension does not move the cadence anchor: with a 24-hour cadence, suspending at hour
+37 still leaves hour 48 as the next automatic checkpoint after resume. Repeating a pending request
+is idempotent. Suspension requires an active checkpoint-enabled run.
+
+In the generator's terminal, one Ctrl+C is a convenient local form of the same safe suspension: it
+immediately acknowledges the request, finishes the current simulated hour, and publishes an
+off-cadence recovery when checkpointing is enabled. The process then exits with status 130 rather
+than the external suspension command's successful status. Press Ctrl+C again to force an immediate
+exit and retain only the last recovery point that had already been published. With checkpointing
+disabled, the first Ctrl+C still waits for the hour boundary but creates no recovery point. A
+request that arrives after the last hourly barrier, while tail work or finalization is already
+running, cannot interrupt that unsafe region and the run finishes normally.
+
+## Resume an interrupted run
+
+Resume while rechecking the authored scenario:
+
+```bash
+eforge generate scenario.yaml --output ./bundle --resume
+```
+
+Resume solely from the authoritative resolved input stored with the checkpoint:
+
+```bash
+eforge generate --output ./bundle --resume
+```
+
+An unspecified resumed run retains its stored cadence. An explicit `--checkpoint-hours` overrides
+that cadence; `0` resumes from the selected point but creates no later checkpoints. The complete
+output root may be moved or copied before resume because checkpoint metadata contains only relative
+paths and its resolved input and immutable segments are self-contained. Stop the generator before
+copying the root; copying an active workspace can capture an inconsistent set of files.
+
+Resume separates immutable run identity, serialized-state loadability, and expected output drift.
+`compatibility_level` remains the backward-oriented `exact|load-compatible|incompatible` summary;
+status and verification schema 1.1 also report `run_identity`, `loadability`, `behavior_change`,
+`confirmation_required`, and categorized run, runtime, behavior, and state-contract differences.
+
+| Policy | Runtime/environment drift | Material or unknown EvidenceForge behavior |
+|---|---|---|
+| `exact` | Reject | Reject; the complete original fingerprint is required |
+| `compatible` (default) | Attempt hydration | Ask interactively, default no; noninteractive use stops with verification guidance |
+| `attempt` | Attempt hydration | Explicitly accepted without a prompt |
+
+Python version/compiler/implementation, dependency versions, OS, architecture, interpreter cache
+tag, and byte order are attemptable drift. Successful hydration permits continuation, but output
+equivalence becomes `not-guaranteed`. `attempt` is consent to output risk, not a safety bypass.
+
+Corruption, unsafe paths or ownership, missing checkpoint objects or participants, unsupported
+checkpoint/participant schemas without an explicit decoder, and hydration failures always stop.
+An explicitly supplied scenario, seed, format filter, or output target must match immutable run
+identity. When those inputs are omitted, resume adopts the checkpoint's authoritative resolved
+scenario, effective seed, formats, target, and other non-OOB run settings.
+
+Live callbacks are a separate authorization boundary. A checkpoint never grants OOB permission.
+If it records non-empty OOB hosts, every host must be supplied again with matching `--oob-host`
+options; new or different hosts conflict with run identity.
+
+EvidenceForge behavior risk comes from validated packaged `config/generation_behavior.yaml`
+history. Exact builds are `exact`; different builds at the same revision are `none-declared`;
+intervening `none`/`localized` records aggregate to `localized`; any intervening material record is
+`material`. Missing history, gaps, downgrade, malformed metadata, or legacy build lineage are
+`unknown`. For `material` or `unknown`, compatible interactive resume describes affected
+domains/formats and defaults to refusal. Noninteractive use must run read-only verification and
+then explicitly choose `--resume-policy attempt` if the risk is acceptable. `checkpoint verify`
+always attempts statically load-compatible state because it is read-only.
+
+After a load-compatible recovery fully hydrates, EvidenceForge atomically publishes a migration
+checkpoint at the same cursor before generating another simulated hour. The original recovery
+remains the fallback until normal rotation replaces it. Later checkpoints and the final generation
+manifest record originating/resuming builds, runtime drift, behavior risk and change IDs, accepted
+policy, confirmation status, cursor, and bounded migration lineage. If hydration or migration
+publication fails, generation does not advance; the pre-migration staged bundle is restored and
+the recovery index remains unchanged.
+
+Interactive generation distinguishes a compatible incomplete run, an invalid or incompatible
+checkpoint, and a completed bundle before offering valid actions. Scripts and redirected input
+must choose explicitly with `--resume` or `--overwrite`. `--force` and `-f` remain deprecated
+aliases for `--overwrite` for compatibility. Resume conflicts with overwrite.
+
+## Workspace, safety, and final output
+
+Recovery data lives under `.eforge-generation/` in the output root. It includes the staged bundle,
+two recovery manifests and bounded live heads, shared content-addressed segments, resolved input,
+and a single-run lock. The resource forecast reports this separately as `Projected checkpoint
+workspace` and includes it once in projected peak working disk.
+
+Checkpoint publication requires protected ownership, no symlinks or path traversal, atomic rename,
+and durable file and directory synchronization. Preflight fails when the filesystem cannot provide
+those guarantees; use another filesystem or explicitly pass `--checkpoint-hours 0`. A demonstrably
+stale lock may be reclaimed, but concurrent generation against the same output root is rejected.
+
+The newest corrupt recovery point produces a warning and falls back to the previous valid point.
+Tampering, incompatible run inputs, unsupported schemas, failed hydration, and unsafe ownership are
+rejected with an explanation. Checkpoints from unreleased development schemas are not migrated
+without an explicit supported decoder.
+
+Successful generation publishes through the normal bundle replacement rules, preserves unrelated
+files, and removes `.eforge-generation/`. The completed generation manifest retains bounded resume
+provenance when recovery occurred. Under an exact resume, deterministic evidence, resolved input,
+ground truth, artifacts, and deterministic sidecars are byte-identical to uninterrupted
+generation. A load-compatible resume makes no byte-equivalence promise; `generation.log` and the
+time-bearing generation manifest retain their established nondeterministic fields in either case.

@@ -3,6 +3,8 @@
 
 """Tests for the machine-readable observation manifest sidecar."""
 
+import json
+
 import pytest
 
 from evidenceforge.events.observation_manifest import (
@@ -12,11 +14,16 @@ from evidenceforge.events.observation_manifest import (
     observation_manifest_matches_scenario,
     write_observation_manifest,
 )
+from evidenceforge.generation.source_deployment_compiler import (
+    compile_scenario_source_deployment,
+)
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
+    NetworkConfig,
     OutputSpec,
     Scenario,
+    SourceObservationOverride,
     StorylineEvent,
     System,
     TimeWindow,
@@ -111,6 +118,8 @@ def test_load_manifest_finds_scenario_root_from_data_dir(tmp_path) -> None:
 
     assert loaded is not None
     assert loaded.storyline_events[0].source_status == {"windows_security": {"dropped": 1}}
+    payload = json.loads((tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert "source_deployment_digest" not in payload
 
 
 def test_write_manifest_rejects_dangling_symlink(tmp_path) -> None:
@@ -166,6 +175,109 @@ def test_load_manifest_rejects_complete_scenario_profile(tmp_path) -> None:
     scenario.observation_profile = "complete"
 
     assert load_observation_manifest(data_dir, scenario) is None
+
+
+def test_complete_profile_with_exact_override_loads_matching_manifest(tmp_path) -> None:
+    """Exact source overrides can create complete-profile gaps requiring a sidecar."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    scenario = _scenario()
+    scenario.observation_profile = "complete"
+    scenario.environment.observation_overrides = [
+        SourceObservationOverride(
+            source_instance="windows_security:ws-01",
+            enabled=False,
+        )
+    ]
+    digest = compile_scenario_source_deployment(scenario).digest
+    write_observation_manifest(
+        tmp_path / OBSERVATION_MANIFEST_FILENAME,
+        scenario,
+        {"step-001": {"windows_security": {"dropped": 1}}},
+        source_deployment_digest=digest,
+    )
+
+    loaded = load_observation_manifest(data_dir, scenario)
+
+    assert loaded is not None
+    assert loaded.observation_profile == "complete"
+    assert loaded.source_deployment_digest == digest
+    assert observation_manifest_matches_scenario(loaded, scenario) is True
+
+
+def test_exact_override_manifest_rejects_stale_deployment_digest(tmp_path) -> None:
+    """An exact-override manifest must match the scenario's compiled deployment."""
+    scenario = _scenario()
+    scenario.environment.observation_overrides = [
+        SourceObservationOverride(
+            source_instance="windows_security:ws-01",
+            enabled=False,
+        )
+    ]
+    write_observation_manifest(
+        tmp_path / OBSERVATION_MANIFEST_FILENAME,
+        scenario,
+        {},
+        source_deployment_digest="a5" * 32,
+    )
+
+    assert load_observation_manifest(tmp_path, scenario) is None
+
+
+def test_exact_override_manifest_binds_compiled_source_deployment_digest(tmp_path) -> None:
+    """The optional deployment digest should round-trip as canonical lowercase hex."""
+    scenario = _scenario()
+    digest = "a5" * 32
+    path = tmp_path / OBSERVATION_MANIFEST_FILENAME
+
+    write_observation_manifest(
+        path,
+        scenario,
+        {},
+        source_deployment_digest=digest.upper(),
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["source_deployment_digest"] == digest
+    loaded = load_observation_manifest(tmp_path)
+    assert loaded is not None
+    assert loaded.source_deployment_digest == digest
+
+
+def test_exact_override_digest_matching_preserves_zero_sensor_topology() -> None:
+    """Manifest matching should exclude undeployed sensor formats at the engine boundary."""
+    scenario = _scenario()
+    scenario.output.logs.append({"format": "zeek"})
+    scenario.environment.network = NetworkConfig.model_validate(
+        {
+            "segments": [
+                {
+                    "name": "workstations",
+                    "cidr": "10.0.0.0/24",
+                    "exposure": "internal",
+                    "systems": ["WS-01"],
+                }
+            ],
+            "sensors": [],
+        }
+    )
+    scenario.environment.observation_overrides = [
+        SourceObservationOverride(
+            source_instance="windows_security:ws-01",
+            enabled=False,
+        )
+    ]
+    digest = compile_scenario_source_deployment(
+        scenario,
+        emitter_formats=("windows_event_security",),
+    ).digest
+    manifest = build_observation_manifest(
+        scenario,
+        {},
+        source_deployment_digest=digest,
+    )
+
+    assert observation_manifest_matches_scenario(manifest, scenario) is True
 
 
 def test_load_manifest_rejects_mismatched_scenario_metadata(tmp_path) -> None:

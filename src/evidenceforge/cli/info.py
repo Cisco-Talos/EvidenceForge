@@ -32,6 +32,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from evidenceforge import __version__
 from evidenceforge.config import (
     get_activity_directory,
@@ -72,6 +74,18 @@ def _collect_formats(formats_dir: Path) -> list[str]:
     return sorted(f.stem for f in formats_dir.glob("*.yaml"))
 
 
+def _collect_packs(project_root: Path) -> list[str]:
+    """Collect exact package/project pack references for explicit discovery."""
+
+    from evidenceforge.composition.packs import PackRepository
+
+    repository = PackRepository(project_root)
+    return sorted(
+        f"{pack.source}:{pack.manifest.type}:{pack.manifest.name}@{pack.manifest.version}"
+        for pack in repository.list()
+    )
+
+
 def _collect_dns_tags() -> list[str]:
     """Collect defined valid DNS tags from the registry.
 
@@ -101,6 +115,24 @@ def _collect_application_ids() -> list[str]:
 
     data = load_catalog()
     return sorted(app["id"] for app in data.get("applications", []) if "id" in app)
+
+
+def _collect_pack_builtin_application_ids() -> list[str]:
+    """Collect stable application IDs allowed by the public pack schema."""
+
+    from evidenceforge.composition.semantic_validation import (
+        packaged_builtin_application_ids,
+    )
+
+    return sorted(packaged_builtin_application_ids())
+
+
+def _collect_pack_builtin_dns_tags() -> list[str]:
+    """Collect stable packaged DNS tags allowed by the public pack schema."""
+
+    from evidenceforge.composition.semantic_validation import packaged_builtin_dns_tags
+
+    return sorted(packaged_builtin_dns_tags())
 
 
 def _collect_system_roles() -> list[str]:
@@ -163,11 +195,78 @@ def _collect_beacon_profiles() -> list[str]:
     return list_profile_names()
 
 
+def _collect_ids_signatures() -> list[dict[str, Any]]:
+    """Collect the effective curated IDS signature catalog for scenario authors.
+
+    The catalog is deliberately limited to fields that help an author choose a
+    compatible attachment. Raw predicates remain engine configuration details.
+    """
+    from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+
+    signatures: list[dict[str, Any]] = []
+    for signature in load_ids_signatures().get("signatures", []):
+        if not isinstance(signature, dict) or not isinstance(signature.get("sid"), int):
+            continue
+        predicate = signature.get("predicate")
+        inspection = (
+            predicate.get("inspection")
+            if isinstance(predicate, dict) and isinstance(predicate.get("inspection"), str)
+            else signature.get("inspection")
+        )
+        entry: dict[str, Any] = {
+            field: signature[field]
+            for field in (
+                "sid",
+                "rev",
+                "message",
+                "classification",
+                "priority",
+                "proto",
+                "dst_port",
+                "direction",
+            )
+            if field in signature
+        }
+        for field in ("target_services", "target_os", "baseline_fp_allowed", "alert_policy"):
+            if field in signature:
+                entry[field] = signature[field]
+        if isinstance(inspection, str):
+            entry["inspection"] = inspection
+        signatures.append(entry)
+    return sorted(signatures, key=lambda signature: int(signature["sid"]))
+
+
+def format_ids_signature_inventory(value: Any) -> str:
+    """Render concise text rows for the IDS signature inventory field."""
+    if not isinstance(value, list):
+        return str(value)
+
+    rows = ["SID\tPROTO/PORT\tDIRECTION\tMESSAGE"]
+    for signature in value:
+        if not isinstance(signature, dict):
+            continue
+        sid = signature.get("sid", "?")
+        protocol = signature.get("proto", "?")
+        port = signature.get("dst_port", "?")
+        direction = signature.get("direction", "?")
+        message = signature.get("message", "")
+        rows.append(f"{sid}\t{protocol}/{port}\t{direction}\t{message}")
+    return "\n".join(rows)
+
+
 def _collect_format_groups() -> dict[str, list[str]]:
     """Collect format group names and their expanded formats."""
     from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
     return {k: sorted(v) for k, v in FORMAT_GROUPS.items()}
+
+
+def _collect_config_families() -> dict[str, dict[str, str]]:
+    """Expose authoring-grade overlay ownership and merge contracts."""
+
+    from evidenceforge.config.overlay_registry import config_family_inventory
+
+    return config_family_inventory()
 
 
 def _collect_identity_pools() -> dict[str, Any]:
@@ -176,19 +275,21 @@ def _collect_identity_pools() -> dict[str, Any]:
         load_command_parameter_pools,
     )
     from evidenceforge.generation.activity.email_background import load_email_background
-    from evidenceforge.generation.activity.external_actor_profiles import (
-        load_external_actor_profiles,
-    )
-    from evidenceforge.generation.activity.mail_public_identities import (
-        load_mail_public_identities,
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        PublicIdentityRegistry,
+        legacy_external_actor_projection,
+        legacy_mail_projection,
+        load_public_identity_profiles,
     )
     from evidenceforge.generation.activity.suspicious_benign_config import (
         load_suspicious_benign,
     )
 
     email_background = load_email_background()
-    mail_public = load_mail_public_identities()
-    external_actor = load_external_actor_profiles()
+    public_profiles = load_public_identity_profiles()
+    public_registry = PublicIdentityRegistry(public_profiles)
+    mail_public = legacy_mail_projection()
+    external_actor = legacy_external_actor_projection()
     suspicious_benign = load_suspicious_benign()
     command_pools = load_command_parameter_pools()
     command_keys = sorted(
@@ -202,11 +303,24 @@ def _collect_identity_pools() -> dict[str, Any]:
     return {
         "overlay_paths": [
             "activity/email_background.yaml",
-            "activity/mail_public_identities.yaml",
-            "activity/external_actor_profiles.yaml",
+            "activity/public_identity_profiles.yaml",
             "activity/suspicious_benign.yaml",
             "activity/command_parameter_pools.yaml",
         ],
+        "legacy_overlay_paths": [
+            "activity/external_actor_profiles.yaml",
+            "activity/mail_public_identities.yaml",
+        ],
+        "public_identity_profiles": {
+            "schema_version": public_profiles["schema_version"],
+            "roles": {
+                role: len(public_registry.fixed_bindings(role)) for role in public_registry.role_ids
+            },
+            "providers": list(public_registry.provider_ids),
+            "reserved_replacement_domains": len(
+                public_profiles.get("reserved_replacement_domains", [])
+            ),
+        },
         "email_background": {
             "external_domains": len(email_background.get("external_domains", [])),
             "inbound_local_parts": len(email_background.get("inbound_local_parts", [])),
@@ -233,7 +347,7 @@ def _collect_identity_pools() -> dict[str, Any]:
     }
 
 
-def _gather_lightweight() -> dict[str, Any]:
+def _gather_lightweight(project_root: Path) -> dict[str, Any]:
     """Gather lightweight fields that don't require overlay-backed loaders.
 
     These always succeed even if the overlay has broken YAML.
@@ -243,13 +357,14 @@ def _gather_lightweight() -> dict[str, Any]:
 
     from evidenceforge.config.overlay import get_overlay_directory, list_overlay_files
 
-    overlay_dir = get_overlay_directory()
+    overlay_dir = get_overlay_directory(project_root)
     overlay_files = list_overlay_files(overlay_dir) if overlay_dir else []
 
     return {
         "version": __version__,
         "install_type": install_type,
         "config_writable": config_writable,
+        "project_root": str(project_root),
         "paths": {
             "config_root": str(config_root),
             "activity": str(get_activity_directory()),
@@ -258,18 +373,30 @@ def _gather_lightweight() -> dict[str, Any]:
             "evaluation": str(get_evaluation_directory()),
         },
         "overlay": {
-            "path": str(Path.cwd() / ".eforge" / "config"),
+            "path": str(project_root / ".eforge" / "config"),
             "exists": overlay_dir is not None,
             "files": overlay_files,
+        },
+        "pack_roots": {
+            "package": str(config_root / "packs"),
+            "project": str(project_root / ".eforge" / "packs"),
         },
     }
 
 
 # Fields that can be resolved from lightweight data alone
-_LIGHTWEIGHT_PREFIXES = {"version", "install_type", "config_writable", "paths", "overlay"}
+_LIGHTWEIGHT_PREFIXES = {
+    "version",
+    "install_type",
+    "config_writable",
+    "project_root",
+    "paths",
+    "overlay",
+    "pack_roots",
+}
 
 
-def gather_info(field: str | None = None) -> dict[str, Any]:
+def gather_info(field: str | None = None, project_root: Path | None = None) -> dict[str, Any]:
     """Gather installation info into a single dict.
 
     If ``field`` is provided and it's a lightweight field (version, paths,
@@ -281,7 +408,16 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
     each inventory is loaded with error handling so a single broken
     loader doesn't crash the entire command.
     """
-    data = _gather_lightweight()
+    from evidenceforge.composition.compiler import (
+        build_management_effective_config,
+        resolve_management_project_root,
+    )
+    from evidenceforge.config.overlay import overlay_project_root_scope
+    from evidenceforge.config.provider import effective_config_scope
+    from evidenceforge.models.exceptions import EvidenceForgeError
+
+    resolved_project_root = resolve_management_project_root(project_root)
+    data = _gather_lightweight(resolved_project_root)
 
     # If requesting a lightweight field, return early — no loaders needed
     if field:
@@ -297,17 +433,37 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "formats": lambda: _collect_formats(formats_dir),
         "dns_tags": _collect_dns_tags,
         "application_ids": _collect_application_ids,
+        "pack_builtin_application_ids": _collect_pack_builtin_application_ids,
+        "pack_builtin_dns_tags": _collect_pack_builtin_dns_tags,
         "system_roles": _collect_system_roles,
         "web_scan_presets": _collect_web_scan_presets,
         "beacon_profiles": _collect_beacon_profiles,
+        "ids_signatures": _collect_ids_signatures,
         "format_groups": _collect_format_groups,
         "identity_pools": _collect_identity_pools,
+        "packs": lambda: _collect_packs(resolved_project_root),
+        "config_families": _collect_config_families,
     }
-    for key, collector in inventories.items():
-        try:
-            data[key] = collector()
-        except Exception as e:
-            data[key] = f"<error: {e}>"
+    effective_config = build_management_effective_config(resolved_project_root)
+    expected_errors = (
+        EvidenceForgeError,
+        OSError,
+        UnicodeError,
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+    )
+    with (
+        overlay_project_root_scope(resolved_project_root),
+        effective_config_scope(effective_config),
+    ):
+        for key, collector in inventories.items():
+            try:
+                data[key] = collector()
+            except expected_errors as e:
+                data[key] = f"<error: {e}>"
 
     return data
 
@@ -320,6 +476,13 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(f"EvidenceForge v{data['version']}")
     lines.append(f"Install type: {data['install_type']}")
     lines.append(f"Config writable: {'yes' if data['config_writable'] else 'no'}")
+    lines.append(f"Project root: {data['project_root']}")
+    lines.append("")
+
+    pack_roots = data["pack_roots"]
+    lines.append("Pack roots:")
+    lines.append(f"  Package: {pack_roots['package']}")
+    lines.append(f"  Project: {pack_roots['project']}")
     lines.append("")
 
     # Paths
@@ -372,6 +535,16 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(_format_list(app_ids))
     lines.append("")
 
+    pack_app_ids = data["pack_builtin_application_ids"]
+    lines.append(f"Pack built-in application IDs ({len(pack_app_ids)}):")
+    lines.append(_format_list(pack_app_ids))
+    lines.append("")
+
+    pack_dns_tags = data["pack_builtin_dns_tags"]
+    lines.append(f"Pack built-in DNS tags ({len(pack_dns_tags)}):")
+    lines.append(_format_list(pack_dns_tags))
+    lines.append("")
+
     beacon_profiles = data["beacon_profiles"]
     lines.append(f"Beacon profiles ({len(beacon_profiles)}):")
     lines.append(_format_list(beacon_profiles))
@@ -390,6 +563,14 @@ def format_human_readable(data: dict[str, Any]) -> str:
     else:
         lines.append(f"  {identity_pools}")
 
+    packs = data["packs"]
+    lines.append("")
+    if isinstance(packs, list):
+        lines.append(f"Available packs ({len(packs)}):")
+        lines.append(_format_list(packs))
+    else:
+        lines.append(f"Available packs: {packs}")
+
     return "\n".join(lines)
 
 
@@ -397,20 +578,30 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
     "beacon_profiles": "Available beacon behavior profile names",
     "config_writable": "Whether package config files are directly editable",
+    "config_families": "Configuration families and their runtime ownership class",
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
-    "identity_pools": "Generated identity pool counts and overlay paths",
+    "identity_pools": "Canonical public identity roles/providers, compatibility counts, and overlay paths",
+    "ids_signatures": "Effective curated IDS signature catalog for ids_alerts attachments",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",
     "overlay.files": "YAML files in the overlay directory",
     "overlay.path": "Path to the overlay directory",
+    "pack_roots.package": "Installed read-only pack repository",
+    "pack_roots.project": "Project-local editable pack repository",
+    "packs": "Exact packaged and project-local pack references",
+    "pack_builtin_application_ids": (
+        "Stable packaged application IDs allowed in pack process profiles"
+    ),
+    "pack_builtin_dns_tags": "Stable packaged DNS tags allowed in pack low-level traffic",
     "paths.activity": "Activity config directory (dns, traffic, apps, etc.)",
     "paths.config_root": "Root config directory",
     "paths.evaluation": "Evaluation rules directory",
     "paths.formats": "Format definitions directory",
     "paths.personas": "Persona definitions directory",
     "personas": "Built-in persona names (package + overlay)",
+    "project_root": "Current working directory or explicit root for project-local inputs",
     "system_roles": "Author-facing system role names from role-aware config",
     "version": "EvidenceForge version",
     "web_scan_presets": "Available web scan preset names (nikto, dirb, etc.)",
@@ -426,7 +617,9 @@ def list_fields(data: dict[str, Any], prefix: str = "") -> list[tuple[str, str]]
     fields: list[tuple[str, str]] = []
     for key, value in data.items():
         full_key = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict):
+        if full_key == "config_families":
+            fields.append((full_key, _FIELD_DESCRIPTIONS[full_key]))
+        elif isinstance(value, dict):
             fields.extend(list_fields(value, full_key))
         else:
             desc = _FIELD_DESCRIPTIONS.get(full_key, "")

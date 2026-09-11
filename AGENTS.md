@@ -6,13 +6,13 @@ This document provides AI coding agents with everything needed to write consiste
 
 EvidenceForge generates realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase hybrid architecture:
 
-**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code Skills guide users through scenario creation via structured interviews. Skills research TTPs via MITRE ATT&CK, expand high-level descriptions into detailed execution plans, and output structured YAML scenario files with companion research markdown.
+**Phase 1 - Scenario Creation (Skill-assisted):** AI agent skills guide users through scenario creation via structured interviews. Skills research TTPs via MITRE ATT&CK, expand high-level descriptions into detailed execution plans, and output structured YAML scenario files with companion research markdown.
 
 **Phase 2 - Log Generation (Deterministic):** Generation engine executes the detailed scenario plan WITHOUT any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, Syslog, Snort/Suricata, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data).
 
 This architecture combines LLM flexibility/realism with deterministic speed, cost-efficiency, and reproducibility.
 
-**Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses Claude Code Skills.
+**Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through AI agent skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses skills outside the generation engine.
 
 **Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). See `docs/reference/scenario-reference.md` for the full event type reference.
 
@@ -72,7 +72,7 @@ handoff details in `docs/worklog/` until they are no longer useful.
 ## Tech Stack
 
 **Core:**
-- Python 3.11+ (required for latest type hint features including `Self`, `TypedDict` improvements)
+- Python 3.12+ (required for the supported runtime and typing features)
 - uv for package management, virtual environments, and script running
 - Pydantic v2 for all data validation and schema management
 
@@ -85,17 +85,25 @@ handoff details in `docs/worklog/` until they are no longer useful.
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
-- Default test runs should avoid coverage instrumentation: use `uv run pytest --no-cov`
+- Default test runs should avoid coverage instrumentation: use `uv run pytest`
   for normal local and feature-PR validation. Coverage is a release/readiness
   gate before `dev` → `main`, run explicitly with
   `uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70`.
-- Separate test markers: `@pytest.mark.slow` for large dataset/workload tests
-  (not run by default). Run slow tests with `--no-cov` unless you are
-  specifically profiling coverage behavior, because coverage instrumentation
-  makes the generator workload much slower.
-- Do not combine `--include-slow` with coverage during release validation. Slow
+- Separate test markers: `@pytest.mark.slow` for the extended release gate and
+  `@pytest.mark.soak` for exceptional million-entry, multi-week, exhaustive-matrix, or full-demo
+  workloads. Neither runs by default. Keep narrow correctness and lifecycle
+  contracts in the routine gate; put distinct but expensive fault matrices,
+  fresh-process determinism checks, and representative end-to-end generation in
+  `slow`. Slow and soak are mutually exclusive tiers. Soak tests are diagnostic
+  and are not routine or release gates. Run
+  slow and soak tests with `--no-cov` because coverage instrumentation makes
+  generator workloads much slower.
+- Do not combine `-m slow` or `-m soak` with coverage during release validation. Extended
   tests are intentionally run with `--no-cov`; coverage is measured on the
   default non-slow suite.
+- Run soak tests only for a relevant scalability, duration, or exhaustive-path
+  change with `uv run pytest -m soak --no-cov`. Run the extended release tier
+  with `uv run pytest -m slow --no-cov`.
 - Enforced release coverage gate: 70% minimum. Aspirational target: 95%+ overall
   and 95%+ for the core generation engine.
 
@@ -123,9 +131,13 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 ### Versioning (Semantic Versioning)
 
 The version is declared in three places that must always match:
-- `pyproject.toml` → `version = "X.Y.Z"`
-- `src/evidenceforge/__init__.py` → `__version__ = "X.Y.Z"`
+- `pyproject.toml` → `version = "X.Y.Z"` or the PEP 440 release-candidate form `"X.Y.ZrcN"`
+- `src/evidenceforge/__init__.py` → the same exact version
 - `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
+
+For a release candidate, use Python's canonical PEP 440 spelling (for example,
+`2.0.0rc1`) and the matching tag `v2.0.0rc1`. Do not use `2.0.0-rc1`; build
+tooling normalizes that spelling and would make the three source declarations disagree.
 
 **Bump rules (SemVer):**
 
@@ -147,12 +159,12 @@ chore: bump version to X.Y.Z
 **Release automation:** `.github/workflows/release.yml` enforces release hygiene
 for every PR to `main` and every push to `main`. On PRs targeting `main`, it
 verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
-all declare the same `X.Y.Z` version, then checks that remote tag `vX.Y.Z` does
+all declare the same `X.Y.Z` or `X.Y.ZrcN` version, then checks that the matching remote tag does
 not already exist. On pushes to `main`, it repeats those checks, creates an
 annotated tag on the merged commit, pushes the tag, and creates the GitHub
 Release entry so it appears under Releases. Remote tags are immutable release
 history; never use `git tag -f`, `git push --force`, or delete/recreate a
-`vX.Y.Z` tag to repair a missed bump. If the tag already exists, bump to the next
+release tag to repair a missed bump. If the tag already exists, bump to the next
 correct SemVer version before merging to `main`.
 
 **Manual release tag guard (fallback only):** if the release workflow is
@@ -186,8 +198,11 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+    raise SystemExit(
+        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        f"got {pyproject_version!r}"
+    )
 if init_version != pyproject_version:
     raise SystemExit(
         "src/evidenceforge/__init__.py __version__ "
@@ -242,8 +257,11 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+", pyproject_version):
-    raise SystemExit(f"pyproject.toml version must be X.Y.Z, got {pyproject_version!r}")
+if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+    raise SystemExit(
+        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        f"got {pyproject_version!r}"
+    )
 if init_version != pyproject_version:
     raise SystemExit(
         "src/evidenceforge/__init__.py __version__ "
@@ -286,7 +304,7 @@ The version on `dev` between releases will be ahead of `main` by one unreleased 
 - Import order: stdlib, third-party, local (enforced by ruff's `I` rules)
 
 ### Type Hints
-- Use modern Python 3.11+ built-in types: `list[User]`, `dict[int, str]` — not `typing.List`, `typing.Dict`
+- Use modern Python 3.12+ built-in types: `list[User]`, `dict[int, str]` — not `typing.List`, `typing.Dict`
 - Use `X | None` — not `Optional[X]`
 - Always include return types on function signatures
 - Annotate variables when the type isn't obvious from the assignment
@@ -451,6 +469,11 @@ past remote authentication, omit that FLOW's process identity rather than moving
 the transport observation later. SSH syslog auth timing must account for the
 canonical event's eCAR/EDR FLOW source-latency window, not only the network
 sensor's final rendered connection timestamp.
+An SSH application-channel watermark may retire its sidecar only by transferring a
+registry-authenticated terminal snapshot proof into the exact SSH continuation. The proof must
+remain authentic after the closed-channel grace tombstone expires. Watermark advancement owns no
+terminal rendering: retain and retry failed adoption before requesting another manager page, and
+leave endpoint/session termination evidence to the existing lifecycle finalizer.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
@@ -469,6 +492,11 @@ bundle.
 As with SSH, endpoint `FLOW` rows for RDP transport should stay near the
 transport open; if late process visibility would invert transport-before-auth
 ordering, drop PID/principal from the FLOW instead of delaying it.
+If RDP source publication fails after canonical network/application commit, recover the full
+retained materialization graph, including the authenticated RDP application receipt, before
+installing the exact lifecycle continuation. Do not redispatch source rows. Cancel the reserved
+continuation only when non-commit is positively established; preserve it and surface the recovery
+failure when commit state is indeterminate.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action
@@ -570,6 +598,17 @@ source-native MIME/body metadata should attach the HTTP file-transfer bundle
 deterministically, even when the `HttpContext` was supplied by a browser-session,
 proxy, process-command, or storyline path.
 
+For SMB staging from modeled clients, define persistent bounded host files in
+`environment.storage.file_sets`; do not turn a workstation into a file server merely to give it
+source files. File sets and share catalogs use the same compiler and canonical content identities,
+but a file set alone creates no SMB exposure. A share may bind a same-system file set only when its
+compiled server-local root is identical; that binding is an alias, not a second file population.
+The SMB action bundle remains the sole owner of authenticated transport/session/tree/file lifecycle,
+destination mutation, move ordering, and retry recovery. Client/server roles are relative to each
+connection. Preserve source paths under `destination.directory`, keep copied destination objects
+distinct while retaining content lineage, and reuse an immediately preceding authored transfer
+process when one exists.
+
 For Linux shell command execution, route bash-history emission and correlated
 foreground process telemetry through the Linux shell-command action bundle. The
 bundle owns the command execution sequence: resolve activity keys to concrete
@@ -577,6 +616,10 @@ commands, align commands after SSH/session readiness, schedule per-user
 bash-history timestamps, emit bash history, and then emit optional process
 telemetry through shared adapter hooks. Do not hand-roll separate bash-history
 and process timing paths for the same modeled command.
+For foreground Linux commands, the process close plus at most 1,400 ms of shell-release jitter
+must precede the owning session close; reserve a 25 ms lifecycle margin as well. Reject an
+impossible action-cohort interval before mutation. Compatibility paths with no valid independent
+close window leave termination to the session owner rather than emitting an invalid process close.
 
 For process execution, route canonical process create/terminate lifecycle and
 process-owned side effects through the process-execution action bundle. The
@@ -719,10 +762,10 @@ When adding or significantly modifying event types, emitters, or the event schem
 targets are 95%+ overall, 95%+ core engine, 90%+ formats, and 85%+ CLI. Exclude:
 `__main__.py`, type stubs, test fixtures.
 
-**Default validation:** run `uv run pytest --no-cov` for normal development and
+**Default validation:** run `uv run pytest` for normal development and
 feature PRs. Run the explicit coverage command only for release readiness before
-opening or updating a `dev` → `main` PR. Do not combine `--include-slow` with
-coverage during release validation.
+opening or updating a `dev` → `main` PR. Do not combine `-m slow` or `-m soak`
+with coverage during release validation.
 
 **Conventions:**
 - Test naming: `test_<function>_<scenario>_<expected_result>`
@@ -735,26 +778,58 @@ coverage during release validation.
 
 ## Skills
 
-Claude Code Skills handle the interactive, creative aspects of scenario creation.
+Agent skills handle the interactive, creative authoring and operational workflows around the
+deterministic `eforge` CLI.
 
-**Location:** `commands/eforge/` directory
+**Canonical location:** `commands/eforge/`. Claude Code installs these files under
+`.claude/commands/eforge/`. ChatGPT and Codex install converted `SKILL.md` trees under
+`.agents/skills/`. The project-local `.agents/` tree is generated, ignored by Git, and must not be
+edited or committed; change only the canonical sources and installer.
 
 **Skills:**
+
 - `/eforge scenario` — Guided scenario creation through a structured interview, producing a validated YAML scenario file
+- `/eforge pack` — Discover, inspect, validate, initialize, and copy industry or organization packs
+- `/eforge industry-pack` — Author reusable industry catalogs and verify their composition behavior
+- `/eforge organization-pack` — Author organization environments/baselines with exact industry dependencies
 - `/eforge generate` — Generation workflow that validates a scenario and runs the deterministic engine
 - `/eforge validate` — Validate a scenario file for schema correctness and cross-reference integrity
 - `/eforge evaluate` — Run data quality evaluation on generated output
+- `/eforge config` — Manage project configuration overlays and their cross-file dependencies
 
-Skills are markdown prompt files (`.md`), not Python code. They run inside Claude Code, not inside the `eforge` CLI process. They follow a hybrid interview pattern (structured questions first, then free-form refinement) and reference `docs/reference/scenario-reference.md` for schema validity.
+Skills are Markdown prompt files, not Python code, and run in the selected agent rather than inside
+the `eforge` CLI process. Keep detailed reusable schemas under `commands/eforge/references/` and
+bundle only the references each ChatGPT/Codex skill needs through
+`src/evidenceforge/cli/install_skills.py`.
 
-**Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/reference/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
+**Important:** When modifying the authored scenario schema, update the Pydantic model, the matching
+focused schema reference under `commands/eforge/references/scenario-*.md`, and the consolidated
+human manual at `docs/reference/scenario-reference.md`. Keep `commands/eforge/scenario.md` as a
+compact dispatcher to those focused references; update `validate.md` when validation behavior or
+error-handling guidance changes. `eforge info` is for project- and installation-dependent
+inventories, not authored-schema discovery.
+
+EvidenceForge commands use the current working directory as the implicit project root.
+`--project-root` is an explicit override only; never search scenario ancestors, working-directory
+ancestors, home directories, installed packages, or source trees for `.eforge`. Canonical skills
+must read `project-context.md`, omit the flag in normal examples, and use focused references—not
+invalid probe scenarios or `eforge info`—to discover authored schema.
 
 ### Adding a New Skill
-1. Create `commands/eforge/{name}.md` with the skill prompt
-2. Follow the hybrid interview pattern
-3. Reference `docs/reference/scenario-reference.md` for output validity
-4. Test interactively in Claude Code
-5. Update `install-skills` command if needed
+
+1. Create the canonical `commands/eforge/{name}.md` prompt with valid `name` and `description`
+   frontmatter.
+2. Add detailed bundled material under `commands/eforge/references/` only when progressive
+   disclosure is useful; reference it from the canonical prompt with `/eforge:references:<name>`.
+3. Add the command, per-skill reference bundle, reference rewrites, and cross-skill command rewrites
+   to `src/evidenceforge/cli/install_skills.py`.
+4. Extend `tests/unit/test_install_skills.py`; its source-manifest invariant requires every
+   top-level canonical command to have a ChatGPT/Codex mapping.
+5. Regenerate the ignored local `.agents/skills/` copies with
+   `eforge install-skills --agent chatgpt` and review the generated `SKILL.md` frontmatter and local
+   reference links. Do not hand-edit or commit them.
+6. Test the installed Claude and ChatGPT/Codex artifacts interactively, including routing between
+   related skills and any deterministic CLI validation workflow.
 
 ## Known Design Decisions (do not flag as bugs)
 

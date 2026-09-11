@@ -14,7 +14,11 @@ import pytest
 
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
 
 
@@ -81,7 +85,7 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
 
     original_time = state_manager.state.current_time
     if original_time is not None:
-        state_manager.set_current_time(original_time.replace(hour=10, minute=0, second=0))
+        state_manager.set_current_time(original_time - timedelta(hours=4))
     engine = object.__new__(GenerationEngine)
     engine.state_manager = state_manager
     engine._system_pids = {}
@@ -205,6 +209,105 @@ class TestWindowsProcessTreeRealism:
 
         assert child_proc is not None
         assert child_proc.parent_pid == dns_pid
+
+    def test_search_indexer_user_noise_reuses_seeded_system_singleton(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """User-noise requests must reuse the SCM-owned Windows Search service root."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        logon_id = ag.generate_logon(user, win_system, timestamp)
+        mock_emitters["ecar"].emit.reset_mock()
+
+        first_pid = ag.generate_process(
+            user=user,
+            system=win_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["services"],
+        )
+        second_pid = ag.generate_process(
+            user=user,
+            system=win_system,
+            time=timestamp + timedelta(minutes=3),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["explorer"],
+        )
+
+        assert first_pid == second_pid == pids["search_indexer"]
+        indexers = [
+            process
+            for process in state_manager.get_processes_on_system(win_system.hostname)
+            if process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert len(indexers) == 1
+        assert indexers[0].parent_pid == pids["services"]
+        assert indexers[0].username == "SYSTEM"
+        assert indexers[0].logon_id == "0x3e7"
+        assert indexers[0].integrity_level == "System"
+        duplicate_creates = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert duplicate_creates == []
+
+    def test_search_indexer_system_noise_reuses_and_preserves_seeded_singleton(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """System-service requests and cleanup must not duplicate or reap WSearch."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        mock_emitters["ecar"].emit.reset_mock()
+
+        reused_pid = ag.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            command_line=r"C:\Windows\System32\SearchIndexer.exe /Embedding",
+            parent_pid=pids["services"],
+            username="SYSTEM",
+        )
+        ag.generate_system_process_termination(
+            system=win_system,
+            time=timestamp + timedelta(minutes=30),
+            pid=reused_pid,
+            process_name=r"C:\Windows\System32\SearchIndexer.exe",
+            parent_pid=pids["services"],
+            username="SYSTEM",
+        )
+
+        assert reused_pid == pids["search_indexer"]
+        assert state_manager.get_process(win_system.hostname, reused_pid) is not None
+        lifecycle_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type in {"system_process_create", "process_terminate"}
+            and call.args[0].process is not None
+            and call.args[0].process.image.lower().endswith(r"\searchindexer.exe")
+        ]
+        assert lifecycle_events == []
+
+    def test_search_indexer_singleton_reuse_rejects_alternate_path(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """A basename collision outside System32 must not alias the WSearch service."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        assert (
+            ag._existing_windows_singleton_pid(
+                win_system,
+                r"C:\Temp\SearchIndexer.exe",
+                datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            )
+            is None
+        )
 
     def test_program_files_singleton_service_reuses_active_agent(
         self, state_manager, mock_emitters, win_system
@@ -408,16 +511,18 @@ class TestWindowsProcessTreeRealism:
     ):
         """A stale explicit parent PID should be replaced before process allocation."""
         ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         logon_id = ag.generate_logon(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_time,
             logon_type=2,
         )
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.explorer_pid is not None
 
+        state_manager.set_current_time(logon_time + timedelta(seconds=2))
         stale_parent = state_manager.create_process(
             win_system.hostname,
             session.explorer_pid,
@@ -428,12 +533,16 @@ class TestWindowsProcessTreeRealism:
             logon_id,
         )
         ag._record_user_process(win_system, user, stale_parent, r"C:\Windows\System32\cmd.exe")
-        assert state_manager.end_process(win_system.hostname, stale_parent)
+        assert state_manager.end_process(
+            win_system.hostname,
+            stale_parent,
+            end_time=logon_time + timedelta(seconds=3),
+        )
 
         child_pid = ag.generate_process(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_time + timedelta(seconds=5),
             logon_id,
             r"C:\Windows\System32\ipconfig.exe",
             "ipconfig.exe /all",
@@ -450,23 +559,28 @@ class TestWindowsProcessTreeRealism:
     ):
         """Stale Explorer session pointers should be rematerialized for GUI children."""
         ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         logon_id = ag.generate_logon(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_time,
             logon_type=2,
         )
         session = state_manager.get_session(logon_id)
         assert session is not None
         assert session.explorer_pid is not None
         stale_explorer = session.explorer_pid
-        assert state_manager.end_process(win_system.hostname, stale_explorer)
+        assert state_manager.end_process(
+            win_system.hostname,
+            stale_explorer,
+            end_time=logon_time + timedelta(seconds=4),
+        )
         session.explorer_pid = stale_explorer
 
         child_pid = ag.generate_process(
             user,
             win_system,
-            datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_time + timedelta(seconds=5),
             logon_id,
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
@@ -529,7 +643,11 @@ class TestWindowsProcessTreeRealism:
 
         for day in range(1, 17):
             event_time = start + timedelta(days=day)
-            state_manager.end_process(win_system.hostname, stale_parent)
+            state_manager.end_process(
+                win_system.hostname,
+                stale_parent,
+                end_time=event_time - timedelta(seconds=1),
+            )
             session.explorer_pid = stale_parent
             child_pid = ag.generate_process(
                 user,
@@ -917,6 +1035,111 @@ class TestWindowsProcessTreeRealism:
         assert parent_proc.image != "", "Parent should have an image path"
         assert parent_proc.command_line != "", "Parent should have a command line"
 
+    def test_preexisting_auto_parent_is_registered_without_creation_row(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """A warm-up parent remains rowless but is live in both canonical owners."""
+        compatibility_ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        session_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        child_time = session_time + timedelta(minutes=5)
+        logon_id = compatibility_ag.generate_logon(user, win_system, session_time)
+
+        registry = LifecycleRegistry(shard_count=8)
+        shadow = LifecycleShadow(state_manager, registry)
+        authority = GeneratorLifecycleAuthority(state_manager, shadow, shard_count=8)
+        authority.bootstrap_active_state()
+        ag = ActivityGenerator(
+            state_manager,
+            mock_emitters,
+            lifecycle_shadow=shadow,
+            lifecycle_authority=authority,
+        )
+        ag._system_pids = {win_system.hostname: pids}
+        ag._scenario_start_time = child_time
+        for emitter in mock_emitters.values():
+            emitter.reset_mock()
+
+        parent_pid = ag._ensure_parent_chain(
+            win_system,
+            user,
+            child_time,
+            logon_id,
+            "ssh.exe",
+            "windows",
+        )
+
+        state_identity = state_manager.get_process_identity(win_system.hostname, parent_pid)
+        assert state_identity is not None
+        registry_process = ag._lifecycle_authority.registry.get_process(state_identity.object_id)
+        assert registry_process is not None
+        assert registry_process.closed_at is None
+        assert registry_process.identity.object_id == state_identity.object_id
+        assert registry_process.identity.pid == state_identity.pid
+        assert registry_process.identity.started_at == state_identity.started_at
+        assert not any(
+            call[0][0].event_type == "process_create"
+            and call[0][0].process is not None
+            and call[0][0].process.pid == parent_pid
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+        )
+
+    def test_auto_parent_rejects_unregistered_grandparent_before_state_mutation(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Strict parent creation fails closed before publishing State or evidence."""
+        compatibility_ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        session_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        child_time = session_time + timedelta(minutes=5)
+        logon_id = compatibility_ag.generate_logon(user, win_system, session_time)
+
+        registry = LifecycleRegistry(shard_count=8)
+        shadow = LifecycleShadow(state_manager, registry)
+        authority = GeneratorLifecycleAuthority(state_manager, shadow, shard_count=8)
+        strict_ag = ActivityGenerator(
+            state_manager,
+            mock_emitters,
+            lifecycle_shadow=shadow,
+            lifecycle_authority=authority,
+        )
+        strict_ag._system_pids = {win_system.hostname: pids}
+        for emitter in mock_emitters.values():
+            emitter.reset_mock()
+
+        def process_snapshot() -> tuple[tuple[object, ...], ...]:
+            return tuple(
+                sorted(
+                    (
+                        process.system,
+                        process.pid,
+                        process.ecar_object_id,
+                        process.start_time,
+                        process.last_activity_time,
+                    )
+                    for process in state_manager.list_running_processes()
+                )
+            )
+
+        before_processes = process_snapshot()
+        before_time = state_manager.get_current_time()
+        before_version = state_manager.materialization_version
+
+        with pytest.raises(StateError, match="parent is not registered and live"):
+            strict_ag._ensure_parent_chain(
+                win_system,
+                user,
+                child_time,
+                logon_id,
+                "ssh.exe",
+                "windows",
+            )
+
+        assert process_snapshot() == before_processes
+        assert state_manager.get_current_time() == before_time
+        assert state_manager.materialization_version == before_version
+        assert registry.stats().process_entries == 0
+        assert all(emitter.emit.call_count == 0 for emitter in mock_emitters.values())
+
     def test_parent_command_line_populated(self, state_manager, mock_emitters, win_system, user):
         """ProcessContext.parent_command_line should be populated, not '-'."""
 
@@ -924,12 +1147,8 @@ class TestWindowsProcessTreeRealism:
 
         logon_id = ag.generate_logon(user, win_system, datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC))
 
-        # Capture dispatched events
-        dispatched = []
-        ag.dispatcher = Mock()
-        ag.dispatcher.dispatch_builder = lambda event: dispatched.append(event)
-
-        ag.generate_process(
+        mock_emitters["ecar"].emit.reset_mock()
+        pid = ag.generate_process(
             user,
             win_system,
             datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC),
@@ -940,9 +1159,13 @@ class TestWindowsProcessTreeRealism:
         )
 
         # Find the process create event
-        proc_events = [e for e in dispatched if e.event_type == "process_create"]
-        assert len(proc_events) > 0
-        proc_ctx = proc_events[0].process
+        proc_ctx = next(
+            call.args[0].process
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == pid
+        )
         assert proc_ctx.parent_command_line != "", "parent_command_line should be populated"
         assert proc_ctx.parent_command_line != "-", "parent_command_line should not be '-'"
 
@@ -990,10 +1213,13 @@ class TestWindowsProcessTreeRealism:
         logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         process_time = datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC)
 
-        logon_id = ag.generate_service_logon(
-            system=win_system,
-            time=logon_time,
-            service_account=svc_user.username,
+        state_manager.set_current_time(logon_time)
+        logon_id = state_manager.create_session(
+            username=svc_user.username,
+            system=win_system.hostname,
+            logon_type=5,
+            source_ip="-",
+            session_kind="service",
         )
         parent_pid = ag._resolve_parent(
             win_system,
@@ -1584,6 +1810,62 @@ class TestLinuxParentSelection:
         )
 
         assert parent_pid == bash_pid
+
+    def test_unknown_command_uses_requested_concurrent_session_shell(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Legacy fallback must not borrow an earlier shell for the same user."""
+
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        first_logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+        second_logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.51",
+            session_kind="ssh",
+        )
+        first_shell = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            logon_id=first_logon_id,
+        )
+        second_shell = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            logon_id=second_logon_id,
+        )
+        first_session = state_manager.get_session(first_logon_id)
+        second_session = state_manager.get_session(second_logon_id)
+        assert first_session is not None
+        assert second_session is not None
+        first_session.session_shell_pid = first_shell
+        second_session.session_shell_pid = second_shell
+
+        parent_pid = ag._select_parent_pid(
+            linux_system,
+            user,
+            "/opt/example/bin/unmapped-command",
+            time=datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC),
+            logon_id=second_logon_id,
+        )
+
+        assert parent_pid == second_shell
+        assert parent_pid != first_shell
 
     def test_ssh_login_shell_keeps_privileged_sshd_parent(
         self, state_manager, mock_emitters, linux_system, user

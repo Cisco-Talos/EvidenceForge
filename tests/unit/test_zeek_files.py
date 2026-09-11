@@ -25,11 +25,10 @@
 import json
 import random
 import tempfile
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import yaml
+import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
@@ -43,8 +42,6 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
-    SmbFileTransferMetadataActionBundle,
-    SmbFileTransferMetadataRequest,
 )
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import (
@@ -92,6 +89,31 @@ class TestFilesFormatAccuracy:
         assert isinstance(real["seen_bytes"], int)
         assert isinstance(real["is_orig"], bool)
         assert isinstance(real["timedout"], bool)
+
+    @pytest.mark.parametrize(
+        ("field_name", "analyzer", "digest"),
+        (
+            ("md5", "MD5", "a" * 32),
+            ("sha1", "SHA1", "b" * 40),
+            ("sha256", "SHA256", "c" * 64),
+        ),
+    )
+    def test_digest_result_requires_matching_analyzer(
+        self,
+        field_name: str,
+        analyzer: str,
+        digest: str,
+    ) -> None:
+        """Canonical file analysis must not carry a digest without its provenance."""
+
+        with pytest.raises(ValueError, match=analyzer):
+            FileTransferContext(**{field_name: digest})
+
+        context = FileTransferContext(
+            analyzers=("MIME", analyzer.lower()),
+            **{field_name: digest},
+        )
+        assert context.analyzers == ("MIME", analyzer.lower())
 
     def test_emitter_output_fields(self):
         """Emitter produces all files.log fields with correct types."""
@@ -460,8 +482,8 @@ class TestFilesUidCorrelation:
         assert file_row["ts"] > http_row["ts"]
         assert file_row["ts"] - http_row["ts"] > 0.005
 
-    def test_http_file_timestamp_uses_final_monotonic_http_timestamp(self):
-        """files.log should follow http.log after same-UID timestamp repairs."""
+    def test_http_file_timestamp_follows_its_own_frozen_http_transaction(self):
+        """files.log follows its transaction without emitter-order timestamp repair."""
         files_fmt = load_format("zeek_files")
         http_fmt = load_format("zeek_http")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -518,8 +540,8 @@ class TestFilesUidCorrelation:
             file_row = json.loads(files_output.read_text().splitlines()[0])
 
         assert len(http_rows) == 2
-        assert http_rows[1]["ts"] > http_rows[0]["ts"]
-        assert file_row["ts"] > http_rows[1]["ts"]
+        http_by_depth = {row["trans_depth"]: row for row in http_rows}
+        assert file_row["ts"] > http_by_depth[2]["ts"]
 
     def test_pe_timestamp_follows_parent_http_file_timestamp(self):
         """pe.log analysis should not predate the owning HTTP/files.log artifact."""
@@ -921,9 +943,9 @@ class TestFilesUidCorrelation:
                     source="SMB",
                     analyzers=["MD5", "SHA1", "SHA256"],
                     seen_bytes=4096,
-                    md5="0" * 32,
-                    sha1="1" * 40,
-                    sha256="2" * 64,
+                    md5="A" * 32,
+                    sha1="B" * 40,
+                    sha256="C" * 64,
                 ),
             )
             emitter.emit(event)
@@ -932,9 +954,9 @@ class TestFilesUidCorrelation:
             with open(output) as f:
                 data = json.loads(f.readline())
 
-            assert data["md5"] == "0" * 32
-            assert data["sha1"] == "1" * 40
-            assert data["sha256"] == "2" * 64
+            assert data["md5"] == "a" * 32
+            assert data["sha1"] == "b" * 40
+            assert data["sha256"] == "c" * 64
 
     def test_smb_filename_renders_when_present(self):
         """SMB files.log rows should include Zeek filename when the context has one."""
@@ -968,250 +990,3 @@ class TestFilesUidCorrelation:
                 data = json.loads(f.readline())
 
             assert data["filename"] == r"\\files01\Shared\Finance\budget-review.xlsx"
-
-    def test_smb_file_analysis_stays_complete_until_sensor_observation(self):
-        """Canonical SMB content stays complete until the sensor plans capture loss."""
-        request = SmbFileTransferMetadataRequest(
-            src_ip="10.0.0.5",
-            dst_ip="10.0.0.10",
-            transfer_bytes=4_000_000,
-            duration=2.5,
-            server="FILE-SRV-01",
-            user="alex",
-        )
-        smb_config = {
-            "min_transfer_bytes": 1,
-            "working_set_probability": 1.0,
-            "working_set_size": 1,
-            "shares": ["Installers"],
-            "departments": ["IT"],
-            "projects": ["Atlas"],
-            "basenames": ["agent"],
-            "binary_extensions": ["zip"],
-            "mime_types": [
-                {
-                    "mime_type": "application/zip",
-                    "weight": 1,
-                    "size_min": 12345,
-                    "size_max": 12345,
-                }
-            ],
-            "analyzer_sets": [{"analyzers": ["MD5", "SHA1"], "weight": 1}],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/zip"],
-                    "templates": [r"\\{server}\Installers\agent.zip"],
-                    "weight": 1,
-                }
-            ],
-        }
-
-        ft = SmbFileTransferMetadataActionBundle(
-            request,
-            _AlwaysPeRandom(),
-            smb_config=smb_config,
-        ).execute()
-
-        assert ft is not None
-        assert ft.timedout is False
-        assert ft.missing_bytes == 0
-        assert ft.seen_bytes == 12345
-        assert ft.total_bytes == 12345
-        assert ft.analyzers == ("MD5", "SHA1")
-        assert ft.md5
-        assert ft.sha1
-
-        repeated = SmbFileTransferMetadataActionBundle(
-            replace(request, transfer_bytes=8_000_000),
-            _AlwaysPeRandom(),
-            smb_config=smb_config,
-        ).execute()
-        assert repeated is not None
-        assert repeated.filename == ft.filename
-        assert repeated.total_bytes == ft.total_bytes
-        assert repeated.md5 == ft.md5
-        assert repeated.sha1 == ft.sha1
-
-    def test_smb_size_bands_create_stable_mid_sized_objects(self):
-        """Weighted size bands should escape the tiny-file floor without losing identity."""
-        config = {
-            "min_transfer_bytes": 1,
-            "working_set_probability": 1.0,
-            "working_set_size": 1,
-            "shares": ["Shared"],
-            "departments": ["Finance"],
-            "projects": ["Atlas"],
-            "basenames": ["forecast"],
-            "binary_extensions": ["zip"],
-            "mime_types": [
-                {
-                    "mime_type": "application/pdf",
-                    "weight": 1,
-                    "size_min": 1024,
-                    "size_max": 2048,
-                    "size_bands": [{"size_min": 262144, "size_max": 524288, "weight": 1}],
-                }
-            ],
-            "analyzer_sets": [{"analyzers": [], "weight": 1}],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/pdf"],
-                    "templates": [r"\\{server}\Shared\forecast.pdf"],
-                    "weight": 1,
-                }
-            ],
-        }
-        request = SmbFileTransferMetadataRequest(
-            src_ip="10.0.0.5",
-            dst_ip="10.0.0.10",
-            transfer_bytes=2_000_000,
-            duration=3.0,
-            server="FILE-SRV-01",
-            user="alex",
-        )
-
-        first = SmbFileTransferMetadataActionBundle(request, random.Random(7), config).execute()
-        second = SmbFileTransferMetadataActionBundle(request, random.Random(7), config).execute()
-
-        assert first is not None and second is not None
-        assert 262144 <= first.total_bytes <= 524288
-        assert first.total_bytes == second.total_bytes
-
-
-class TestSmbFileTransferConfig:
-    """Verify SMB file-transfer realism config loading."""
-
-    def test_overlay_updates_threshold_and_extends_mime_types(self, tmp_path, monkeypatch):
-        from evidenceforge.generation.activity.smb_file_transfers import (
-            load_smb_file_transfers,
-            reset_smb_file_transfers_cache,
-        )
-
-        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
-        overlay_dir.mkdir(parents=True)
-        (overlay_dir / "smb_file_transfers.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "min_transfer_bytes": 8192,
-                    "mime_types": [{"mime_type": "application/x-test", "weight": 1}],
-                },
-                sort_keys=False,
-            )
-        )
-        monkeypatch.chdir(tmp_path)
-        reset_smb_file_transfers_cache()
-
-        try:
-            data = load_smb_file_transfers()
-            assert data["min_transfer_bytes"] == 8192
-            assert any(entry["mime_type"] == "application/x-test" for entry in data["mime_types"])
-        finally:
-            reset_smb_file_transfers_cache()
-
-    def test_filename_picker_uses_overlay_templates(self):
-        """Filename templates should be data-driven and support overlays."""
-        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
-
-        config = {
-            "working_set_probability": 0.0,
-            "working_set_size": 2,
-            "shares": ["Shared"],
-            "departments": ["Finance"],
-            "projects": ["Atlas"],
-            "basenames": ["audit-evidence"],
-            "binary_extensions": ["zip"],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/pdf"],
-                    "templates": [r"\\{server}\Evidence\{basename}.pdf"],
-                    "weight": 1,
-                }
-            ],
-        }
-
-        filename = pick_smb_filename(
-            random.Random(42),
-            config,
-            mime_type="application/pdf",
-            server="files01.example.com",
-            user="alice",
-        )
-
-        assert filename.startswith("\\\\files01\\Evidence\\")
-        assert filename.endswith(".pdf")
-
-    def test_filename_picker_reuses_durable_working_set_with_long_tail(self):
-        """Most SMB observations should revisit concrete files while retaining novel paths."""
-        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
-
-        config = {
-            "working_set_probability": 0.75,
-            "working_set_size": 4,
-            "shares": ["Shared", "Projects"],
-            "departments": ["Finance", "Engineering"],
-            "projects": ["Atlas", "Orion"],
-            "basenames": [f"document-{index}" for index in range(30)],
-            "binary_extensions": ["zip", "dat"],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/pdf"],
-                    "templates": [r"\\{server}\{share}\{department}\{basename}.pdf"],
-                    "weight": 1,
-                }
-            ],
-        }
-        rng = random.Random(42)
-        filenames = [
-            pick_smb_filename(
-                rng,
-                config,
-                mime_type="application/pdf",
-                server="files01.example.com",
-                user="alice",
-            )
-            for _ in range(100)
-        ]
-
-        assert len(set(filenames)) < 45
-        assert max(filenames.count(filename) for filename in set(filenames)) >= 10
-        assert len(set(filenames)) > config["working_set_size"]
-
-    def test_filename_picker_composes_a_broad_semantic_long_tail(self):
-        """Configured lexical components should survive stem normalization as real diversity."""
-        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
-
-        config = {
-            "working_set_probability": 0.0,
-            "working_set_size": 3,
-            "lexical_composition_probability": 1.0,
-            "shares": ["Shared"],
-            "departments": ["Finance"],
-            "projects": ["Atlas"],
-            "basenames": ["fallback"],
-            "lexical_subjects": [f"subject-{index}" for index in range(20)],
-            "lexical_document_kinds": [f"kind-{index}" for index in range(20)],
-            "lexical_qualifiers": ["draft", "final", "approved"],
-            "binary_extensions": ["zip"],
-            "filename_templates": [
-                {
-                    "mime_types": ["application/pdf"],
-                    "templates": [r"\\{server}\Shared\{basename}.pdf"],
-                    "weight": 1,
-                }
-            ],
-        }
-        rng = random.Random(91)
-        stems = {
-            pick_smb_filename(
-                rng,
-                config,
-                mime_type="application/pdf",
-                server="files01.example.com",
-                user="alice",
-            )
-            .rsplit("\\", 1)[-1]
-            .rsplit(".", 1)[0]
-            for _ in range(60)
-        }
-
-        assert len(stems) >= 45

@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
-from evidenceforge.config.schemas import DnsTunnelRttConfig
+from evidenceforge.config.schemas import DnsTunnelRttConfig, NmapCommandProbeConfig
 from evidenceforge.utils.rng import _stable_seed
 
 _CACHED_DATA: dict[str, Any] | None = None
@@ -128,6 +128,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             overlay["linux_smb_connection_owners"],
             "role",
         )
+    if isinstance(overlay.get("nmap_command_probe"), dict):
+        result["nmap_command_probe"] = {
+            **default.get("nmap_command_probe", {}),
+            **overlay["nmap_command_probe"],
+        }
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     if isinstance(overlay.get("proxy_connect_status_messages"), dict):
@@ -157,9 +162,29 @@ def reset_network_params_cache() -> None:
 
 
 def public_ntp_servers() -> list[dict[str, Any]]:
-    """Return configured public NTP server profiles."""
-    servers = load_network_params().get("public_ntp_servers", [])
-    return [server for server in servers if isinstance(server, dict)]
+    """Return canonical public NTP identities through the retained helper shape."""
+
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        default_public_identity_registry,
+    )
+
+    return [
+        {
+            "name": binding.trait("name", binding.ptr),
+            "ip": binding.ip,
+            "operator": binding.trait("operator", binding.provider),
+            "stratum": binding.trait("stratum", 2),
+            "ref_id": binding.trait("ref_id", ".GPS."),
+            "weight": weight,
+        }
+        for binding, weight in default_public_identity_registry().fixed_binding_records("ntp")
+    ]
+
+
+def nmap_command_probe_config() -> NmapCommandProbeConfig:
+    """Return validated bounded planning settings for nmap process effects."""
+
+    return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
 
 
 def public_ntp_ips() -> list[str]:
@@ -172,10 +197,21 @@ def public_ntp_ips() -> list[str]:
 
 
 def public_dns_resolvers() -> list[dict[str, Any]]:
-    """Return configured public recursive DNS resolver profiles."""
+    """Return canonical DNS identities through the retained helper shape."""
 
-    resolvers = load_network_params().get("public_dns_resolvers", [])
-    return [resolver for resolver in resolvers if isinstance(resolver, dict)]
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        default_public_identity_registry,
+    )
+
+    return [
+        {
+            "name": binding.trait("name", binding.ptr),
+            "ip": binding.ip,
+            "operator": binding.trait("operator", binding.provider),
+            "weight": weight,
+        }
+        for binding, weight in default_public_identity_registry().fixed_binding_records("dns")
+    ]
 
 
 def external_client_excluded_cidrs() -> list[str]:
