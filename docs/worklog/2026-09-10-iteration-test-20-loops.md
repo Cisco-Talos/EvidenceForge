@@ -443,3 +443,29 @@
   evidence, but the panel exposed incomplete host-build coverage for other Windows inbox binaries.
 - Highest-impact next families: unified Linux PID allocation, complete host-build Windows binary
   inventory, and HTTP redirect/DNS source-native contracts.
+
+## Loop 65 Family Contract
+
+### Host-local Linux transient process identity
+
+- **Classification:** `family_level`; loop-64 `hard_contradiction` and `distribution_texture`
+  findings in Linux process identity across syslog and eCAR.
+- **Owning abstraction:** `StateManager` owns one time-aware PID namespace and hidden workload
+  progression per Linux host. Lifecycle generators must request process identity from that owner;
+  source renderers may only project the allocated PID.
+- **Invariant:** a newly started one-shot process consumes a PID from the same host/time namespace
+  as every other canonical or syslog-only transient process. Its follow-on messages and termination
+  retain that PID. Hidden churn has stable host-specific workload magnitude as well as minute/hour
+  variation, so unrelated hosts do not converge on one fleet-wide PID/time slope.
+- **Entry paths:** anacron lifecycle, scheduled CRON shell/workload processes, SSH and sudo
+  transients, ordinary Linux system/user processes, deferred baseline generation, and direct
+  transient syslog allocation.
+- **Consumers:** eCAR process create/terminate records, RFC 5424 syslog APP-NAME/PROCID fields,
+  process parent/lifecycle state, checkpoint/retry replay, blind chronology probes, and PID-wrap
+  validation.
+- **Layer rationale:** the low anacron PID was introduced by bypassing process materialization and
+  selecting a private random number in baseline code. Routing it through `StateManager` repairs the
+  shared truth; host workload texture belongs in the allocator rather than any source renderer.
+- **Sibling risks:** durable boot daemons retain their fixed boot PIDs, explicit PID namespaces
+  remain valid, out-of-order 30-second allocation lanes retain capacity, PID wrap/reuse rules stay
+  unchanged, and anacron source rows remain one coherent daily lifecycle.

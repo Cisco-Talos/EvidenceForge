@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 28
+current_revision: 29
 history_start_revision: 1
-behavior_surface_sha256: "183fe16017b29d7948159af482152fcbf2526b8907749ed57fbacdf5f62ba487"
+behavior_surface_sha256: "3d93b8804254832eb6435cd9f9026d804b0b81221da33acbe0aac4f6b2604605"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -303,3 +303,14 @@ changes:
       - ecar
       - windows_event_sysmon
     summary: Compiles and binds exact native, application, and storage deployment identity before production process generation so canonical events carry release or explicit unresolved binary truth.
+  - revision: 29
+    id: host-local-linux-transient-process-identity
+    impact: material
+    domains:
+      - process-identity
+      - linux-baseline
+      - lifecycle
+    formats:
+      - ecar
+      - syslog
+    summary: Routes one-shot anacron activity through the canonical host PID allocator and gives hidden Linux process churn stable host-specific workload magnitude.

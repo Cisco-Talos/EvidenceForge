@@ -3964,7 +3964,20 @@ class BaselineMixin:
         emitted[system.hostname] = run_date
         self._anacron_lifecycle_days = emitted
 
-        pid = sys_pids.get("anacron", rng.randint(10000, 60000))
+        parent_pid = sys_pids.get("cron", sys_pids.get("systemd", 1))
+        lifecycle_group_id = f"anacron:{system.hostname}:{run_date}"
+        pid = self.activity_generator.generate_system_process(
+            system=system,
+            time=ts,
+            process_name="/usr/sbin/anacron",
+            command_line="/usr/sbin/anacron -s",
+            parent_pid=parent_pid,
+            username="root",
+            emit_linux_syslog=False,
+            concurrency_group_id=lifecycle_group_id,
+        )
+        if not pid:
+            return
         job_name = rng.choice(["cron.daily", "logrotate"])
         delay_minutes = rng.choice([2, 5, 11])
         job_start = ts + timedelta(minutes=delay_minutes, seconds=rng.uniform(0.5, 12.0))
@@ -3991,6 +4004,16 @@ class BaselineMixin:
                 facility=3,
                 severity=6,
             )
+        terminal_time = events[-1][0] + timedelta(milliseconds=rng.randint(20, 180))
+        self.activity_generator.generate_system_process_termination(
+            system=system,
+            time=terminal_time,
+            pid=pid,
+            process_name="/usr/sbin/anacron",
+            parent_pid=parent_pid,
+            username="root",
+            concurrency_group_id=lifecycle_group_id,
+        )
 
     def _execute_authored_events_for_hour(self, current_hour: datetime) -> None:
         """Execute same-hour storyline and red-herring entries in nominal time order."""

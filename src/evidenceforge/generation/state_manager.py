@@ -8910,12 +8910,19 @@ class StateManager:
     # ========================================
 
     @staticmethod
+    def _linux_pid_host_workload_factor(system: str) -> float:
+        """Return a stable host-specific multiplier for hidden process churn."""
+
+        return 0.75 + ((_stable_seed(f"linux_pid_workload:{system}") % 1051) / 1000.0)
+
+    @staticmethod
     def _build_linux_pid_weekly_churn_prefix(system: str) -> tuple[int, ...]:
         """Build one immutable hidden-churn prefix without mutating allocator caches."""
 
         rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
         prefix = [0]
         hourly_factor = 1.0
+        host_workload_factor = StateManager._linux_pid_host_workload_factor(system)
         hourly_regimes = [0.20, 0.40, 0.70, 1.00, 1.50, 2.80]
         for minute_of_week in range(_MINUTES_PER_WEEK):
             day = minute_of_week // (24 * 60)
@@ -8926,7 +8933,7 @@ class StateManager:
                     rng.shuffle(hourly_regimes)
                 hourly_factor = hourly_regimes[hour % len(hourly_regimes)]
             base_churn = 76 if day >= 5 else 116 if 8 <= hour < 18 else 92
-            hourly_target = round(base_churn * hourly_factor)
+            hourly_target = round(base_churn * hourly_factor * host_workload_factor)
             lower = max(48, round(hourly_target * 0.45))
             upper = min(720, max(lower, round(hourly_target * 1.55)))
             churn = rng.randint(lower, upper)
@@ -13357,41 +13364,7 @@ class StateManager:
         if cached is not None:
             return cached
 
-        rng = random.Random(_stable_seed(f"linux_pid_hidden_churn:{system}"))
-        prefix = [0]
-        hourly_factor = 1.0
-        hourly_regimes = [0.20, 0.40, 0.70, 1.00, 1.50, 2.80]
-        for minute_of_week in range(_MINUTES_PER_WEEK):
-            day = minute_of_week // (24 * 60)
-            minute_of_day = minute_of_week % (24 * 60)
-            hour = minute_of_day // 60
-            if minute_of_day % 60 == 0:
-                if hour % len(hourly_regimes) == 0:
-                    rng.shuffle(hourly_regimes)
-                hourly_factor = hourly_regimes[hour % len(hourly_regimes)]
-            if day >= 5:
-                base_churn = 76
-            elif 8 <= hour < 18:
-                base_churn = 116
-            else:
-                base_churn = 92
-            hourly_target = round(base_churn * hourly_factor)
-            lower = max(48, round(hourly_target * 0.45))
-            upper = min(720, max(lower, round(hourly_target * 1.55)))
-            churn = rng.randint(lower, upper)
-            if rng.random() < 0.04:
-                churn += rng.randint(90, 480)
-            # Baseline families can discover process starts out of traversal
-            # order. Reserve two disjoint 30-second logical lanes per minute so
-            # every later lane remains numerically above every earlier lane.
-            # Forty-seven positions gives the measured 36-position dense SSH
-            # bootstrap burst eleven positions of deterministic headroom without materially
-            # changing the workload-shaped churn when it is already larger.
-            lane_floor = 2 * _LINUX_PID_REORDER_LANE_WIDTH
-            churn = max(churn, lane_floor)
-            prefix.append(prefix[-1] + churn)
-
-        frozen = tuple(prefix)
+        frozen = self._build_linux_pid_weekly_churn_prefix(system)
         self._linux_pid_weekly_churn_prefixes[system] = frozen
         return frozen
 
