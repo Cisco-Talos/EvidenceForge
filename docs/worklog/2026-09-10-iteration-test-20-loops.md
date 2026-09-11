@@ -518,3 +518,24 @@
 - **Sibling risks:** preserve source-side `mstsc.exe` and TCP/3389 transport-before-auth ordering,
   successful-flow semantics, bootstrap process order, explicit logoff/session close, reconnect
   behavior, source publication deadlines, and exact deferred continuation recovery.
+
+## Loop 66 Verification
+
+- Implementation commit: `a9d2b7bfb` (`fix: publish remote session readiness before child
+  activity`).
+- Behavior contract: revision 30, surface digest
+  `9ad3c48fa5b74e270d2ba31d3da22649500cb5a703f62999e6db564f576780f2`.
+- Routine gate: 8,397 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 125,914 evaluated records across 22 sources.
+- Deterministic evaluation: 96.2339, acceptance PASS; pillars 99.9992 parseability, 96.8682
+  plausibility, 94.2708 causality, and 92.2471 timing.
+- Rendered RDP probe: transport at 15:20:19.944, Type 10 login for `0x27015bf` at
+  15:20:25.365, and dependent `cmd.exe`/`whoami.exe` creates at 15:20:25.366/15:20:26.200;
+  Windows Security retains the same `10.10.1.99:58332` tuple and post-login ordering.
+- Blind panel: 73/92/89/86 (mean 85.00), unanimously Synthetic. Deliberation was not triggered:
+  average verdict confidence was 89.5 and score spread was 19.
+- The repaired same-LUID process-before-login inversion did not recur. The panel exposed one
+  fixed Explorer 19041 identity across incompatible host builds, command-inconsistent Nmap
+  application/discovery behavior, and post-disconnect RDP activity as the highest-impact families.
+- Next highest-impact families: complete host-build Windows PE identity, Nmap semantic target and
+  protocol expansion, and remote-interactive reconnect/control ownership.
