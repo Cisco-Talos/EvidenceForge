@@ -861,3 +861,26 @@
   before TGS and KDC WFP-before-audit guarantees; do not convert NTLM or local logons to Kerberos;
   keep failed exchanges non-successful; respect transport/process/session bounds, DC clock offsets,
   checkpoint recovery, and deterministic replay.
+
+## Loop 73 Result
+
+- **Implementation commit:** `8dc3eaa28` (`fix: order fresh Kerberos before service use`).
+- **Behavior contract:** revision 37,
+  `c6916d584af620a5a0081c7701b8443765d2b8a6fddacd33b0ba9238c2d2a66f`.
+- **Verification:** 8,405 routine tests passed, 5 skipped, and 2,009 deselected; focused Kerberos
+  and behavior-manifest tests passed; Ruff check and format check passed; all 92 configuration
+  files validated; the scenario retained only its existing 24 informational pivot notes.
+- **Rendered invariant:** 210 fresh Kerberos AS/TGS bundles joined to exact KDC and dependent
+  service transports, with zero ordering violations and a minimum 1.254-second KDC-to-service
+  observation margin.
+- **Automated evaluation:** 96.47762068969884 PASS across 127,848 records (parseability
+  99.99921782116263, plausibility 96.85306697612519, causality 94.47421150278294, timing
+  93.2301786181151).
+- **Initial panel:** Threat Hunter 70 (Synthetic, 82 verdict confidence), Detection Engineer 64
+  (Synthetic, 76), Network Forensics 64 (Synthetic, 81), Host/EDR 67 (Synthetic, 84); mean 66.25.
+- **Deliberation:** not triggered; verdicts were unanimous, average verdict confidence was 80.75,
+  and the synthetic-confidence spread was 6.
+- **Target-family disposition:** the Loop 72 Kerberos acquisition inversion did not recur in the
+  rendered probe or any initial expert report.
+- **Next family:** make Zeek file-analysis provenance agree with every rendered digest across SMB,
+  HTTP, SMTP, certificate, and sibling file-observation paths.
