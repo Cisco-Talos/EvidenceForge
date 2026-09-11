@@ -830,7 +830,23 @@ class FileTransferContext:
     entity_body_len: int | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "analyzers", tuple(self.analyzers))
+        analyzers = tuple(self.analyzers)
+        analyzer_names = {analyzer.upper() for analyzer in analyzers}
+        missing_digest_analyzers = [
+            analyzer
+            for field_name, analyzer in (
+                ("md5", "MD5"),
+                ("sha1", "SHA1"),
+                ("sha256", "SHA256"),
+            )
+            if getattr(self, field_name) and analyzer not in analyzer_names
+        ]
+        if missing_digest_analyzers:
+            missing = ", ".join(missing_digest_analyzers)
+            raise ValueError(
+                f"File transfer digest results require matching Zeek analyzers: {missing}"
+            )
+        object.__setattr__(self, "analyzers", analyzers)
         object.__setattr__(self, "multipart_part_path", tuple(self.multipart_part_path))
 
 

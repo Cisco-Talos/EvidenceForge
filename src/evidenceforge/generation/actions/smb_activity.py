@@ -136,6 +136,7 @@ from evidenceforge.utils.time import ensure_utc, parse_duration
 
 _MAX_PERSISTENT_SMB_OPERATIONS = MAX_PERSISTENT_SMB_OPERATIONS
 _MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 6 + 3 * _MAX_PERSISTENT_SMB_OPERATIONS
+_SMB_FILE_ANALYZERS = ("MIME", "MD5", "SHA1", "SHA256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2234,7 +2235,7 @@ class SmbActivityActionBundle:
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
                     filename=state.path,
-                    analyzers=("MIME",),
+                    analyzers=_SMB_FILE_ANALYZERS,
                     mime_type=state.mime_type,
                     duration=timing.transfer_seconds,
                     local_orig=client_system is not None,
@@ -4679,7 +4680,7 @@ class SmbActivityActionBundle:
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
                     filename=state.path,
-                    analyzers=("MIME",),
+                    analyzers=_SMB_FILE_ANALYZERS,
                     mime_type=state.mime_type,
                     duration=timing.transfer_seconds,
                     local_orig=client is not None,

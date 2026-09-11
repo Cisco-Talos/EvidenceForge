@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 37
+current_revision: 38
 history_start_revision: 1
-behavior_surface_sha256: "c6916d584af620a5a0081c7701b8443765d2b8a6fddacd33b0ba9238c2d2a66f"
+behavior_surface_sha256: "830a3f817076b6db4edeb1b1234236b8d94a977494041326ea42adcf91598aed"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -404,3 +404,13 @@ changes:
       - zeek_conn
       - ecar
     summary: Places modeled fresh AS/TGS acquisition far enough ahead of Windows remote authentication that KDC processing precedes the dependent target-service transport and successful logon after source-native timing is applied.
+  - revision: 38
+    id: zeek-file-digest-analyzer-provenance
+    impact: localized
+    domains:
+      - file-analysis
+      - canonical-file-transfer
+      - smb
+    formats:
+      - zeek_files
+    summary: Requires every canonical file digest result to declare its matching Zeek analyzer and adapts both SMB execution paths to publish MIME plus MD5, SHA1, and SHA256 provenance.

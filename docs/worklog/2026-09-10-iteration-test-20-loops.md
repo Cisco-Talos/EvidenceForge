@@ -884,3 +884,29 @@
   rendered probe or any initial expert report.
 - **Next family:** make Zeek file-analysis provenance agree with every rendered digest across SMB,
   HTTP, SMTP, certificate, and sibling file-observation paths.
+
+## Loop 74 Family Contract
+
+### Authoritative Zeek file-analysis provenance for rendered digests
+
+- **Classification:** `family_level`; Loop 73 `schema_or_format` and `contract_gap` finding across
+  97 SMB-derived Zeek `files.log` rows.
+- **Owning abstraction:** canonical `FileTransferContext` owns the analysis results and their
+  provenance before source observation or Zeek rendering; SMB action bundles adapt durable content
+  identities into that contract.
+- **Invariant:** a non-empty MD5, SHA1, or SHA256 result may exist only when the same canonical file
+  observation declares the corresponding `MD5`, `SHA1`, or `SHA256` analyzer. Source observation
+  may coherently hide all analyzer results, but no renderer may expose an orphan digest.
+- **Entry paths:** persistent and compatibility SMB reads/writes, HTTP request and response bodies,
+  multipart leaves, SMTP/MIME attachments, TLS certificate files, staged archive transfer, direct
+  canonical context construction, and source-local analyzer visibility projection.
+- **Consumers:** Zeek `files.log`, HTTP/SMTP/TLS FUID references, PE analysis, network observation
+  plans, evaluator field-agreement checks, checkpoint serialization, and blind detection review.
+- **Layer rationale:** analyzer names and digest values are sibling facts on the canonical file
+  transfer, so their consistency belongs in `FileTransferContext`. SMB callers currently provide
+  durable digests while declaring only MIME; they must adapt into the shared contract. Fixing only
+  the Zeek emitter would conceal malformed canonical truth from sibling consumers.
+- **Sibling risks:** preserve legitimate MIME-only and analyzer-free rows; compare analyzer names
+  case-insensitively without rewriting source-native spelling; keep observation-driven analyzer
+  loss atomic with digest loss; do not imply that a digest was computed when its field is empty;
+  retain stable content identity, FUID, and multi-sensor correlation.

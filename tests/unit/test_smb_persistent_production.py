@@ -596,6 +596,24 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
     )
 
 
+def test_persistent_smb_file_analysis_declares_digest_provenance(
+    windows_read_control: tuple[tuple[str, bytes], ...],
+) -> None:
+    """Persistent SMB file observations declare every computed digest analyzer."""
+
+    payloads = dict(windows_read_control)
+    rows = [
+        json.loads(line) for line in payloads["core-zeek/files.json"].decode("utf-8").splitlines()
+    ]
+
+    assert rows
+    assert all(
+        {"MIME", "MD5", "SHA1", "SHA256"} <= set(row["analyzers"])
+        and all(row[field_name] for field_name in ("md5", "sha1", "sha256"))
+        for row in rows
+    )
+
+
 def test_persistent_smb_tree_connect_has_packet_stage_microsecond_texture(
     windows_read_control: tuple[tuple[str, bytes], ...],
 ) -> None:

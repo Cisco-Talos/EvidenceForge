@@ -28,6 +28,8 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import (
     FileTransferContext,
@@ -87,6 +89,31 @@ class TestFilesFormatAccuracy:
         assert isinstance(real["seen_bytes"], int)
         assert isinstance(real["is_orig"], bool)
         assert isinstance(real["timedout"], bool)
+
+    @pytest.mark.parametrize(
+        ("field_name", "analyzer", "digest"),
+        (
+            ("md5", "MD5", "a" * 32),
+            ("sha1", "SHA1", "b" * 40),
+            ("sha256", "SHA256", "c" * 64),
+        ),
+    )
+    def test_digest_result_requires_matching_analyzer(
+        self,
+        field_name: str,
+        analyzer: str,
+        digest: str,
+    ) -> None:
+        """Canonical file analysis must not carry a digest without its provenance."""
+
+        with pytest.raises(ValueError, match=analyzer):
+            FileTransferContext(**{field_name: digest})
+
+        context = FileTransferContext(
+            analyzers=("MIME", analyzer.lower()),
+            **{field_name: digest},
+        )
+        assert context.analyzers == ("MIME", analyzer.lower())
 
     def test_emitter_output_fields(self):
         """Emitter produces all files.log fields with correct types."""
