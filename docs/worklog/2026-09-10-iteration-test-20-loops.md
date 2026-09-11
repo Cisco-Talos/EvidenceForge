@@ -567,3 +567,25 @@
   the Windows build; unresolved or artifact-local binaries may legitimately lack PE resources;
   compatibility callers retain deterministic data-driven metadata; paths and OriginalFileName
   casing remain source-native; deployment overrides and architecture separation stay intact.
+
+## Loop 67 Verification
+
+- Implementation commits: `de59b2c60` (`fix: bind Windows PE identity to host builds`) and
+  `cdb161208` (`fix: materialize native deployment metadata paths`).
+- Behavior contract: revision 31, surface digest
+  `7be368c84bf4e383e2cb7d1e6b27bfb027b8fbcfcff9433428097ba185c5df44`.
+- Routine gate: 8,398 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 125,914 evaluated records across 22 sources.
+- Deterministic evaluation: 96.2339, acceptance PASS; pillars 99.9992 parseability, 96.8682
+  plausibility, 94.2708 causality, and 92.2471 timing.
+- Rendered PE probe: all-five-field Sysmon Event 1 gaps fell from 691/938 rows and 51 images to
+  104/938 rows and 29 images. Explorer resolves four build-specific versions with one digest per
+  version and zero cross-version digest overlap.
+- Blind panel: 72/76/65/90 (mean 75.75), unanimously Synthetic. Deliberation was not triggered:
+  average verdict confidence was 82.75 and score spread was 25.
+- The repaired fixed Explorer 19041 identity did not recur as a prioritized finding. The panel
+  exposed a near-universal KDC-before-WFP inversion, cloned Linux IRQ inventories, invalid-SSH
+  timestamp suffix locking, and repeated network/content distribution fingerprints.
+- Next highest-impact families: KDC/WFP causality, per-host Linux hardware inventory, and
+  source-native SSH/IDS timestamp construction. Nmap command semantics remains queued from loops
+  65–66.
