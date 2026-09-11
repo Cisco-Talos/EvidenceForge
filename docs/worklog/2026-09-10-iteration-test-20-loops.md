@@ -36,6 +36,7 @@
 | 57 | DHCP phase timing; canonical parent principal | 97.36 PASS | 69.00 initial / 82.25 deliberated | complete |
 | 58 | UDP DNS close timing; RDP userinit lifecycle | 96.28 PASS | 71.75 initial / 86.75 deliberated | complete |
 | 59 | Proxy phase causality; Windows token/session identity | 96.28 PASS | 65.00 initial / 77.50 deliberated | complete |
+| 60 | UDP DNS packet identity; sub-ms WFP admission | 96.28 PASS | 61.00 initial / 71.50 deliberated | complete |
 
 ## Loop 57 Verification
 
@@ -218,3 +219,25 @@
 - **Sibling risks:** process-create/dependent ordering keeps its 1 ms lifecycle gap. WFP process
   attribution is retained only when its already-modeled process lifecycle is valid; this fix does
   not fabricate or move process identity.
+
+## Loop 60 Verification
+
+- Commits: `b5b9617f0` (packet-derived DNS timing) and `1cb4fbfcb` (sub-millisecond
+  WFP source-admission sibling fix).
+- Routine gate: 8,381 passed, 5 skipped; Ruff check and format check passed across
+  769 files.
+- Generated bundle: 122,916 records across 22 evaluated sources.
+- Deterministic evaluation: 96.2817, acceptance PASS; pillars 100.00 parseability,
+  96.82 plausibility, 93.95 causality, and 92.95 timing.
+- Rendered DNS probe: all 3,863 qualifying one-query/one-response UDP transactions
+  across core, DB, and DMZ sensors have exact query-start and response-close equality
+  between `dns.json` and `conn.json`, with zero mismatches.
+- Generation-discovered WFP sibling: a valid 463 microsecond DNS transport initially
+  failed because WFP admission reserved a generic 1 ms close margin. A WFP-specific
+  1 microsecond precision boundary now admits the interval; the exact regression and
+  complete regeneration pass.
+- Blind panel: initial scores 56/86/34/68 (mean 61.00); verdict disagreement and a
+  52-point spread triggered deliberation. Final scores 68/88/53/77 (mean 71.50), with
+  three Synthetic verdicts and one Inconclusive, synthetic-leaning verdict.
+- Next highest-impact families: host-specific Windows execution metadata, browser
+  process action lifecycles, and source-coherent SSH observation.
