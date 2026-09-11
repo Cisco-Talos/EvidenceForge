@@ -1,8 +1,0 @@
-{
-  "bare_explorer_max_per_session": 1,
-  "bare_explorer_session_groups_over_one": 0,
-  "explorer_process_creates": 14,
-  "services_parented_explorer": 0,
-  "userinit_max_per_session": 1,
-  "userinit_session_groups_over_one": 0
-}
