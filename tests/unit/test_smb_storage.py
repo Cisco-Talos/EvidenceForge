@@ -277,6 +277,25 @@ def test_host_file_set_compiles_without_exposing_an_smb_server(scenarios_dir: Pa
     assert first.manifest()["file_sets"][0]["backing_share"] is None
 
 
+def test_compiled_storage_file_ids_use_full_width_digest_entropy() -> None:
+    """Compiled source-native IDs should not expose a zero-padded 32-bit seed."""
+    first = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\forecast.xlsx"
+    )
+    second = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\forecast.xlsx"
+    )
+    sibling = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\budget.xlsx"
+    )
+
+    assert first == second
+    assert first.startswith("file-")
+    assert len(first) == 21
+    assert int(first[5:13], 16) != 0
+    assert sibling != first
+
+
 def test_share_can_export_the_exact_same_host_file_set(scenarios_dir: Path) -> None:
     data = _storage_scenario_data(scenarios_dir)
     data["environment"]["storage"] = {

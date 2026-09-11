@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 24
+current_revision: 25
 history_start_revision: 1
-behavior_surface_sha256: "481e21381f78bcbb1d327a6cd9a30a8c2a1af4a19536f5f64d4050f8bfc70aec"
+behavior_surface_sha256: "1ffc409e1424464935982502f3beec72a6ed61e54ee90a482605b77ca0eff1c6"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -260,3 +260,15 @@ changes:
     formats:
       - windows_event_security
     summary: Derives Security provider thread lifecycles and NT device-volume paths from deterministic host-local identities instead of fleet-wide finite pools.
+  - revision: 25
+    id: source-native-full-width-identifier-entropy
+    impact: material
+    domains:
+      - explicit-proxy-identity
+      - postfix-queue-identity
+      - storage-file-identity
+    formats:
+      - ecar
+      - proxy_access
+      - syslog
+    summary: Derives visible proxy tunnel, compiled storage file, and Postfix queue identifiers from full-width seed-scoped digests instead of zero-padded 32-bit seeds.

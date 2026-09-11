@@ -855,6 +855,25 @@ def test_postfix_delay_components_vary_by_queue_and_recipient() -> None:
     assert len(ratio_shapes) >= 8
 
 
+def test_postfix_queue_ids_use_digest_entropy_without_zero_padding() -> None:
+    """Postfix queue IDs should be stable native-width tokens without seed padding."""
+    generator = object.__new__(ActivityGenerator)
+    system = System(
+        hostname="MAIL-01",
+        ip="10.10.2.25",
+        os="Ubuntu Server 24.04",
+        type="server",
+    )
+    queue_ids = {
+        generator._postfix_queue_id(f"<message-{index}@corp.example>", system)
+        for index in range(32)
+    }
+
+    assert len(queue_ids) == 32
+    assert all(re.fullmatch(r"[A-F0-9]{9,11}", queue_id) for queue_id in queue_ids)
+    assert any(not queue_id.startswith("0") for queue_id in queue_ids)
+
+
 def test_postfix_terminal_removal_releases_transient_queue_state(monkeypatch) -> None:
     generator = object.__new__(ActivityGenerator)
     system = System(hostname="MAIL-01", ip="10.10.2.25", os="Ubuntu 22.04", type="server")

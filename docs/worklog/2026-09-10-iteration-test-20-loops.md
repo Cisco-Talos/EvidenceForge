@@ -302,3 +302,32 @@
 - The repaired execution-thread and NT-volume fingerprints were absent from every report.
 - Next highest-impact families: source-native identifier entropy across proxy/eCAR/Postfix,
   Sysmon Event 8 target-thread semantics, and command-derived process/scan execution.
+
+## Loop 62 Family Contract
+
+### Source-native deterministic identifier entropy
+
+- **Classification:** `new_family`; loop-61 `hard_contradiction` / probable generator-identity
+  leak spanning otherwise unrelated visible source families.
+- **Owning abstraction:** a seed-scoped deterministic digest utility owns full-width entropy;
+  the proxy renderer, storage-world compiler, and Postfix activity owner independently choose
+  their source-native prefix, width, alphabet, and semantic identity inputs.
+- **Invariant:** a requested N-hex-character identifier contains N digest-derived characters,
+  rather than formatting a 32-bit seed into a wider zero-padded slot. Values remain stable for
+  the same generation seed and semantic identity, change with that identity or public seed, and
+  use separate namespaces across products. Proxy tunnel children retain one tunnel identifier,
+  one storage file retains one canonical identity across its consumers, and all Postfix lifecycle
+  lines and SMTP replies retain the same per-hop queue ID.
+- **Entry paths:** explicit-proxy HTTPS child rendering and tunnel summarization; default compiled
+  SMB/storage files projected into eCAR and server evidence; Postfix receive, delivery, removal,
+  SMTP reply, and Received-header paths.
+- **Consumers:** proxy grouping/checkpoint replay, eCAR file object correlation, storage/share
+  registries, SMB/File projections, Postfix queue state, SMTP evidence, parsers, and blind
+  distribution probes.
+- **Layer rationale:** canonical identity ownership and source-native syntax are distinct. The
+  shared utility provides deterministic entropy only; each owning product layer selects its own
+  visible shape and correlation scope instead of exposing one global identifier convention.
+- **Sibling risks:** internal action/cohort IDs, Zeek UIDs/FUIDs, UUID-shaped lifecycle identities,
+  and intentionally 32-bit protocol fields are not widened merely because they use deterministic
+  seeds. The material output change requires a behavior-manifest revision and exact retry,
+  checkpoint, storage, mail, and proxy regression coverage.

@@ -4,6 +4,7 @@
 """Tests for proxy emitter referrer field and CONNECT tunnel behavior."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -824,7 +825,9 @@ class TestProxyActionSemantics:
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
         assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
         parsed = [_parse_proxy_fields(line) for line in all_lines]
-        assert len({fields["tunnel_id"] for fields in parsed}) == 1
+        tunnel_ids = {fields["tunnel_id"] for fields in parsed}
+        assert len(tunnel_ids) == 1
+        assert re.fullmatch(r"PT-[0-9a-f]{16}", tunnel_ids.pop())
         assert {fields["client_src_port"] for fields in parsed} == {54321}
 
     def test_future_tunnel_state_does_not_suppress_earlier_connect_setup(self):

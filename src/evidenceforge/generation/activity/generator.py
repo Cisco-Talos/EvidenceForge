@@ -399,7 +399,7 @@ from evidenceforge.models.scenario import (
 )
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.paths import write_exclusive_child_stream
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed, stable_hex_digest, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
@@ -27864,10 +27864,13 @@ class ActivityGenerator:
         """Return a stable Postfix-like queue identifier for a message on one server."""
         seed = _stable_seed(f"postfix_queue:{system.hostname}:{message_id}")
         width = 9 + (seed % 3)
-        token = f"{seed:X}"
-        if len(token) < width:
-            token = token.rjust(width, "0")
-        return token[-width:]
+        return stable_hex_digest(
+            "postfix-queue",
+            system.hostname.casefold(),
+            message_id,
+            length=width,
+            uppercase=True,
+        )
 
     def _postfix_peer_name(self, system: "System") -> str:
         """Return the peer label Postfix would show for an SMTP client/server."""

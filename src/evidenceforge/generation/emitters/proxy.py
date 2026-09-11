@@ -33,7 +33,7 @@ from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.output_targets import OutputTarget
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_hex_digest
 
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
 # only when no tunnel exists for this (proxy_fqdn, client_ip, host, port)
@@ -424,7 +424,12 @@ class ProxyEmitter(HostMultiplexEmitter):
                 f"{px.client_ip}:{getattr(net, 'src_port', 0)}:{px.host}:{request_time.isoformat()}"
             )
             identity = canonical_uid or fallback_identity
-            tunnel_id = f"PT-{_stable_seed(f'proxy-tunnel:{px.proxy_fqdn}:{identity}'):016x}"
+            tunnel_id = "PT-" + stable_hex_digest(
+                "proxy-tunnel",
+                px.proxy_fqdn,
+                identity,
+                length=16,
+            )
             tunnel_key = (
                 px.proxy_fqdn,
                 tunnel_id,

@@ -56,7 +56,7 @@ from evidenceforge.utils import (
     validate_output_path,
     write_yaml,
 )
-from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.rng import generation_seed_scope, stable_hex_digest, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 
@@ -79,6 +79,36 @@ class TestStableUuid:
         second = stable_uuid("ecar-process", "WS-01", 1235, "cmd.exe")
 
         assert first != second
+
+
+class TestStableHexDigest:
+    """Tests for deterministic full-width hexadecimal identifier helpers."""
+
+    def test_stable_hex_digest_is_repeatable_and_full_width(self):
+        """Requested token width should contain digest entropy, not zero padding."""
+        first = stable_hex_digest("proxy-tunnel", "PROXY-01", "client.example", length=16)
+        second = stable_hex_digest("proxy-tunnel", "PROXY-01", "client.example", length=16)
+
+        assert first == second
+        assert len(first) == 16
+        assert int(first[:8], 16) != 0
+
+    def test_stable_hex_digest_separates_namespaces_parts_and_public_seed(self):
+        """Distinct semantic identities and public seeds should produce distinct tokens."""
+        baseline = stable_hex_digest("proxy-tunnel", "PROXY-01", "example.com")
+        assert baseline != stable_hex_digest("storage-file", "PROXY-01", "example.com")
+        assert baseline != stable_hex_digest("proxy-tunnel", "PROXY-02", "example.com")
+
+        with generation_seed_scope(7):
+            seeded = stable_hex_digest("proxy-tunnel", "PROXY-01", "example.com")
+
+        assert seeded != baseline
+
+    @pytest.mark.parametrize("namespace,length", [("", 16), ("valid", 0), ("valid", 65)])
+    def test_stable_hex_digest_rejects_invalid_shape(self, namespace: str, length: int):
+        """Invalid namespaces and digest widths should fail at the helper boundary."""
+        with pytest.raises(ValueError):
+            stable_hex_digest(namespace, "part", length=length)
 
 
 class TestRedactSecrets:
