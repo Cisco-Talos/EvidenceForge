@@ -570,6 +570,8 @@ class TestProxyActionSemantics:
             tunnel_setup_cs_bytes=300,
             tunnel_setup_sc_bytes=180,
             tunnel_setup_time_taken_ms=100,
+            client_transport_cs_bytes=5000,
+            client_transport_sc_bytes=8000,
         )
         event = OccurrenceBuilder(
             timestamp=connected_at,
@@ -582,6 +584,8 @@ class TestProxyActionSemantics:
                 protocol="tcp",
                 service="http",
                 zeek_uid="Cproxybounded",
+                orig_bytes=5000,
+                resp_bytes=8000,
                 duration=plan.client_duration_seconds,
             ),
             proxy=ProxyContext(
@@ -611,6 +615,8 @@ class TestProxyActionSemantics:
         )
         setup_offset_ms = round((tunnel_requested_at - connected_at).total_seconds() * 1000)
         assert setup_offset_ms + connect["tunnel_duration_ms"] <= 1000
+        assert connect["cs_bytes"] + connect["tunnel_cs_bytes"] == 5000
+        assert connect["sc_bytes"] + connect["tunnel_sc_bytes"] == 8000
 
     def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
         from evidenceforge.formats import load_format

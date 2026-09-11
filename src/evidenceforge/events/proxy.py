@@ -44,6 +44,8 @@ class ProxyTransactionPlan:
     tunnel_setup_cs_bytes: int = 0
     tunnel_setup_sc_bytes: int = 0
     tunnel_setup_time_taken_ms: int = 0
+    client_transport_cs_bytes: int | None = None
+    client_transport_sc_bytes: int | None = None
 
     def __post_init__(self) -> None:
         """Validate conditional phase ordering and terminal semantics."""
@@ -123,6 +125,14 @@ class ProxyTransactionPlan:
             < 0
         ):
             raise ValueError("Proxy tunnel setup accounting must be non-negative")
+        if any(
+            value is not None and value < 0
+            for value in (
+                self.client_transport_cs_bytes,
+                self.client_transport_sc_bytes,
+            )
+        ):
+            raise ValueError("Proxy client transport accounting must be non-negative")
 
     @property
     def time_taken_ms(self) -> int:

@@ -332,6 +332,12 @@ class ExplicitProxyRequestPreparation:
             manager.cancel_prepared_admission(token)
             raise StateError("Deferred proxy request returned an incompatible result")
         aligned = _aligned_reused_plan(plan, reuse)
+        budget = self.snapshot.application_snapshot.identity.budget
+        aligned = replace(
+            aligned,
+            client_transport_cs_bytes=budget.initiator_bytes,
+            client_transport_sc_bytes=budget.responder_bytes,
+        )
         return token, replace(
             self.proxy_context,
             transaction=aligned,
@@ -475,6 +481,7 @@ class ProxyTransactionExecutor(Protocol):
         proxy_bypass: bool = False,
         suppress_direct_http_channel: bool = False,
         preserve_http_outcome: bool = False,
+        preserve_explicit_payload: bool = False,
         process_image: str | None = None,
         parent_action_group_id: str | None = None,
         preserve_start_time: bool = False,
@@ -728,6 +735,18 @@ class ProxyTransactionActionBundle:
                     phase_plan.tunnel_setup_sc_bytes + child_sc_bytes + future_resp_bytes
                 )
 
+        client_http_orig_floor, client_http_resp_floor = generator_utils._http_flow_payload_bytes(
+            client_http
+        )
+        client_orig_bytes = max(client_orig_bytes, client_http_orig_floor)
+        client_resp_bytes = max(client_resp_bytes, client_http_resp_floor)
+        phase_plan = replace(
+            phase_plan,
+            client_transport_cs_bytes=client_orig_bytes,
+            client_transport_sc_bytes=client_resp_bytes,
+        )
+        proxy_context = replace(proxy_context, transaction=phase_plan)
+
         client_duration = phase_plan.client_duration_seconds
         egress_time = phase_plan.origin_connect_at
         egress_duration = phase_plan.origin_duration_seconds
@@ -805,6 +824,7 @@ class ProxyTransactionActionBundle:
             proxy_bypass=True,
             suppress_direct_http_channel=True,
             preserve_http_outcome=True,
+            preserve_explicit_payload=True,
             process_image=client_process_image,
             suppress_source_pid_inference=suppress_client_pid_inference,
             parent_action_group_id=self.anchor.stable_id,

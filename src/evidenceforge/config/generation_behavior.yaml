@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 38
+current_revision: 39
 history_start_revision: 1
-behavior_surface_sha256: "830a3f817076b6db4edeb1b1234236b8d94a977494041326ea42adcf91598aed"
+behavior_surface_sha256: "ccf193ccfc507846ebf4044d8b0af7a6e3b8116add68bb3a4549f20303987776"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -414,3 +414,16 @@ changes:
     formats:
       - zeek_files
     summary: Requires every canonical file digest result to declare its matching Zeek analyzer and adapts both SMB execution paths to publish MIME plus MD5, SHA1, and SHA256 provenance.
+  - revision: 39
+    id: explicit-proxy-authoritative-client-byte-ledger
+    impact: material
+    domains:
+      - browser-sessions
+      - explicit-proxy-transactions
+      - network-transport
+      - cross-source-correlation
+    formats:
+      - proxy_access
+      - zeek_conn
+      - ecar
+    summary: Derives inspected CONNECT tunnel counters from the exact carrying client transport so proxy, Zeek, and endpoint wire-byte views consume one canonical directional payload ledger.
