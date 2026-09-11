@@ -1014,8 +1014,8 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
     assert rows["destination-tap"][0]["id.orig_h"] == "198.51.100.25"
 
 
-def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> None:
-    """DNS query and response timing stays within a very short parent flow."""
+def test_single_exchange_dns_shares_packet_anchors_at_every_sensor(tmp_path) -> None:
+    """One-query UDP DNS rows share their request and response packet anchors."""
 
     event = _network_event(start=T0, stable_id="network:short-dns")
     event.timestamp = T0 + timedelta(milliseconds=2)
@@ -1042,8 +1042,8 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
         phase="start",
     )
     event._sensor_hostnames_by_format = {
-        "zeek_conn": ["source-tap"],
-        "zeek_dns": ["source-tap"],
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_dns": ["source-tap", "destination-tap"],
     }
     event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
         event,
@@ -1053,12 +1053,12 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter = ZeekEmitter(
         load_format("zeek_conn"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
     dns_emitter = ZeekDnsEmitter(
         load_format("zeek_dns"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
 
     conn_emitter.emit(event)
@@ -1066,10 +1066,11 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter.close()
     dns_emitter.close()
 
-    conn = json.loads((tmp_path / "source-tap" / "conn.json").read_text())
-    dns = json.loads((tmp_path / "source-tap" / "dns.json").read_text())
-    assert dns["ts"] == pytest.approx(conn["ts"])
-    assert dns["ts"] + dns["rtt"] <= conn["ts"] + conn["duration"]
+    for sensor in ("source-tap", "destination-tap"):
+        conn = json.loads((tmp_path / sensor / "conn.json").read_text())
+        dns = json.loads((tmp_path / sensor / "dns.json").read_text())
+        assert dns["ts"] == pytest.approx(conn["ts"])
+        assert dns["ts"] + dns["rtt"] == pytest.approx(conn["ts"] + conn["duration"])
 
 
 def test_http_companion_never_precedes_planned_sensor_connection(tmp_path) -> None:

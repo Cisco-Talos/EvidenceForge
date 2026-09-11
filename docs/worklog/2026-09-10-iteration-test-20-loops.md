@@ -174,3 +174,27 @@
   deliberation. Final scores 70/78/82/80 (mean 77.50), unanimously Synthetic.
 - Next highest-impact families: packet-derived Zeek DNS query/response identity, unified
   SSH session/history/process timing, and KDC-local AS/TGS/logon ordering.
+
+## Loop 60 Family Contract
+
+### Packet-derived single-exchange UDP DNS identity
+
+- **Classification:** `family_level`; loop-59 `hard_contradiction` in the canonical DNS
+  transaction and source-observation family.
+- **Owning abstraction:** `NetworkTransactionPlanner` owns canonical DNS request/response packet
+  timing; `NetworkObservationPlanner` freezes the same packet anchors for each Zeek sensor.
+- **Invariant:** for a response-bearing UDP DNS transaction rendered with history `Dd` and exactly
+  one origin and one response packet, `dns.ts == conn.ts` and
+  `dns.ts + dns.rtt == conn.ts + conn.duration` at every sensor. Query and response are the two
+  packets that define the transport interval; neither source projection nor the emitter may add
+  an independent analyzer delay or close slack. TCP DNS, retransmitted/multipacket UDP DNS, and
+  unanswered queries retain their protocol-specific phase models.
+- **Entry paths:** authored `DnsContext` connections, synthesized resolver transactions, baseline
+  DNS, explicit-proxy destination lookups, causal DNS prerequisites, and direct emitter fixtures.
+- **Consumers:** Zeek conn/dns rows, canonical network state, source-window admission, deterministic
+  evaluation, proxy DNS dependencies, and packet-level forensic probes.
+- **Layer rationale:** the contradiction is shared request/response packet truth. Repairing only
+  `dns.log` would leave canonical duration and `conn.log` inconsistent; retaining emitter-local
+  jitter would recreate the defect after sensor projection.
+- **Sibling risks:** DNS retries, truncation/TCP fallback, response loss, and true multipacket
+  exchanges must not be collapsed into the single-exchange contract.

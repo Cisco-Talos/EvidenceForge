@@ -3046,8 +3046,8 @@ def test_zeek_dns_timestamp_stays_inside_rendered_conn_lifetime(tmp_path: Path) 
     conn_row = json.loads(conn_path.read_text().splitlines()[0])
     dns_row = json.loads(dns_path.read_text().splitlines()[0])
 
-    assert conn_row["ts"] <= dns_row["ts"] <= conn_row["ts"] + event.network.duration
-    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
+    assert dns_row["ts"] == pytest.approx(conn_row["ts"])
+    assert dns_row["ts"] + dns_row["rtt"] == pytest.approx(conn_row["ts"] + conn_row["duration"])
 
 
 def test_zeek_dns_rtt_fits_exact_rendered_conn_lifetime(tmp_path: Path) -> None:
@@ -3078,8 +3078,8 @@ def test_zeek_dns_rtt_fits_exact_rendered_conn_lifetime(tmp_path: Path) -> None:
     conn_row = json.loads(conn_path.read_text().splitlines()[0])
     dns_row = json.loads(dns_path.read_text().splitlines()[0])
 
-    assert conn_row["ts"] <= dns_row["ts"]
-    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
+    assert dns_row["ts"] == pytest.approx(conn_row["ts"])
+    assert dns_row["ts"] + dns_row["rtt"] == pytest.approx(conn_row["ts"] + conn_row["duration"])
 
 
 def test_migrated_emitters_do_not_use_local_timing_helpers() -> None:

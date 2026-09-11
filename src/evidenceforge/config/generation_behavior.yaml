@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 22
+current_revision: 23
 history_start_revision: 1
-behavior_surface_sha256: "23b4c5d8bc2fec6661d5dfadd9b64483bbce3605b58702921c24a94b8ff64c57"
+behavior_surface_sha256: "fc4e39137f123383354ba4ec0ededa67f6c9dda8bb18ed92224c39673c7051d4"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -232,3 +232,13 @@ changes:
       - zeek_http
       - zeek_ssl
     summary: Preserves CONNECT-before-origin packet ordering at every shared sensor and renders one canonical Windows process token and RDP LogonGuid across endpoint sources.
+  - revision: 23
+    id: packet-derived-single-exchange-dns-timing
+    impact: material
+    domains:
+      - dns-transport-lifecycle
+      - network-source-timing
+    formats:
+      - zeek_conn
+      - zeek_dns
+    summary: Makes one-query one-response UDP DNS rows share exact request and response packet anchors with their parent connection at every sensor.

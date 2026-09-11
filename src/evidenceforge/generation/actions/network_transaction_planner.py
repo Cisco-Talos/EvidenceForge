@@ -1461,7 +1461,10 @@ class NetworkTransactionPlanner:
         request: NetworkConnectionRequest,
         rtt_seconds: float,
     ) -> float:
-        """Return DNS RTT plus typed transport teardown slack."""
+        """Return packet-owned DNS transport duration for the requested protocol."""
+
+        if request.proto == "udp":
+            return rtt_seconds
 
         return rtt_seconds + self._sample_duration_seconds(
             request,
