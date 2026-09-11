@@ -63,3 +63,17 @@ def test_release_slow_workflow_excludes_soak_diagnostics() -> None:
     assert "uv run pytest -m slow --no-cov" in workflow
     assert "--include-slow" not in workflow
     assert "--include-soak" not in workflow
+
+
+def test_release_slow_workflow_shards_tests_and_parallelizes_portability() -> None:
+    """The release lane preserves all slow tests across four independent shards."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = (repo_root / ".github" / "workflows" / "release-slow.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "--slow-shard-count 4" in workflow
+    assert '--slow-shard-index "${{ matrix.shard_index }}"' in workflow
+    assert workflow.count("shard_index:") == 4
+    assert "checkpoint-portability:" in workflow
+    assert "needs: [slow-comprehensive, checkpoint-portability]" in workflow
