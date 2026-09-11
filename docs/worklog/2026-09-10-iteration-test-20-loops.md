@@ -734,3 +734,53 @@
   not recur in rendered probes or any initial expert report.
 - **Next family:** preserve canonical HTTP authority and Referer semantics across explicit-proxy
   client and origin legs; six Host mutations and one isolated cross-source Referer mismatch remain.
+
+## Loop 71 Family Contract
+
+### Canonical HTTP authority and headers across explicit-proxy legs
+
+- **Classification:** `family_level`; loop-70 `hard_contradiction` across explicit-proxy client,
+  proxy-access, and origin-facing Zeek HTTP evidence.
+- **Owning abstraction:** the explicit-proxy transaction bundle owns the logical HTTP request and
+  its canonical origin authority, Referer, and user-agent before either transport leg is rendered.
+- **Invariant:** one logical proxied HTTP request preserves the same canonical authority and
+  request-header semantics across the client-to-proxy and proxy-to-origin legs unless an explicit
+  modeled transformation owns the change. The origin-facing Host must identify the selected origin,
+  and a present Referer must not disappear on one sibling source.
+- **Entry paths:** cleartext absolute-form proxy requests, HTTPS CONNECT transactions, browser and
+  command-line clients, uploads, package-manager traffic, cache hits, denies, gateway failures, and
+  direct transaction-bundle calls.
+- **Consumers:** proxy access rendering, Zeek HTTP on both legs, origin DNS and TLS identity, web
+  access logs, route selection, connection correlation, source observation, and blind network
+  review.
+- **Layer rationale:** emitters consume transaction fields independently, but the contradiction is
+  created when the bundle derives or forwards different authority/header values for sibling legs.
+  Repair the shared transaction truth rather than normalizing one rendered source afterward.
+- **Sibling risks:** preserve absolute-form client URIs versus origin-form outbound URIs, CONNECT
+  authority ports, intentional privacy/header stripping when explicitly modeled, cache/deny paths
+  with no origin leg, deterministic retries, and valid DNS/TLS routing when the public service uses
+  aliases or CDN addresses.
+
+## Loop 71 Result
+
+- **Implementation commit:** `85e118f9c` (`fix: preserve proxy HTTP authority and headers`).
+- **Behavior contract:** revision 35,
+  `3a3042fa9936afb29d4c885dffe6b13c04a38866bcec70a2b0076fdfd81299ec`.
+- **Verification:** 8,404 routine tests passed, 5 skipped, and 2,009 deselected; Ruff check and
+  format check passed across 769 files; all 92 configuration files validated; the scenario retained
+  only its existing 24 informational pivot notes.
+- **Rendered invariant:** 97 Zeek/proxy Referer joins and 45 cleartext client/origin HTTP leg joins
+  had zero mismatches. All six cited authority mutations and the isolated curl Referer disagreement
+  were repaired.
+- **Automated evaluation:** 97.04960531289694 PASS across 124,332 records (parseability
+  99.99919570183059, plausibility 96.85765800043988, causality 97.12464221795368, timing
+  92.77135773874691).
+- **Initial panel:** Threat Hunter 44 (Inconclusive, 78 verdict confidence), Detection Engineer 97
+  (Synthetic, 95), Network Forensics 89 (Synthetic, 94), Host/EDR 78 (Synthetic, 84); mean 77.0.
+- **Deliberation:** triggered by verdict disagreement and a 53-point spread. Revised scores were
+  90, 98, 94, and 90; mean 93.0 with a unanimous Synthetic verdict.
+- **Target-family disposition:** the loop-70 proxy authority and Referer contradictions did not
+  recur in rendered probes or any initial expert report.
+- **Next family:** bind each CONNECT tunnel's advertised duration and close to the exact carrying
+  client-to-proxy TCP interval; 416 of 639 uniquely keyed completed sessions currently violate the
+  outer-transport lifecycle, including 262 exact bidirectional-byte matches.
