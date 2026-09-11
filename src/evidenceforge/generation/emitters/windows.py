@@ -1143,6 +1143,41 @@ class WindowsEventEmitter(LogEmitter):
             normalized[field] = normalize_windows_id_value(value)
         return normalized
 
+    def _provider_execution_thread_id(
+        self,
+        event_data: dict[str, Any],
+        event: CanonicalOccurrence,
+    ) -> int:
+        """Return one host/provider-scoped Security execution thread identity."""
+
+        host = self._get_host(event)
+        provider_pid_value = normalize_windows_id_value(event_data.get("ExecutionProcessID", 0))
+        try:
+            provider_pid = int(provider_pid_value)
+        except (TypeError, ValueError):
+            provider_pid = 0
+        timestamp = event_data.get("TimeCreated")
+        source_time = ensure_utc(timestamp) if isinstance(timestamp, datetime) else event.timestamp
+        provider_scope = f"{host.hostname.casefold()}:{provider_pid}"
+        lifetime_seconds = 11 * 60 + (_stable_seed(f"windows-thread-life:{provider_scope}") % 1201)
+        lifecycle_epoch = int(source_time.timestamp()) // lifetime_seconds
+        if provider_pid == 4:
+            pool_size = 32 + (_stable_seed(f"windows-thread-pool:{provider_scope}") % 25)
+        else:
+            pool_size = 8 + (_stable_seed(f"windows-thread-pool:{provider_scope}") % 17)
+        occurrence_identity = event.occurrence_id or (
+            f"{event.event_type}:{event.timestamp.isoformat()}:"
+            f"{event_data.get('EventID', '')}:{event_data.get('Computer', '')}"
+        )
+        slot = (
+            _stable_seed(
+                f"windows-thread-slot:{provider_scope}:{lifecycle_epoch}:{occurrence_identity}"
+            )
+            % pool_size
+        )
+        thread_seed = _stable_seed(f"windows-thread-id:{provider_scope}:{lifecycle_epoch}:{slot}")
+        return 4 * (64 + (thread_seed % 1_000_000))
+
     def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Windows fields."""
         host = event.src_host or event.dst_host
@@ -2071,7 +2106,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionProcessID": 4,
             "ExecutionThreadID": rng.randint(50, 200),
             "ProcessID": pid,
-            "Application": self._to_device_path(image),
+            "Application": self._to_device_path(image, host),
             "Direction": direction,
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,
@@ -2134,12 +2169,23 @@ class WindowsEventEmitter(LogEmitter):
         return "outbound_default" if is_outbound else "inbound_default"
 
     @staticmethod
-    def _to_device_path(path: str) -> str:
-        """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+    def _to_device_path(path: str, host: HostContext | None = None) -> str:
+        """Convert a drive path to one installation-specific NT device path."""
         if path == "System":
             return path
         if path and len(path) > 2 and path[1] == ":":
-            return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
+            if host is None:
+                volume_number = 1
+            else:
+                drive_offset = max(0, ord(path[0].upper()) - ord("C"))
+                installation_base = 1 + (
+                    _stable_seed(
+                        f"windows-volume-base:{host.hostname.casefold()}:{host.os.casefold()}"
+                    )
+                    % 8
+                )
+                volume_number = installation_base + drive_offset
+            return f"\\device\\harddiskvolume{volume_number}\\{path[3:]}".lower()
         return path.lower()
 
     @staticmethod
@@ -2716,7 +2762,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
-        event_data = self._normalize_execution_ids(event_data)
+        event_data = dict(event_data)
         event_data.pop("_TimingFinalized", None)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
@@ -2726,7 +2772,12 @@ class WindowsEventEmitter(LogEmitter):
             event_id = coerce_windows_event_id(event_data.get("EventID"))
             phase = self._timing_phase(canonical_event, event_id)
             event_data["TimeCreated"] = self._render_timestamp(canonical_event, phase)
+            event_data["ExecutionThreadID"] = self._provider_execution_thread_id(
+                event_data,
+                canonical_event,
+            )
             event_data["_TimingFinalized"] = _FROZEN_TIMING_MARKER
+        event_data = self._normalize_execution_ids(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         host_type = getattr(self._emission_context, "host_type", "")

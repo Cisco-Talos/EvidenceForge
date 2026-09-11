@@ -2749,10 +2749,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert f'<Data Name="ProcessID">{pid}</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\program files\\mozilla '
-            "firefox\\firefox.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_uses_source_native_timestamp_offset(self, format_def, temp_output):
         """WFP 5156 should render with a host-audit offset from the canonical connection."""
@@ -2936,10 +2937,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="ProcessID">1184</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\'
-            "svchost.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_skips_unresolved_non_system_pid(self, format_def, temp_output):
         """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
@@ -2999,6 +3001,83 @@ class TestWindowsEventEmitter:
             WindowsEventEmitter._to_device_path(r"\device\harddiskvolume1\test.exe")
             == r"\device\harddiskvolume1\test.exe"
         )
+
+    def test_device_path_mapping_is_stable_per_installation_and_drive(self):
+        """Canonical host paths should use stable installation-local volume identities."""
+        hosts = [
+            HostContext(
+                hostname=f"WKS-{index:02d}",
+                ip=f"10.0.0.{index}",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn=f"WKS-{index:02d}.corp.local",
+            )
+            for index in range(1, 17)
+        ]
+
+        c_paths = {
+            WindowsEventEmitter._to_device_path(r"C:\Windows\System32\svchost.exe", host)
+            for host in hosts
+        }
+        first_c_path = WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+        first_d_path = WindowsEventEmitter._to_device_path(
+            r"D:\Program Files\agent.exe",
+            hosts[0],
+        )
+
+        assert len(c_paths) > 1
+        assert all(path.startswith(r"\device\harddiskvolume") for path in c_paths)
+        assert first_c_path != first_d_path
+        assert first_c_path == WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+
+    def test_provider_execution_threads_are_host_scoped_and_not_one_finite_pool(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Canonical provider thread populations should be aligned and host-specific."""
+        emitter = WindowsEventEmitter(format_def, temp_output)
+
+        def thread_ids(hostname: str) -> set[int]:
+            host = HostContext(
+                hostname=hostname,
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn=f"{hostname}.corp.local",
+            )
+            values: set[int] = set()
+            for minute in range(360):
+                event_id = 4624 if minute % 2 == 0 else 4625
+                event = OccurrenceBuilder(
+                    timestamp=datetime(2024, 1, 15, tzinfo=UTC) + timedelta(minutes=minute),
+                    event_type="logon" if event_id == 4624 else "failed_logon",
+                    src_host=host,
+                )
+                values.add(
+                    emitter._provider_execution_thread_id(
+                        {"EventID": event_id, "ExecutionProcessID": 600},
+                        event,
+                    )
+                )
+            return values
+
+        dc_01_threads = thread_ids("DC-01")
+        dc_02_threads = thread_ids("DC-02")
+
+        assert dc_01_threads == thread_ids("DC-01")
+        assert len(dc_01_threads) > 38
+        assert len(dc_02_threads) > 38
+        assert dc_01_threads != dc_02_threads
+        assert all(thread_id % 4 == 0 for thread_id in dc_01_threads | dc_02_threads)
 
     def test_timestamp_100ns_precision(self, format_def, temp_output):
         """Test that timestamps have EVTX-like 100ns precision."""
