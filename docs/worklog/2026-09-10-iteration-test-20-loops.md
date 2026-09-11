@@ -910,3 +910,54 @@
   case-insensitively without rewriting source-native spelling; keep observation-driven analyzer
   loss atomic with digest loss; do not imply that a digest was computed when its field is empty;
   retain stable content identity, FUID, and multi-sensor correlation.
+
+## Loop 74 Result
+
+- **Implementation commit:** `8fca52b68` (`fix: align Zeek file digests with analyzers`).
+- **Behavior contract:** revision 38,
+  `830a3f817076b6db4edeb1b1234236b8d94a977494041326ea42adcf91598aed`.
+- **Verification:** 8,409 routine tests passed, 5 skipped, and 2,009 deselected; focused Zeek,
+  SMB/storage, observation, and behavior-manifest tests passed; Ruff check and format check passed;
+  all 92 configuration files validated; the scenario retained only its existing 24 informational
+  pivot notes.
+- **Rendered invariant:** all 1,244 digest-bearing rows among 2,097 Zeek file observations declared
+  every corresponding analyzer, with zero provenance violations across SSL, SMB, HTTP, and SMTP.
+- **Automated evaluation:** 96.47762068969884 PASS across 127,848 records (parseability
+  99.99921782116263, plausibility 96.85306697612519, causality 94.47421150278294, timing
+  93.2301786181151).
+- **Initial panel:** Threat Hunter 47 (Inconclusive, 82 verdict confidence), Detection Engineer 74
+  (Synthetic, 86), Network Forensics 84 (Synthetic, 90), Host/EDR 66 (Synthetic, 82); mean 67.75.
+- **Deliberation:** triggered by verdict disagreement and a 37-point spread. Revised scores were
+  69, 80, 82, and 74; mean 76.25 with unanimous Synthetic verdicts.
+- **Target-family disposition:** the Loop 73 digest/analyzer provenance defect did not recur in the
+  rendered probe or any expert report.
+- **Next family:** reconcile explicit-proxy tunnel counters and their exact client-to-proxy Zeek
+  transport through one authoritative byte ledger.
+
+## Loop 75 Family Contract
+
+### Authoritative explicit-proxy client-transport byte ledger
+
+- **Classification:** `family_level`; Loop 74 `hard_contradiction` across 430 of 719 joined
+  inspected CONNECT tunnels, including 118 gross zero-loss or high-margin mismatches.
+- **Owning abstraction:** the explicit-proxy transaction bundle and channel manager own one
+  client-to-proxy transport budget and the completed child-request ledger; the network connection
+  bundle owns the canonical TCP payload totals carried by that ledger.
+- **Invariant:** for every completed inspected tunnel, CONNECT control bytes plus all completed
+  tunneled request bytes equal the canonical client transport's directional payload totals. A
+  deliberately unobserved proxy request must remain represented in canonical tunnel accounting;
+  observation may not silently create a second byte truth.
+- **Entry paths:** initial inspected HTTPS request, persistent child reuse, request-local fallback,
+  capacity replacement, timeout/close, source-observation projection, right-censored sessions,
+  checkpoint recovery, and direct transaction-bundle calls.
+- **Consumers:** proxy access CONNECT and child rows, Zeek client `conn.log`, eCAR FLOW, firewall
+  accounting, channel budgets and receipts, timeout retirement, evaluator joins, and blind
+  same-tuple byte probes.
+- **Layer rationale:** the proxy emitter currently totals observed child rows while the physical
+  transport retains an independently forecast browser-group payload. The contract must reconcile
+  actual committed operations with the parent budget at the bundle/channel boundary rather than
+  inventing compensating bytes in either renderer.
+- **Sibling risks:** preserve CONNECT control-message scope; do not double-count upload bodies or
+  TLS framing; keep proxy-origin egress accounting independent; retain valid request-local fallbacks,
+  process lifetime, UID/source-port identity, observation semantics, deterministic recovery, and
+  exact channel capacity enforcement.
