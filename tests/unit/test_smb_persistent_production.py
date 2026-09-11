@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -593,6 +594,30 @@ def test_generate_smb_activity_uses_one_persistent_windows_root(
         "core-zeek/smb_files.json",
         "core-zeek/smb_mapping.json",
     )
+
+
+def test_persistent_smb_tree_connect_has_packet_stage_microsecond_texture(
+    windows_read_control: tuple[tuple[str, bytes], ...],
+) -> None:
+    """Tree mapping timing stays bounded without preserving the transport's millisecond residue."""
+
+    payloads = dict(windows_read_control)
+    connections = [
+        json.loads(line, parse_float=Decimal)
+        for line in payloads["core-zeek/conn.json"].decode("utf-8").splitlines()
+    ]
+    mappings = [
+        json.loads(line, parse_float=Decimal)
+        for line in payloads["core-zeek/smb_mapping.json"].decode("utf-8").splitlines()
+    ]
+    assert len(mappings) == 1
+    mapping = mappings[0]
+    connection = next(row for row in connections if row["uid"] == mapping["uid"])
+    delta_microseconds = (mapping["ts"] - connection["ts"]) * Decimal(1_000_000)
+
+    assert delta_microseconds == delta_microseconds.to_integral_value()
+    assert Decimal(42_074) <= delta_microseconds <= Decimal(185_994)
+    assert delta_microseconds % Decimal(1_000) != 0
 
 
 def test_persistent_windows_smb_logon_renders_canonical_network_identity(

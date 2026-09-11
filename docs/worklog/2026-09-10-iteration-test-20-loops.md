@@ -689,3 +689,25 @@
   in the rendered probe or any initial expert report.
 - **Next family:** replace the 120-of-120 integer-millisecond SMB mapping offsets with
   source-native, microsecond-textured tree-connect timing owned by the SMB action/timing layer.
+
+## Loop 70 Family Contract
+
+### Source-native SMB tree-connect packet timing
+
+- **Classification:** `family_level`; loop-69 `distribution_texture` across every rendered core
+  Zeek SMB mapping.
+- **Owning abstraction:** the SMB action bundle and its timing planner own authentication and tree
+  connection phase timestamps before source-native rendering.
+- **Invariant:** an SMB tree mapping must occur after its parent transport is established and before
+  later file operations/transport close, but its packet-stage timestamp must not be restricted to an
+  integer-millisecond delta that preserves the TCP connection start's microsecond residue.
+- **Entry paths:** baseline SMB client/server activity, legitimate lateral movement, typed SMB file
+  activity, Windows remote administration, domain-policy/SYSVOL access, and direct bundle tests.
+- **Consumers:** canonical `smb_tree_connect` events, Zeek `smb_mapping`, Windows share audit,
+  Linux Samba syslog, file-operation timing, source observation, and deterministic replay.
+- **Layer rationale:** the exact lattice is introduced when the bundle adds integer-millisecond auth
+  and tree delays to the canonical transport start. Emitters faithfully preserve that time, so the
+  repair belongs in bundle timing rather than Zeek formatting.
+- **Sibling risks:** preserve deterministic output across workers and hash seeds; keep auth before
+  tree-connect, tree-connect before file operations, every SMB child inside transport bounds, and
+  source-local multi-sensor timing relationships valid.

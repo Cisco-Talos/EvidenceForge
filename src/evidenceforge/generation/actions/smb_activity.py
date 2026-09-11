@@ -1066,9 +1066,27 @@ class SmbActivityActionBundle:
             dst_ip=server.ip,
             dst_port=445,
         )
-        auth_delay_ms = self.rng.randint(28, 96)
-        tree_delay_ms = self.rng.randint(14, 88)
-        auth_time = self.transport_start + timedelta(milliseconds=auth_delay_ms)
+        timing = self._timing_planner()
+        timing_lifecycle_id = transaction_id or transport_uid
+        auth_delay = timing.packet_observation_delta(
+            relationship_key="smb.transport_to_auth",
+            stable_id=f"{self.anchor.stable_id}:authentication",
+            minimum_ms=28,
+            maximum_ms=96,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="authentication",
+        )
+        tree_delay = timing.packet_observation_delta(
+            relationship_key="smb.auth_to_tree_connect",
+            stable_id=f"{self.anchor.stable_id}:tree-connect",
+            minimum_ms=14,
+            maximum_ms=88,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="tree_connect",
+        )
+        auth_time = self.transport_start + auth_delay
         auth_session_ref = stable_uuid(
             "smb-auth-session",
             self.anchor.stable_id,
@@ -1164,11 +1182,7 @@ class SmbActivityActionBundle:
         byte_allocations = self._transport_byte_allocations(selected)
         total_orig_bytes = sum(orig for orig, _resp in byte_allocations)
         total_resp_bytes = sum(resp for _orig, resp in byte_allocations)
-        operation_start = (
-            auth_time
-            + timedelta(milliseconds=tree_delay_ms)
-            + timedelta(seconds=self._session_setup_seconds())
-        )
+        operation_start = auth_time + tree_delay + timedelta(seconds=self._session_setup_seconds())
         close_time = self.transport_start + timedelta(seconds=max(0.2, duration - 0.02))
         first_timing = self._operation_timing(
             selected[0],
@@ -1211,7 +1225,7 @@ class SmbActivityActionBundle:
             smb_platform_fields = self._smb_platform_fields(share, server)
             self._emit_phase(
                 event_type="smb_tree_connect",
-                timestamp=auth_time + timedelta(milliseconds=tree_delay_ms),
+                timestamp=auth_time + tree_delay,
                 network=net,
                 server=server,
                 client=client_system,
@@ -1740,8 +1754,26 @@ class SmbActivityActionBundle:
         authority = self.executor._persistent_smb_terminal_continuations
         root_facts = authority.root_facts(terminal_continuation)
         if root_facts.phase == "reserved":
-            auth_time = self.request.time + timedelta(milliseconds=self.rng.randint(28, 96))
-            tree_time = auth_time + timedelta(milliseconds=self.rng.randint(14, 88))
+            timing = self._timing_planner()
+            timing_lifecycle_id = self.anchor.stable_id
+            auth_time = self.request.time + timing.packet_observation_delta(
+                relationship_key="smb.transport_to_auth",
+                stable_id=f"{self.anchor.stable_id}:authentication",
+                minimum_ms=28,
+                maximum_ms=96,
+                host=server.hostname,
+                lifecycle_id=timing_lifecycle_id,
+                sample_key="authentication",
+            )
+            tree_time = auth_time + timing.packet_observation_delta(
+                relationship_key="smb.auth_to_tree_connect",
+                stable_id=f"{self.anchor.stable_id}:tree-connect",
+                minimum_ms=14,
+                maximum_ms=88,
+                host=server.hostname,
+                lifecycle_id=timing_lifecycle_id,
+                sample_key="tree_connect",
+            )
             close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
             auth_session_ref = stable_uuid(
                 "persistent-smb-auth-session",

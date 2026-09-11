@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 33
+current_revision: 34
 history_start_revision: 1
-behavior_surface_sha256: "a1de251c88268c81cd920a8d23ff49da1ca08eb36b1b35a8d9f6067c2f28f7ff"
+behavior_surface_sha256: "9958d695d3e7470381cd44a9e91869dee545bb45b8eed53c59bcdaddd5f4ca9d"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -357,3 +357,15 @@ changes:
       - ecar
       - syslog
     summary: Reuses the sole controlling terminal already owned by a continuing Linux interactive or SSH session so one persistent shell cannot publish sudo children across multiple pts identities.
+  - revision: 34
+    id: source-native-smb-tree-connect-timing
+    impact: material
+    domains:
+      - smb-session-lifecycle
+      - network-protocol-timing
+      - source-timing
+    formats:
+      - zeek_smb_mapping
+      - windows_event_security
+      - syslog
+    summary: Samples SMB authentication and tree-connect packet-stage gaps through the shared timing runtime with microsecond texture while preserving canonical transport and file-operation ordering.
