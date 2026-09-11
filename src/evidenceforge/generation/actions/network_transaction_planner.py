@@ -3737,7 +3737,14 @@ class NetworkTransactionPlanner:
         if not suppress_application_side_effects and http is not None and conn_state == "SF":
             duration = self._completed_http_duration_seconds(request, duration)
 
-        if not caller_provided_duration:
+        dns_owns_duration = (
+            service == "dns"
+            and proto in {"udp", "tcp"}
+            and dst_port == 53
+            and dns is not None
+            and dns.rtt is not None
+        )
+        if not caller_provided_duration and not dns_owns_duration:
             duration = self._generator_owned_duration_seconds(request, duration)
         kerberos_audit_count = 0
         if (

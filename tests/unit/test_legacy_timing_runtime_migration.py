@@ -420,6 +420,8 @@ def test_migrated_timing_sibling_callers_are_exact_and_runtime_wired() -> None:
     assert observed == {
         ("actions/network_transaction_planner.py", "_execute", "_zeek_conn_observation_time"),
         ("actions/rdp_session.py", "execute", "_target_logon_time"),
+        ("actions/smb_activity.py", "_execute_persistent_windows", "packet_observation_delta"),
+        ("actions/smb_activity.py", "execute", "packet_observation_delta"),
         ("actions/ssh_session.py", "_resolve_responder_pid", "_predicted_transport_open_time"),
         ("actions/ssh_session.py", "_transport_open_time", "packet_observation_delta"),
         ("actions/ssh_session.py", "execute_with_identity", "_plan_transport"),

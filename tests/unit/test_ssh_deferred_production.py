@@ -5014,8 +5014,8 @@ def test_exact_close_freezes_receiver_descendants_children_first_before_parent(
     assert [(row["object"], row["action"], row.get("pid")) for row in terminal_rows] == [
         ("PROCESS", "TERMINATE", child_pid),
         ("PROCESS", "TERMINATE", shell_pid),
-        ("USER_SESSION", "LOGOUT", None),
         ("PROCESS", "TERMINATE", receiver_pid),
+        ("USER_SESSION", "LOGOUT", None),
     ]
     expected_process_objects = {
         child_pid: child_identity.object_id,

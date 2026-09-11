@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 40
+current_revision: 42
 history_start_revision: 1
-behavior_surface_sha256: "612484f5ef8f70dce7a1f34294089f52b865c6efe2f5b7d92d8d3ff145c4976e"
+behavior_surface_sha256: "6ed79f5fc695e1a385379427e6c4601cd2dcd4cd674546ba73621f6ed87f2caa"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -443,3 +443,25 @@ changes:
       - windows_event_sysmon
       - zeek
     summary: Retains process owners through canonical dependent connections, gates catalog releases by scenario date, renders SMB browse phases as directory operations, and preserves source-visible workstation lock dwell and re-authentication order.
+  - revision: 41
+    id: dns-transport-duration-owned-by-rtt
+    impact: material
+    domains:
+      - dns
+      - network-protocol-timing
+      - source-timing
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Preserves the canonical DNS round-trip interval as the owning transport duration instead of re-jittering exact response-timed exchanges through generic connection defaults.
+  - revision: 42
+    id: session-terminal-release-gate-corrections
+    impact: material
+    domains:
+      - linux-session-identity
+      - process-lifecycle
+      - source-timing
+    formats:
+      - ecar
+      - syslog
+    summary: Serializes concurrent sudo TTY bootstrap claims, preserves one controlling terminal per live session, and sizes delayed SSH logout windows from the repaired visible session duration.

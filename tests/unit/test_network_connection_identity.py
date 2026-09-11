@@ -219,6 +219,9 @@ def test_network_request_identity_field_census_matches_current_public_model() ->
         "preserve_dst_ip",
         "preserve_http_outcome",
         "suppress_application_side_effects",
+        "kerberos_audit_mode",
+        "kerberos_audit_username",
+        "kerberos_audit_service_name",
         "suppress_source_pid_inference",
         "preserve_explicit_payload",
         "suppress_prereq_dns",
@@ -1377,11 +1380,11 @@ def test_network_request_identity_enforces_total_node_budget() -> None:
             member_count -= chunk_size
         return chunks
 
-    # The exact-1e8 request/email envelope consumes 79 occurrences, leaving
-    # 16,305 public payload members under the 16,384-node contract.
-    _ = _request_with_payload(payload_occurrences(16_305)).stable_id
+    # The exact-1e8 request/email envelope consumes 82 occurrences, leaving
+    # 16,302 public payload members under the 16,384-node contract.
+    _ = _request_with_payload(payload_occurrences(16_302)).stable_id
     with pytest.raises(ValueError, match="maximum of 16384 traversed nodes") as exc_info:
-        _ = _request_with_payload(payload_occurrences(16_306)).stable_id
+        _ = _request_with_payload(payload_occurrences(16_303)).stable_id
     assert type(exc_info.value) is ValueError
 
 

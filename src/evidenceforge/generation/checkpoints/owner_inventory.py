@@ -1047,6 +1047,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_checkpoint_recovery",
         "_checkpoint_synchronization_hook",
         "compiled_scenario",
+        "deployment_registry",
         "dispatcher",
         "emitters",
         "end_time",

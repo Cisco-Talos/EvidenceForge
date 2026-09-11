@@ -4729,7 +4729,7 @@ def test_strict_sudo_tty_active_claim_rejects_same_request_until_exact_retry(
     assert not generator._linux_sudo_tty_capacity_claims
 
 
-def test_strict_sudo_tty_postclaim_concurrency_retains_both_authoritative_caches(
+def test_strict_sudo_tty_postclaim_concurrency_preserves_one_session_terminal(
     tmp_path: Path,
 ) -> None:
     engine, generator, state, system = _strict_sudo_generator(tmp_path)
@@ -4776,29 +4776,36 @@ def test_strict_sudo_tty_postclaim_concurrency_retains_both_authoritative_caches
                     sudo_user="linux_user",
                     tty="pts/1",
                 )
-            second = _generate_sudo_processes(
-                generator,
-                system,
-                sudo_time=engine.start_time + timedelta(seconds=31),
-                lifecycle_group_id="sudo:postclaim-cache:second",
-                command="/usr/bin/hostname",
-                sudo_user="linux_user",
-                tty="pts/2",
-            )
+            with pytest.raises(StateError, match="active capacity claim"):
+                _generate_sudo_processes(
+                    generator,
+                    system,
+                    sudo_time=engine.start_time + timedelta(seconds=31),
+                    lifecycle_group_id="sudo:postclaim-cache:second",
+                    command="/usr/bin/hostname",
+                    sudo_user="linux_user",
+                    tty="pts/2",
+                )
         finally:
             release_first.set()
         first = first_future.result(timeout=10)
+        second = _generate_sudo_processes(
+            generator,
+            system,
+            sudo_time=engine.start_time + timedelta(seconds=31),
+            lifecycle_group_id="sudo:postclaim-cache:retry",
+            command="/usr/bin/hostname",
+            sudo_user="linux_user",
+            tty="pts/2",
+        )
 
     materialize_session.assert_called_once()
     assert first[0] > 0 and first[1] is not None and first[3] == "pts/1"
-    assert second[0] > 0 and second[1] is not None and second[3] == "pts/2"
+    assert second[0] > 0 and second[1] is not None and second[3] == "pts/1"
     sessions = state.get_sessions_for_user("linux_user")
     assert len(sessions) == 1
     session = sessions[0]
-    expected_keys = {
-        first_key,
-        (system.hostname, "linux_user", "pts/2"),
-    }
+    expected_keys = {first_key}
     assert set(generator._linux_sudo_tty_assignments) >= expected_keys
     assert {
         generator._linux_sudo_tty_owners[(system.hostname, key[2])] for key in expected_keys

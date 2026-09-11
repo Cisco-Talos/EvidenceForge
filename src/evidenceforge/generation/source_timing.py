@@ -5227,17 +5227,19 @@ class SourceTimingPlanner:
         key = (family, lifecycle.group_id)
         earliest = clock_end
         visible_start = self._latest_session_start_times.get(key)
+        duration_floor = clock_end
         if visible_start is not None:
             canonical_duration = max(
                 timedelta(microseconds=1),
                 canonical_end - ensure_utc(lifecycle.canonical_start),
             )
-            earliest = max(earliest, visible_start + canonical_duration)
+            duration_floor = visible_start + canonical_duration
+            earliest = max(earliest, duration_floor)
         latest_dependent = self._latest_session_dependent_times.get(key)
         if latest_dependent is not None:
             earliest = max(latest_dependent, earliest)
         format_name = "ecar" if family == "ecar" else "windows_security"
-        latest_allowed = clock_end + self.session_closure_tail(format_name)
+        latest_allowed = max(clock_end, duration_floor) + self.session_closure_tail(format_name)
         if output_end_time is not None:
             latest_allowed = min(latest_allowed, ensure_utc(output_end_time))
         available_us = round((latest_allowed - earliest).total_seconds() * 1_000_000)

@@ -123,6 +123,7 @@ from evidenceforge.generation.checkpoints.owner_inventory import (
     BOUNDED_RUNTIME_CACHE_CHECKPOINT_FIELDS,
     CRYPTOGRAPHIC_MATERIAL_CHECKPOINT_FIELDS,
     EXPIRING_INDEX_CHECKPOINT_FIELDS,
+    GENERATION_ENGINE_CHECKPOINT_FIELDS,
     GENERATOR_LIFECYCLE_AUTHORITY_CHECKPOINT_FIELDS,
     GENERATOR_LIFECYCLE_AUTHORITY_SHARD_CHECKPOINT_FIELDS,
     HTTP_CHANNEL_MANAGER_CHECKPOINT_FIELDS,
@@ -1020,6 +1021,15 @@ def test_activity_head_classifies_every_retention_audited_mutable_field() -> Non
             EXPIRING_INDEX_CHECKPOINT_FIELDS,
             owner_name=name,
         )
+
+
+def test_generation_engine_rebuilds_compiled_deployment_registry_after_restore() -> None:
+    """The immutable deployment registry is recompiled before checkpoint hydration."""
+
+    assert any(
+        field.name == "deployment_registry" and field.disposition == "deterministically-rebuilt"
+        for field in GENERATION_ENGINE_CHECKPOINT_FIELDS
+    )
 
 
 def _runtime_artifact_descriptor(ordinal: int) -> RuntimeArtifactDescriptor:

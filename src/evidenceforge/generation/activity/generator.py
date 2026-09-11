@@ -39423,6 +39423,7 @@ class ActivityGenerator:
 
             stale = False
             capacity_exhausted = False
+            principal_claim_conflict = False
             claim_adopted = False
             claim_reserved = False
             retained_claim: object | None = None
@@ -39477,6 +39478,16 @@ class ActivityGenerator:
                 elif (
                     capacity_claim is not None
                     and not publish
+                    and target_claim is None
+                    and any(
+                        key[:2] == requested_tty_key[:2] and claim[4]
+                        for key, claim in current_claim_snapshot.items()
+                    )
+                ):
+                    principal_claim_conflict = True
+                elif (
+                    capacity_claim is not None
+                    and not publish
                     and action is None
                     and target_claim is None
                 ):
@@ -39504,6 +39515,10 @@ class ActivityGenerator:
             del retained_claim
             if claim_adopted:
                 continue
+            if principal_claim_conflict:
+                raise conflict(
+                    "principal session bootstrap is already protected by an active capacity claim"
+                )
             if capacity_exhausted:
                 raise StateError("Linux sudo TTY ownership capacity exhausted for exact pair")
             if claim_reserved:
