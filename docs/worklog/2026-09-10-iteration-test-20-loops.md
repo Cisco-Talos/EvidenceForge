@@ -617,3 +617,29 @@
   without modeled transport retain their existing timing; denied/unanswered connections must not
   acquire successful WFP/KDC evidence; short transports must fail safely rather than render audit
   rows after close; source-side WFP and remote-auth ordering remain unchanged.
+
+## Loop 68 Result
+
+- **Fix:** successful KDC audit intent now travels through the canonical port-88 connection
+  request. Target-side 5156 publication precedes transport-bound 4768/4769/4771 source timing,
+  including outbound/inbound baseline profiles, DC cycles, logon tickets, machine-account traffic,
+  and visible failed pre-authentication.
+- **Implementation commits:** `ec461d22f` and `b7624c7cf`.
+- **Behavior contract:** revision 32, surface digest
+  `921a464f493e07f915d0be797cf97bd48becb090e2503481f30aac8c9cdbf5bb`.
+- **Verification:** 8,401 routine tests passed, 5 skipped, 2,009 deselected; Ruff check and format
+  check passed for 769 files; 92 config files validated; scenario validation retained 24 existing
+  informational findings.
+- **Rendered probe:** DC-01 1,302/1,302 and DC-02 1,386/1,386 exact matched KDC rows followed target
+  WFP admission; zero inversions.
+- **Automated eval:** PASS, 96.38261128510587 over 122,597 records. Pillars: parseability
+  99.9991843193553, plausibility 96.86081360171023, causality 94.37888817496561, timing
+  92.8646527256516.
+- **Initial blind panel:** Threat 68 (Synthetic/80), Detection 43 (Inconclusive/82), Network 29
+  (Real/73), Host 92 (Synthetic/96); mean 58.0, mixed/inconclusive.
+- **Deliberation:** triggered by verdict disagreement and 63-point spread. Revised scores: Threat
+  82, Detection 78, Network 58, Host 93; mean 77.75, likely synthetic.
+- **Fix regression:** the loop-67 KDC/WFP inversion did not recur in any initial report.
+- **Next family:** make controlling terminal identity immutable for each continuing interactive
+  shell; the panel found 71 sudo rows across 14 shells and 11 hosts rotating among multiple
+  `pts/*` devices without a new shell/session transition.
