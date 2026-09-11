@@ -49,6 +49,7 @@ from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import CanonicalOccurrence, OccurrenceBuilder
+from evidenceforge.events.content_identity import ProcessBinaryIdentity
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.formats.format_def import FormatDefinition
@@ -1617,6 +1618,33 @@ class SysmonEventEmitter(LogEmitter):
         imphash = hashlib.md5(f"imp:{seed}".encode(), usedforsecurity=False).hexdigest().upper()
         return f"SHA1={sha1},MD5={md5},SHA256={sha256},IMPHASH={imphash}"
 
+    @staticmethod
+    def _canonical_binary_hashes(binary_identity: ProcessBinaryIdentity) -> str:
+        """Render source-native hashes from one exact canonical binary identity."""
+        digests = getattr(binary_identity, "digests", None)
+        if digests is None:
+            return "-"
+        rendered = f"SHA1={digests.sha1},MD5={digests.md5},SHA256={digests.sha256}"
+        if digests.imphash:
+            rendered = f"{rendered},IMPHASH={digests.imphash}"
+        return rendered
+
+    @staticmethod
+    def _canonical_binary_pe_metadata(
+        binary_identity: ProcessBinaryIdentity,
+    ) -> tuple[str, str, str, str, str]:
+        """Return PE version resources attached to the exact binary identity."""
+        metadata = getattr(binary_identity, "pe_version_info", None)
+        if metadata is None:
+            return "-", "-", "-", "-", "-"
+        return (
+            metadata.file_version,
+            metadata.description,
+            metadata.product,
+            metadata.company,
+            metadata.original_filename,
+        )
+
     def _resolve_logon_guid(self, hostname: str, logon_id: str, auth: Any | None) -> str:
         """Resolve the canonical Windows LogonGuid for Sysmon process telemetry."""
         if auth is not None and getattr(auth, "logon_guid", ""):
@@ -1689,6 +1717,13 @@ class SysmonEventEmitter(LogEmitter):
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 
+        if proc.binary_identity is None:
+            hashes = self._generate_hashes(proc.image, host)
+            pe_metadata = self._get_pe_metadata(proc.image, host)
+        else:
+            hashes = self._canonical_binary_hashes(proc.binary_identity)
+            pe_metadata = self._canonical_binary_pe_metadata(proc.binary_identity)
+
         event_data = {
             "EventID": 1,
             "TimeCreated": render_time,
@@ -1707,7 +1742,7 @@ class SysmonEventEmitter(LogEmitter):
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(host.hostname, auth, logon_id),
             "IntegrityLevel": integrity,
-            "Hashes": self._generate_hashes(proc.image, host),
+            "Hashes": hashes,
             "ParentProcessGuid": parent_guid,
             "ParentProcessId": proc.parent_pid,
             "ParentImage": proc.parent_image or "-",
@@ -1719,7 +1754,7 @@ class SysmonEventEmitter(LogEmitter):
         }
         self._apply_finalized_times(event_data, native_time, render_time)
         # Populate PE metadata from known binary lookup
-        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image, host)
+        fv, desc, prod, company, orig = pe_metadata
         event_data["FileVersion"] = fv
         event_data["Description"] = desc
         event_data["Product"] = prod
@@ -2345,13 +2380,28 @@ class SysmonEventEmitter(LogEmitter):
         utc_time = _format_sysmon_utc_time(native_time)
         process_guid = self._get_stable_process_guid(host.hostname, pid, process_start_time)
 
-        # PE metadata for the loaded DLL
-        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
-        if il.signed and (fv, desc, prod, company, orig) == ("-", "-", "-", "-", "-"):
-            fv, desc, prod, company, orig = self._signed_module_metadata(
+        # PE metadata and hashes are one projection of the attached content identity.
+        if il.binary_identity is None:
+            fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
+            if il.signed and (fv, desc, prod, company, orig) == ("-", "-", "-", "-", "-"):
+                fv, desc, prod, company, orig = self._signed_module_metadata(
+                    il.image_loaded,
+                    il.signature,
+                )
+            hashes = self._generate_hashes(
                 il.image_loaded,
-                il.signature,
+                host,
+                rendered_identity=(
+                    fv,
+                    desc,
+                    prod,
+                    company,
+                    orig,
+                ),
             )
+        else:
+            fv, desc, prod, company, orig = self._canonical_binary_pe_metadata(il.binary_identity)
+            hashes = self._canonical_binary_hashes(il.binary_identity)
         signature_status = il.signature_status if il.signed else "Unavailable"
         if event.auth and event.auth.username:
             user = self._format_user(event.auth.username, host.netbios_domain)
@@ -2359,18 +2409,6 @@ class SysmonEventEmitter(LogEmitter):
             user = self._format_user(proc.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
-        hashes = self._generate_hashes(
-            il.image_loaded,
-            host,
-            rendered_identity=(
-                fv,
-                desc,
-                prod,
-                company,
-                orig,
-            ),
-        )
-
         event_data = {
             "EventID": 7,
             "TimeCreated": render_time,

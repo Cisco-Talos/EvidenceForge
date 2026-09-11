@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 26
+current_revision: 27
 history_start_revision: 1
-behavior_surface_sha256: "7f62ff26bd8f880b68bd475b06ef88ee9c573cf709247013767bfaf795f3717b"
+behavior_surface_sha256: "ab6ddf52e5805f129b2add43f7ac0797c370818d8407819a5eefcc054e084375"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -282,3 +282,13 @@ changes:
       - ecar
       - syslog
     summary: Preserves canonical systemd-logind IDs on observation-orphaned close rows so SSH session and process identities remain joinable across syslog and eCAR.
+  - revision: 27
+    id: canonical-sysmon-binary-content-identity
+    impact: material
+    domains:
+      - binary-content-identity
+      - windows-pe-metadata
+      - sysmon-process-telemetry
+    formats:
+      - windows_event_sysmon
+    summary: Renders Sysmon process and image-load hashes and PE metadata from the exact canonical binary release or local-artifact identity instead of installation paths.

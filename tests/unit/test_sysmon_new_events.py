@@ -11,6 +11,11 @@ from unittest.mock import patch
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import (
+    BinaryReleaseIdentity,
+    BinaryReleaseKey,
+    PeVersionInfo,
+)
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
@@ -811,6 +816,54 @@ class TestRenderEvent7:
         assert '<Data Name="Signed">false</Data>' in content
         assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
 
+    def test_image_load_hashes_follow_attached_release_not_install_path(self, emitter):
+        """Event 7 renders exact module content independently of user placement."""
+        release = BinaryReleaseIdentity(
+            key=BinaryReleaseKey(
+                product_id="slack",
+                version="4.38.125",
+                build="4.38.125",
+                architecture="x64",
+                platform="windows",
+                artifact_name="slack_elf.dll",
+            ),
+            pe_version_info=PeVersionInfo(
+                file_version="4.38.125",
+                description="Slack ELF module",
+                product="Slack",
+                company="Slack Technologies, LLC",
+                original_filename="slack_elf.dll",
+            ),
+        )
+        for ordinal, username in enumerate(("alice", "bob")):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                event_type="image_load",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=1234 + ordinal,
+                    parent_pid=1,
+                    image=rf"C:\Users\{username}\AppData\Local\slack\slack.exe",
+                    command_line="slack.exe",
+                    username=username,
+                ),
+                image_load=ImageLoadContext(
+                    image_loaded=(rf"C:\Users\{username}\AppData\Local\slack\slack_elf.dll"),
+                    signed=True,
+                    signature="Slack Technologies, LLC",
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_image_loaded(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] == emitter._event_dicts[1]["Hashes"]
+        assert emitter._event_dicts[0]["Hashes"] == (
+            f"SHA1={release.digests.sha1},MD5={release.digests.md5},"
+            f"SHA256={release.digests.sha256},IMPHASH={release.digests.imphash}"
+        )
+        assert emitter._event_dicts[0]["FileVersion"] == "4.38.125"
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
@@ -1106,6 +1159,100 @@ class TestProcessCreateMetadata:
         assert SysmonEventEmitter._generate_hashes(
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
+
+    def test_process_hashes_follow_attached_release_not_user_install_path(self, emitter):
+        """One installed release keeps one hash set across user-scoped placements."""
+        release = BinaryReleaseIdentity(
+            key=BinaryReleaseKey(
+                product_id="slack",
+                version="4.38.125",
+                build="4.38.125",
+                architecture="x64",
+                platform="windows",
+                artifact_name="slack.exe",
+            ),
+            pe_version_info=PeVersionInfo(
+                file_version="4.38.125",
+                description="Slack",
+                product="Slack",
+                company="Slack Technologies, LLC",
+                original_filename="slack.exe",
+            ),
+        )
+        paths = (
+            r"C:\Users\alice\AppData\Local\slack\slack.exe",
+            r"C:\Users\bob\AppData\Local\slack\slack.exe",
+        )
+        for ordinal, path in enumerate(paths):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                event_type="process_create",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=4100 + ordinal,
+                    parent_pid=500,
+                    image=path,
+                    command_line=path,
+                    username=("alice", "bob")[ordinal],
+                    start_time=datetime(2024, 1, 15, 10, 30, ordinal, tzinfo=UTC),
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_process_create(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] == emitter._event_dicts[1]["Hashes"]
+        assert emitter._event_dicts[0]["Hashes"] == (
+            f"SHA1={release.digests.sha1},MD5={release.digests.md5},"
+            f"SHA256={release.digests.sha256},IMPHASH={release.digests.imphash}"
+        )
+        assert emitter._event_dicts[0]["FileVersion"] == "4.38.125"
+
+    def test_process_hashes_and_metadata_separate_os_build_releases(self, emitter):
+        """Build-distinct Windows binaries retain distinct canonical content truth."""
+        releases = tuple(
+            BinaryReleaseIdentity(
+                key=BinaryReleaseKey(
+                    product_id="microsoft-windows",
+                    version=build,
+                    build=build,
+                    architecture="x64",
+                    platform="windows",
+                    artifact_name="winlogon.exe",
+                ),
+                pe_version_info=PeVersionInfo(
+                    file_version=build,
+                    description="Windows Logon Application",
+                    product="Microsoft Windows Operating System",
+                    company="Microsoft Corporation",
+                    original_filename="winlogon.exe",
+                ),
+            )
+            for build in ("10.0.19041.1", "10.0.20348.1")
+        )
+        for ordinal, release in enumerate(releases):
+            event = OccurrenceBuilder(
+                timestamp=datetime(2024, 1, 15, 10, 31, ordinal, tzinfo=UTC),
+                event_type="process_create",
+                src_host=_win_host(),
+                process=ProcessContext(
+                    pid=4200 + ordinal,
+                    parent_pid=500,
+                    image=r"C:\Windows\System32\winlogon.exe",
+                    command_line="winlogon.exe",
+                    username="SYSTEM",
+                    start_time=datetime(2024, 1, 15, 10, 31, ordinal, tzinfo=UTC),
+                    binary_identity=release,
+                ),
+            )
+            emitter._render_sysmon_process_create(event)
+
+        assert len(emitter._event_dicts) == 2
+        assert emitter._event_dicts[0]["Hashes"] != emitter._event_dicts[1]["Hashes"]
+        assert [row["FileVersion"] for row in emitter._event_dicts] == [
+            "10.0.19041.1",
+            "10.0.20348.1",
+        ]
 
     def test_tiworker_metadata_uses_servicing_stack_component_version(self):
         """WinSxS TiWorker metadata should match the rendered component path."""

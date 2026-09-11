@@ -395,3 +395,30 @@
 - The repaired cross-source SSH ID substitution was absent from every report. The highest-impact
   next families are canonical binary content identity, Event 4648 host ownership, and Zeek
   analyzer declarations.
+
+## Loop 64 Family Contract
+
+### Canonical process-binary hashes and PE metadata
+
+- **Classification:** `family_level`; loop-63 repeated `hard_contradiction` spanning installed
+  third-party releases and build-owned Windows system binaries.
+- **Owning abstraction:** `ProcessContext.binary_identity`, populated by the deployment/local
+  artifact registries at dispatch preparation, owns executable content digests and optional PE
+  version resources. The Sysmon renderer owns only source-native projection of that exact identity.
+- **Invariant:** one `BinaryReleaseIdentity` or `LocalArtifactBinaryIdentity` renders one complete
+  hash set at every installation path, user, and host. Distinct release/build/architecture/artifact
+  keys render distinct digest sets. PE metadata and hashes come from the same binary identity;
+  unresolved and virtual-kernel identities never acquire fabricated file hashes or VERSIONINFO.
+- **Entry paths:** baseline, storyline, remote administration, scheduled tasks, services, browser
+  and application activity, retained local executable publication, image loads, and compatibility
+  events that omit an attached production identity.
+- **Consumers:** Sysmon Event 1 and Event 7, Security/eCAR process joins, deployment audits,
+  checkpoint/retry replay, blind cross-host release probes, and future source-native hash renderers.
+- **Layer rationale:** canonical release and local-artifact identities already exclude placement and
+  include content-owning build dimensions. The defect is introduced when Sysmon ignores the attached
+  identity and hashes a path-derived fallback, so the fix is to render existing canonical truth
+  rather than create a second emitter-local identity model.
+- **Sibling risks:** direct unit/legacy callers without dispatch preparation retain deterministic
+  compatibility projection. Genuine local artifacts remain content-specific. Signed module fallback
+  metadata must not override an attached exact module identity, and hashes must remain uppercase in
+  Sysmon's source-native `Hashes` field.
