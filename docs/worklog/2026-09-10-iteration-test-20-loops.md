@@ -422,3 +422,24 @@
   compatibility projection. Genuine local artifacts remain content-specific. Signed module fallback
   metadata must not override an attached exact module identity, and hashes must remain uppercase in
   Sysmon's source-native `Hashes` field.
+
+## Loop 64 Verification
+
+- Renderer implementation commit: `28cccc2ce` (`fix: render canonical binary identities`).
+- Production binding commit: `9eb47c99b` (`fix: bind canonical binary deployment`).
+- Behavior contracts: revisions 27 and 28, final surface digest
+  `183fe16017b29d7948159af482152fcbf2526b8907749ed57fbacdf5f62ba487`.
+- Routine gate: 8,395 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 127,148 evaluated records across 22 sources.
+- Deterministic evaluation: 96.5904, acceptance PASS; pillars 99.9992 parseability,
+  96.9310 plausibility, 94.8004 causality, and 93.2886 timing.
+- Rendered binary probe: five cross-host application-release groups and eight OS binary/build
+  groups had zero hash violations. Slack, Teams, OneDrive, and FileSyncShell64 identities are
+  placement independent; winlogon/userinit identities are build specific.
+- Blind initial panel: 49/71/68/87 (mean 68.75), with one Inconclusive and three Synthetic
+  verdicts. Deliberation was triggered by verdict disagreement and a 38-point spread; final scores
+  were 66/78/74/90 (mean 77.00), unanimously Synthetic.
+- The repaired cross-host application release identity was absent from the final prioritized
+  evidence, but the panel exposed incomplete host-build coverage for other Windows inbox binaries.
+- Highest-impact next families: unified Linux PID allocation, complete host-build Windows binary
+  inventory, and HTTP redirect/DNS source-native contracts.
