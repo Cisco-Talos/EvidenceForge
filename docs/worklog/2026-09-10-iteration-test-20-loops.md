@@ -377,3 +377,21 @@
 - **Sibling risks:** matched rewritten compatibility sessions must still keep New/Removed parity;
   malformed oversized IDs remain nonfatal; genuine pre-window closes remain valid orphan rows and
   are not fabricated into visible opens.
+
+## Loop 63 Verification
+
+- Implementation commit: `f1caae5cd` (`fix: preserve logind close identities`).
+- Behavior contract: revision 26, surface digest
+  `7f62ff26bd8f880b68bd475b06ef88ee9c573cf709247013767bfaf795f3717b`.
+- Routine gate: 8,391 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 129,460 records across 22 evaluated sources.
+- Deterministic evaluation: 97.2286, acceptance PASS; pillars 99.9992 parseability,
+  96.4484 plausibility, 97.2176 causality, and 94.0615 timing.
+- Rendered SSH probe: five visible eCAR termination/logind removal lifecycle joins retain one
+  canonical session ID, with zero mismatches. The four exact loop-62 mismatches are repaired.
+- Blind initial panel: 29/71/66/92 (mean 64.50), with one Real and three Synthetic verdicts.
+  Deliberation was triggered by verdict disagreement and a 63-point spread; final scores were
+  64/82/78/93 (mean 79.25), unanimously Synthetic.
+- The repaired cross-source SSH ID substitution was absent from every report. The highest-impact
+  next families are canonical binary content identity, Event 4648 host ownership, and Zeek
+  analyzer declarations.

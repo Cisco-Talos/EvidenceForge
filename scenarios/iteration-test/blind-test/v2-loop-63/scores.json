@@ -1,0 +1,77 @@
+{
+  "schema_version": "eforge-assess-scores/v1",
+  "loop": 63,
+  "automated_eval": {
+    "score": 97.22856790642855,
+    "status": "PASS",
+    "records": 129460,
+    "interpretation": "PASS / high quality",
+    "pillars": {
+      "parseability": 99.99922756063648,
+      "plausibility": 96.44839163547215,
+      "causality": 97.21758140149264,
+      "timing": 94.06153189498202
+    }
+  },
+  "blind_initial": {
+    "threat_hunter": {
+      "assessment": "Real",
+      "verdict_confidence": 74,
+      "synthetic_confidence": 29,
+      "interpretation": "likely real",
+      "report_path": "threat-hunter-report.md"
+    },
+    "detection_engineer": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 84,
+      "synthetic_confidence": 71,
+      "interpretation": "likely synthetic",
+      "report_path": "detection-engineer-report.md"
+    },
+    "network_forensics": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 74,
+      "synthetic_confidence": 66,
+      "interpretation": "likely synthetic",
+      "report_path": "network-forensics-report.md"
+    },
+    "host_forensics": {
+      "assessment": "Synthetic",
+      "verdict_confidence": 95,
+      "synthetic_confidence": 92,
+      "interpretation": "confidently synthetic",
+      "report_path": "host-forensics-report.md"
+    },
+    "average_synthetic_confidence": 64.5,
+    "average_interpretation": "likely synthetic"
+  },
+  "deliberation": {
+    "triggered": true,
+    "reason": "Initial verdict disagreement and a 63-point synthetic-confidence spread",
+    "final": {
+      "threat_hunter": {
+        "assessment": "Synthetic",
+        "verdict_confidence": 78,
+        "synthetic_confidence": 64
+      },
+      "detection_engineer": {
+        "assessment": "Synthetic",
+        "verdict_confidence": 90,
+        "synthetic_confidence": 82
+      },
+      "network_forensics": {
+        "assessment": "Synthetic",
+        "verdict_confidence": 84,
+        "synthetic_confidence": 78
+      },
+      "host_forensics": {
+        "assessment": "Synthetic",
+        "verdict_confidence": 96,
+        "synthetic_confidence": 93
+      }
+    },
+    "average_synthetic_confidence": 79.25,
+    "average_interpretation": "likely synthetic",
+    "report_path": "deliberation.md"
+  }
+}
