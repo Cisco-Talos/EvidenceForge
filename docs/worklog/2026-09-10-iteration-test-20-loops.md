@@ -1,9 +1,11 @@
-# Iteration-Test 20-Loop Assessment
+# Iteration-Test Assessment — Loops 57–75
 
 ## Scope
 
 - Branch: `codex/assess-20-loops-2026-09-10`, created from `dev` at `12988ce72`.
-- Requested loops: 57 through 76, using `scenarios/iteration-test/scenario.yaml`.
+- Originally requested loops: 57 through 76, using `scenarios/iteration-test/scenario.yaml`.
+- The user ended the run after loop 75, so the completed restarted session contains 19 loops
+  (57 through 75); loop 76 was not started.
 - Prior loop-57 work was explicitly discarded and is not part of this effort.
 - Every loop will preserve standalone four-reviewer blind scoring and automated evaluation.
 
@@ -37,6 +39,21 @@
 | 58 | UDP DNS close timing; RDP userinit lifecycle | 96.28 PASS | 71.75 initial / 86.75 deliberated | complete |
 | 59 | Proxy phase causality; Windows token/session identity | 96.28 PASS | 65.00 initial / 77.50 deliberated | complete |
 | 60 | UDP DNS packet identity; sub-ms WFP admission | 96.28 PASS | 61.00 initial / 71.50 deliberated | complete |
+| 61 | Windows provider execution metadata; NT volume identity | 96.28 PASS | 75.25 initial | complete |
+| 62 | Source-native deterministic identifier entropy | 97.23 PASS | 72.25 initial / 78.75 deliberated | complete |
+| 63 | Observation-safe systemd-logind close identity | 97.23 PASS | 64.50 initial / 79.25 deliberated | complete |
+| 64 | Canonical process-binary hashes and PE metadata | 96.59 PASS | 68.75 initial / 77.00 deliberated | complete |
+| 65 | Host-local Linux transient process identity | 96.67 PASS | 65.00 initial / 79.50 deliberated | complete |
+| 66 | RDP session publication before dependent activity | 96.23 PASS | 85.00 initial | complete |
+| 67 | Host-build-owned Windows PE identity | 96.23 PASS | 75.75 initial | complete |
+| 68 | KDC processing after packet admission | 96.38 PASS | 58.00 initial / 77.75 deliberated | complete |
+| 69 | Immutable Linux controlling terminal identity | 97.05 PASS | 64.25 initial / 73.75 deliberated | complete |
+| 70 | Source-native SMB tree-connect packet timing | 97.05 PASS | 50.00 initial / 57.00 deliberated | complete |
+| 71 | Proxy HTTP authority and header identity | 97.05 PASS | 77.00 initial / 93.00 deliberated | complete |
+| 72 | CONNECT tunnel lifetime bounded by transport | 97.05 PASS | 52.00 initial / 61.00 deliberated | complete |
+| 73 | Fresh Kerberos acquisition before use | 96.48 PASS | 66.25 initial | complete |
+| 74 | Zeek file-digest analyzer provenance | 96.48 PASS | 67.75 initial / 76.25 deliberated | complete |
+| 75 | Explicit-proxy client-transport byte ledger | 96.54 PASS | 74.25 initial / 81.50 deliberated | complete |
 
 ## Loop 57 Verification
 
@@ -961,3 +978,30 @@
   TLS framing; keep proxy-origin egress accounting independent; retain valid request-local fallbacks,
   process lifetime, UID/source-port identity, observation semantics, deterministic recovery, and
   exact channel capacity enforcement.
+
+## Loop 75 Result
+
+- **Implementation commit:** `1e2874272` (`fix: reconcile proxy transport byte accounting`).
+- **Behavior contract:** revision 39,
+  `ccf193ccfc507846ebf4044d8b0af7a6e3b8116add68bb3a4549f20303987776`.
+- **Verification:** 8,409 routine tests passed, 5 skipped, and 2,009 deselected; focused proxy
+  transaction and rendering tests passed; Ruff check and format check passed across 769 files.
+- **Rendered invariant:** 458 successful CONNECT rows produced 455 exact client-transport joins;
+  the three unmatched rows were observation gaps. No joined row had a gross byte mismatch and no
+  row without reported sensor loss had a directional mismatch. The 52 residual differences were
+  bounded by source-native `missed_bytes`.
+- **Automated evaluation:** 96.53944253213886 PASS across 117,110 records (parseability
+  99.99914610195543, plausibility 96.93361508524268, causality 94.65558605926869, timing
+  93.21199207712195).
+- **Initial panel:** Threat Hunter 68 (Synthetic, 86 verdict confidence), Detection Engineer 53
+  (Inconclusive, 80), Network Forensics 82 (Synthetic, 92), Host/EDR 94 (Synthetic, 97); mean
+  74.25.
+- **Deliberation:** triggered by verdict disagreement and a 41-point spread. Revised scores were
+  76, 70, 86, and 94; mean 81.50 with unanimous Synthetic verdicts.
+- **Target-family disposition:** the loop-74 proxy/Zeek gross byte-accounting contradiction did
+  not recur in the rendered probe or any initial expert report.
+- **Highest-impact remaining families:** process-owned activity after process termination,
+  scenario-date-aware software catalogs, browser/TLS timing modes, UDP syslog sender state,
+  source-semantic Samba and workstation lock lifecycles, and host-state-driven Linux background
+  texture.
+- **Session disposition:** stopped after this loop at the user's request. Loop 76 was not started.
