@@ -1573,7 +1573,8 @@ applications:
         image_path: "C:\\Windows\\explorer.exe"
         deployment:
           kind: catalog
-          release_policy: pe_metadata
+          release_policy: host_build
+          product_id: microsoft-windows
           scope: machine
           architectures: [x86, x64, arm64]
         pe_metadata:

@@ -425,12 +425,22 @@ def _release_for_catalog_executable(
     artifact_path: str,
     architecture: Architecture,
     host_build: str,
+    native_descriptor: NativeSystemBinaryDescriptor | None = None,
 ) -> BinaryReleaseIdentity:
     """Build one data-owned service/task executable release identity."""
 
     if descriptor.release_policy is None or descriptor.product_id is None:
         raise ValueError(f"deployment descriptor {descriptor.id!r} is incomplete")
     host_owned = descriptor.release_policy == "host_build"
+    pe_version_info = None
+    if host_owned and native_descriptor is not None and native_descriptor.has_pe_version_info:
+        pe_version_info = PeVersionInfo(
+            file_version=host_build,
+            description=native_descriptor.description,
+            product=native_descriptor.product,
+            company=native_descriptor.company,
+            original_filename=native_descriptor.original_filename,
+        )
     return BinaryReleaseIdentity(
         key=BinaryReleaseKey(
             product_id=descriptor.product_id,
@@ -440,7 +450,8 @@ def _release_for_catalog_executable(
             platform="windows",
             artifact_name=_artifact_name(artifact_path, "windows"),
             variant="core-os" if host_owned else "legacy-native",
-        )
+        ),
+        pe_version_info=pe_version_info,
     )
 
 
@@ -450,6 +461,7 @@ def _release_for_service_process(
     platform: Platform,
     architecture: Architecture,
     host_build: str,
+    native_descriptor: NativeSystemBinaryDescriptor | None = None,
 ) -> BinaryReleaseIdentity:
     """Build one exact resident service manager/worker artifact identity."""
 
@@ -460,6 +472,20 @@ def _release_for_service_process(
     ):
         raise ValueError(f"service process descriptor {descriptor.key!r} is incomplete")
     host_owned = descriptor.release_policy == "host_build"
+    pe_version_info = None
+    if (
+        platform == "windows"
+        and host_owned
+        and native_descriptor is not None
+        and native_descriptor.has_pe_version_info
+    ):
+        pe_version_info = PeVersionInfo(
+            file_version=host_build,
+            description=native_descriptor.description,
+            product=native_descriptor.product,
+            company=native_descriptor.company,
+            original_filename=native_descriptor.original_filename,
+        )
     return BinaryReleaseIdentity(
         key=BinaryReleaseKey(
             product_id=descriptor.product_id,
@@ -469,7 +495,8 @@ def _release_for_service_process(
             platform=platform,
             artifact_name=_artifact_name(descriptor.image, platform),
             variant=descriptor.variant,
-        )
+        ),
+        pe_version_info=pe_version_info,
     )
 
 
@@ -1045,20 +1072,26 @@ def compile_deployment_registry(
             )
             for descriptor in (*selected_service_descriptors, *selected_task_descriptors)
         }
+        materialized_native_descriptors = tuple(
+            replace(
+                descriptor,
+                path=normalize_defender_platform_path(
+                    descriptor.path,
+                    system.hostname,
+                ),
+            )
+            for descriptor in descriptors_by_platform[platform]
+            if _native_descriptor_applies_to_system(descriptor, system)
+        )
+        native_descriptor_by_path = {
+            canonical_native_path(descriptor.path, platform): descriptor
+            for descriptor in materialized_native_descriptors
+        }
         host_release_by_path: dict[str, BinaryReleaseIdentity] = {}
         release_groups: dict[
             str, list[tuple[NativeSystemBinaryDescriptor, BinaryReleaseIdentity]]
         ] = defaultdict(list)
-        for catalog_descriptor in descriptors_by_platform[platform]:
-            if not _native_descriptor_applies_to_system(catalog_descriptor, system):
-                continue
-            descriptor = replace(
-                catalog_descriptor,
-                path=normalize_defender_platform_path(
-                    catalog_descriptor.path,
-                    system.hostname,
-                ),
-            )
+        for descriptor in materialized_native_descriptors:
             normalized_descriptor_path = canonical_native_path(descriptor.path, platform)
             if normalized_descriptor_path in application_owned_paths[platform] or (
                 normalized_descriptor_path in capability_owned_paths
@@ -1371,6 +1404,7 @@ def compile_deployment_registry(
                         platform=platform,
                         architecture=architecture,
                         host_build=build,
+                        native_descriptor=native_descriptor_by_path.get(normalized_path),
                     ),
                 )
                 existing = host_release_by_path.get(normalized_path)
@@ -1458,6 +1492,7 @@ def compile_deployment_registry(
                     artifact_path=image_path,
                     architecture=architecture,
                     host_build=build,
+                    native_descriptor=native_descriptor_by_path.get(normalized_path),
                 ),
             )
             capability_releases_by_release[release.release_id].setdefault(

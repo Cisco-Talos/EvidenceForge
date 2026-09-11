@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 30
+current_revision: 31
 history_start_revision: 1
-behavior_surface_sha256: "9ad3c48fa5b74e270d2ba31d3da22649500cb5a703f62999e6db564f576780f2"
+behavior_surface_sha256: "2470f65a4094b827d9a31c900c0803fa2c337e5b64f0d1a5edb658159275d162"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -326,3 +326,13 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Commits admitted deferred-session source indexes with the exact timing transaction and applies remote-session readiness before authored follow-on activity, preventing RDP LogonID use before source-visible login.
+  - revision: 31
+    id: host-build-windows-pe-identity-coverage
+    impact: material
+    domains:
+      - binary-content-identity
+      - software-deployment
+      - windows-pe-metadata
+    formats:
+      - windows_event_sysmon
+    summary: Compiles Explorer and high-volume Windows native process VERSIONINFO from exact host-build releases and preserves that metadata when service or task catalogs own the executable path.

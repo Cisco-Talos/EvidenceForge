@@ -539,3 +539,31 @@
   application/discovery behavior, and post-disconnect RDP activity as the highest-impact families.
 - Next highest-impact families: complete host-build Windows PE identity, Nmap semantic target and
   protocol expansion, and remote-interactive reconnect/control ownership.
+
+## Loop 67 Family Contract
+
+### Host-build-owned Windows PE identity coverage
+
+- **Classification:** `family_level`; loops 64–66 repeated `hard_contradiction` and
+  `schema_or_format` findings across Windows inbox binaries.
+- **Owning abstraction:** the deployment content registry owns one `BinaryReleaseIdentity` per
+  exact Windows build, architecture, and artifact. The system/application catalogs own the
+  executable's VERSIONINFO vocabulary; Sysmon only renders the attached canonical identity.
+- **Invariant:** an OS-owned executable on one host uses that host's resolved Windows build in its
+  release key and FileVersion, and its hashes derive from that exact release. The same executable
+  on different builds has different content digests, while adjacent inbox components on one host
+  remain in one build family. Known OS binaries do not lose all PE fields merely because one
+  generation entry path used a system-process descriptor instead of an application descriptor.
+- **Entry paths:** interactive/RDP bootstrap, baseline system services and scheduled tasks,
+  storyline commands, remote administration, application-catalog Windows Explorer/RDP tools,
+  loaded modules, and direct compatibility rendering.
+- **Consumers:** Sysmon Event 1/Event 7, Security/eCAR process joins, deployment audits,
+  application assignment, checkpoint/retry replay, and blind cross-host build/hash probes.
+- **Layer rationale:** the contradiction originates in split catalog ownership: Explorer is
+  compiled as one fixed application release while many native descriptors omit VERSIONINFO and
+  fall back to emitter-local tables. Consolidating source data into the deployment catalogs and
+  binding host build there repairs canonical truth rather than rewriting rendered rows.
+- **Sibling risks:** third-party/versioned releases must remain version-owned rather than inherit
+  the Windows build; unresolved or artifact-local binaries may legitimately lack PE resources;
+  compatibility callers retain deterministic data-driven metadata; paths and OriginalFileName
+  casing remain source-native; deployment overrides and architecture separation stay intact.
