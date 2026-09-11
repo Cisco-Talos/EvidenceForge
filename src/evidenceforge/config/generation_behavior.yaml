@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 34
+current_revision: 35
 history_start_revision: 1
-behavior_surface_sha256: "9958d695d3e7470381cd44a9e91869dee545bb45b8eed53c59bcdaddd5f4ca9d"
+behavior_surface_sha256: "3a3042fa9936afb29d4c885dffe6b13c04a38866bcec70a2b0076fdfd81299ec"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -369,3 +369,14 @@ changes:
       - windows_event_security
       - syslog
     summary: Samples SMB authentication and tree-connect packet-stage gaps through the shared timing runtime with microsecond texture while preserving canonical transport and file-operation ordering.
+  - revision: 35
+    id: canonical-explicit-proxy-http-authority-headers
+    impact: material
+    domains:
+      - explicit-proxy-transactions
+      - http-semantics
+      - cross-source-correlation
+    formats:
+      - proxy_access
+      - zeek_http
+    summary: Preserves the proxy transaction's normalized origin authority and Referer across client-facing proxy evidence and origin-facing HTTP requests, preventing sibling Host mutations or isolated header disagreement.

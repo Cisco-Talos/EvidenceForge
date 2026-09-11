@@ -179,6 +179,36 @@ def test_proxy_phase_plan_is_deterministic_ordered_and_immutable() -> None:
         first.request_at = request.time  # type: ignore[misc]
 
 
+def test_proxy_http_legs_share_canonical_authority_and_referrer() -> None:
+    """Sibling HTTP legs must consume the normalized proxy transaction truth."""
+
+    request = _request()
+    assert request.http is not None
+    request = replace(
+        request,
+        hostname="20-205-68-81.microsoft.com",
+        http=replace(
+            request.http,
+            host="20.205.68.81",
+            referrer="https://www.reddit.com/",
+        ),
+    )
+    proxy_context = replace(
+        _proxy_context(),
+        host="20-205-68-81.microsoft.com",
+        url="http://20-205-68-81.microsoft.com/api/v1/data",
+        referrer="",
+    )
+    bundle = ProxyTransactionActionBundle(request=request, executor=MagicMock())
+
+    client_http = bundle._build_client_http(proxy_context)
+    egress_http = bundle._build_egress_http(proxy_context, client_http)
+
+    assert egress_http is not None
+    assert client_http.host == egress_http.host == proxy_context.host
+    assert client_http.referrer == egress_http.referrer == proxy_context.referrer
+
+
 def test_proxy_transaction_can_preserve_unknown_client_process_ownership() -> None:
     """Explicit proxy routing must honor a caller's no-fabricated-owner contract."""
     request = replace(_request(), suppress_source_pid_inference=True)

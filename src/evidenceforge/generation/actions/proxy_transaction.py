@@ -1138,7 +1138,7 @@ class ProxyTransactionActionBundle:
                 flow_transaction_count=request.http.flow_transaction_count,
                 status_code=proxy_context.status_code,
                 status_msg=status_messages.get(proxy_context.status_code, request.http.status_msg),
-                referrer=request.http.referrer,
+                referrer=proxy_context.referrer,
                 trans_depth=request.http.trans_depth,
                 tags=list(request.http.tags),
                 resp_mime_types=response_mime_types_for_status(
@@ -1522,6 +1522,7 @@ class ProxyTransactionActionBundle:
         if egress_http is not None:
             egress_http = replace(
                 egress_http,
+                host=proxy_context.host,
                 user_agent=proxy_context.user_agent,
                 referrer=proxy_context.referrer,
                 request_body_len=proxy_context.request_body_bytes,
