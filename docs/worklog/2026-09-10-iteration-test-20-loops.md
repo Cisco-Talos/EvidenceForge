@@ -331,3 +331,21 @@
   and intentionally 32-bit protocol fields are not widened merely because they use deterministic
   seeds. The material output change requires a behavior-manifest revision and exact retry,
   checkpoint, storage, mail, and proxy regression coverage.
+
+## Loop 62 Verification
+
+- Implementation commit: `ab6c55e0a` (`fix: diversify source-native identifiers`).
+- Behavior contract: revision 25, surface digest
+  `1ffc409e1424464935982502f3beec72a6ed61e54ee90a482605b77ca0eff1c6`.
+- Routine gate: 8,390 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 129,460 records across 22 evaluated sources.
+- Deterministic evaluation: 97.2286, acceptance PASS; pillars 99.9992 parseability,
+  96.4484 plausibility, 97.2176 causality, and 94.0615 timing.
+- Rendered identifier probe: 1,964 proxy tunnel-ID rows and 111 compact eCAR storage-file rows
+  have zero former `00000000` prefixes; 138 Postfix lifecycle rows use 30 native-width queue IDs
+  with ordinary leading-zero variation.
+- Blind initial panel: 68/58/89/74 (mean 72.25), unanimously Synthetic. Deliberation was triggered
+  by the 31-point score spread and produced 76/70/89/80 (mean 78.75).
+- The repaired identifier fingerprint was absent from all reports.
+- Next highest-impact families: SSH continuation/session identity, canonical public IPv6 identity,
+  UFW host-clock/scanner texture, and process-termination outcomes.
