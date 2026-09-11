@@ -1093,6 +1093,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         self.storage_world = StorageWorldModel.compile(self.scenario)
         self.activity_generator._storage_world = self.storage_world
+        from evidenceforge.generation.deployment_compiler import (
+            compile_native_deployment_registry,
+        )
+
+        self.deployment_registry = compile_native_deployment_registry(
+            self.scenario,
+            self.world_model,
+            storage_world=self.storage_world,
+        )
+        self.dispatcher.bind_deployment_registry(self.deployment_registry)
 
         # Cache org CIDR networks for external IP exclusion
         import ipaddress as _ipa_core

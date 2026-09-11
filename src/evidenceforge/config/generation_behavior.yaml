@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 27
+current_revision: 28
 history_start_revision: 1
-behavior_surface_sha256: "ab6ddf52e5805f129b2add43f7ac0797c370818d8407819a5eefcc054e084375"
+behavior_surface_sha256: "183fe16017b29d7948159af482152fcbf2526b8907749ed57fbacdf5f62ba487"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -291,4 +291,15 @@ changes:
       - sysmon-process-telemetry
     formats:
       - windows_event_sysmon
-    summary: Renders Sysmon process and image-load hashes and PE metadata from the exact canonical binary release or local-artifact identity instead of installation paths.
+    summary: Renders Sysmon process and image-load hashes and PE metadata from exact attached canonical binary identities instead of installation paths.
+  - revision: 28
+    id: production-binary-deployment-registry-binding
+    impact: material
+    domains:
+      - binary-content-identity
+      - software-deployment
+      - process-generation
+    formats:
+      - ecar
+      - windows_event_sysmon
+    summary: Compiles and binds exact native, application, and storage deployment identity before production process generation so canonical events carry release or explicit unresolved binary truth.
