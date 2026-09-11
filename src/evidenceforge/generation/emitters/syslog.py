@@ -5627,9 +5627,14 @@ class SyslogEmitter(HostMultiplexEmitter):
             return lines
 
         latest_new_by_pid: dict[str, int] = {}
+        visible_new_keys = {
+            (_logind_pid(match), match.group("session"))
+            for line in lines
+            if (match := _LOGIND_NEW_SESSION_RE.search(line)) is not None
+        }
         prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         rewritten_by_original: dict[tuple[str, str], int] = {}
-        prewindow_seen_by_original: set[tuple[str, str]] = set()
+        orphan_removals_seen: set[tuple[str, str]] = set()
         normalized: list[str] = []
         for index, line in enumerate(lines):
             new_match = _LOGIND_NEW_SESSION_RE.search(line)
@@ -5663,25 +5668,30 @@ class SyslogEmitter(HostMultiplexEmitter):
                 key = (_logind_pid(removed_match), removed_match.group("session"))
                 rewritten = rewritten_by_original.get(key)
                 if rewritten is None:
-                    pid = _logind_pid(removed_match)
-                    original_session_id = _parse_logind_session_id(removed_match.group("session"))
+                    pid = key[0]
+                    original_session_id = _parse_logind_session_id(key[1])
                     if original_session_id is None:
                         normalized.append(line)
                         continue
-                    first_visible = max(2, first_by_pid.get(pid, original_session_id + 1))
-                    needs_prewindow_rewrite = (
-                        original_session_id >= first_visible or key in prewindow_seen_by_original
-                    )
-                    prewindow_seen_by_original.add(key)
-                    if needs_prewindow_rewrite:
+                    collides_with_visible_new = key in visible_new_keys
+                    duplicates_orphan = key in orphan_removals_seen
+                    orphan_removals_seen.add(key)
+                    if collides_with_visible_new or duplicates_orphan:
                         step_seed = _stable_seed(
                             "syslog_logind_prewindow_session_step:"
-                            f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
+                            f"{host_key}:{pid}:{key[1]}:{index}"
                         )
-                        prewindow_next_by_pid[pid] = (
-                            prewindow_next_by_pid.get(pid, first_visible - 1) - 1 - (step_seed % 3)
+                        rewritten = (
+                            prewindow_next_by_pid.get(
+                                pid,
+                                max(2, first_by_pid.get(pid, original_session_id + 1)) - 1,
+                            )
+                            - 1
+                            - (step_seed % 3)
                         )
-                        rewritten = prewindow_next_by_pid[pid]
+                        while rewritten == original_session_id:
+                            rewritten -= 1
+                        prewindow_next_by_pid[pid] = rewritten
                 if rewritten is not None:
                     line = (
                         f"{line[: removed_match.start('session')]}"

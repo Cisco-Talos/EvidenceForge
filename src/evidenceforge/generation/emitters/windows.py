@@ -765,6 +765,63 @@ def _enforce_windows_lock_dwell_after_normalization(
         event["TimeCreated"] = minimum_unlock
 
 
+def _repair_windows_lock_lifecycle_rows(
+    rows: list[tuple[int, dict[str, Any]]],
+    prior_locks: dict[tuple[str, str, str], datetime],
+) -> set[int]:
+    """Repair 4800 -> Type 7 -> 4801 source order in canonical admission order."""
+
+    locks = dict(prior_locks)
+    pending_reauth: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    changed: set[int] = set()
+    for rowid, event in sorted(rows, key=lambda row: row[0]):
+        event_id = event.get("EventID")
+        timestamp = event.get("TimeCreated")
+        if not isinstance(timestamp, datetime):
+            continue
+        computer = str(event.get("Computer") or "")
+        logon_id = str(event.get("TargetLogonId") or "")
+        if not computer or not logon_id:
+            continue
+        if event_id == 4624 and str(event.get("LogonType") or "") == "7":
+            pending_reauth[(computer, logon_id)] = (rowid, event)
+            continue
+        if event_id not in {4800, 4801}:
+            continue
+        session_id = str(event.get("SessionId") or "")
+        key = (computer, logon_id, session_id)
+        if event_id == 4800:
+            locks[key] = ensure_utc(timestamp)
+            continue
+
+        lock_time = locks.pop(key, None)
+        if lock_time is None:
+            continue
+        unlock_time = ensure_utc(timestamp)
+        minimum_unlock = lock_time + timedelta(seconds=min_unlock_gap_seconds())
+        if unlock_time < minimum_unlock:
+            unlock_time = minimum_unlock
+            event["TimeCreated"] = unlock_time
+            changed.add(rowid)
+        reauth = pending_reauth.pop((computer, logon_id), None)
+        if reauth is None:
+            continue
+        reauth_rowid, reauth_event = reauth
+        reauth_time = ensure_utc(reauth_event["TimeCreated"])
+        if lock_time < reauth_time < unlock_time:
+            continue
+        gap_ms = 80 + (
+            _stable_seed(
+                "windows_lock_source_reauth_gap:"
+                f"{computer}:{logon_id}:{session_id}:{unlock_time.isoformat()}"
+            )
+            % 571
+        )
+        reauth_event["TimeCreated"] = unlock_time - timedelta(milliseconds=gap_ms)
+        changed.add(reauth_rowid)
+    return changed
+
+
 def _subject_domain(username: str, netbios_domain: str) -> str:
     """Return the correct domain for SubjectDomainName / TargetDomainName.
 
@@ -1142,6 +1199,41 @@ class WindowsEventEmitter(LogEmitter):
             value = normalized.get(field)
             normalized[field] = normalize_windows_id_value(value)
         return normalized
+
+    def _provider_execution_thread_id(
+        self,
+        event_data: dict[str, Any],
+        event: CanonicalOccurrence,
+    ) -> int:
+        """Return one host/provider-scoped Security execution thread identity."""
+
+        host = self._get_host(event)
+        provider_pid_value = normalize_windows_id_value(event_data.get("ExecutionProcessID", 0))
+        try:
+            provider_pid = int(provider_pid_value)
+        except (TypeError, ValueError):
+            provider_pid = 0
+        timestamp = event_data.get("TimeCreated")
+        source_time = ensure_utc(timestamp) if isinstance(timestamp, datetime) else event.timestamp
+        provider_scope = f"{host.hostname.casefold()}:{provider_pid}"
+        lifetime_seconds = 11 * 60 + (_stable_seed(f"windows-thread-life:{provider_scope}") % 1201)
+        lifecycle_epoch = int(source_time.timestamp()) // lifetime_seconds
+        if provider_pid == 4:
+            pool_size = 32 + (_stable_seed(f"windows-thread-pool:{provider_scope}") % 25)
+        else:
+            pool_size = 8 + (_stable_seed(f"windows-thread-pool:{provider_scope}") % 17)
+        occurrence_identity = event.occurrence_id or (
+            f"{event.event_type}:{event.timestamp.isoformat()}:"
+            f"{event_data.get('EventID', '')}:{event_data.get('Computer', '')}"
+        )
+        slot = (
+            _stable_seed(
+                f"windows-thread-slot:{provider_scope}:{lifecycle_epoch}:{occurrence_identity}"
+            )
+            % pool_size
+        )
+        thread_seed = _stable_seed(f"windows-thread-id:{provider_scope}:{lifecycle_epoch}:{slot}")
+        return 4 * (64 + (thread_seed % 1_000_000))
 
     def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Windows fields."""
@@ -2071,7 +2163,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionProcessID": 4,
             "ExecutionThreadID": rng.randint(50, 200),
             "ProcessID": pid,
-            "Application": self._to_device_path(image),
+            "Application": self._to_device_path(image, host),
             "Direction": direction,
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,
@@ -2134,12 +2226,23 @@ class WindowsEventEmitter(LogEmitter):
         return "outbound_default" if is_outbound else "inbound_default"
 
     @staticmethod
-    def _to_device_path(path: str) -> str:
-        """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+    def _to_device_path(path: str, host: HostContext | None = None) -> str:
+        """Convert a drive path to one installation-specific NT device path."""
         if path == "System":
             return path
         if path and len(path) > 2 and path[1] == ":":
-            return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
+            if host is None:
+                volume_number = 1
+            else:
+                drive_offset = max(0, ord(path[0].upper()) - ord("C"))
+                installation_base = 1 + (
+                    _stable_seed(
+                        f"windows-volume-base:{host.hostname.casefold()}:{host.os.casefold()}"
+                    )
+                    % 8
+                )
+                volume_number = installation_base + drive_offset
+            return f"\\device\\harddiskvolume{volume_number}\\{path[3:]}".lower()
         return path.lower()
 
     @staticmethod
@@ -2716,7 +2819,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
-        event_data = self._normalize_execution_ids(event_data)
+        event_data = dict(event_data)
         event_data.pop("_TimingFinalized", None)
         if "EventID" in event_data:
             event_data["EventID"] = normalize_windows_event_id_value(event_data["EventID"])
@@ -2726,7 +2829,12 @@ class WindowsEventEmitter(LogEmitter):
             event_id = coerce_windows_event_id(event_data.get("EventID"))
             phase = self._timing_phase(canonical_event, event_id)
             event_data["TimeCreated"] = self._render_timestamp(canonical_event, phase)
+            event_data["ExecutionThreadID"] = self._provider_execution_thread_id(
+                event_data,
+                canonical_event,
+            )
             event_data["_TimingFinalized"] = _FROZEN_TIMING_MARKER
+        event_data = self._normalize_execution_ids(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         host_type = getattr(self._emission_context, "host_type", "")
@@ -4581,6 +4689,22 @@ class WindowsEventEmitter(LogEmitter):
 
         self._delete_spooled_events_unlocked(dropped_rowids)
 
+    def _repair_spooled_workstation_lock_lifecycles_unlocked(self) -> None:
+        """Repair source-visible lock lifecycles and persist their new sort keys."""
+
+        rows = list(self._iter_spooled_rows_unlocked())
+        changed = _repair_windows_lock_lifecycle_rows(
+            rows,
+            self._rendered_lock_time_by_session,
+        )
+        self._update_spooled_events_unlocked(
+            [
+                (_spool_encode(event), self._event_sort_key(event), rowid)
+                for rowid, event in rows
+                if rowid in changed
+            ]
+        )
+
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the exact private journal after terminal source close."""
 
@@ -4743,10 +4867,10 @@ class WindowsEventEmitter(LogEmitter):
                 sequence,
                 "windows_time_created",
             )
-            _enforce_windows_lock_dwell_after_normalization(
-                event,
-                state.rendered_lock_time_by_session,
-            )
+        _enforce_windows_lock_dwell_after_normalization(
+            event,
+            state.rendered_lock_time_by_session,
+        )
         normalized_event_time = event.get("TimeCreated")
         event_computer = str(event.get("Computer", ""))
         if isinstance(normalized_event_time, datetime) and event_computer:
@@ -4834,6 +4958,7 @@ class WindowsEventEmitter(LogEmitter):
                 self._shift_spooled_process_dependents_after_create_unlocked()
                 self._shift_spooled_special_privileges_after_logons_unlocked()
                 self._shift_spooled_process_terminations_after_dependents_unlocked()
+            self._repair_spooled_workstation_lock_lifecycles_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
@@ -4845,6 +4970,10 @@ class WindowsEventEmitter(LogEmitter):
                 self._shift_process_dependents_after_create()
                 self._shift_special_privileges_after_logons()
                 self._shift_process_terminations_after_dependents()
+            _repair_windows_lock_lifecycle_rows(
+                list(enumerate(self._event_dicts)),
+                self._rendered_lock_time_by_session,
+            )
             self._suppress_duplicate_lock_unlock_transitions()
 
             def _sort_key(event: dict) -> Any:

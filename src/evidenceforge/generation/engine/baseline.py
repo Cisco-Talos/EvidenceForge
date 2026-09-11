@@ -3964,7 +3964,20 @@ class BaselineMixin:
         emitted[system.hostname] = run_date
         self._anacron_lifecycle_days = emitted
 
-        pid = sys_pids.get("anacron", rng.randint(10000, 60000))
+        parent_pid = sys_pids.get("cron", sys_pids.get("systemd", 1))
+        lifecycle_group_id = f"anacron:{system.hostname}:{run_date}"
+        pid = self.activity_generator.generate_system_process(
+            system=system,
+            time=ts,
+            process_name="/usr/sbin/anacron",
+            command_line="/usr/sbin/anacron -s",
+            parent_pid=parent_pid,
+            username="root",
+            emit_linux_syslog=False,
+            concurrency_group_id=lifecycle_group_id,
+        )
+        if not pid:
+            return
         job_name = rng.choice(["cron.daily", "logrotate"])
         delay_minutes = rng.choice([2, 5, 11])
         job_start = ts + timedelta(minutes=delay_minutes, seconds=rng.uniform(0.5, 12.0))
@@ -3991,6 +4004,16 @@ class BaselineMixin:
                 facility=3,
                 severity=6,
             )
+        terminal_time = events[-1][0] + timedelta(milliseconds=rng.randint(20, 180))
+        self.activity_generator.generate_system_process_termination(
+            system=system,
+            time=terminal_time,
+            pid=pid,
+            process_name="/usr/sbin/anacron",
+            parent_pid=parent_pid,
+            username="root",
+            concurrency_group_id=lifecycle_group_id,
+        )
 
     def _execute_authored_events_for_hour(self, current_hour: datetime) -> None:
         """Execute same-hour storyline and red-herring entries in nominal time order."""
@@ -9786,6 +9809,8 @@ class BaselineMixin:
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
                 conn_pid = _pids.get(pid_key, -1) if pid_key else -1
 
+                kerberos_audit_username = ""
+                kerberos_audit_service_name = ""
                 if (
                     conn.get("service") == "kerberos"
                     and conn.get("port") == 88
@@ -9806,20 +9831,8 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
-                            ts,
-                            rng,
-                            tgs_before_ms=(8, 65),
-                            tgt_before_tgs_ms=(35, 240),
-                        )
-                        self.activity_generator._maybe_generate_kerberos_tgt(
-                            username=machine_principal,
-                            source_ip=system.ip,
-                            dc_hostname=dc_hostname,
-                            time=tgt_time,
-                            rng=rng,
-                        )
-                        service_name = rng.choices(
+                        kerberos_audit_username = machine_principal
+                        kerberos_audit_service_name = rng.choices(
                             [
                                 f"host/{dc_hostname}",
                                 f"ldap/{dc_hostname}",
@@ -9829,13 +9842,6 @@ class BaselineMixin:
                             weights=[34, 36, 20, 10],
                             k=1,
                         )[0]
-                        self.activity_generator.generate_kerberos_service_ticket(
-                            username=machine_principal,
-                            service_name=service_name,
-                            source_ip=system.ip,
-                            dc_hostname=dc_hostname,
-                            time=tgs_time,
-                        )
 
                 if conn.get("service") == "smb" and any(
                     share.system.casefold()
@@ -9863,6 +9869,8 @@ class BaselineMixin:
                     source_system=system,
                     hostname=hostname,
                     pid=conn_pid,
+                    kerberos_audit_username=kerberos_audit_username,
+                    kerberos_audit_service_name=kerberos_audit_service_name,
                     suppress_source_pid_inference=(
                         os_cat == "linux"
                         and conn_pid <= 0
@@ -10086,6 +10094,8 @@ class BaselineMixin:
                             )
                         ):
                             continue
+                        kerberos_audit_username = ""
+                        kerberos_audit_service_name = ""
                         if (
                             conn.get("service") == "kerberos"
                             and conn.get("port") == 88
@@ -10095,20 +10105,8 @@ class BaselineMixin:
                         ):
                             dc_hostname = system.hostname
                             machine_principal = f"{src_sys.hostname}$"
-                            tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
-                                ts,
-                                rng,
-                                tgs_before_ms=(8, 65),
-                                tgt_before_tgs_ms=(35, 240),
-                            )
-                            self.activity_generator._maybe_generate_kerberos_tgt(
-                                username=machine_principal,
-                                source_ip=src_ip,
-                                dc_hostname=dc_hostname,
-                                time=tgt_time,
-                                rng=rng,
-                            )
-                            service_name = rng.choices(
+                            kerberos_audit_username = machine_principal
+                            kerberos_audit_service_name = rng.choices(
                                 [
                                     f"host/{dc_hostname}",
                                     f"ldap/{dc_hostname}",
@@ -10118,14 +10116,6 @@ class BaselineMixin:
                                 weights=[34, 36, 20, 10],
                                 k=1,
                             )[0]
-                            self.activity_generator.generate_kerberos_service_ticket(
-                                username=machine_principal,
-                                service_name=service_name,
-                                source_ip=src_ip,
-                                dc_hostname=dc_hostname,
-                                time=tgs_time,
-                            )
-
                         if conn.get("service") == "smb" and any(
                             share.system.casefold() == system.hostname.casefold()
                             for share in self.activity_generator._storage_world.shares
@@ -10147,6 +10137,8 @@ class BaselineMixin:
                             source_system=src_sys,
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
+                            kerberos_audit_username=kerberos_audit_username,
+                            kerberos_audit_service_name=kerberos_audit_service_name,
                         )
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
@@ -11165,19 +11157,6 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
-                            ts,
-                            rng,
-                            tgs_before_ms=(8, 55),
-                            tgt_before_tgs_ms=(35, 220),
-                        )
-                        self.activity_generator._maybe_generate_kerberos_tgt(
-                            username=machine_principal,
-                            source_ip=system.ip,
-                            dc_hostname=dc_hostname,
-                            time=tgt_time,
-                            rng=rng,
-                        )
                         service_name = rng.choices(
                             [
                                 f"host/{dc_hostname}",
@@ -11188,13 +11167,9 @@ class BaselineMixin:
                             weights=[34, 36, 20, 10],
                             k=1,
                         )[0]
-                        self.activity_generator.generate_kerberos_service_ticket(
-                            username=machine_principal,
-                            service_name=service_name,
-                            source_ip=system.ip,
-                            dc_hostname=dc_hostname,
-                            time=tgs_time,
-                        )
+                    else:
+                        machine_principal = ""
+                        service_name = ""
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=krb_dst_ip,
@@ -11208,6 +11183,8 @@ class BaselineMixin:
                         emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=_svc_pid("lsass"),
+                        kerberos_audit_username=machine_principal,
+                        kerberos_audit_service_name=service_name,
                     )
 
             # LDAP
@@ -12246,12 +12223,6 @@ class BaselineMixin:
                         self.state_manager.set_current_time(ts)
 
                         username = f"{client.hostname}$"
-                        self.activity_generator.generate_kerberos_tgt(
-                            username=username,
-                            source_ip=client.ip,
-                            dc_hostname=dc_hostname,
-                            time=ts,
-                        )
                         self.activity_generator.generate_connection(
                             src_ip=client.ip,
                             dst_ip=dc_ips[_dc_idx],
@@ -12265,6 +12236,8 @@ class BaselineMixin:
                             source_system=client,
                             pid=krb_pid,
                             emit_dns=False,
+                            kerberos_audit_mode="tgt",
+                            kerberos_audit_username=username,
                         )
                         if rng.random() < 0.22:
                             num_tgs = 0
@@ -12312,13 +12285,6 @@ class BaselineMixin:
                                 dc_hostname,
                             )
                             svc = _pick_dc_kerberos_service(rng, target_is_dc=target_is_dc)
-                            self.activity_generator.generate_kerberos_service_ticket(
-                                username=username,
-                                service_name=f"{svc}/{target}",
-                                source_ip=client.ip,
-                                dc_hostname=dc_hostname,
-                                time=ts2,
-                            )
                             self.activity_generator.generate_connection(
                                 src_ip=client.ip,
                                 dst_ip=dc_ips[_dc_idx],
@@ -12332,6 +12298,9 @@ class BaselineMixin:
                                 source_system=client,
                                 pid=krb_pid,
                                 emit_dns=False,
+                                kerberos_audit_mode="tgs",
+                                kerberos_audit_username=username,
+                                kerberos_audit_service_name=f"{svc}/{target}",
                             )
                         if rng.random() < 0.10:
                             ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)

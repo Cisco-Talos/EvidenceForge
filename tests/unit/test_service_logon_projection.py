@@ -835,7 +835,7 @@ def test_named_type5_composes_real_windows_and_ecar_exact_publication(
         hashlib.sha256(
             next(content for path, content in source_bytes.items() if path.endswith(".xml"))
         ).hexdigest()
-        == "9ae7ab331ed889f073997ed34325d7ed0a63f60c3182d193c8638ca53f71786f"
+        == "10e097ad57497957cbd5a5b2889d1c30866c24628b7bf3e1158d06f2a649cdc0"
     )
     assert (
         hashlib.sha256(
@@ -943,7 +943,7 @@ def test_named_type5_real_multisink_retry_is_exact_once(
         hashlib.sha256(
             next(content for path, content in reference_bytes.items() if path.endswith(".xml"))
         ).hexdigest()
-        == "9ae7ab331ed889f073997ed34325d7ed0a63f60c3182d193c8638ca53f71786f"
+        == "10e097ad57497957cbd5a5b2889d1c30866c24628b7bf3e1158d06f2a649cdc0"
     )
     assert (
         hashlib.sha256(

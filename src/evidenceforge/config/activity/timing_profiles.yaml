@@ -118,6 +118,11 @@ relationships:
     position: after
     min_ms: 3
     max_ms: 35
+  windows.kerberos_after_wfp:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 45
   windows.network_logon_after_transport:
     class: source_latency
     position: after

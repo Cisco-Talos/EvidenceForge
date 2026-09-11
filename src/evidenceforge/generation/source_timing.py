@@ -54,6 +54,7 @@ from evidenceforge.utils.time import ensure_utc
 type TimingOccurrence = OccurrenceBuilder | CanonicalOccurrence
 
 _SOURCE_EPSILON = timedelta(milliseconds=1)
+_WFP_TRANSPORT_EPSILON = timedelta(microseconds=1)
 _PROCESS_CREATE_SOURCE_KEYS = {
     "source.windows_security_process_create",
     "source.sysmon_process_create",
@@ -4794,6 +4795,17 @@ class SourceTimingPlanner:
                 hostname=hostname,
                 preferred=preferred,
             )
+        if family == "windows_security" and event.event_type in {
+            "kerberos_tgt",
+            "kerberos_service",
+            "kerberos_preauth_failed",
+        }:
+            return self._windows_kdc_time_after_wfp(
+                event,
+                source_instance=source_instance,
+                hostname=hostname,
+                preferred=preferred,
+            )
         if event.event_type not in {
             "logon",
             "machine_logon",
@@ -4943,11 +4955,11 @@ class SourceTimingPlanner:
                 f"host={hostname} floor={source_floor.isoformat()} "
                 f"close={source_close.isoformat()}"
             )
-        if source_floor <= preferred < source_close - _SOURCE_EPSILON:
+        if source_floor <= preferred < source_close - _WFP_TRANSPORT_EPSILON:
             return preferred
 
         available_us = int(
-            (source_close - _SOURCE_EPSILON - source_floor).total_seconds() * 1_000_000
+            (source_close - _WFP_TRANSPORT_EPSILON - source_floor).total_seconds() * 1_000_000
         )
         if available_us <= 1:
             raise StateError(
@@ -4986,6 +4998,82 @@ class SourceTimingPlanner:
         self.timing_runtime.audit.record_saturation(
             "source.windows_wfp_connection.admissible_window"
         )
+        return timestamp
+
+    def _windows_kdc_time_after_wfp(
+        self,
+        event: TimingOccurrence,
+        *,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Place transport-bound KDC processing after target packet admission."""
+
+        network = event.network
+        lifecycle = event.lifecycle
+        host = event.dst_host or event.src_host
+        if network is None or lifecycle is None or host is None:
+            return preferred
+        anchor = self._admitted_windows_transport_transactions.get(
+            self._transaction_transport_key(
+                lifecycle.group_id,
+                hostname,
+                network.src_ip,
+                network.src_port,
+                network.dst_ip,
+                network.dst_port,
+                network.protocol,
+            )
+        )
+        if anchor is None:
+            return preferred
+        if network.closed_at is None:
+            raise StateError(
+                "Transport-bound KDC audit is missing its canonical close time: "
+                f"host={hostname} transaction={lifecycle.group_id}"
+            )
+        close_time = self._runtime_endpoint_clock_time(
+            network.closed_at,
+            hostname=hostname,
+            os_category=host.os_category,
+        )
+        if anchor < preferred < close_time:
+            return preferred
+        available_us = int(
+            (close_time - anchor - _WFP_TRANSPORT_EPSILON).total_seconds() * 1_000_000
+        )
+        if available_us <= 1:
+            raise StateError(
+                "KDC source window cannot fit after target WFP admission: "
+                f"host={hostname} anchor={anchor.isoformat()} close={close_time.isoformat()}"
+            )
+        window = get_timing_window(
+            "windows.kerberos_after_wfp",
+            default_min_ms=1,
+            default_max_ms=45,
+            default_position="after",
+            default_class="source_latency",
+        )
+        maximum_us = min(window.max_ms * 1_000, available_us)
+        minimum_us = window.min_ms * 1_000 if maximum_us > window.min_ms * 1_000 else 1
+        timestamp = anchor + self.timing_runtime.sampler.sample_timedelta(
+            self._right_skew_distribution(minimum_us, maximum_us + 1),
+            relationship_key="windows.kerberos_after_wfp",
+            scope=TimingScope(
+                stable_id=self._endpoint_event_object_id(event, hostname, "kdc"),
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=lifecycle.group_id,
+            ),
+            sample_key="after_admission",
+        )
+        if not anchor < timestamp < close_time:
+            raise StateError(
+                "KDC source timing escaped its admitted transport: "
+                f"host={hostname} admission={anchor.isoformat()} "
+                f"timestamp={timestamp.isoformat()} close={close_time.isoformat()}"
+            )
         return timestamp
 
     def _machine_ticket_anchor(self, event: TimingOccurrence) -> datetime | None:

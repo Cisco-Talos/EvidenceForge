@@ -2421,6 +2421,11 @@ class NetworkObservationPlanner:
                 path_role,
                 transaction.conn_id or transaction.zeek_uid or transaction.stable_id,
                 runtime,
+                parent_group_id=(
+                    event.lifecycle.parent_group_id
+                    if event.lifecycle is not None and event.lifecycle.parent_group_id is not None
+                    else ""
+                ),
             )
             observation_scope = TimingScope(
                 stable_id=transaction.stable_id or transaction.zeek_uid,
@@ -2457,6 +2462,8 @@ class NetworkObservationPlanner:
                 visible_formats=formats,
                 timing=timing,
                 runtime=runtime,
+                observed_traffic=observed_traffic,
+                observed_history=history,
             )
             admitted_formats = self._admitted_source_formats(
                 formats,
@@ -2945,15 +2952,20 @@ class NetworkObservationPlanner:
         path_role: str,
         transaction_id: str,
         runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        *,
+        parent_group_id: str = "",
     ) -> tuple[datetime, datetime | None]:
         """Project one canonical interval through a physical sensor clock and route."""
 
         clock_key = cls._sensor_clock_key(sensor_identity, timing.profile_name)
         clock_spec = cls._sensor_clock_spec(timing)
+        coherent_proxy_group = (
+            parent_group_id if parent_group_id.startswith("proxy-transaction-") else ""
+        )
         scope = TimingScope(
-            stable_id=transaction_id,
+            stable_id=coherent_proxy_group or transaction_id,
             source=sensor_identity.casefold(),
-            lifecycle_id=path_role,
+            lifecycle_id=coherent_proxy_group or path_role,
         )
         route_delay = runtime.sampler.sample_timedelta(
             cls._right_skew_distribution(
@@ -3065,6 +3077,8 @@ class NetworkObservationPlanner:
         visible_formats: set[str],
         timing: NetworkSensorObservationTiming,
         runtime: TimingRuntime | SourceTimingPlanningRuntime,
+        observed_traffic: NetworkTrafficLedger | None = None,
+        observed_history: str | None = None,
     ) -> tuple[tuple[tuple[str, datetime], ...], tuple[tuple[str, float], ...]]:
         """Freeze Zeek connection, analyzer, and file timing before rendering."""
 
@@ -3096,8 +3110,24 @@ class NetworkObservationPlanner:
         if dns is not None and "zeek_dns" in visible_formats:
             dns_key = network_source_timing_key("zeek_dns")
             source_rtt_us = max(0, round(float(dns.rtt or 0.0) * 1_000_000))
+            traffic = observed_traffic or network.traffic
+            history = observed_history or network.history
+            single_exchange_udp = (
+                network.protocol == "udp"
+                and history == "Dd"
+                and traffic.orig.packets == 1
+                and traffic.resp.packets == 1
+                and source_rtt_us > 0
+                and observed_close is not None
+            )
+            if single_exchange_udp:
+                source_rtt_us = round((observed_close - observed_start).total_seconds() * 1_000_000)
+                source_times[dns_key] = observed_start
+                source_times[network_source_timing_key("zeek_dns", "response")] = observed_close
+                source_durations[dns_key] = source_rtt_us / 1_000_000
+                dns = None
             dns_upper = observed_close
-            if observed_close is not None and source_rtt_us > 0:
+            if dns is not None and observed_close is not None and source_rtt_us > 0:
                 observed_duration_us = round(
                     (observed_close - observed_start).total_seconds() * 1_000_000
                 )
@@ -3124,28 +3154,29 @@ class NetworkObservationPlanner:
                         sample_key=f"rtt:{observed_duration_us}",
                     )
                 dns_upper = observed_close - timedelta(microseconds=source_rtt_us + 1)
-            dns_window = get_timing_window(
-                "source.zeek_dns_query",
-                default_min_ms=1,
-                default_max_ms=95,
-                default_position="after",
-                default_class="same_observation",
-            )
-            dns_time = cls._sample_after_within(
-                observed_start,
-                dns_upper,
-                minimum_us=dns_window.min_ms * 1_000,
-                maximum_us=dns_window.max_ms * 1_000,
-                relationship_key="source.zeek_dns_query",
-                scope=scope,
-                sample_key=f"dns:{dns.trans_id}:{dns.query}",
-                runtime=runtime,
-            )
-            source_times[dns_key] = dns_time
-            if source_rtt_us > 0:
-                response_time = dns_time + timedelta(microseconds=source_rtt_us)
-                source_times[network_source_timing_key("zeek_dns", "response")] = response_time
-                source_durations[dns_key] = source_rtt_us / 1_000_000
+            if dns is not None:
+                dns_window = get_timing_window(
+                    "source.zeek_dns_query",
+                    default_min_ms=1,
+                    default_max_ms=95,
+                    default_position="after",
+                    default_class="same_observation",
+                )
+                dns_time = cls._sample_after_within(
+                    observed_start,
+                    dns_upper,
+                    minimum_us=dns_window.min_ms * 1_000,
+                    maximum_us=dns_window.max_ms * 1_000,
+                    relationship_key="source.zeek_dns_query",
+                    scope=scope,
+                    sample_key=f"dns:{dns.trans_id}:{dns.query}",
+                    runtime=runtime,
+                )
+                source_times[dns_key] = dns_time
+                if source_rtt_us > 0:
+                    response_time = dns_time + timedelta(microseconds=source_rtt_us)
+                    source_times[network_source_timing_key("zeek_dns", "response")] = response_time
+                    source_durations[dns_key] = source_rtt_us / 1_000_000
 
         if event.dhcp is not None and "zeek_dhcp" in visible_formats:
             dhcp_key = network_source_timing_key("zeek_dhcp")
@@ -3264,16 +3295,21 @@ class NetworkObservationPlanner:
             if observed_close is not None and ocsp_duration_floor_us:
                 downstream_reserve_us = file_window.min_ms * 1_000 + ocsp_duration_floor_us + 3
                 http_upper = observed_close - timedelta(microseconds=downstream_reserve_us)
-            http_time = cls._sample_after_within(
-                request_anchor,
-                http_upper,
-                minimum_us=http_window.min_ms * 1_000,
-                maximum_us=http_window.max_ms * 1_000,
-                relationship_key="source.zeek_http_request",
-                scope=scope,
-                sample_key=f"http:{http.trans_depth}",
-                runtime=runtime,
-            )
+            if canonical_request is not None:
+                http_time = request_anchor
+                if http_upper is not None:
+                    http_time = min(http_time, http_upper)
+            else:
+                http_time = cls._sample_after_within(
+                    request_anchor,
+                    http_upper,
+                    minimum_us=http_window.min_ms * 1_000,
+                    maximum_us=http_window.max_ms * 1_000,
+                    relationship_key="source.zeek_http_request",
+                    scope=scope,
+                    sample_key=f"http:{http.trans_depth}",
+                    runtime=runtime,
+                )
             if "zeek_http" in visible_formats:
                 source_times[network_source_timing_key("zeek_http")] = http_time
 
@@ -4469,6 +4505,8 @@ def _compatibility_protocol_timing(
         visible_formats=set(RUNTIME_OWNED_ZEEK_FORMATS),
         timing=timing,
         runtime=runtime,
+        observed_traffic=network.traffic,
+        observed_history=network.history,
     )
 
 

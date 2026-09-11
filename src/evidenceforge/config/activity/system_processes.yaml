@@ -684,21 +684,63 @@ system_binaries:
     - exe: "svchost.exe"
       path: "C:\\Windows\\System32\\svchost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Host Process for Windows Services
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: svchost.exe
     - exe: "taskhostw.exe"
       path: "C:\\Windows\\System32\\taskhostw.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Host Process for Windows Tasks
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: taskhostw.exe
     - exe: "sihost.exe"
       path: "C:\\Windows\\System32\\sihost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Shell Infrastructure Host
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: sihost.exe
     - exe: "conhost.exe"
       path: "C:\\Windows\\System32\\conhost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Console Window Host
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: conhost.exe
     - exe: "dllhost.exe"
       path: "C:\\Windows\\System32\\dllhost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: COM Surrogate
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: dllhost.exe
     - exe: "RuntimeBroker.exe"
       path: "C:\\Windows\\System32\\RuntimeBroker.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Runtime Broker
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: RuntimeBroker.exe
     - exe: "backgroundTaskHost.exe"
       path: "C:\\Windows\\System32\\backgroundTaskHost.exe"
       release_policy: host_build
@@ -707,6 +749,13 @@ system_binaries:
     - exe: "cmd.exe"
       path: "C:\\Windows\\System32\\cmd.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Windows Command Processor
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: cmd.exe
     - exe: "powershell.exe"
       path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
       release_policy: host_build
@@ -721,38 +770,101 @@ system_binaries:
     - exe: "spoolsv.exe"
       path: "C:\\Windows\\System32\\spoolsv.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Spooler SubSystem App
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: spoolsv.exe
     - exe: "WmiPrvSE.exe"
       path: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: WMI Provider Host
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: WmiPrvSE.exe
     - exe: "msdtc.exe"
       path: "C:\\Windows\\System32\\msdtc.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Microsoft Distributed Transaction Coordinator
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: msdtc.exe
     - exe: "SearchIndexer.exe"
       path: "C:\\Windows\\System32\\SearchIndexer.exe"
       release_policy: host_build
     - exe: "SearchProtocolHost.exe"
       path: "C:\\Windows\\System32\\SearchProtocolHost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Microsoft Windows Search Protocol Host
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: SearchProtocolHost.exe
     - exe: "SearchFilterHost.exe"
       path: "C:\\Windows\\System32\\SearchFilterHost.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Microsoft Windows Search Filter Host
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: SearchFilterHost.exe
 
     # --- Windows Update and telemetry ---
     - exe: "usoclient.exe"
       path: "C:\\Windows\\System32\\usoclient.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Update Session Orchestrator
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: UsoClient.exe
     - exe: "TiWorker.exe"
       path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: servicing-stack
+        description: Windows Module Installer Worker
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: TiWorker.exe
     - exe: "cleanmgr.exe"
       path: "C:\\Windows\\System32\\cleanmgr.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Disk Cleanup
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: cleanmgr.exe
     - exe: "wsqmcons.exe"
       path: "C:\\Windows\\System32\\wsqmcons.exe"
       release_policy: host_build
     - exe: "CompatTelRunner.exe"
       path: "C:\\Windows\\System32\\CompatTelRunner.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Microsoft Compatibility Appraiser
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: CompatTelRunner.exe
     - exe: "GoogleUpdate.exe"
       path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
       release_policy: unspecified
@@ -825,12 +937,26 @@ system_binaries:
     - exe: "dfsr.exe"
       path: "C:\\Windows\\System32\\dfsr.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: DFS Replication Service
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: dfsr.exe
     - exe: "ntdsutil.exe"
       path: "C:\\Windows\\System32\\ntdsutil.exe"
       release_policy: host_build
     - exe: "ismserv.exe"
       path: "C:\\Windows\\System32\\ismserv.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Intersite Messaging Service
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: ismserv.exe
 
     # --- Admin GUI tools ---
     - exe: "taskmgr.exe"
@@ -875,9 +1001,23 @@ system_binaries:
     - exe: "sc.exe"
       path: "C:\\Windows\\System32\\sc.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Service Control Manager Configuration Tool
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: sc.exe
     - exe: "net.exe"
       path: "C:\\Windows\\System32\\net.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Net Command
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: net.exe
     - exe: "net1.exe"
       path: "C:\\Windows\\System32\\net1.exe"
       release_policy: host_build
@@ -890,6 +1030,13 @@ system_binaries:
     - exe: "schtasks.exe"
       path: "C:\\Windows\\System32\\schtasks.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: Task Scheduler Configuration Tool
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: schtasks.exe
     - exe: "wevtutil.exe"
       path: "C:\\Windows\\System32\\wevtutil.exe"
       release_policy: host_build
@@ -928,6 +1075,13 @@ system_binaries:
     - exe: "whoami.exe"
       path: "C:\\Windows\\System32\\whoami.exe"
       release_policy: host_build
+      native_release:
+        product_id: microsoft-windows
+        variant: core-os
+        description: whoami - displays logged on user information
+        product: Microsoft Windows Operating System
+        company: Microsoft Corporation
+        original_filename: whoami.exe
 
     # --- Information / enumeration tools ---
     - exe: "systeminfo.exe"

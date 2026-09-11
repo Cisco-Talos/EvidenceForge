@@ -3857,7 +3857,7 @@ class EventDispatcher:
             )
         return tuple(admitted)
 
-    def _stage_action_cohort_projection_timing(
+    def _stage_prepared_projection_timing(
         self,
         projection: _PreparedProjection,
         preparation: SourceTimingPreparation,
@@ -3866,6 +3866,37 @@ class EventDispatcher:
 
         for source_event, format_name in self._action_cohort_admitted_source_events(projection):
             preparation.record_admitted_source_event(source_event, format_name)
+
+    def stage_deferred_session_publication_timing(
+        self,
+        dispatches: tuple[PreparedDispatch, ...],
+        preparation: SourceTimingPreparation,
+    ) -> None:
+        """Retain admitted deferred-session indexes after every member is planned."""
+
+        if type(dispatches) is not tuple or len(dispatches) < 2:
+            raise EventContractError("Deferred-session timing requires an ordered publication")
+        if not self.source_timing_planner.is_active_preparation(preparation):
+            raise EventContractError("Deferred-session timing preparation is not active")
+        for ordinal, prepared in enumerate(dispatches):
+            expected_intent = (
+                PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
+                if ordinal == 0
+                else PreparedDispatchStateIntent.EXTERNAL_DEFERRED_DEPENDENT
+            )
+            if (
+                type(prepared) is not PreparedDispatch
+                or prepared._source_timing_preparation is not preparation
+                or prepared._state_intent is not expected_intent
+                or prepared._consumed
+                or prepared._action_cohort_batch_id is not None
+                or prepared._network_dependent_batch_id is not None
+                or prepared._deferred_session_publication_batch_id is not None
+            ):
+                raise EventContractError(
+                    "Deferred-session timing member changed intent or preparation"
+                )
+            self._stage_prepared_projection_timing(prepared._projection, preparation)
 
     def _action_cohort_projection_observation_deltas(
         self,
@@ -4015,7 +4046,7 @@ class EventDispatcher:
                 occurrence,
                 allowed_formats=allowed_formats,
             )
-            self._stage_action_cohort_projection_timing(
+            self._stage_prepared_projection_timing(
                 projection,
                 source_timing_preparation,
             )

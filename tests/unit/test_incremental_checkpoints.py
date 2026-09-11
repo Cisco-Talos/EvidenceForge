@@ -573,7 +573,6 @@ def test_proxy_emitter_head_restores_only_live_tunnel_summaries(tmp_path: Path) 
         tunnel_cs_bytes=123,
         tunnel_sc_bytes=456,
         latest_child_end=opened_at + timedelta(minutes=1, seconds=2),
-        transport_duration_ms=62_000,
     )
     seal = ProxyEmitterParticipant(source).prepare_checkpoint(1)
     restored = ProxyEmitter(load_format("proxy_access"), tmp_path / "restored")

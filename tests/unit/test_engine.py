@@ -102,6 +102,62 @@ def test_service_wrapper_storyline_process_lifetimes_are_source_native():
     )
 
 
+def test_engine_binds_canonical_binary_registry_before_process_generation(
+    tmp_path,
+):
+    """Production initialization enables exact process-binary identity resolution."""
+    scenario = Scenario(
+        version="1.0",
+        name="binary-registry-integration",
+        description="Binary registry integration",
+        environment=Environment(
+            description="Test environment",
+            users=[
+                User(
+                    username="testuser",
+                    full_name="Test User",
+                    email="test@example.com",
+                    primary_system="TEST-01",
+                )
+            ],
+            systems=[
+                System(
+                    hostname="TEST-01",
+                    ip="10.0.0.1",
+                    os="Windows 10",
+                    type="workstation",
+                )
+            ],
+        ),
+        time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="2h"),
+        baseline_activity=BaselineActivity(
+            description="Test baseline",
+            intensity="medium",
+            variation="low",
+        ),
+        output=OutputSpec(
+            logs=[{"format": "windows"}],
+            destination="./output",
+            compression=False,
+        ),
+        personas=[],
+    )
+    engine = GenerationEngine(scenario, tmp_path)
+
+    engine._initialize()
+
+    assert engine.dispatcher.deployment_registry is engine.deployment_registry
+    system = scenario.environment.systems[0]
+    identity = engine.dispatcher.resolve_process_binary_identity(
+        system.hostname,
+        "",
+        r"C:\Windows\System32\winlogon.exe",
+        "windows",
+    )
+    assert identity is not None
+    assert identity.identity_kind == "installed_release"
+
+
 @pytest.mark.slow
 class TestGenerationEngine:
     def test_incremental_tail_resume_is_byte_identical_for_external_sorted_emitters(

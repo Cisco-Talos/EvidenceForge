@@ -986,6 +986,7 @@ class NetworkTransactionPlanner:
             ProcessMaterializationPlan,
             SessionMaterializationPlan,
         )
+        from evidenceforge.generation.windows_tokens import windows_process_token_profile
 
         if type(authority) is not DeferredSessionNetworkAuthority:
             raise TypeError("Deferred session dependent authority changed exact type")
@@ -1119,6 +1120,21 @@ class NetworkTransactionPlanner:
                 )
                 parent_identity = member.parent_identity
                 system_subject = identity.principal.casefold() == "system"
+                integrity_level, token_elevation, mandatory_label = (
+                    windows_process_token_profile(
+                        identity.principal,
+                        member.integrity_level,
+                    )
+                    if is_rdp
+                    else (member.integrity_level, "", "")
+                )
+                owning_session = (
+                    batch.session.identity
+                    if batch.session is not None
+                    and member.auth_session_id == batch.session.identity.session_id
+                    and identity.logon_id == batch.session.identity.logon_id
+                    else None
+                )
                 builder = OccurrenceBuilder(
                     timestamp=spec.canonical_time,
                     event_type=spec.event_type.value,
@@ -1129,13 +1145,21 @@ class NetworkTransactionPlanner:
                         image=identity.image,
                         command_line=identity.command_line,
                         username=identity.principal,
-                        integrity_level=member.integrity_level,
+                        integrity_level=integrity_level,
                         logon_id=identity.logon_id,
                         start_time=identity.started_at,
                         parent_image=(parent_identity.image if parent_identity is not None else ""),
                         parent_command_line=(
                             parent_identity.command_line if parent_identity is not None else ""
                         ),
+                        parent_username=(
+                            parent_identity.principal if parent_identity is not None else ""
+                        ),
+                        parent_start_time=(
+                            parent_identity.started_at if parent_identity is not None else None
+                        ),
+                        token_elevation=token_elevation,
+                        mandatory_label=mandatory_label,
                     ),
                     auth=(
                         AuthContext(
@@ -1150,6 +1174,9 @@ class NetworkTransactionPlanner:
                             subject_logon_id="0x3e7" if system_subject else "",
                             session_kind="rdp",
                             auth_protocol="rdp",
+                            logon_guid=(
+                                owning_session.logon_guid if owning_session is not None else ""
+                            ),
                         )
                         if is_rdp
                         else None
@@ -1434,7 +1461,10 @@ class NetworkTransactionPlanner:
         request: NetworkConnectionRequest,
         rtt_seconds: float,
     ) -> float:
-        """Return DNS RTT plus typed transport teardown slack."""
+        """Return packet-owned DNS transport duration for the requested protocol."""
+
+        if request.proto == "udp":
+            return rtt_seconds
 
         return rtt_seconds + self._sample_duration_seconds(
             request,
@@ -3720,12 +3750,19 @@ class NetworkTransactionPlanner:
             and src_port > 0
             and not (proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"})
         ):
-            kerberos_audit_count = executor._kerberos_audit_count_for_connection(
-                src_ip,
-                kerberos_dc_hostname,
-                src_port,
-                time,
-            )
+            if request.kerberos_audit_mode in {"tgt", "tgs"}:
+                kerberos_audit_count = 1
+            elif request.kerberos_audit_mode == "pair":
+                kerberos_audit_count = 2
+            elif request.kerberos_audit_mode == "none":
+                kerberos_audit_count = 0
+            else:
+                kerberos_audit_count = executor._kerberos_audit_count_for_connection(
+                    src_ip,
+                    kerberos_dc_hostname,
+                    src_port,
+                    time,
+                )
             if kerberos_audit_count == 0 and kerberos_prerequisite_success:
                 # A successful internal KDC transport with no existing tuple
                 # companions will publish a TGT/TGS pair after the leased
@@ -4275,9 +4312,9 @@ class NetworkTransactionPlanner:
                 else:
                     event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
                     event.network.resp_ip_bytes = event.network.resp_bytes + overhead
-            event.network.duration = max(
-                event.network.duration or 0.0,
-                self._dns_transport_duration_seconds(request, synthesized_rtt),
+            event.network.duration = self._dns_transport_duration_seconds(
+                request,
+                synthesized_rtt,
             )
 
         # Proxy context: attach only for established outbound internet traffic.
@@ -5605,6 +5642,13 @@ class NetworkTransactionPlanner:
                     for builder, state_member in deferred_state_starts
                 )
 
+        if prepared_deferred_session_dispatches:
+            if prepared_dispatch is None:
+                raise StateError("Deferred-session timing lost its transport projection")
+            executor.dispatcher.stage_deferred_session_publication_timing(
+                (prepared_dispatch, *prepared_deferred_session_dispatches),
+                boundary.timing_preparation,
+            )
         boundary.seal_timing()
         if prepared_dispatch is not None:
             executor.dispatcher.validate_prepared(prepared_dispatch)
@@ -5940,6 +5984,13 @@ class NetworkTransactionPlanner:
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
         executor._last_connection_effective_transaction_id = ""
+        process_owner_system = resolved_source_system or source_system
+        if process_owner_system is not None and event.network.initiating_pid > 0:
+            executor._remember_process_connection_hold(
+                system=process_owner_system,
+                pid=event.network.initiating_pid,
+                close_time=event.network.closed_at,
+            )
         if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
             executor._last_connection_effective_tuple = (
                 event.network.src_ip,
@@ -5952,6 +6003,7 @@ class NetworkTransactionPlanner:
             executor._last_connection_effective_transaction_id = event.network.stable_id
             executor._last_connection_http_context = event.protocol.http
             executor._last_connection_file_transfers = event.protocol.file_transfers
+        kerberos_target_wfp_published = False
         if (
             kerberos_prerequisite_success
             and not suppress_application_side_effects
@@ -5960,9 +6012,34 @@ class NetworkTransactionPlanner:
             and event.network.protocol in {"tcp", "udp"}
             and event.network.src_port > 0
         ):
+            if (
+                not committed_suppressed
+                and deferred_published is None
+                and target_system is not None
+                and dst_host_ctx is not None
+                and dst_host_ctx.os_category == "windows"
+                and not event.network.application_layer_only
+                and executor._should_emit_windows_inbound_wfp(event, target_system)
+            ):
+                inbound_pid = event.network.responding_pid
+                inbound_application = executor._lookup_process_name(
+                    target_system.hostname,
+                    inbound_pid,
+                    "windows",
+                )
+                executor.generate_wfp_connection(
+                    system=target_system,
+                    time=time,
+                    network=event.network,
+                    pid=inbound_pid,
+                    application=inbound_application,
+                    parent_action_group_id=parent_action_group_id,
+                )
+                kerberos_target_wfp_published = True
             # Publish endpoint audit evidence only after the canonical transport
-            # and its final leased tuple have committed. Timestamp ordering is
-            # source truth and does not depend on publication call order.
+            # and its final leased tuple have committed.  When target WFP is
+            # visible, admit that exact source frontier before dependent KDC
+            # processing is planned.
             executor._emit_dc_audit_for_kerberos_connection(
                 src_ip=event.network.src_ip,
                 src_port=event.network.src_port,
@@ -5973,6 +6050,10 @@ class NetworkTransactionPlanner:
                 conn_state=event.network.conn_state,
                 service=event.network.service,
                 source_system=resolved_source_system,
+                transport=event.network,
+                audit_mode=request.kerberos_audit_mode,
+                audit_username=request.kerberos_audit_username,
+                audit_service_name=request.kerberos_audit_service_name,
             )
         if deferred_published is not None:
             publication = deferred_published.publication
@@ -6058,7 +6139,8 @@ class NetworkTransactionPlanner:
             )
 
         if (
-            target_system is not None
+            not kerberos_target_wfp_published
+            and target_system is not None
             and dst_host_ctx is not None
             and dst_host_ctx.os_category == "windows"
             and not event.network.application_layer_only

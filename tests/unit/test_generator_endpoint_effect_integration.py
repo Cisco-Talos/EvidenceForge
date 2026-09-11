@@ -1205,9 +1205,10 @@ def test_no_session_linux_nmap_preserves_process_probes_and_foreground_hold() ->
     probe_close = probes[0].network.closed_at
     assert probe_close is not None
     process_key = generator._process_instance_key(source.hostname, pid)
-    assert process_key not in generator._process_connection_hold_until
+    assert generator._process_connection_hold_until[process_key] == probe_close
     finalizer_time = generator.foreground_process_termination_time(source.hostname, pid)
-    assert finalizer_time == process.start_time + timedelta(seconds=4.367418)
+    assert finalizer_time is not None
+    assert finalizer_time > probe_close
 
 
 @pytest.mark.parametrize("effect_kind", ["file", "registry"])

@@ -70,28 +70,49 @@ systems and sensors.
 
 ## What's New in 2.0
 
-- **More realistic correlated evidence:** SSH, RDP, SMB, Windows authentication, Sysmon, Zeek,
-  Snort, eCAR, and Linux system logs now agree more closely on identities, timing, processes,
-  network sessions, and lifecycle boundaries. Investigations encounter fewer cross-source
+- **Greater realism across sources**. Endpoint, identity, network, application, and IDS evidence
+  now agrees more closely on actors, credentials, processes, timing, network sessions, artifacts,
+  and lifecycle boundaries. Analysts can follow investigative pivots with fewer synthetic
   contradictions and more source-native behavior.
 
-- **Cross-platform SMB2/3 activity:** Generate realistic file-share activity across Windows and
-  Linux clients and Windows or Samba servers. Authentication, file operations, network traffic,
-  endpoint telemetry, and Samba audit events remain correlated across the resulting log sources.
+- **Full cross-platform SMB2/3 activity**. Model stateful file-share activity across Windows and
+  Linux clients and Windows or Samba servers, including storage topology, authentication,
+  mappings, mounts, access controls, persistent sessions, and file operations. Correlated Windows
+  Security, EDR, Samba audit, network traffic, and Zeek `smb_mapping`, `smb_files`, and `files` logs
+  provide complete SMB investigations instead of inferred port 445 activity.
 
-- **Resumable long-running generation:** EvidenceForge creates automatic recovery checkpoints
-  during generation, so large or multi-week runs can be safely interrupted and resumed without
-  starting over. New status and suspension commands make these runs easier to inspect and control.
+- **Resumable large-scale generation**. Automatic incremental checkpoints, graceful suspension,
+  integrity verification, and compatibility-aware recovery make long or multi-week runs easier to
+  operate. Interrupted jobs can resume safely without starting over, while improved progress
+  reporting, resource forecasting, and performance make large datasets more practical.
 
-- **Easier scenario authoring:** Focused `eforge schema` commands provide exact field definitions
-  and working minimal examples for individual scenario objects and event types. Validation errors
-  are grouped around the object that needs attention and point directly to the relevant schema
-  contract.
+- **Reusable environment packs**. Industry packs capture sector-specific applications, roles,
+  traffic, and activity patterns, while organization packs define a consistent environment,
+  including its identities, assets, services, storage, and background noise. Teams can share these
+  packs, and reusing an organization pack across scenarios makes the resulting datasets look like
+  different incidents collected from the same real environment.
 
-- **Modular, reusable scenarios:** Split large scenarios into nested YAML includes, then compose
-  them with versioned industry and organization packs containing reusable environments, personas,
-  applications, and activity models. Packs can be validated, shared as portable `.efpack`
-  archives, and reproduced with their exact dependencies.
+- **Composable Scenario 2.0 environments**. Scenarios can combine reusable packs with
+  scenario-specific content and nested YAML includes. Users can separate stable organizational
+  context from individual storylines, customize only what an exercise requires, and avoid
+  rebuilding the same environment for every dataset.
+
+- **Self-describing output bundles**. Every generated bundle includes its authoritative resolved
+  scenario and generation manifest, recording the effective composition, formats, seed, digests,
+  and provenance. Bundles can be evaluated without separately locating the original scenario and
+  retain the information needed to understand or reproduce the run.
+
+- **Faster, clearer scenario authoring**. Focused `eforge schema` commands provide exact
+  installed-version field definitions and minimal examples, while runtime inventories expose valid
+  roles, personas, formats, and IDS signatures. Grouped validation diagnostics and dedicated agent
+  skills help authors find and repair the relevant object without navigating the entire scenario
+  schema.
+
+- **Earlier detection of invisible or impossible behavior**. Validation now considers deployed
+  sources, host roles, sensor placement, observation settings, collection windows, and selected
+  output formats before generation begins. Blocking evidence gaps fail early, while intentionally
+  valid but entirely invisible activity receives an actionable warning before users commit time
+  and resources to a run.
 
 [See the complete changelog](CHANGELOG.md) for detailed release history.
 

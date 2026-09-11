@@ -35,7 +35,7 @@ _APP_PATHS = {
 _MODULE_PATHS = {
     "slack": r"C:\Users\{username}\AppData\Local\slack\app-4.38.125\slack_elf.dll",
     "zoom": r"C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll",
-    "postman": r"C:\Users\{username}\AppData\Local\Postman\app-11.2.14\Postman.dll",
+    "postman": r"C:\Users\{username}\AppData\Local\Postman\app-10.24.3\Postman.dll",
 }
 
 
@@ -74,6 +74,7 @@ def _scenario(
     deployment_overrides: list[dict[str, object]] | None = None,
 ) -> Scenario:
     payload = yaml.safe_load(_SCENARIO_PATH.read_text(encoding="utf-8"))
+    payload["time_window"]["start"] = "2024-03-18T12:00:00Z"
     payload["environment"]["users"] = users
     payload["environment"]["systems"] = systems
     payload["environment"]["network"]["segments"][0]["systems"] = [
@@ -82,6 +83,25 @@ def _scenario(
     if deployment_overrides is not None:
         payload["environment"]["deployment_overrides"] = deployment_overrides
     return Scenario.model_validate(payload)
+
+
+def test_application_release_validity_window_gates_every_deployment_identity() -> None:
+    """A future catalog release must not compile a descriptor or installation."""
+
+    payload = _application("postman").model_dump(mode="python")
+    payload["platforms"]["windows"]["available_from"] = "2024-04-01"
+    future_postman = ApplicationEntry.model_validate(payload)
+    scenario = _scenario(
+        [_user("alice", "developer", "WS-A")],
+        [_system("WS-A", 1)],
+        deployment_overrides=[{"system": "WS-A", "applications": ["postman"]}],
+    )
+
+    registry = _compile(scenario, applications=(future_postman,))
+
+    assert registry.application_descriptor("postman", "windows") is None
+    assert registry.count_installations_for_application("WS-A", "postman") == 0
+    assert _resolved(registry, "WS-A", "alice", "postman") is None
 
 
 def _compile(

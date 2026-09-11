@@ -44,6 +44,8 @@ class ProxyTransactionPlan:
     tunnel_setup_cs_bytes: int = 0
     tunnel_setup_sc_bytes: int = 0
     tunnel_setup_time_taken_ms: int = 0
+    client_transport_cs_bytes: int | None = None
+    client_transport_sc_bytes: int | None = None
 
     def __post_init__(self) -> None:
         """Validate conditional phase ordering and terminal semantics."""
@@ -123,6 +125,14 @@ class ProxyTransactionPlan:
             < 0
         ):
             raise ValueError("Proxy tunnel setup accounting must be non-negative")
+        if any(
+            value is not None and value < 0
+            for value in (
+                self.client_transport_cs_bytes,
+                self.client_transport_sc_bytes,
+            )
+        ):
+            raise ValueError("Proxy client transport accounting must be non-negative")
 
     @property
     def time_taken_ms(self) -> int:
@@ -135,6 +145,17 @@ class ProxyTransactionPlan:
         """Return the complete client-to-proxy transport lifetime."""
 
         return max(0.000001, (self.close_at - self.client_connect_at).total_seconds())
+
+    @property
+    def tunnel_duration_seconds(self) -> float | None:
+        """Return the successful nested CONNECT tunnel lifetime when modeled."""
+
+        if self.tunnel_request_at is None or self.terminal_outcome != "success":
+            return None
+        established_at = (
+            self.request_at if self.tunnel_request_at < self.request_at else self.decision_at
+        )
+        return max(0.0, (self.close_at - established_at).total_seconds())
 
     @property
     def origin_duration_seconds(self) -> float | None:

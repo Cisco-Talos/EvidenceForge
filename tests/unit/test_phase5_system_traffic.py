@@ -1008,6 +1008,7 @@ def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     """Anacron syslog should be a coherent daily run, not random repeated fragments."""
     engine = type("FakeEngine", (object,), {})()
     engine.activity_generator = Mock()
+    engine.activity_generator.generate_system_process.return_value = 1_920_117
     engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
     engine.end_time = datetime(2024, 3, 18, 18, 0, 0, tzinfo=UTC)
     engine._scenario_tz = None
@@ -1040,6 +1041,21 @@ def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     assert all("cron.weekly" not in message for message in messages)
     assert messages[-1] == "Normal exit (1 job run)"
     assert times == sorted(times)
+    assert {call.kwargs["pid"] for call in calls} == {1_920_117}
+    engine.activity_generator.generate_system_process.assert_called_once_with(
+        system=linux_system,
+        time=ts,
+        process_name="/usr/sbin/anacron",
+        command_line="/usr/sbin/anacron -s",
+        parent_pid=1,
+        username="root",
+        emit_linux_syslog=False,
+        concurrency_group_id="anacron:LNX-01:2024-03-18",
+    )
+    termination = engine.activity_generator.generate_system_process_termination
+    termination.assert_called_once()
+    assert termination.call_args.kwargs["pid"] == 1_920_117
+    assert termination.call_args.kwargs["time"] > times[-1]
 
 
 def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
@@ -2110,12 +2126,12 @@ class TestInfrastructureDetection:
         assert activity_gen._kerberos_tgt_cache_until[tgt_key] > timestamp
         assert activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
 
-    def test_kerberos_transport_failure_retains_already_committed_primary_audit_points(
+    def test_kerberos_transport_failure_prevents_unadmitted_primary_audit_points(
         self,
         activity_gen,
         mock_emitters,
     ):
-        """A later KDC transport failure cannot erase an accepted primary 4771."""
+        """A failed KDC transport cannot publish a 4771 or reserve its audit points."""
 
         dc = System(
             hostname="DC-01",
@@ -2157,8 +2173,8 @@ class TestInfrastructureDetection:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
             if call[0][0].event_type == "kerberos_preauth_failed"
         ]
-        assert len(emitted) == 1
-        assert activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
+        assert emitted == []
+        assert not activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
         assert (
             activity_gen._kerberos_audit_count_for_connection(
                 client.ip,
@@ -2166,10 +2182,10 @@ class TestInfrastructureDetection:
                 source_port,
                 timestamp,
             )
-            == 1
+            == 0
         )
         census = activity_gen._network_transaction_runtime.census()
-        assert census.live_points == 2
+        assert census.live_points == 0
         assert census.prepared_transactions == census.claimed_transactions == 0
         assert census.reserved_points == census.preparation_fences == 0
 

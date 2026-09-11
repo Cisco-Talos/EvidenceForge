@@ -498,6 +498,80 @@ def test_machine_logon_follows_visible_kerberos_service_ticket() -> None:
     assert timedelta(milliseconds=3) <= login_time - ticket_time <= timedelta(milliseconds=135)
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    ["kerberos_tgt", "kerberos_service", "kerberos_preauth_failed"],
+)
+def test_transport_bound_kdc_audit_follows_target_wfp(event_type: str) -> None:
+    """KDC processing must render after exact target packet admission and before close."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    dc = HostContext(
+        hostname="DC-01",
+        ip="10.0.0.10",
+        fqdn="DC-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="domain_controller",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    transport = network_plan(
+        src_ip="10.0.0.20",
+        src_port=54123,
+        dst_ip=dc.ip,
+        dst_port=88,
+        protocol="tcp",
+        service="kerberos",
+        duration=0.18,
+        source_visible_start_time=start,
+        source_visible_close_time=start + timedelta(milliseconds=180),
+        conn_state="SF",
+    )
+    lifecycle = ActionLifecycleContext(
+        group_id=transport.stable_id,
+        canonical_start=transport.started_at,
+        phase="dependent",
+    )
+    wfp_event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="wfp_connection",
+        src_host=dc,
+        network=transport,
+        lifecycle=lifecycle,
+    )
+    kdc_event = OccurrenceBuilder(
+        timestamp=start - timedelta(milliseconds=120),
+        event_type=event_type,
+        dst_host=dc,
+        network=transport,
+        kerberos=KerberosContext(
+            target_username="WIN-TEST-01$",
+            target_domain="CORP.LOCAL",
+            service_name="krbtgt" if event_type != "kerberos_service" else "host/DC-01",
+            source_ip="::ffff:10.0.0.20",
+            source_port=54123,
+        ),
+        lifecycle=lifecycle,
+    )
+
+    planner.plan_event(wfp_event, "windows_event_security")
+    planner.record_admitted_source_event(wfp_event, "windows_event_security")
+    planner.plan_event(kdc_event, "windows_event_security")
+
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    kdc_time = kdc_event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_event_security", dc.hostname)
+    ]
+    projected_close = transport.closed_at + planner.endpoint_clock_adjustment_for_host(
+        hostname=dc.hostname,
+        os_category=dc.os_category,
+        timestamp=transport.closed_at,
+    )
+    assert wfp_time < kdc_time < projected_close
+
+
 def test_machine_logon_after_closed_transport_still_follows_late_service_ticket() -> None:
     """A completed Kerberos socket cannot pull machine auth before its ticket."""
 
@@ -2540,6 +2614,34 @@ def test_windows_wfp_late_candidate_uses_transport_interior_without_close_atom()
     assert candidate < wfp_time < projected_close
 
 
+def test_windows_wfp_admits_submillisecond_transport_interval() -> None:
+    """A packet-sized DNS interval must not inherit the 1 ms lifecycle epsilon."""
+
+    planner = _source_timing_planner("complete")
+    flow_event, login_event = _remote_auth_timing_events()
+    candidate = datetime(2024, 3, 18, 12, 4, 22, 616309, tzinfo=UTC)
+    canonical_close = candidate + timedelta(microseconds=463)
+    wfp_event = _remote_auth_wfp_event(flow_event, login_event)
+    wfp_event.timestamp = candidate
+    wfp_event.network = network_plan(
+        src_ip="10.0.0.10",
+        src_port=53000,
+        dst_ip="10.0.0.53",
+        dst_port=53,
+        protocol="udp",
+        service="dns",
+        duration=0.000463,
+        source_visible_start_time=candidate,
+        source_visible_close_time=canonical_close,
+        conn_state="SF",
+    )
+
+    planner.plan_event(wfp_event, "windows_event_security")
+
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    assert candidate <= wfp_time < canonical_close
+
+
 def test_windows_wfp_source_clock_adjustment_is_applied_once() -> None:
     """The WFP source floor must translate clocks without adding skew twice."""
 
@@ -3046,8 +3148,8 @@ def test_zeek_dns_timestamp_stays_inside_rendered_conn_lifetime(tmp_path: Path) 
     conn_row = json.loads(conn_path.read_text().splitlines()[0])
     dns_row = json.loads(dns_path.read_text().splitlines()[0])
 
-    assert conn_row["ts"] <= dns_row["ts"] <= conn_row["ts"] + event.network.duration
-    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
+    assert dns_row["ts"] == pytest.approx(conn_row["ts"])
+    assert dns_row["ts"] + dns_row["rtt"] == pytest.approx(conn_row["ts"] + conn_row["duration"])
 
 
 def test_zeek_dns_rtt_fits_exact_rendered_conn_lifetime(tmp_path: Path) -> None:
@@ -3078,8 +3180,8 @@ def test_zeek_dns_rtt_fits_exact_rendered_conn_lifetime(tmp_path: Path) -> None:
     conn_row = json.loads(conn_path.read_text().splitlines()[0])
     dns_row = json.loads(dns_path.read_text().splitlines()[0])
 
-    assert conn_row["ts"] <= dns_row["ts"]
-    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
+    assert dns_row["ts"] == pytest.approx(conn_row["ts"])
+    assert dns_row["ts"] + dns_row["rtt"] == pytest.approx(conn_row["ts"] + conn_row["duration"])
 
 
 def test_migrated_emitters_do_not_use_local_timing_helpers() -> None:

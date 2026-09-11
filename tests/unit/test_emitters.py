@@ -46,6 +46,7 @@ from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
     _enforce_windows_lock_dwell_after_normalization,
     _normalize_windows_time_created,
+    _repair_windows_lock_lifecycle_rows,
     _shift_windows_lock_lifecycle_after_rendered_clock,
     _special_privilege_fallback,
     _windows_pid_hex,
@@ -1894,6 +1895,54 @@ class TestWindowsEventEmitter:
         assert unlock["TimeCreated"] == lock_time + timedelta(seconds=min_unlock_gap_seconds())
         assert not rendered_locks
 
+    def test_finalized_lock_lifecycle_repairs_reauth_order_and_dwell(self):
+        """Frozen cross-batch timing must still retain 4800 -> Type 7 -> 4801 order."""
+        computer = "WIN-TEST-01.corp.local"
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        rows = [
+            (
+                10,
+                {
+                    "EventID": 4800,
+                    "TimeCreated": lock_time,
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                11,
+                {
+                    "EventID": 4624,
+                    "LogonType": 7,
+                    "TimeCreated": lock_time - timedelta(seconds=29),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                12,
+                {
+                    "EventID": 4801,
+                    "TimeCreated": lock_time + timedelta(milliseconds=2),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+        ]
+
+        changed = _repair_windows_lock_lifecycle_rows(rows, {})
+
+        reauth_time = rows[1][1]["TimeCreated"]
+        unlock_time = rows[2][1]["TimeCreated"]
+        assert changed == {11, 12}
+        assert lock_time < reauth_time < unlock_time
+        assert unlock_time - lock_time == timedelta(seconds=min_unlock_gap_seconds())
+
     def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
         """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -2749,10 +2798,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert f'<Data Name="ProcessID">{pid}</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\program files\\mozilla '
-            "firefox\\firefox.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_uses_source_native_timestamp_offset(self, format_def, temp_output):
         """WFP 5156 should render with a host-audit offset from the canonical connection."""
@@ -2936,10 +2986,11 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Data Name="ProcessID">1184</Data>' in content
-        assert (
-            '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\'
-            "svchost.exe</Data>"
-        ) in content
+        expected_application = emitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            event.src_host,
+        )
+        assert f'<Data Name="Application">{expected_application}</Data>' in content
 
     def test_wfp_connection_skips_unresolved_non_system_pid(self, format_def, temp_output):
         """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
@@ -2999,6 +3050,83 @@ class TestWindowsEventEmitter:
             WindowsEventEmitter._to_device_path(r"\device\harddiskvolume1\test.exe")
             == r"\device\harddiskvolume1\test.exe"
         )
+
+    def test_device_path_mapping_is_stable_per_installation_and_drive(self):
+        """Canonical host paths should use stable installation-local volume identities."""
+        hosts = [
+            HostContext(
+                hostname=f"WKS-{index:02d}",
+                ip=f"10.0.0.{index}",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn=f"WKS-{index:02d}.corp.local",
+            )
+            for index in range(1, 17)
+        ]
+
+        c_paths = {
+            WindowsEventEmitter._to_device_path(r"C:\Windows\System32\svchost.exe", host)
+            for host in hosts
+        }
+        first_c_path = WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+        first_d_path = WindowsEventEmitter._to_device_path(
+            r"D:\Program Files\agent.exe",
+            hosts[0],
+        )
+
+        assert len(c_paths) > 1
+        assert all(path.startswith(r"\device\harddiskvolume") for path in c_paths)
+        assert first_c_path != first_d_path
+        assert first_c_path == WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe",
+            hosts[0],
+        )
+
+    def test_provider_execution_threads_are_host_scoped_and_not_one_finite_pool(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Canonical provider thread populations should be aligned and host-specific."""
+        emitter = WindowsEventEmitter(format_def, temp_output)
+
+        def thread_ids(hostname: str) -> set[int]:
+            host = HostContext(
+                hostname=hostname,
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn=f"{hostname}.corp.local",
+            )
+            values: set[int] = set()
+            for minute in range(360):
+                event_id = 4624 if minute % 2 == 0 else 4625
+                event = OccurrenceBuilder(
+                    timestamp=datetime(2024, 1, 15, tzinfo=UTC) + timedelta(minutes=minute),
+                    event_type="logon" if event_id == 4624 else "failed_logon",
+                    src_host=host,
+                )
+                values.add(
+                    emitter._provider_execution_thread_id(
+                        {"EventID": event_id, "ExecutionProcessID": 600},
+                        event,
+                    )
+                )
+            return values
+
+        dc_01_threads = thread_ids("DC-01")
+        dc_02_threads = thread_ids("DC-02")
+
+        assert dc_01_threads == thread_ids("DC-01")
+        assert len(dc_01_threads) > 38
+        assert len(dc_02_threads) > 38
+        assert dc_01_threads != dc_02_threads
+        assert all(thread_id % 4 == 0 for thread_id in dc_01_threads | dc_02_threads)
 
     def test_timestamp_100ns_precision(self, format_def, temp_output):
         """Test that timestamps have EVTX-like 100ns precision."""

@@ -232,6 +232,14 @@ class TestLinuxPidAllocation:
         assert statistics.stdev(minute_deltas) > 12
         assert sm._linux_pid_weekly_churn_prefixes["TEST-01"]
 
+    def test_linux_pid_progression_varies_materially_across_hosts(self, sm):
+        """Unrelated hosts should not expose one fleet-wide PID/time slope."""
+        hosts = [f"LINUX-{ordinal:02d}" for ordinal in range(16)]
+        six_hour_churn = [sm._linux_pid_hidden_churn_offset(host, 6 * 3600) for host in hosts]
+
+        assert len(set(six_hour_churn)) == len(hosts)
+        assert max(six_hour_churn) > min(six_hour_churn) * 1.35
+
 
 class TestPidWraparound:
     """PID wraparound should not reuse PIDs of still-running processes."""

@@ -72,6 +72,7 @@ from evidenceforge.generation.actions.dhcp_lease import (
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
     dhcp_renewal_interval_seconds,
+    plan_dhcp_source_timeline,
 )
 from evidenceforge.generation.actions.dns_lookup import (
     DnsLookupActionBundle,
@@ -255,6 +256,7 @@ __all__ = [
     "DhcpLeaseActionBundle",
     "DhcpLeaseRequest",
     "dhcp_renewal_interval_seconds",
+    "plan_dhcp_source_timeline",
     "DnsLookupActionBundle",
     "DnsLookupRequest",
     "EmailAccessActionBundle",

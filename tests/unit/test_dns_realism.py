@@ -24,7 +24,6 @@ import pytest
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.formats import load_format
-from evidenceforge.generation.actions import dns_transport_close_headroom_seconds
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -1369,11 +1368,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.dns.rtt == 0.35
-        assert (
-            0.35
-            < event.network.duration
-            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.35)
-        )
+        assert event.network.duration == 0.35
 
     def test_dns_conn_duration_exact_anchor_still_uses_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1402,11 +1397,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.dns.rtt == 0.02
-        assert (
-            0.02
-            < event.network.duration
-            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.02)
-        )
+        assert event.network.duration == 0.02
 
     def test_explicit_dns_response_state_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1440,11 +1431,7 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_pkts > 0
         assert event.network.resp_bytes > 0
         assert event.dns.rtt == 0.08
-        assert (
-            0.08
-            < event.network.duration
-            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.08)
-        )
+        assert event.network.duration == 0.08
 
     def test_servfail_dns_response_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1573,11 +1560,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.dns.rtt == 0.08
-        assert (
-            0.08
-            < event.network.duration
-            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.08)
-        )
+        assert event.network.duration == 0.08
 
     def test_dns_a_query_accounting_is_clamped_to_dns_transaction(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1610,11 +1593,7 @@ class TestWeirdProtocolConstraint:
         assert event.network.orig_bytes <= 260
         assert event.network.resp_bytes <= 512
         assert event.dns.rtt == 0.019
-        assert (
-            0.019
-            < event.network.duration
-            <= dns_transport_close_headroom_seconds(caller_rtt_maximum=0.019)
-        )
+        assert event.network.duration == 0.019
 
     def test_dns_authoritative_flag_is_consistent_for_internal_names(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1818,6 +1797,10 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_bytes != 512
         assert event.network.orig_bytes < 80
         assert event.network.resp_bytes < 140
+        assert event.network.history == "Dd"
+        assert event.network.orig_pkts == 1
+        assert event.network.resp_pkts == 1
+        assert event.network.duration == event.dns.rtt
 
     def test_udp_dns_with_explicit_conn_state_uses_udp_history(
         self, activity_gen, timestamp, state_manager, mock_emitters

@@ -738,6 +738,60 @@ def test_same_connection_observations_preserve_canonical_request_order() -> None
         assert timedelta(microseconds=990) <= observed_delta <= timedelta(microseconds=1010)
 
 
+def test_proxy_child_observation_stays_after_connect_request() -> None:
+    """A shared proxy route projection preserves request-before-origin causality."""
+
+    planner = NetworkObservationPlanner(_visibility_engine())
+    parent_group_id = "proxy-transaction-observation-order"
+    client = _network_event(
+        start=T0,
+        stable_id="network:proxy-client",
+        protocol="tcp",
+        zeek_uid="CProxyClient",
+    )
+    client.dns = None
+    client.network = replace(client.network, service="http")
+    client.http = HttpContext(
+        method="CONNECT",
+        host="updates.example.com",
+        uri="updates.example.com:443",
+        canonical_request_time=T0 + timedelta(microseconds=100),
+    )
+    client.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-client",
+        canonical_start=T0,
+        phase="prerequisite",
+        parent_group_id=parent_group_id,
+    )
+    client._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_http": ["source-tap", "destination-tap"],
+    }
+    origin = _network_event(
+        start=T0 + timedelta(microseconds=200),
+        stable_id="network:proxy-origin",
+        protocol="tcp",
+        zeek_uid="CProxyOrigin",
+    )
+    origin.dns = None
+    origin.lifecycle = ActionLifecycleContext(
+        group_id="network:proxy-origin",
+        canonical_start=T0 + timedelta(microseconds=200),
+        phase="dependent",
+        parent_group_id=parent_group_id,
+    )
+    origin._sensor_hostnames_by_format = {
+        "zeek_conn": ["source-tap", "destination-tap"],
+    }
+
+    client_observations = _observation_by_sensor(planner.plan(client, {"zeek_conn", "zeek_http"}))
+    origin_observations = _observation_by_sensor(planner.plan(origin, {"zeek_conn"}))
+
+    for sensor_identity, client_observation in client_observations.items():
+        client_times = dict(client_observation.source_times)
+        assert client_times["zeek_http"] < origin_observations[sensor_identity].observed_start_time
+
+
 def test_explicit_loss_profile_is_deterministic_bounded_and_auditable(monkeypatch) -> None:
     """Only an explicit capture-loss profile may change observed counters."""
 
@@ -960,8 +1014,8 @@ def test_protocol_siblings_share_one_sensor_identity_and_tuple(tmp_path) -> None
     assert rows["destination-tap"][0]["id.orig_h"] == "198.51.100.25"
 
 
-def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> None:
-    """DNS query and response timing stays within a very short parent flow."""
+def test_single_exchange_dns_shares_packet_anchors_at_every_sensor(tmp_path) -> None:
+    """One-query UDP DNS rows share their request and response packet anchors."""
 
     event = _network_event(start=T0, stable_id="network:short-dns")
     event.timestamp = T0 + timedelta(milliseconds=2)
@@ -988,8 +1042,8 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
         phase="start",
     )
     event._sensor_hostnames_by_format = {
-        "zeek_conn": ["source-tap"],
-        "zeek_dns": ["source-tap"],
+        "zeek_conn": ["source-tap", "destination-tap"],
+        "zeek_dns": ["source-tap", "destination-tap"],
     }
     event.network_observations = NetworkObservationPlanner(_visibility_engine()).plan(
         event,
@@ -999,12 +1053,12 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter = ZeekEmitter(
         load_format("zeek_conn"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
     dns_emitter = ZeekDnsEmitter(
         load_format("zeek_dns"),
         tmp_path,
-        sensor_hostnames=["source-tap"],
+        sensor_hostnames=["source-tap", "destination-tap"],
     )
 
     conn_emitter.emit(event)
@@ -1012,10 +1066,11 @@ def test_short_dns_companion_stays_inside_planned_sensor_interval(tmp_path) -> N
     conn_emitter.close()
     dns_emitter.close()
 
-    conn = json.loads((tmp_path / "source-tap" / "conn.json").read_text())
-    dns = json.loads((tmp_path / "source-tap" / "dns.json").read_text())
-    assert dns["ts"] == pytest.approx(conn["ts"])
-    assert dns["ts"] + dns["rtt"] <= conn["ts"] + conn["duration"]
+    for sensor in ("source-tap", "destination-tap"):
+        conn = json.loads((tmp_path / sensor / "conn.json").read_text())
+        dns = json.loads((tmp_path / sensor / "dns.json").read_text())
+        assert dns["ts"] == pytest.approx(conn["ts"])
+        assert dns["ts"] + dns["rtt"] == pytest.approx(conn["ts"] + conn["duration"])
 
 
 def test_http_companion_never_precedes_planned_sensor_connection(tmp_path) -> None:

@@ -211,6 +211,40 @@ def test_client_path_upload_reuses_runtime_artifact_identity_and_size() -> None:
     assert resolved.mime_type == content.mime_type
 
 
+def test_smb_browse_directory_phase_drops_regular_file_identity() -> None:
+    """A browse phase targets the containing directory, not the selected document."""
+
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.request = SimpleNamespace(spec=SimpleNamespace(client=None, path_style="mounted"))
+    bundle.client_access = "cifs_mount"
+    bundle.mapping = SimpleNamespace(mount="/mnt/research", drive="")
+    bundle.world = SimpleNamespace(
+        server_local_path=lambda _share, path: (
+            "/srv/samba/research" + (f"/{path.replace(chr(92), '/')}" if path else "")
+        )
+    )
+    share = SimpleNamespace(system="FILE-LNX-01", name="ClinicalResearch")
+    common = {
+        "share_path": r"Studies\2024\model_validation.csv",
+        "file_id": "model-validation",
+        "content_version": 3,
+        "local_file_id": "local-model-validation",
+        "local_content_version": 3,
+        "handle_id": "handle-9",
+        "size_bytes": 8192,
+    }
+
+    directory = bundle._directory_phase_common(common, share)
+
+    assert directory["share_path"] == r"Studies\2024"
+    assert directory["client_path"] == "/mnt/research/Studies/2024"
+    assert directory["server_path"] == "/srv/samba/research/Studies/2024"
+    assert directory["file_id"] == ""
+    assert directory["content_version"] == 0
+    assert directory["handle_id"] == ""
+    assert directory["size_bytes"] == 0
+
+
 def test_omitted_storage_compiles_duration_independent_diverse_defaults(
     scenarios_dir: Path,
 ) -> None:
@@ -275,6 +309,25 @@ def test_host_file_set_compiles_without_exposing_an_smb_server(scenarios_dir: Pa
     assert not any(share.system == "TEST-01" for share in first.shares)
     assert first.manifest()["schema_version"] == 3
     assert first.manifest()["file_sets"][0]["backing_share"] is None
+
+
+def test_compiled_storage_file_ids_use_full_width_digest_entropy() -> None:
+    """Compiled source-native IDs should not expose a zero-padded 32-bit seed."""
+    first = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\forecast.xlsx"
+    )
+    second = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\forecast.xlsx"
+    )
+    sibling = storage_world_module._StorageWorldCompiler._file_id(
+        "FS-01.finance", r"FY26\budget.xlsx"
+    )
+
+    assert first == second
+    assert first.startswith("file-")
+    assert len(first) == 21
+    assert int(first[5:13], 16) != 0
+    assert sibling != first
 
 
 def test_share_can_export_the_exact_same_host_file_set(scenarios_dir: Path) -> None:

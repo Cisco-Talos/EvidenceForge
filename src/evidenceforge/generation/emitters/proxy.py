@@ -33,7 +33,7 @@ from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.output_targets import OutputTarget
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_hex_digest
 
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
 # only when no tunnel exists for this (proxy_fqdn, client_ip, host, port)
@@ -51,7 +51,6 @@ class _PendingTunnelSummary:
     tunnel_cs_bytes: int = 0
     tunnel_sc_bytes: int = 0
     latest_child_end: datetime | None = None
-    transport_duration_ms: int | None = None
 
     def add_child(
         self,
@@ -79,7 +78,6 @@ class _ObservedTunnelChild:
     child_end: datetime
     cs_bytes: int
     sc_bytes: int
-    transport_duration_ms: int | None
 
 
 def _combined_log_value(value: Any) -> str:
@@ -202,11 +200,22 @@ def _connect_tunnel_payload_fields(
     if int(tunnel_status or 0) >= 400 or terminal_outcome not in {"", "success"}:
         return {}
 
+    transport_cs_bytes = None
+    transport_sc_bytes = None
+    if bool(getattr(net, "application_layer_only", False)):
+        transport_cs_bytes = getattr(transaction, "client_transport_cs_bytes", None)
+        transport_sc_bytes = getattr(transaction, "client_transport_sc_bytes", None)
+    if transport_cs_bytes is None:
+        transport_cs_bytes = net.orig_bytes
+    if transport_sc_bytes is None:
+        transport_sc_bytes = net.resp_bytes
     fields = {
-        "tunnel_cs_bytes": max(0, int(net.orig_bytes or 0) - setup_cs_bytes),
-        "tunnel_sc_bytes": max(0, int(net.resp_bytes or 0) - setup_sc_bytes),
+        "tunnel_cs_bytes": max(0, int(transport_cs_bytes or 0) - setup_cs_bytes),
+        "tunnel_sc_bytes": max(0, int(transport_sc_bytes or 0) - setup_sc_bytes),
     }
-    if net.duration is not None:
+    if transaction is not None and transaction.tunnel_duration_seconds is not None:
+        fields["tunnel_duration_ms"] = round(transaction.tunnel_duration_seconds * 1000)
+    elif net.duration is not None:
         fields["tunnel_duration_ms"] = max(0, round(float(net.duration) * 1000))
     return fields
 
@@ -424,7 +433,12 @@ class ProxyEmitter(HostMultiplexEmitter):
                 f"{px.client_ip}:{getattr(net, 'src_port', 0)}:{px.host}:{request_time.isoformat()}"
             )
             identity = canonical_uid or fallback_identity
-            tunnel_id = f"PT-{_stable_seed(f'proxy-tunnel:{px.proxy_fqdn}:{identity}'):016x}"
+            tunnel_id = "PT-" + stable_hex_digest(
+                "proxy-tunnel",
+                px.proxy_fqdn,
+                identity,
+                length=16,
+            )
             tunnel_key = (
                 px.proxy_fqdn,
                 tunnel_id,
@@ -452,6 +466,13 @@ class ProxyEmitter(HostMultiplexEmitter):
                 "client_src_port": getattr(net, "src_port", 0),
                 "_host_fqdn": px.proxy_fqdn,
             }
+            if px.transaction is not None and (
+                px.transaction.client_transport_cs_bytes is not None
+                and px.transaction.client_transport_sc_bytes is not None
+            ):
+                for field in ("tunnel_cs_bytes", "tunnel_sc_bytes", "tunnel_duration_ms"):
+                    if field in setup:
+                        connect_data[field] = setup[field]
             self._observed_tunnel_children.append(
                 _ObservedTunnelChild(
                     key=tunnel_key,
@@ -461,11 +482,6 @@ class ProxyEmitter(HostMultiplexEmitter):
                     + timedelta(milliseconds=max(0, int(px.time_taken or 0))),
                     cs_bytes=max(0, int(px.cs_bytes or 0)),
                     sc_bytes=max(0, int(px.sc_bytes or 0)),
-                    transport_duration_ms=(
-                        max(0, round(float(net.duration) * 1000))
-                        if net is not None and net.duration is not None
-                        else None
-                    ),
                 )
             )
         else:
@@ -511,17 +527,17 @@ class ProxyEmitter(HostMultiplexEmitter):
         if pending is None:
             return
         connect_data = pending.connect_data
-        connect_data["tunnel_cs_bytes"] = pending.tunnel_cs_bytes
-        connect_data["tunnel_sc_bytes"] = pending.tunnel_sc_bytes
+        # A canonical physical client transport owns wire-payload totals. Keep
+        # those values when available; observed child rows represent the
+        # decrypted request view and may differ by TLS framing or collection.
+        connect_data.setdefault("tunnel_cs_bytes", pending.tunnel_cs_bytes)
+        connect_data.setdefault("tunnel_sc_bytes", pending.tunnel_sc_bytes)
         latest_child_end = pending.latest_child_end or pending.last_activity_at
         visible_duration_ms = max(
             0,
-            round((latest_child_end - pending.opened_at).total_seconds() * 1000) + 999,
+            round((latest_child_end - pending.opened_at).total_seconds() * 1000),
         )
-        connect_data["tunnel_duration_ms"] = max(
-            visible_duration_ms,
-            pending.transport_duration_ms or 0,
-        )
+        connect_data["tunnel_duration_ms"] = visible_duration_ms
         self._dispatch(connect_data)
 
     def _fold_observed_tunnel_children(self) -> None:
@@ -542,11 +558,8 @@ class ProxyEmitter(HostMultiplexEmitter):
                     connect_data=child.connect_data,
                     opened_at=child.connect_data["timestamp"],
                     last_activity_at=child.request_time,
-                    transport_duration_ms=child.transport_duration_ms,
                 )
                 self._pending_tunnels[child.key] = pending
-            elif child.transport_duration_ms is not None:
-                pending.transport_duration_ms = child.transport_duration_ms
             pending.add_child(
                 cs_bytes=child.cs_bytes,
                 sc_bytes=child.sc_bytes,

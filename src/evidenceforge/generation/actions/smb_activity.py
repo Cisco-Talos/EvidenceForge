@@ -136,6 +136,7 @@ from evidenceforge.utils.time import ensure_utc, parse_duration
 
 _MAX_PERSISTENT_SMB_OPERATIONS = MAX_PERSISTENT_SMB_OPERATIONS
 _MAX_PERSISTENT_SMB_SOURCE_MEMBERS = 6 + 3 * _MAX_PERSISTENT_SMB_OPERATIONS
+_SMB_FILE_ANALYZERS = ("MIME", "MD5", "SHA1", "SHA256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1066,9 +1067,27 @@ class SmbActivityActionBundle:
             dst_ip=server.ip,
             dst_port=445,
         )
-        auth_delay_ms = self.rng.randint(28, 96)
-        tree_delay_ms = self.rng.randint(14, 88)
-        auth_time = self.transport_start + timedelta(milliseconds=auth_delay_ms)
+        timing = self._timing_planner()
+        timing_lifecycle_id = transaction_id or transport_uid
+        auth_delay = timing.packet_observation_delta(
+            relationship_key="smb.transport_to_auth",
+            stable_id=f"{self.anchor.stable_id}:authentication",
+            minimum_ms=28,
+            maximum_ms=96,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="authentication",
+        )
+        tree_delay = timing.packet_observation_delta(
+            relationship_key="smb.auth_to_tree_connect",
+            stable_id=f"{self.anchor.stable_id}:tree-connect",
+            minimum_ms=14,
+            maximum_ms=88,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="tree_connect",
+        )
+        auth_time = self.transport_start + auth_delay
         auth_session_ref = stable_uuid(
             "smb-auth-session",
             self.anchor.stable_id,
@@ -1164,11 +1183,7 @@ class SmbActivityActionBundle:
         byte_allocations = self._transport_byte_allocations(selected)
         total_orig_bytes = sum(orig for orig, _resp in byte_allocations)
         total_resp_bytes = sum(resp for _orig, resp in byte_allocations)
-        operation_start = (
-            auth_time
-            + timedelta(milliseconds=tree_delay_ms)
-            + timedelta(seconds=self._session_setup_seconds())
-        )
+        operation_start = auth_time + tree_delay + timedelta(seconds=self._session_setup_seconds())
         close_time = self.transport_start + timedelta(seconds=max(0.2, duration - 0.02))
         first_timing = self._operation_timing(
             selected[0],
@@ -1211,7 +1226,7 @@ class SmbActivityActionBundle:
             smb_platform_fields = self._smb_platform_fields(share, server)
             self._emit_phase(
                 event_type="smb_tree_connect",
-                timestamp=auth_time + timedelta(milliseconds=tree_delay_ms),
+                timestamp=auth_time + tree_delay,
                 network=net,
                 server=server,
                 client=client_system,
@@ -1740,8 +1755,26 @@ class SmbActivityActionBundle:
         authority = self.executor._persistent_smb_terminal_continuations
         root_facts = authority.root_facts(terminal_continuation)
         if root_facts.phase == "reserved":
-            auth_time = self.request.time + timedelta(milliseconds=self.rng.randint(28, 96))
-            tree_time = auth_time + timedelta(milliseconds=self.rng.randint(14, 88))
+            timing = self._timing_planner()
+            timing_lifecycle_id = self.anchor.stable_id
+            auth_time = self.request.time + timing.packet_observation_delta(
+                relationship_key="smb.transport_to_auth",
+                stable_id=f"{self.anchor.stable_id}:authentication",
+                minimum_ms=28,
+                maximum_ms=96,
+                host=server.hostname,
+                lifecycle_id=timing_lifecycle_id,
+                sample_key="authentication",
+            )
+            tree_time = auth_time + timing.packet_observation_delta(
+                relationship_key="smb.auth_to_tree_connect",
+                stable_id=f"{self.anchor.stable_id}:tree-connect",
+                minimum_ms=14,
+                maximum_ms=88,
+                host=server.hostname,
+                lifecycle_id=timing_lifecycle_id,
+                sample_key="tree_connect",
+            )
             close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
             auth_session_ref = stable_uuid(
                 "persistent-smb-auth-session",
@@ -2195,6 +2228,9 @@ class SmbActivityActionBundle:
                 encrypted=share.encryption == "required",
                 audit=share.audit,
             )
+            phase_common = (
+                self._directory_phase_common(common, share) if action == "browse" else common
+            )
             file_transfer = None
             if result == "success" and phase in {"read", "write"}:
                 content = self._file_content_identity(state)
@@ -2202,7 +2238,7 @@ class SmbActivityActionBundle:
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
                     filename=state.path,
-                    analyzers=("MIME",),
+                    analyzers=_SMB_FILE_ANALYZERS,
                     mime_type=state.mime_type,
                     duration=timing.transfer_seconds,
                     local_orig=client_system is not None,
@@ -2281,7 +2317,7 @@ class SmbActivityActionBundle:
                             previous_path=previous_path,
                             previous_client_path=previous_client_path,
                             previous_server_path=previous_server_path,
-                            **common,
+                            **phase_common,
                         ),
                         file_transfer=file_transfer,
                         identity_plan=EventIdentityPlan(
@@ -4596,6 +4632,9 @@ class SmbActivityActionBundle:
                 "delete": "smb_file_delete",
             }[action]
             phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
+            phase_common = (
+                self._directory_phase_common(common, share) if action == "browse" else common
+            )
             previous_path = ""
             previous_client_path = ""
             previous_server_path = ""
@@ -4647,7 +4686,7 @@ class SmbActivityActionBundle:
                     fuid=self._file_transfer_fuid(state, phase),
                     source="SMB",
                     filename=state.path,
-                    analyzers=("MIME",),
+                    analyzers=_SMB_FILE_ANALYZERS,
                     mime_type=state.mime_type,
                     duration=timing.transfer_seconds,
                     local_orig=client is not None,
@@ -4675,7 +4714,7 @@ class SmbActivityActionBundle:
                     previous_path=previous_path,
                     previous_client_path=previous_client_path,
                     previous_server_path=previous_server_path,
-                    **common,
+                    **phase_common,
                 ),
                 file_transfer=file_transfer,
             )
@@ -5317,6 +5356,28 @@ class SmbActivityActionBundle:
         if drive:
             return f"{drive}\\{path}"
         return self.world.unc_path(share, path)
+
+    def _directory_phase_common(
+        self,
+        common: dict[str, Any],
+        share: CompiledStorageShare,
+    ) -> dict[str, Any]:
+        """Return file-free canonical fields for one directory enumeration phase."""
+
+        directory = ntpath.dirname(str(common["share_path"]))
+        return {
+            **common,
+            "client_path": self._client_path(directory, share),
+            "local_path": "",
+            "share_path": directory,
+            "server_path": self.world.server_local_path(share, directory),
+            "file_id": "",
+            "content_version": 0,
+            "local_file_id": "",
+            "local_content_version": 0,
+            "handle_id": "",
+            "size_bytes": 0,
+        }
 
     def _local_path(self, remote_path: str) -> str:
         source = self.request.spec.source

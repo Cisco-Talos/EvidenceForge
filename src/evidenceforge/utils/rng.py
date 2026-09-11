@@ -98,6 +98,38 @@ def _stable_seed(key: str) -> int:
     return int(hashlib.sha256(scoped_key.encode()).hexdigest(), 16) % (2**32)
 
 
+def stable_hex_digest(
+    namespace: str,
+    *parts: object,
+    length: int = 16,
+    uppercase: bool = False,
+) -> str:
+    """Create a deterministic full-width hexadecimal token from semantic parts.
+
+    Args:
+        namespace: Non-empty namespace separating unrelated identifier families.
+        *parts: Semantic identity components for the token.
+        length: Number of hexadecimal characters to return, from 1 through 64.
+        uppercase: Whether to render hexadecimal characters in uppercase.
+
+    Returns:
+        A seed-scoped hexadecimal digest prefix of the requested length.
+
+    Raises:
+        ValueError: If ``namespace`` is empty or ``length`` is outside the SHA-256 range.
+    """
+    if not namespace:
+        raise ValueError("stable hexadecimal identifier namespace must not be empty")
+    if not 1 <= length <= 64:
+        raise ValueError("stable hexadecimal identifier length must be between 1 and 64")
+
+    normalized = "|".join("" if part is None else str(part) for part in parts)
+    seed = current_generation_seed()
+    prefix = "evidenceforge" if seed == DEFAULT_GENERATION_SEED else f"evidenceforge:seed:{seed}"
+    token = hashlib.sha256(f"{prefix}:{namespace}:{normalized}".encode()).hexdigest()[:length]
+    return token.upper() if uppercase else token
+
+
 def stable_uuid(namespace: str, *parts: object) -> str:
     """Create a deterministic UUIDv4-shaped identifier from stable semantic parts."""
     normalized = "|".join("" if part is None else str(part) for part in parts)

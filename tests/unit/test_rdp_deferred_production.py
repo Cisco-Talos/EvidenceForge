@@ -309,6 +309,7 @@ def _open_rdp_terminal_harness(
     open_time: datetime = _START,
     expect_exact_initial: bool = True,
     source_process_lead_seconds: float = 3.0,
+    privileged_user: bool = False,
 ) -> _RdpTerminalHarness:
     """Open one exact initial RDP generation whose full terminal graph is still pending."""
 
@@ -383,6 +384,7 @@ def _open_rdp_terminal_harness(
         username="analyst",
         full_name="Security Analyst",
         email="analyst@example.test",
+        persona="sysadmin" if privileged_user else "",
     )
     generator._ip_to_system = (
         {source.ip: source, target.ip: target} if modeled_source else {target.ip: target}
@@ -939,6 +941,104 @@ def test_explicit_logoff_delegates_bundle_owned_rdp_graph_to_exact_owner(
     assert len(child_terminations) == 1
     assert len(target_logouts) == 1
     assert child_terminations[0]["timestamp_ms"] < target_logouts[0]["timestamp_ms"]
+
+
+def test_initial_rdp_publishes_login_before_immediate_authored_process(
+    tmp_path: Path,
+) -> None:
+    """An immediate RDP child process cannot render before its owning login."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        include_sysmon=True,
+        include_sysmon_during_open=True,
+        modeled_source=False,
+        modeled_target_pid4=True,
+        production_timing_runtime=True,
+    )
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None
+    login_source_time = harness.dispatcher.source_timing_planner.session_start_source_time(
+        "ecar",
+        session.lifecycle_group_id,
+    )
+    assert login_source_time is not None
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    assert session.explorer_pid is not None
+    explorer_identity = harness.state.get_process_identity(
+        harness.target_hostname,
+        session.explorer_pid,
+    )
+    assert explorer_identity is not None
+    child_pid = harness.generator.generate_process(
+        user,
+        target,
+        explorer_identity.started_at + timedelta(milliseconds=20),
+        harness.logon_id,
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "powershell.exe -NoProfile Get-Process",
+        parent_pid=explorer_identity.pid,
+        from_storyline=True,
+    )
+    child_identity = harness.state.get_process_identity(harness.target_hostname, child_pid)
+    assert child_identity is not None
+    assert child_identity.parent_lifecycle_group_id == session.lifecycle_group_id
+
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    ecar_rows = _read_json_lines(harness.output_root / "ecar", "ecar.json")
+    login = next(
+        row
+        for row in ecar_rows
+        if row.get("hostname") == harness.target_hostname
+        and row.get("object") == "USER_SESSION"
+        and row.get("action") == "LOGIN"
+        and row.get("objectID") == harness.session_object_id
+    )
+    child = next(
+        row
+        for row in ecar_rows
+        if row.get("object") == "PROCESS"
+        and row.get("action") == "CREATE"
+        and row.get("objectID") == child_identity.object_id
+    )
+    assert login["timestamp_ms"] < child["timestamp_ms"]
+
+    rendered_security = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    security_login_time = _windows_security_time(rendered_security, 4624)
+    security_process_time = _windows_security_time(
+        rendered_security,
+        4688,
+        process_name="powershell.exe",
+    )
+    assert security_login_time < security_process_time
+
+    rendered_sysmon = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "sysmon").rglob("*.xml")
+    )
+    sysmon_process_time = _windows_security_time(
+        rendered_sysmon,
+        1,
+        process_name="powershell.exe",
+    )
+    assert security_login_time < sysmon_process_time
 
 
 def test_hourly_stale_cleanup_drains_due_rdp_before_consuming_exact_mstsc(
@@ -2695,6 +2795,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         modeled_target_pid4=True,
         modeled_source_pid4=True,
         production_timing_runtime=True,
+        privileged_user=True,
     )
     sysmon = harness.sysmon
     assert sysmon is not None
@@ -2715,6 +2816,11 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert winlogon.parent_pid == pid4.pid
     assert userinit.parent_pid == winlogon.pid
     assert explorer.parent_pid == userinit.pid
+
+    harness.generator.advance_rdp_session_lifecycle_watermark(_START + timedelta(seconds=30))
+    assert harness.state.get_process(harness.target_hostname, userinit.pid) is None
+    assert harness.state.get_process(harness.target_hostname, winlogon.pid) is not None
+    assert harness.state.get_process(harness.target_hostname, explorer.pid) is not None
 
     planner = harness.dispatcher.source_timing_planner
     parent_object_id = planner._sysmon_process_object_id(
@@ -2739,6 +2845,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     )
     event_one_rows = _xml_events(rendered, 1)
     assert not _xml_events(rendered, 3)
+    event_five_rows = _xml_events(rendered, 5)
 
     def _field(event: str, name: str) -> str:
         match = re.search(rf'<Data Name="{name}">(.*?)</Data>', event)
@@ -2768,6 +2875,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         "ProcessGuid",
     )
     assert _field(target_rows["winlogon.exe"], "ParentImage") == "System"
+    assert _field(target_rows["userinit.exe"], "ParentUser") == "NT AUTHORITY\\SYSTEM"
     assert (
         _field(target_rows["userinit.exe"], "ParentImage")
         .casefold()
@@ -2795,6 +2903,9 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     )
     assert _field(type_ten, "TargetUserSid").startswith("S-")
     assert re.fullmatch(r"\{[0-9a-f-]{36}\}", _field(type_ten, "LogonGuid"), re.I)
+    session_logon_guid = _field(type_ten, "LogonGuid")
+    assert _field(target_rows["userinit.exe"], "LogonGuid") == session_logon_guid
+    assert _field(target_rows["explorer.exe"], "LogonGuid") == session_logon_guid
 
     process_rows = {
         _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
@@ -2805,6 +2916,12 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert _field(process_rows["winlogon.exe"], "SubjectUserSid") == "S-1-5-18"
     assert _field(process_rows["winlogon.exe"], "SubjectUserName") == "SYSTEM"
     assert _field(process_rows["winlogon.exe"], "SubjectLogonId") == "0x3e7"
+    assert _field(target_rows["userinit.exe"], "IntegrityLevel") == "High"
+    assert _field(process_rows["userinit.exe"], "MandatoryLabel") == "S-1-16-12288"
+    assert _field(process_rows["userinit.exe"], "TokenElevationType") == "%%1937"
+    assert _field(target_rows["explorer.exe"], "IntegrityLevel") == "Medium"
+    assert _field(process_rows["explorer.exe"], "MandatoryLabel") == "S-1-16-8192"
+    assert _field(process_rows["explorer.exe"], "TokenElevationType") == "%%1938"
     assert _field(type_ten, "ProcessId") == _field(process_rows["winlogon.exe"], "NewProcessId")
     assert _event_time(process_rows["winlogon.exe"]) < _event_time(type_ten)
     assert _field(process_rows["winlogon.exe"], "ParentProcessName") == "System"
@@ -2835,6 +2952,12 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
             identity.pid,
             rendered_times[image],
         )
+    userinit_closes = [
+        event for event in event_five_rows if _field(event, "ProcessId") == str(userinit.pid)
+    ]
+    assert len(userinit_closes) == 1
+    rendered_userinit_lifetime = _event_time(userinit_closes[0]) - rendered_times["userinit.exe"]
+    assert timedelta(milliseconds=650) < rendered_userinit_lifetime < timedelta(seconds=5.5)
 
 
 def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:

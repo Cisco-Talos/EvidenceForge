@@ -3769,6 +3769,72 @@ class TestStorylineCommandSideEffects:
             == source.ip
         )
 
+    def test_type10_logon_compatibility_records_rdp_session_readiness(self):
+        """Legacy Type 10 authored logons delay later activity until RDP is usable."""
+
+        target = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        actor = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+        )
+        session_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        ready_time = session_time + timedelta(seconds=3)
+        state_manager = _FakeStateManager()
+        generator = _FakeActivityGenerator()
+
+        def generate_rdp_logon(**kwargs: Any) -> str:
+            state_manager.sessions["0xrdp"] = SimpleNamespace(
+                username=actor.username,
+                system=target.hostname,
+                logon_id="0xrdp",
+                logon_type=10,
+                source_ip=kwargs["source_ip"],
+                start_time=session_time,
+                source_ready_time=ready_time,
+                network_close_time=session_time + timedelta(minutes=30),
+                session_kind="rdp",
+            )
+            return "0xrdp"
+
+        generator.generate_logon = generate_rdp_logon
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[target], service_accounts=[])
+        )
+        engine.state_manager = state_manager
+        engine.activity_generator = generator
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._session_end_plan_for_current_start = lambda: None
+        engine._authored_rdp_session_end_plan = lambda: None
+        spec = SimpleNamespace(
+            type="logon",
+            logon_type=10,
+            source_ip="10.10.1.99",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=target,
+            time=session_time,
+            activity="establish RDP session",
+            explicit_types={"logon"},
+        )
+        process_time = engine._apply_storyline_shell_availability(
+            actor=actor,
+            system=target,
+            time=session_time + timedelta(milliseconds=20),
+            rng=random.Random(1),
+        )
+
+        assert process_time > ready_time
+
     def test_recent_psexesvc_service_runs_follow_on_commands_as_system(self):
         source = System(
             hostname="DC-01",

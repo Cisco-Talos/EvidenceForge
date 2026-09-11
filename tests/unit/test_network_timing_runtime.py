@@ -823,7 +823,7 @@ def test_dns_kerberos_ntp_and_failed_durations_have_right_skew_without_atoms() -
         )
         dns_values.append(round(planner._dns_rtt_seconds(request, is_public_resolver=False) * 1e6))
         dns_close_slack_values.append(
-            round(planner._dns_transport_duration_seconds(request, 0.0) * 1e6)
+            round(planner._dns_transport_duration_seconds(replace(request, proto="tcp"), 0.0) * 1e6)
         )
         kerberos_values.append(round(planner._kerberos_udp_duration_seconds(request) * 1e6))
         ntp_values.append(

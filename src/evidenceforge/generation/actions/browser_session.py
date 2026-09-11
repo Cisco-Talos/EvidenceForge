@@ -195,7 +195,6 @@ class BrowserSessionActionBundle:
             enumerate(visible_requests),
             key=lambda item: (request_plan[item[0]][3], item[0]),
         )
-
         first_uid = ""
         request_count = 0
         for req_index, req in planned_requests:

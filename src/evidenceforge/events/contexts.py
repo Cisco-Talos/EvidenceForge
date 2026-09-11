@@ -137,6 +137,7 @@ class ProcessContext:
     logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
     parent_image: str = ""  # ParentProcessName (4688)
     parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
+    parent_username: str = ""  # Canonical parent principal for source-native rendering
     parent_start_time: datetime | None = None  # Parent creation time for stable GUIDs
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
@@ -829,7 +830,23 @@ class FileTransferContext:
     entity_body_len: int | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "analyzers", tuple(self.analyzers))
+        analyzers = tuple(self.analyzers)
+        analyzer_names = {analyzer.upper() for analyzer in analyzers}
+        missing_digest_analyzers = [
+            analyzer
+            for field_name, analyzer in (
+                ("md5", "MD5"),
+                ("sha1", "SHA1"),
+                ("sha256", "SHA256"),
+            )
+            if getattr(self, field_name) and analyzer not in analyzer_names
+        ]
+        if missing_digest_analyzers:
+            missing = ", ".join(missing_digest_analyzers)
+            raise ValueError(
+                f"File transfer digest results require matching Zeek analyzers: {missing}"
+            )
+        object.__setattr__(self, "analyzers", analyzers)
         object.__setattr__(self, "multipart_part_path", tuple(self.multipart_part_path))
 
 

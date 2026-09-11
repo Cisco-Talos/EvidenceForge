@@ -1099,24 +1099,25 @@ applications:
     system_types: [workstation]
 
   - id: zoom
-    display_name: "Zoom Workplace"
+    display_name: "Zoom Meetings"
     singleton_per_session: true
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe'
+        available_from: 2024-02-26
         deployment:
           kind: managed
           product_id: zoom
-          version: "6.0.11.39959"
-          build: "6.0.11.39959"
+          version: "5.17.6.24660"
+          build: "5.17.6.24660"
           architectures: [x64, arm64]
           scope: user
           variant: stable
           fleet_prevalence: 1.0
         pe_metadata:
-          file_version: "6.0.11.39959"
+          file_version: "5.17.6.24660"
           description: "Zoom Meetings"
-          product: "Zoom Workplace"
+          product: "Zoom Meetings"
           company: "Zoom Video Communications, Inc."
           original_filename: "Zoom.exe"
         command_templates:
@@ -1130,9 +1131,9 @@ applications:
             release_policy: owner_release
             signature: "Zoom Video Communications, Inc."
             pe_metadata:
-              file_version: "6.0.11.39959"
+              file_version: "5.17.6.24660"
               description: "Zoom Video App"
-              product: "Zoom Workplace"
+              product: "Zoom Meetings"
               company: "Zoom Video Communications, Inc."
               original_filename: "zVideoApp.dll"
           - path: 'C:\Windows\System32\ws2_32.dll'
@@ -1149,13 +1150,14 @@ applications:
     platforms:
       windows:
         image_path: 'C:\Program Files\Cisco Spark\Webex.exe'
+        available_from: 2024-03-12
         deployment:
           kind: catalog
           release_policy: pe_metadata
           scope: machine
           architectures: [x86, x64, arm64]
         pe_metadata:
-          file_version: "44.4.0.28421"
+          file_version: "44.3.0.28993"
           description: "Cisco Webex"
           product: "Cisco Webex"
           company: "Cisco Systems, Inc."
@@ -1171,7 +1173,7 @@ applications:
             release_policy: owner_release
             signature: "Cisco Systems, Inc."
             pe_metadata:
-              file_version: "44.4.0.28421"
+              file_version: "44.3.0.28993"
               description: "Cisco Webex Host"
               product: "Cisco Webex"
               company: "Cisco Systems, Inc."
@@ -1489,17 +1491,18 @@ applications:
     platforms:
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Postman\Postman.exe'
+        available_from: 2024-03-01
         deployment:
           kind: managed
           product_id: postman
-          version: "11.2.14"
-          build: "11.2.14"
+          version: "10.24.3"
+          build: "10.24.3"
           architectures: [x64, arm64]
           scope: user
           variant: stable
           fleet_prevalence: 1.0
         pe_metadata:
-          file_version: "11.2.14"
+          file_version: "10.24.3"
           description: "Postman"
           product: "Postman"
           company: "Postman, Inc."
@@ -1511,11 +1514,11 @@ applications:
           - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
         loaded_modules:
-          - path: 'C:\Users\{username}\AppData\Local\Postman\app-11.2.14\Postman.dll'
+          - path: 'C:\Users\{username}\AppData\Local\Postman\app-10.24.3\Postman.dll'
             release_policy: owner_release
             signature: "Postman, Inc."
             pe_metadata:
-              file_version: "11.2.14"
+              file_version: "10.24.3"
               description: "Postman"
               product: "Postman"
               company: "Postman, Inc."
@@ -1573,7 +1576,8 @@ applications:
         image_path: "C:\\Windows\\explorer.exe"
         deployment:
           kind: catalog
-          release_policy: pe_metadata
+          release_policy: host_build
+          product_id: microsoft-windows
           scope: machine
           architectures: [x86, x64, arm64]
         pe_metadata:

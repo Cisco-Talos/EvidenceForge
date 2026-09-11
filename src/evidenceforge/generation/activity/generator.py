@@ -253,6 +253,7 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockRequest,
     file_transfer_hashes,
     http_response_parent_duration_floor,
+    plan_dhcp_source_timeline,
     plan_linux_pipeline_stage_times,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
@@ -385,6 +386,9 @@ from evidenceforge.generation.timing import (
     TruncatedLognormalDistribution,
     WeightedDistribution,
 )
+from evidenceforge.generation.windows_tokens import (
+    windows_process_token_profile as _windows_token_profile,
+)
 from evidenceforge.models.exceptions import GenerationError, PathSafetyError, StateError
 from evidenceforge.models.scenario import (
     EmailMessageEventSpec,
@@ -395,7 +399,7 @@ from evidenceforge.models.scenario import (
 )
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.paths import write_exclusive_child_stream
-from evidenceforge.utils.rng import _stable_seed, stable_uuid
+from evidenceforge.utils.rng import _stable_seed, stable_hex_digest, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
@@ -577,6 +581,9 @@ _FAILED_LINUX_SSH_PROCESS_CAUSAL_FLOOR_MS = 25
 _FAILED_LOGON_ENDPOINT_LATENCY_DEFAULT_MAX_MS = 100
 _FAILED_LOGON_KERBEROS_PREAUTH_LATEST_LEAD_MS = 40
 _FAILED_LOGON_NTLM_VALIDATION_DELAY_MAX_MS = 85
+# Fresh AS/TGS exchange evidence must precede the earliest possible dependent
+# Windows service transport (currently up to 900 ms before authentication).
+_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS = (2_400, 3_200)
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
     "mysql",
@@ -1998,18 +2005,6 @@ def _windows_script_host_process(
     if command_lower.startswith("cmd "):
         return host_image, f"cmd.exe {stripped[4:]}"
     return host_image, f"cmd.exe /c {stripped or ntpath.basename(process_name)}"
-
-
-def _windows_token_profile(username: str, integrity_level: str) -> tuple[str, str, str]:
-    """Return source-native Windows token fields for a process owner."""
-    normalized = username.upper().split("\\")[-1]
-    if normalized in _SYSTEM_ACCOUNTS:
-        return "System", "%%1936", "S-1-16-16384"
-    if integrity_level == "High":
-        return "High", "%%1936", "S-1-16-12288"
-    if integrity_level == "Low":
-        return "Low", "%%1938", "S-1-16-4096"
-    return "Medium", "%%1938", "S-1-16-8192"
 
 
 def _windows_service_process_account(process_name: str, command_line: str) -> str | None:
@@ -4918,6 +4913,7 @@ class _RdpLifecycleJournalEntry:
     """Mutable progress for one immutable committed RDP continuation."""
 
     continuation: Any
+    userinit_terminated: bool = False
     disconnect_published: bool = False
     source_terminated: bool = False
     source_termination_at: datetime | None = None
@@ -7259,6 +7255,34 @@ class ActivityGenerator:
                 continue
             self._disconnect_exact_rdp_entry(entry)
 
+        # Preserve disconnect as the first terminal phase when a caller advances
+        # across both frontiers at once. Fine-grained generation watermarks still
+        # close userinit near desktop readiness before transport disconnect.
+        for entry in pending:
+            continuation = entry.continuation
+            userinit_identity = getattr(continuation.prepared, "userinit_identity", None)
+            userinit_terminate_at = getattr(
+                continuation.prepared,
+                "userinit_terminate_at",
+                None,
+            )
+            if (
+                userinit_identity is not None
+                and userinit_terminate_at is not None
+                and not entry.userinit_terminated
+                and userinit_terminate_at <= canonical_cutoff
+            ):
+                timing_proof = self._rdp_bundle_for_continuation(
+                    continuation
+                ).terminate_exact_rdp_process(
+                    continuation,
+                    userinit_identity,
+                    userinit_terminate_at,
+                )
+                if timing_proof.canonical_time != userinit_terminate_at:
+                    raise StateError("Exact RDP userinit termination changed its canonical time")
+                entry.userinit_terminated = True
+
         # A due RDP session can itself own a later nested RDP client process. Close every
         # due transport and source process before logging out any session so a parent
         # session remains available while its child client is terminalized.
@@ -7867,19 +7891,19 @@ class ActivityGenerator:
         requested_time: datetime,
         process_name: str,
         command_line: str,
+        authoritative_time: bool = False,
     ) -> datetime:
-        """Return a shell-serialized start time for a Linux foreground process."""
+        """Return a shell-serialized start time for a Linux foreground process.
+
+        Authored events can be visited after later baseline reservations. When
+        ``authoritative_time`` is true, preserve a viable authored anchor instead
+        of moving it into the owning session's terminal release margin.
+        """
         if _get_os_category(system.os) != "linux":
             return requested_time
         if _linux_foreground_lifetime(process_name, command_line) is None:
             return requested_time
-        reserved_time = max(
-            requested_time,
-            self._bash_history_next_time.get(
-                (system.hostname, username, logon_id),
-                requested_time,
-            ),
-        )
+        authored_candidate = requested_time
         session = self.state_manager.get_session(logon_id)
         if session is not None and session.session_kind.casefold() == "ssh":
             shell_ready = self._linux_ssh_process_shell_ready_time(
@@ -7887,10 +7911,20 @@ class ActivityGenerator:
                 session=session,
                 username=username,
                 parent_pid=parent_pid,
-                activity_time=reserved_time,
+                activity_time=authored_candidate,
             )
-            reserved_time = max(reserved_time, shell_ready + timedelta(milliseconds=50))
-        return self._reserve_foreground_shell_time(
+            authored_candidate = max(
+                authored_candidate,
+                shell_ready + timedelta(milliseconds=50),
+            )
+        reserved_time = max(
+            authored_candidate,
+            self._bash_history_next_time.get(
+                (system.hostname, username, logon_id),
+                authored_candidate,
+            ),
+        )
+        serialized_time = self._reserve_foreground_shell_time(
             system=system,
             username=username,
             logon_id=logon_id,
@@ -7898,6 +7932,21 @@ class ActivityGenerator:
             requested_time=reserved_time,
             seed_text=command_line,
         )
+        if authoritative_time:
+            session_deadline = self.state_manager.get_session_end_time(logon_id)
+            active_deadline = _session_activity_end_time(session) if session is not None else None
+            if active_deadline is not None:
+                session_deadline = (
+                    active_deadline
+                    if session_deadline is None
+                    else min(ensure_utc(session_deadline), active_deadline)
+                )
+            if session_deadline is not None:
+                deadline = ensure_utc(session_deadline)
+                margin = timedelta(milliseconds=_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25)
+                if serialized_time + margin >= deadline and authored_candidate + margin < deadline:
+                    return authored_candidate
+        return serialized_time
 
     def _linux_ssh_process_shell_ready_time(
         self,
@@ -9209,6 +9258,7 @@ class ActivityGenerator:
         rng: random.Random,
         source_port: int | None = None,
         domain: str = "",
+        transport: NetworkTransactionPlan | None = None,
     ) -> bool:
         """Emit a TGT only when the client should not be using a cached ticket."""
         if not self._should_emit_visible_kerberos_tgt(username, source_ip, dc_hostname, time, rng):
@@ -9220,6 +9270,7 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            transport=transport,
         )
         return True
 
@@ -14987,17 +15038,9 @@ class ActivityGenerator:
         tgt_time, tgs_time = self._kerberos_ticket_times(
             time,
             rng,
-            tgs_before_ms=(20, 100),
+            tgs_before_ms=_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS,
             tgt_before_tgs_ms=(35, 240),
         )
-        self._maybe_generate_kerberos_tgt(
-            username=user.username,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            rng=rng,
-        )
-
         role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
         service_names = {
             str(service).lower() for service in (getattr(system, "services", []) or [])
@@ -15037,13 +15080,40 @@ class ActivityGenerator:
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
         )
-        self.generate_kerberos_service_ticket(
-            username=user.username,
-            service_name=service_name,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-        )
+        source_system = self._ip_to_system.get(source_ip.removeprefix("::ffff:"))
+        if source_system is not None and dc_idx < len(dc_ips):
+            transport_start = tgt_time - timedelta(milliseconds=20)
+            self.generate_connection(
+                src_ip=source_ip.removeprefix("::ffff:"),
+                dst_ip=dc_ips[dc_idx],
+                time=transport_start,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=max(0.08, (time - transport_start).total_seconds() - 0.02),
+                orig_bytes=rng.randint(520, 1600),
+                resp_bytes=rng.randint(1800, 5200),
+                source_system=source_system,
+                emit_dns=False,
+                kerberos_audit_mode="pair",
+                kerberos_audit_username=user.username,
+                kerberos_audit_service_name=service_name,
+            )
+        else:
+            self._maybe_generate_kerberos_tgt(
+                username=user.username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgt_time,
+                rng=rng,
+            )
+            self.generate_kerberos_service_ticket(
+                username=user.username,
+                service_name=service_name,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
+            )
 
     def generate_failed_logon(
         self,
@@ -19968,7 +20038,11 @@ class ActivityGenerator:
                 if provisional_termination <= actor.started_at:
                     raise ExecutionEffectPlanError(
                         ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared process actor leaves no interval for its lifecycle close",
+                        "prepared process actor leaves no interval for its lifecycle close: "
+                        f"host={request.system.hostname!r} image={actor.image!r} "
+                        f"started_at={actor.started_at.isoformat()} "
+                        f"session_deadline={actor.session_deadline.isoformat()} "
+                        f"planned_close={provisional_termination.isoformat()}",
                     )
 
             root_binary_publication: LocalArtifactPublishToken | None = None
@@ -20395,6 +20469,7 @@ class ActivityGenerator:
         if (
             _get_os_category(system.os) == "linux"
             and request.source_visible_by is None
+            and not request.from_storyline
             and _linux_shell_process_reserves_foreground(process_name, command_line)
             and _linux_foreground_lifetime(process_name, command_line) is not None
         ):
@@ -24696,6 +24771,10 @@ class ActivityGenerator:
         conn_state: str,
         service: str,
         source_system: System | None,
+        transport: NetworkTransactionPlan,
+        audit_mode: str = "auto",
+        audit_username: str = "",
+        audit_service_name: str = "",
     ) -> None:
         """Emit DC-side Kerberos audit companions via an action bundle."""
         request = KerberosConnectionAuditRequest(
@@ -24708,6 +24787,10 @@ class ActivityGenerator:
             conn_state=conn_state,
             service=service,
             source_system=source_system,
+            transport=transport,
+            audit_mode=audit_mode,
+            audit_username=audit_username,
+            audit_service_name=audit_service_name,
         )
         KerberosConnectionAuditActionBundle(self, request).execute()
 
@@ -24725,8 +24808,12 @@ class ActivityGenerator:
         conn_state = request.conn_state
         service = request.service
         source_system = request.source_system
+        transport = request.transport
+        audit_mode = request.audit_mode
 
         if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
+            return
+        if audit_mode == "none":
             return
         if proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"}:
             return
@@ -24746,7 +24833,11 @@ class ActivityGenerator:
             proto=proto,
             exclude_active_tuple=False,
         )
-        if self._has_recent_kerberos_audit(src_ip, dc_hostname, time) and reserved_port == src_port:
+        if (
+            audit_mode == "auto"
+            and self._has_recent_kerberos_audit(src_ip, dc_hostname, time)
+            and reserved_port == src_port
+        ):
             return
 
         rng = random.Random(
@@ -24761,36 +24852,56 @@ class ActivityGenerator:
             tgs_before_ms=(12, 75),
             tgt_before_tgs_ms=(35, 260),
         )
-        machine_principal = f"{source_system.hostname}$"
-        self._maybe_generate_kerberos_tgt(
-            username=machine_principal,
-            source_ip=src_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            rng=rng,
-            source_port=src_port,
+        machine_principal = request.audit_username or f"{source_system.hostname}$"
+        if audit_mode in {"auto", "pair", "tgt"}:
+            emit_tgt = self._maybe_generate_kerberos_tgt if audit_mode == "auto" else None
+            if emit_tgt is not None:
+                emit_tgt(
+                    username=machine_principal,
+                    source_ip=src_ip,
+                    dc_hostname=dc_hostname,
+                    time=tgt_time,
+                    rng=rng,
+                    source_port=src_port,
+                    transport=transport,
+                )
+            else:
+                self.generate_kerberos_tgt(
+                    username=machine_principal,
+                    source_ip=src_ip,
+                    dc_hostname=dc_hostname,
+                    time=tgt_time,
+                    source_port=src_port,
+                    transport=transport,
+                )
+        service_name = (
+            request.audit_service_name
+            or rng.choices(
+                [
+                    f"host/{dc_hostname}",
+                    f"ldap/{dc_hostname}",
+                    f"cifs/{dc_hostname}",
+                    f"DNS/{dc_hostname}",
+                ],
+                weights=[34, 36, 20, 10],
+                k=1,
+            )[0]
         )
-        service_name = rng.choices(
-            [
-                f"host/{dc_hostname}",
-                f"ldap/{dc_hostname}",
-                f"cifs/{dc_hostname}",
-                f"DNS/{dc_hostname}",
-            ],
-            weights=[34, 36, 20, 10],
-            k=1,
-        )[0]
-        machine_service_principal = (
-            f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
-        )
-        self.generate_kerberos_service_ticket(
-            username=machine_service_principal,
-            service_name=service_name,
-            source_ip=src_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-            source_port=src_port,
-        )
+        if audit_mode in {"auto", "pair", "tgs"}:
+            service_principal = machine_principal
+            if audit_mode == "auto":
+                service_principal = (
+                    f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
+                )
+            self.generate_kerberos_service_ticket(
+                username=service_principal,
+                service_name=service_name,
+                source_ip=src_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
+                source_port=src_port,
+                transport=transport,
+            )
 
     def generate_connection(
         self,
@@ -24832,6 +24943,9 @@ class ActivityGenerator:
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
         suppress_application_side_effects: bool = False,
+        kerberos_audit_mode: Literal["auto", "none", "tgt", "tgs", "pair"] = "auto",
+        kerberos_audit_username: str = "",
+        kerberos_audit_service_name: str = "",
         suppress_source_pid_inference: bool = False,
         preserve_explicit_payload: bool = False,
         suppress_prereq_dns: bool = False,
@@ -24926,6 +25040,9 @@ class ActivityGenerator:
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
             suppress_application_side_effects=suppress_application_side_effects,
+            kerberos_audit_mode=kerberos_audit_mode,
+            kerberos_audit_username=kerberos_audit_username,
+            kerberos_audit_service_name=kerberos_audit_service_name,
             suppress_source_pid_inference=suppress_source_pid_inference,
             preserve_explicit_payload=preserve_explicit_payload,
             suppress_prereq_dns=suppress_prereq_dns,
@@ -27843,10 +27960,13 @@ class ActivityGenerator:
         """Return a stable Postfix-like queue identifier for a message on one server."""
         seed = _stable_seed(f"postfix_queue:{system.hostname}:{message_id}")
         width = 9 + (seed % 3)
-        token = f"{seed:X}"
-        if len(token) < width:
-            token = token.rjust(width, "0")
-        return token[-width:]
+        return stable_hex_digest(
+            "postfix-queue",
+            system.hostname.casefold(),
+            message_id,
+            length=width,
+            uppercase=True,
+        )
 
     def _postfix_peer_name(self, system: "System") -> str:
         """Return the peer label Postfix would show for an SMTP client/server."""
@@ -34260,20 +34380,8 @@ class ActivityGenerator:
         tgt_time, tgs_time = self._kerberos_ticket_times(
             time,
             rng,
-            tgs_before_ms=(8, 65),
+            tgs_before_ms=_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS,
             tgt_before_tgs_ms=(35, 220),
-        )
-        kerberos_source_port = self._reserve_kerberos_source_port(
-            source_ip,
-            dc_hostname,
-            tgt_time,
-        )
-        self.generate_kerberos_tgt(
-            username=machine_username,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            source_port=kerberos_source_port,
         )
         service, destination_port = rng.choices(
             [("ldap", 389), ("cifs", 445)],
@@ -34281,14 +34389,6 @@ class ActivityGenerator:
             k=1,
         )[0]
         service_name = f"{service}/{dc_hostname}"
-        self.generate_kerberos_service_ticket(
-            username=machine_username,
-            service_name=service_name,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-            source_port=kerberos_source_port,
-        )
         target_system = self._ip_to_system.get(dc_ip)
         if target_system is None:
             target_system = System(
@@ -34296,6 +34396,39 @@ class ActivityGenerator:
                 ip=dc_ip,
                 os="Windows Server 2022",
                 type="domain_controller",
+            )
+        source_system = self._ip_to_system.get(source_ip)
+        if source_system is not None:
+            transport_start = tgt_time - timedelta(milliseconds=20)
+            self.generate_connection(
+                src_ip=source_ip,
+                dst_ip=dc_ip,
+                time=transport_start,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=max(0.08, (time - transport_start).total_seconds() - 0.02),
+                orig_bytes=rng.randint(520, 1600),
+                resp_bytes=rng.randint(1800, 5200),
+                source_system=source_system,
+                emit_dns=False,
+                kerberos_audit_mode="pair",
+                kerberos_audit_username=machine_username,
+                kerberos_audit_service_name=service_name,
+            )
+        else:
+            self.generate_kerberos_tgt(
+                username=machine_username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgt_time,
+            )
+            self.generate_kerberos_service_ticket(
+                username=machine_username,
+                service_name=service_name,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
             )
         service_source_port = self._allocate_ephemeral_port(
             source_ip,
@@ -34432,6 +34565,7 @@ class ActivityGenerator:
         time: datetime,
         domain: str = "",
         source_port: int | None = None,
+        transport: NetworkTransactionPlan | None = None,
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
         request = KerberosTgtRequest(
@@ -34441,6 +34575,7 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            transport=transport,
         )
         KerberosTgtActionBundle(self, request).execute()
 
@@ -34454,6 +34589,7 @@ class ActivityGenerator:
         time = request.time
         domain = request.domain
         source_port = request.source_port
+        transport = request.transport
 
         # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
@@ -34484,6 +34620,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="kerberos_tgt",
             dst_host=self._build_dc_host_context(dc_hostname),
+            network=transport,
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
@@ -34498,6 +34635,15 @@ class ActivityGenerator:
                 cert_thumbprint=tgt_fields["cert_thumbprint"],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=source_port,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
             ),
         )
 
@@ -34597,6 +34743,7 @@ class ActivityGenerator:
         domain: str = "",
         source_port: int | None = None,
         service_account_name: str = "",
+        transport: NetworkTransactionPlan | None = None,
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         request = KerberosServiceTicketRequest(
@@ -34608,6 +34755,7 @@ class ActivityGenerator:
             domain=domain,
             source_port=source_port,
             service_account_name=service_account_name,
+            transport=transport,
         )
         KerberosServiceTicketActionBundle(self, request).execute()
 
@@ -34648,6 +34796,7 @@ class ActivityGenerator:
         time = request.time
         domain = request.domain
         source_port = request.source_port
+        transport = request.transport
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
@@ -34680,6 +34829,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="kerberos_service",
             dst_host=self._build_dc_host_context(dc_hostname),
+            network=transport,
             kerberos=KerberosContext(
                 target_username=(
                     username
@@ -34698,6 +34848,15 @@ class ActivityGenerator:
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=source_port,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
             ),
         )
 
@@ -36102,10 +36261,39 @@ class ActivityGenerator:
             if has_source_ip
             else 0
         )
+        transport: NetworkTransactionPlan | None = None
+        if emit_connection and has_source_ip:
+            dc_system = self._dc_system_for_hostname(dc_hostname)
+            dc_ip = str(getattr(dc_system, "ip", "") or "")
+            if dc_ip:
+                capture = NetworkConnectionIdentityCapture()
+                self.generate_connection(
+                    src_ip=source_ip.removeprefix("::ffff:"),
+                    dst_ip=dc_ip,
+                    time=time - timedelta(milliseconds=20),
+                    dst_port=88,
+                    proto="tcp",
+                    service="kerberos",
+                    duration=rng.uniform(0.08, 0.16),
+                    orig_bytes=rng.randint(180, 900),
+                    resp_bytes=rng.randint(80, 500),
+                    src_port=source_port,
+                    source_system=getattr(self, "_ip_to_system", {}).get(
+                        source_ip.removeprefix("::ffff:")
+                    ),
+                    conn_state="SF",
+                    emit_dns=False,
+                    suppress_application_side_effects=True,
+                    identity_capture=capture,
+                )
+                transport = capture.transaction
+                if transport is None:
+                    raise StateError("Kerberos pre-auth transport did not publish its identity")
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="kerberos_preauth_failed",
             dst_host=dc_host,
+            network=transport,
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=getattr(self, "_ad_domain", "corp.local").upper(),
@@ -36118,6 +36306,15 @@ class ActivityGenerator:
                 source_port=source_port,
                 reporting_pid=reporting_pid,
             ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
+            ),
         )
         self._dispatch_prepared_kerberos_audit(
             event,
@@ -36125,29 +36322,6 @@ class ActivityGenerator:
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             source_port=source_port,
-        )
-
-        if not emit_connection or not has_source_ip:
-            return
-        dc_system = self._dc_system_for_hostname(dc_hostname)
-        dc_ip = str(getattr(dc_system, "ip", "") or "")
-        if not dc_ip:
-            return
-        source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
-        self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=dc_ip,
-            time=time,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=rng.uniform(0.001, 0.04),
-            orig_bytes=rng.randint(180, 900),
-            resp_bytes=rng.randint(80, 500),
-            src_port=source_port,
-            source_system=source_system,
-            conn_state=rng.choices(["SF", "RSTR"], weights=[82, 18], k=1)[0],
-            emit_dns=False,
         )
 
     def _get_user_logon_id(
@@ -37708,16 +37882,23 @@ class ActivityGenerator:
             time=time,
             msg_types=msg_types,
         )
+        message_count = 5 if is_initial_acquisition else 3
+        timeline = plan_dhcp_source_timeline(
+            request,
+            transaction_duration=dhcp_duration,
+            message_count=message_count,
+            timing_runtime=self.timing_runtime,
+        )
         transaction = NetworkTransactionPlan(
             stable_id=request.stable_id,
             hostname=system.hostname,
             outcome="success",
             phase_times=(
-                ("transport_start", time),
-                ("transport_close", time + timedelta(seconds=dhcp_duration)),
+                ("transport_start", timeline.transport_start),
+                ("transport_close", timeline.transport_close),
             ),
-            started_at=time,
-            closed_at=time + timedelta(seconds=dhcp_duration),
+            started_at=timeline.transport_start,
+            closed_at=timeline.transport_close,
             src_ip=system.ip,
             dst_ip=server_addr,
             src_port=68,
@@ -37768,8 +37949,9 @@ class ActivityGenerator:
         if _get_os_category(system.os) == "linux":
             dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
             interface = linux_primary_interface(system)
-            bound_message_index = 4 if is_initial_acquisition else 2
-            bound_message_offset = bound_message_index * 1.5
+            bound_message_offset = (
+                timeline.endpoint_phase_times[-1] - timeline.transport_start
+            ).total_seconds()
             if renewal_interval is None:
                 displayed_renewal_interval = lease_time / 2
             else:
@@ -37789,13 +37971,19 @@ class ActivityGenerator:
                     f"DHCPACK of {system.ip} from {server_addr}",
                     f"bound to {system.ip} -- renewal in {renewal} seconds.",
                 ]
-            for idx, message in enumerate(messages):
+            for phase_time, message in zip(
+                timeline.endpoint_phase_times,
+                messages,
+                strict=True,
+            ):
                 self.generate_syslog_event(
                     system=system,
-                    time=time + timedelta(milliseconds=idx * 1500),
+                    time=phase_time,
                     app_name="dhclient",
                     message=message,
                     pid=dhclient_pid,
+                    lifecycle_group_id=request.stable_id,
+                    lifecycle_canonical_start=timeline.transport_start,
                 )
 
     def generate_anonymous_logon(
@@ -37986,6 +38174,8 @@ class ActivityGenerator:
         facility: int = 3,
         severity: int = 6,
         auth: AuthContext | None = None,
+        lifecycle_group_id: str = "",
+        lifecycle_canonical_start: datetime | None = None,
     ) -> None:
         """Generate a standalone syslog event via canonical OccurrenceBuilder dispatch.
 
@@ -38014,6 +38204,15 @@ class ActivityGenerator:
                 pid=pid,
                 facility=facility,
                 severity=severity,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=lifecycle_group_id,
+                    canonical_start=lifecycle_canonical_start or time,
+                    phase="dependent",
+                )
+                if lifecycle_group_id
+                else None
             ),
         )
         self.dispatcher.dispatch_builder(event)
@@ -38075,6 +38274,66 @@ class ActivityGenerator:
             if deadline is not None and type(deadline) is not datetime:
                 raise StateError("Linux sudo TTY availability route has a malformed deadline")
             return logon_id, deadline
+
+    def _linux_sudo_terminal_for_session(self, logon_id: str) -> str | None:
+        """Return the sole controlling terminal already bound to one live session."""
+
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo terminal lookup requires a non-empty exact LogonID")
+        with self._linux_sudo_tty_lock:
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            sessions = self._linux_sudo_tty_sessions
+            if type(reverse) is not dict or type(sessions) is not dict:
+                raise StateError("Linux sudo terminal routes must be exact dictionaries")
+            tty_keys = dict.get(reverse, logon_id)
+            if tty_keys is None:
+                return None
+            if type(tty_keys) is not set or not tty_keys:
+                raise StateError("Linux sudo terminal route has a malformed reverse bucket")
+            normalized = tuple(sorted(self._validate_linux_sudo_tty_key(key) for key in tty_keys))
+            if len(normalized) != 1:
+                raise StateError("One Linux session cannot own multiple controlling terminals")
+            tty_key = normalized[0]
+            if dict.get(sessions, tty_key) != logon_id:
+                raise StateError("Linux sudo terminal reverse route lost its exact session owner")
+            return tty_key[2]
+
+    def _linux_sudo_tty_request_for_session(
+        self,
+        logon_id: str,
+    ) -> tuple[str, str, str] | None:
+        """Return the exact allocator request that owns one session's terminal."""
+
+        if type(logon_id) is not str or not logon_id:
+            raise StateError("Linux sudo TTY request lookup requires a non-empty exact LogonID")
+        with self._linux_sudo_tty_lock:
+            reverse = self._linux_sudo_tty_keys_by_logon_id
+            sessions = self._linux_sudo_tty_sessions
+            assignments = self._linux_sudo_tty_assignments
+            owners = self._linux_sudo_tty_owners
+            if any(
+                type(mapping) is not dict for mapping in (reverse, sessions, assignments, owners)
+            ):
+                raise StateError("Linux sudo terminal ownership maps must be exact dictionaries")
+            tty_keys = dict.get(reverse, logon_id)
+            if tty_keys is None:
+                return None
+            if type(tty_keys) is not set or not tty_keys:
+                raise StateError("Linux sudo terminal route has a malformed reverse bucket")
+            normalized = tuple(sorted(self._validate_linux_sudo_tty_key(key) for key in tty_keys))
+            if len(normalized) != 1:
+                raise StateError("One Linux session cannot own multiple controlling terminals")
+            tty_key = normalized[0]
+            inverse_key = (tty_key[0], tty_key[2])
+            requested_tty_key = dict.get(owners, inverse_key)
+            if (
+                dict.get(sessions, tty_key) != logon_id
+                or type(requested_tty_key) is not tuple
+                or self._validate_linux_sudo_tty_key(requested_tty_key) != requested_tty_key
+                or dict.get(assignments, requested_tty_key) != tty_key[2]
+            ):
+                raise StateError("Linux sudo terminal route lost its exact allocator owner")
+            return requested_tty_key
 
     def _has_linux_sudo_tty_route(self, logon_id: str) -> bool:
         """Return whether one exact nonempty reverse TTY route exists for a session."""
@@ -38358,6 +38617,10 @@ class ActivityGenerator:
             current_keys = dict.get(reverse, logon_id)
             if current_keys is not None and type(current_keys) is not set:
                 raise StateError("Linux sudo TTY reverse route has a malformed key bucket")
+            if session is not None and current_keys and tty_key not in current_keys:
+                raise StateError(
+                    "One live Linux session cannot publish a second controlling terminal"
+                )
 
             previous_after = set(previous_keys or ())
             previous_after.discard(tty_key)
@@ -39502,7 +39765,34 @@ class ActivityGenerator:
         if complete_by is None:
             complete_by = ensure_utc(reserve_until) + timedelta(milliseconds=50)
         user = self._user_model_for_username(sudo_user)
-        requested_tty_key = (system.hostname, sudo_user, tty)
+        compatible_at_request = [
+            candidate
+            for candidate in self.state_manager.get_active_sessions_for_user_at(
+                user.username,
+                sudo_time,
+            )
+            if candidate.system == system.hostname
+            and candidate.session_kind in {"interactive", "ssh"}
+            and _session_active_for_activity(
+                candidate,
+                reserve_until,
+                margin_seconds=1.0,
+            )
+        ]
+        requested_tty_key: tuple[str, str, str]
+        if compatible_at_request:
+            preferred_session = max(
+                compatible_at_request,
+                key=lambda candidate: candidate.start_time,
+            )
+            existing_request = self._linux_sudo_tty_request_for_session(preferred_session.logon_id)
+            if existing_request is not None:
+                requested_tty_key = existing_request
+                tty = requested_tty_key[2]
+            else:
+                requested_tty_key = (system.hostname, sudo_user, tty)
+        else:
+            requested_tty_key = (system.hostname, sudo_user, tty)
         capacity_claim = object()
         tty_pair_published = False
         handoff_pair_deltas: list[tuple[bool, bool]] = []
@@ -39539,20 +39829,24 @@ class ActivityGenerator:
                 ):
                     session = candidate
             if session is None:
-                compatible_sessions = [
-                    candidate
-                    for candidate in self.state_manager.get_active_sessions_for_user_at(
-                        user.username,
-                        effective_sudo_time,
-                    )
-                    if candidate.system == system.hostname
-                    and candidate.session_kind in {"interactive", "ssh"}
-                    and _session_active_for_activity(
-                        candidate,
-                        reserve_until,
-                        margin_seconds=1.0,
-                    )
-                ]
+                compatible_sessions = []
+                for candidate in self.state_manager.get_active_sessions_for_user_at(
+                    user.username,
+                    effective_sudo_time,
+                ):
+                    if (
+                        candidate.system != system.hostname
+                        or candidate.session_kind not in {"interactive", "ssh"}
+                        or not _session_active_for_activity(
+                            candidate,
+                            reserve_until,
+                            margin_seconds=1.0,
+                        )
+                    ):
+                        continue
+                    candidate_terminal = self._linux_sudo_terminal_for_session(candidate.logon_id)
+                    if candidate_terminal is None or candidate_terminal == assigned_tty:
+                        compatible_sessions.append(candidate)
                 if compatible_sessions:
                     session = max(compatible_sessions, key=lambda candidate: candidate.start_time)
             if latest_end is not None:
@@ -41507,6 +41801,14 @@ class ActivityGenerator:
             return proc.command_line
         return "-"
 
+    def _lookup_parent_username(self, hostname: str, parent_pid: int) -> str:
+        """Look up the canonical principal for a child process's parent."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        if proc is not None:
+            return proc.username
+        identity = self.state_manager.get_process_identity(hostname, parent_pid)
+        return identity.principal if identity is not None else ""
+
     def _lookup_parent_start_time(self, hostname: str, parent_pid: int) -> datetime | None:
         """Look up parent process start time at event construction time."""
         proc = self.state_manager.get_process(hostname, parent_pid)
@@ -41619,6 +41921,10 @@ class ActivityGenerator:
                 logon_id=event_logon_id,
                 parent_image=self._lookup_parent_image(system.hostname, running_proc.parent_pid),
                 parent_command_line=self._lookup_parent_command_line(
+                    system.hostname,
+                    running_proc.parent_pid,
+                ),
+                parent_username=self._lookup_parent_username(
                     system.hostname,
                     running_proc.parent_pid,
                 ),

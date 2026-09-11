@@ -28,7 +28,7 @@ from evidenceforge.models.scenario import (
     StorageShareConfig,
     System,
 )
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_hex_digest
 
 _MappingPresentation = tuple[frozenset[str], frozenset[str], str, str]
 
@@ -1190,7 +1190,12 @@ class _StorageWorldCompiler:
 
     @staticmethod
     def _file_id(share_ref: str, path: str) -> str:
-        return f"file-{_stable_seed(f'storage-file:{share_ref.casefold()}:{path.casefold()}'):016x}"
+        return "file-" + stable_hex_digest(
+            "storage-file",
+            share_ref.casefold(),
+            path.casefold(),
+            length=16,
+        )
 
     def _compile_mappings(self) -> None:
         used_drives: list[_MappingPresentation] = []

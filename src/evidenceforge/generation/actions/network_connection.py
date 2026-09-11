@@ -2200,6 +2200,9 @@ class NetworkConnectionRequest:
     preserve_dst_ip: bool = False
     preserve_http_outcome: bool = False
     suppress_application_side_effects: bool = False
+    kerberos_audit_mode: Literal["auto", "none", "tgt", "tgs", "pair"] = "auto"
+    kerberos_audit_username: str = ""
+    kerberos_audit_service_name: str = ""
     suppress_source_pid_inference: bool = False
     preserve_explicit_payload: bool = False
     suppress_prereq_dns: bool = False
@@ -2270,6 +2273,12 @@ class NetworkConnectionRequest:
             raise ValueError(
                 f"Unsupported transport lifecycle request mode {self.transport_lifecycle_mode!r}"
             )
+        if self.kerberos_audit_mode not in {"auto", "none", "tgt", "tgs", "pair"}:
+            raise ValueError(f"Unsupported Kerberos audit mode {self.kerberos_audit_mode!r}")
+        if self.kerberos_audit_mode != "auto" and (
+            self.service != "kerberos" or self.dst_port != 88
+        ):
+            raise ValueError("Explicit Kerberos audit modes require a port-88 Kerberos request")
         if self.deferred_session_authority is not None:
             if type(self.deferred_session_authority) is not DeferredSessionNetworkAuthority:
                 raise TypeError("Network request deferred authority has an unsupported type")

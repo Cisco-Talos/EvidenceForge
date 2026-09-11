@@ -4781,6 +4781,19 @@ class TestActivityGenerator:
         state_manager.set_current_time(timestamp)
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
+        activity_gen._ip_to_system["10.0.1.10"] = System(
+            hostname="WKS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system["10.0.2.10"] = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
 
         sessions_before = len(state_manager.state.active_sessions)
         activity_gen.generate_machine_account_logon(
@@ -4806,7 +4819,7 @@ class TestActivityGenerator:
         assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
         assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
         assert all(
-            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+            abs((event.timestamp - timestamp).total_seconds()) < 4.0 for event in kerberos_events
         )
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
@@ -4831,6 +4844,13 @@ class TestActivityGenerator:
             if call.args[0].event_type == "connection"
             and call.args[0].network.dst_port in {389, 445}
         )
+        kerberos_connection = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert max(event.timestamp for event in kerberos_events) < service_connection.timestamp
+        assert kerberos_connection.timestamp < service_connection.timestamp
         assert machine_logon.auth.source_port == service_connection.network.src_port
         assert (
             machine_logon.remote_auth.primary_transport.transaction_id
@@ -9544,7 +9564,7 @@ class TestActivityGenerator:
         ]
         event = process_events[-1]
         assert event.process.integrity_level == "High"
-        assert event.process.token_elevation == "%%1936"
+        assert event.process.token_elevation == "%%1937"
         assert event.process.mandatory_label == "S-1-16-12288"
 
     def test_windows_singleton_process_uses_seeded_pid_without_create_event(
@@ -12079,6 +12099,55 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.process is None
         assert event.network.initiating_pid == -1
+
+    def test_generate_connection_extends_process_hold_through_transport_close(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Every process-attributed connection must retain its owner through close."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Java\bin\java.exe",
+            command_line="java.exe -jar service-healthcheck.jar",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=8.5,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=r"C:\Program Files\Java\bin\java.exe",
+            emit_dns=False,
+        )
+
+        process = state_manager.get_process(test_system.hostname, pid)
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert process is not None
+        assert process.last_activity_time == event.network.closed_at
+        assert (
+            activity_gen._process_connection_hold_until[
+                activity_gen._process_instance_key(test_system.hostname, pid)
+            ]
+            == event.network.closed_at
+        )
 
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,

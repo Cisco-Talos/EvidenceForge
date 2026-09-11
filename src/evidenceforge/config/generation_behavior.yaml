@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 19
+current_revision: 40
 history_start_revision: 1
-behavior_surface_sha256: "181edbc078901377fcd97cf67aa9c42d2b80c9164367df1ca9a58dcb3df5c1ef"
+behavior_surface_sha256: "612484f5ef8f70dce7a1f34294089f52b865c6efe2f5b7d92d8d3ff145c4976e"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -191,3 +191,255 @@ changes:
       - all-email
       - all-authentication
     summary: Binds generated Internet identities once by semantic role and provider, with deterministic canonical overlays and silent 2.x legacy translation.
+  - revision: 20
+    id: dhcp-phase-timing-and-process-parent-principal
+    impact: material
+    domains:
+      - dhcp-source-timing
+      - process-parent-identity
+      - rdp-session
+    formats:
+      - syslog
+      - zeek_dhcp
+      - windows_event_sysmon
+    summary: Plans independent DHCP endpoint phase observations around the canonical wire interval and preserves exact parent principals for process rendering.
+  - revision: 21
+    id: dns-close-and-rdp-userinit-lifecycle
+    impact: material
+    domains:
+      - dns-transport-lifecycle
+      - rdp-session-lifecycle
+      - process-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_dns
+    summary: Makes response-bearing synthesized DNS close timing packet-owned and terminates RDP userinit after desktop readiness through the exact lifecycle journal.
+  - revision: 22
+    id: proxy-phase-and-windows-token-identity
+    impact: material
+    domains:
+      - explicit-proxy-source-timing
+      - windows-process-token-identity
+      - rdp-session-identity
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_http
+      - zeek_ssl
+    summary: Preserves CONNECT-before-origin packet ordering at every shared sensor and renders one canonical Windows process token and RDP LogonGuid across endpoint sources.
+  - revision: 23
+    id: packet-derived-single-exchange-dns-timing
+    impact: material
+    domains:
+      - dns-transport-lifecycle
+      - network-source-timing
+    formats:
+      - zeek_conn
+      - zeek_dns
+    summary: Makes one-query one-response UDP DNS rows share exact request and response packet anchors with their parent connection at every sensor.
+  - revision: 23
+    id: submillisecond-wfp-transport-admission
+    impact: localized
+    domains:
+      - windows-endpoint-source-timing
+      - network-transport-lifecycle
+    formats:
+      - windows_event_security
+    summary: Admits Windows WFP observations inside valid sub-millisecond canonical transport intervals without imposing the generic 1 ms lifecycle gap.
+  - revision: 24
+    id: windows-provider-thread-and-volume-identity
+    impact: material
+    domains:
+      - windows-source-metadata
+      - windows-installation-identity
+    formats:
+      - windows_event_security
+    summary: Derives Security provider thread lifecycles and NT device-volume paths from deterministic host-local identities instead of fleet-wide finite pools.
+  - revision: 25
+    id: source-native-full-width-identifier-entropy
+    impact: material
+    domains:
+      - explicit-proxy-identity
+      - postfix-queue-identity
+      - storage-file-identity
+    formats:
+      - ecar
+      - proxy_access
+      - syslog
+    summary: Derives visible proxy tunnel, compiled storage file, and Postfix queue identifiers from full-width seed-scoped digests instead of zero-padded 32-bit seeds.
+  - revision: 26
+    id: preserve-orphaned-logind-close-identity
+    impact: localized
+    domains:
+      - linux-session-identity
+      - syslog-terminal-normalization
+    formats:
+      - ecar
+      - syslog
+    summary: Preserves canonical systemd-logind IDs on observation-orphaned close rows so SSH session and process identities remain joinable across syslog and eCAR.
+  - revision: 27
+    id: canonical-sysmon-binary-content-identity
+    impact: material
+    domains:
+      - binary-content-identity
+      - windows-pe-metadata
+      - sysmon-process-telemetry
+    formats:
+      - windows_event_sysmon
+    summary: Renders Sysmon process and image-load hashes and PE metadata from exact attached canonical binary identities instead of installation paths.
+  - revision: 28
+    id: production-binary-deployment-registry-binding
+    impact: material
+    domains:
+      - binary-content-identity
+      - software-deployment
+      - process-generation
+    formats:
+      - ecar
+      - windows_event_sysmon
+    summary: Compiles and binds exact native, application, and storage deployment identity before production process generation so canonical events carry release or explicit unresolved binary truth.
+  - revision: 29
+    id: host-local-linux-transient-process-identity
+    impact: material
+    domains:
+      - process-identity
+      - linux-baseline
+      - lifecycle
+    formats:
+      - ecar
+      - syslog
+    summary: Routes one-shot anacron activity through the canonical host PID allocator, gives hidden Linux process churn stable host-specific workload magnitude, and preserves viable authored shell anchors against later traversal-order reservations.
+  - revision: 30
+    id: deferred-remote-session-publication-frontier
+    impact: material
+    domains:
+      - remote-session-lifecycle
+      - source-timing
+      - storyline-scheduling
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Commits admitted deferred-session source indexes with the exact timing transaction and applies remote-session readiness before authored follow-on activity, preventing RDP LogonID use before source-visible login.
+  - revision: 31
+    id: host-build-windows-pe-identity-coverage
+    impact: material
+    domains:
+      - binary-content-identity
+      - software-deployment
+      - windows-pe-metadata
+    formats:
+      - windows_event_sysmon
+    summary: Compiles Explorer and high-volume Windows native process VERSIONINFO from exact host-build releases and preserves that metadata when service or task catalogs own the executable path.
+  - revision: 32
+    id: kdc-processing-after-packet-admission
+    impact: material
+    domains:
+      - kerberos-authentication
+      - network-transport
+      - source-timing
+    formats:
+      - windows_event_security
+    summary: Binds connection-triggered KDC audits to the exact canonical Kerberos transport and renders 4768, 4769, and 4771 strictly after target-side WFP admission and before transport close.
+  - revision: 33
+    id: immutable-linux-session-controlling-terminal
+    impact: material
+    domains:
+      - linux-session-identity
+      - process-lifecycle
+      - sudo-authentication
+    formats:
+      - ecar
+      - syslog
+    summary: Reuses the sole controlling terminal already owned by a continuing Linux interactive or SSH session so one persistent shell cannot publish sudo children across multiple pts identities.
+  - revision: 34
+    id: source-native-smb-tree-connect-timing
+    impact: material
+    domains:
+      - smb-session-lifecycle
+      - network-protocol-timing
+      - source-timing
+    formats:
+      - zeek_smb_mapping
+      - windows_event_security
+      - syslog
+    summary: Samples SMB authentication and tree-connect packet-stage gaps through the shared timing runtime with microsecond texture while preserving canonical transport and file-operation ordering.
+  - revision: 35
+    id: canonical-explicit-proxy-http-authority-headers
+    impact: material
+    domains:
+      - explicit-proxy-transactions
+      - http-semantics
+      - cross-source-correlation
+    formats:
+      - proxy_access
+      - zeek_http
+    summary: Preserves the proxy transaction's normalized origin authority and Referer across client-facing proxy evidence and origin-facing HTTP requests, preventing sibling Host mutations or isolated header disagreement.
+  - revision: 36
+    id: proxy-connect-nested-transport-lifetime
+    impact: material
+    domains:
+      - explicit-proxy-transactions
+      - application-lifecycle
+      - network-transport
+    formats:
+      - proxy_access
+      - zeek_conn
+      - ecar
+    summary: Derives successful CONNECT duration from the nested tunnel lifecycle and removes fabricated summary slack so tunnel setup and payload remain bounded by the exact carrying client transport.
+  - revision: 37
+    id: kerberos-fresh-ticket-before-dependent-service
+    impact: material
+    domains:
+      - windows-authentication
+      - kerberos
+      - network-transport
+    formats:
+      - windows_event_security
+      - zeek_conn
+      - ecar
+    summary: Places modeled fresh AS/TGS acquisition far enough ahead of Windows remote authentication that KDC processing precedes the dependent target-service transport and successful logon after source-native timing is applied.
+  - revision: 38
+    id: zeek-file-digest-analyzer-provenance
+    impact: localized
+    domains:
+      - file-analysis
+      - canonical-file-transfer
+      - smb
+    formats:
+      - zeek_files
+    summary: Requires every canonical file digest result to declare its matching Zeek analyzer and adapts both SMB execution paths to publish MIME plus MD5, SHA1, and SHA256 provenance.
+  - revision: 39
+    id: explicit-proxy-authoritative-client-byte-ledger
+    impact: material
+    domains:
+      - browser-sessions
+      - explicit-proxy-transactions
+      - network-transport
+      - cross-source-correlation
+    formats:
+      - proxy_access
+      - zeek_conn
+      - ecar
+    summary: Derives inspected CONNECT tunnel counters from the exact carrying client transport so proxy, Zeek, and endpoint wire-byte views consume one canonical directional payload ledger.
+  - revision: 40
+    id: post-assessment-hard-contradiction-repairs
+    impact: material
+    domains:
+      - process-lifecycle
+      - application-deployment
+      - smb
+      - windows-authentication
+      - source-timing
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek
+    summary: Retains process owners through canonical dependent connections, gates catalog releases by scenario date, renders SMB browse phases as directory operations, and preserves source-visible workstation lock dwell and re-authentication order.

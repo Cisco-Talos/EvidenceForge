@@ -184,26 +184,55 @@ def test_authored_process_actor_profile_compiles_on_exact_storyline_host() -> No
 
 
 def test_windows_explorer_is_deployed_where_session_shell_generation_is_supported() -> None:
-    """Server and domain-controller session shells resolve the exact Explorer release."""
+    """Session shells resolve one Explorer release per exact Windows build."""
 
     systems = [
-        _system("WS-01", 1),
-        {
-            "hostname": "DC-01",
-            "ip": "10.0.0.2",
-            "os": "Windows Server 2019",
-            "type": "domain_controller",
-        },
+        _system("WS-10", 1, os_name="Windows 10 Enterprise"),
+        _system("WS-11", 2, os_name="Windows 11 Enterprise"),
+        _system("SRV-19", 3, os_name="Windows Server 2019"),
+        _system("SRV-22", 4, os_name="Windows Server 2022"),
     ]
     _scenario, registry = _compile(systems)
 
-    explorer = registry.resolve_binary(
-        "DC-01",
-        r"C:\Windows\explorer.exe",
-        "windows",
+    explorers = {
+        hostname: registry.resolve_binary(
+            hostname,
+            r"C:\Windows\explorer.exe",
+            "windows",
+        )
+        for hostname in ("WS-10", "WS-11", "SRV-19", "SRV-22")
+    }
+
+    assert all(explorer is not None for explorer in explorers.values())
+    exact_explorers = [explorer for explorer in explorers.values() if explorer is not None]
+    assert {explorer.key.product_id for explorer in exact_explorers} == {"microsoft-windows"}
+    assert [explorer.pe_version_info.file_version for explorer in exact_explorers] == [
+        "10.0.19041.1",
+        "10.0.22621.1",
+        "10.0.17763.1",
+        "10.0.20348.1",
+    ]
+    assert len({explorer.digests.sha256 for explorer in exact_explorers}) == 4
+
+
+def test_capability_owned_native_processes_keep_host_build_pe_metadata() -> None:
+    """Service/task ownership must not discard native VERSIONINFO."""
+
+    _scenario, registry = _compile([_system("WS-01", 1)])
+    paths = (
+        r"C:\Windows\System32\taskhostw.exe",
+        r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+        r"C:\Windows\System32\dllhost.exe",
+        r"C:\Windows\System32\conhost.exe",
     )
-    assert explorer is not None
-    assert explorer.key.product_id == "windows-explorer"
+
+    releases = [registry.resolve_binary("WS-01", path, "windows") for path in paths]
+
+    assert all(release is not None for release in releases)
+    for release in releases:
+        assert release is not None
+        assert release.pe_version_info is not None
+        assert release.pe_version_info.file_version == "10.0.22621.1"
 
 
 def test_native_system_binary_catalog_is_typed_and_legacy_compatible() -> None:
@@ -215,6 +244,19 @@ def test_native_system_binary_catalog_is_typed_and_legacy_compatible() -> None:
     assert len(descriptors) == 100
     assert by_exe["winlogon.exe"].has_pe_version_info
     assert by_exe["userinit.exe"].has_pe_version_info
+    assert all(
+        by_exe[exe].has_pe_version_info
+        for exe in (
+            "taskhostw.exe",
+            "WmiPrvSE.exe",
+            "dllhost.exe",
+            "conhost.exe",
+            "SearchFilterHost.exe",
+            "SearchProtocolHost.exe",
+            "svchost.exe",
+            "cmd.exe",
+        )
+    )
     assert by_exe["eventvwr.exe"].release_policy == "host_build"
     assert by_exe["vpnagent.exe"].release_policy == "unspecified"
     assert all(item.release_policy in {"host_build", "unspecified"} for item in descriptors)

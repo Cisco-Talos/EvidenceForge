@@ -30,6 +30,7 @@ from evidenceforge.generation.emitters.zeek_base import (
     SensorMultiplexEmitter,
     planned_zeek_connection_interval,
 )
+from evidenceforge.generation.network_observation import network_source_timing_key
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _SOURCE_TIMING = SourceTimingPlanner()
@@ -86,25 +87,38 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             if net.duration is not None
             else dns.rtt
         )
+        timing_key = network_source_timing_key("zeek_dns")
+        single_exchange_udp = (
+            net.protocol == "udp"
+            and net.history == "Dd"
+            and net.orig_pkts == 1
+            and net.resp_pkts == 1
+            and dns.rtt is not None
+            and conn_lifetime is not None
+        )
         within = None
         if conn_lifetime is not None and conn_lifetime > 0:
             rtt = dns.rtt or 0.0
             latest_offset = max(0.0, conn_lifetime - rtt - 0.000001)
             latest = conn_ts + timedelta(seconds=latest_offset)
             within = (conn_ts, latest)
-        event_ts = _SOURCE_TIMING.source_time(
-            event,
-            "source.zeek_dns_query",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-            not_before=conn_ts,
-            within=within,
+        event_ts = (
+            conn_ts
+            if single_exchange_udp and planned_interval is None
+            else _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_dns_query",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=conn_ts,
+                within=within,
+            )
         )
         event_data: dict[str, Any] = {
             "ts": event_ts,
@@ -132,7 +146,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             "opcode_name": dns.opcode_name,
         }
         if dns.rtt is not None:
-            event_data["rtt"] = dns.rtt
+            event_data["rtt"] = conn_lifetime if single_exchange_udp else dns.rtt
         if dns.answers:
             event_data["answers"] = dns.answers
         if dns.TTLs:
@@ -143,6 +157,9 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
                 self.format_def.name if self.format_def else "zeek_dns",
             )
         )
+        event_data["_source_timing_key"] = timing_key
+        event_data["_source_duration_key"] = timing_key
+        event_data["_source_duration_field"] = "rtt"
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
