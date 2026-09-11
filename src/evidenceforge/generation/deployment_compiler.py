@@ -1076,7 +1076,7 @@ def compile_deployment_registry(
             replace(
                 descriptor,
                 path=normalize_defender_platform_path(
-                    descriptor.path,
+                    materialize_catalog_image_path(descriptor.path, system),
                     system.hostname,
                 ),
             )
