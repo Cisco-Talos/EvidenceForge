@@ -3750,12 +3750,19 @@ class NetworkTransactionPlanner:
             and src_port > 0
             and not (proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"})
         ):
-            kerberos_audit_count = executor._kerberos_audit_count_for_connection(
-                src_ip,
-                kerberos_dc_hostname,
-                src_port,
-                time,
-            )
+            if request.kerberos_audit_mode in {"tgt", "tgs"}:
+                kerberos_audit_count = 1
+            elif request.kerberos_audit_mode == "pair":
+                kerberos_audit_count = 2
+            elif request.kerberos_audit_mode == "none":
+                kerberos_audit_count = 0
+            else:
+                kerberos_audit_count = executor._kerberos_audit_count_for_connection(
+                    src_ip,
+                    kerberos_dc_hostname,
+                    src_port,
+                    time,
+                )
             if kerberos_audit_count == 0 and kerberos_prerequisite_success:
                 # A successful internal KDC transport with no existing tuple
                 # companions will publish a TGT/TGS pair after the leased
@@ -6037,6 +6044,9 @@ class NetworkTransactionPlanner:
                 service=event.network.service,
                 source_system=resolved_source_system,
                 transport=event.network,
+                audit_mode=request.kerberos_audit_mode,
+                audit_username=request.kerberos_audit_username,
+                audit_service_name=request.kerberos_audit_service_name,
             )
         if deferred_published is not None:
             publication = deferred_published.publication

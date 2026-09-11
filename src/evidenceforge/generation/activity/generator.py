@@ -15038,14 +15038,6 @@ class ActivityGenerator:
             tgs_before_ms=(20, 100),
             tgt_before_tgs_ms=(35, 240),
         )
-        self._maybe_generate_kerberos_tgt(
-            username=user.username,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            rng=rng,
-        )
-
         role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
         service_names = {
             str(service).lower() for service in (getattr(system, "services", []) or [])
@@ -15085,13 +15077,40 @@ class ActivityGenerator:
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
         )
-        self.generate_kerberos_service_ticket(
-            username=user.username,
-            service_name=service_name,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-        )
+        source_system = self._ip_to_system.get(source_ip.removeprefix("::ffff:"))
+        if source_system is not None and dc_idx < len(dc_ips):
+            transport_start = tgt_time - timedelta(milliseconds=20)
+            self.generate_connection(
+                src_ip=source_ip.removeprefix("::ffff:"),
+                dst_ip=dc_ips[dc_idx],
+                time=transport_start,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=max(0.08, (time - transport_start).total_seconds() - 0.02),
+                orig_bytes=rng.randint(520, 1600),
+                resp_bytes=rng.randint(1800, 5200),
+                source_system=source_system,
+                emit_dns=False,
+                kerberos_audit_mode="pair",
+                kerberos_audit_username=user.username,
+                kerberos_audit_service_name=service_name,
+            )
+        else:
+            self._maybe_generate_kerberos_tgt(
+                username=user.username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgt_time,
+                rng=rng,
+            )
+            self.generate_kerberos_service_ticket(
+                username=user.username,
+                service_name=service_name,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
+            )
 
     def generate_failed_logon(
         self,
@@ -24750,6 +24769,9 @@ class ActivityGenerator:
         service: str,
         source_system: System | None,
         transport: NetworkTransactionPlan,
+        audit_mode: str = "auto",
+        audit_username: str = "",
+        audit_service_name: str = "",
     ) -> None:
         """Emit DC-side Kerberos audit companions via an action bundle."""
         request = KerberosConnectionAuditRequest(
@@ -24763,6 +24785,9 @@ class ActivityGenerator:
             service=service,
             source_system=source_system,
             transport=transport,
+            audit_mode=audit_mode,
+            audit_username=audit_username,
+            audit_service_name=audit_service_name,
         )
         KerberosConnectionAuditActionBundle(self, request).execute()
 
@@ -24781,8 +24806,11 @@ class ActivityGenerator:
         service = request.service
         source_system = request.source_system
         transport = request.transport
+        audit_mode = request.audit_mode
 
         if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
+            return
+        if audit_mode == "none":
             return
         if proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"}:
             return
@@ -24802,7 +24830,11 @@ class ActivityGenerator:
             proto=proto,
             exclude_active_tuple=False,
         )
-        if self._has_recent_kerberos_audit(src_ip, dc_hostname, time) and reserved_port == src_port:
+        if (
+            audit_mode == "auto"
+            and self._has_recent_kerberos_audit(src_ip, dc_hostname, time)
+            and reserved_port == src_port
+        ):
             return
 
         rng = random.Random(
@@ -24817,38 +24849,56 @@ class ActivityGenerator:
             tgs_before_ms=(12, 75),
             tgt_before_tgs_ms=(35, 260),
         )
-        machine_principal = f"{source_system.hostname}$"
-        self._maybe_generate_kerberos_tgt(
-            username=machine_principal,
-            source_ip=src_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            rng=rng,
-            source_port=src_port,
-            transport=transport,
+        machine_principal = request.audit_username or f"{source_system.hostname}$"
+        if audit_mode in {"auto", "pair", "tgt"}:
+            emit_tgt = self._maybe_generate_kerberos_tgt if audit_mode == "auto" else None
+            if emit_tgt is not None:
+                emit_tgt(
+                    username=machine_principal,
+                    source_ip=src_ip,
+                    dc_hostname=dc_hostname,
+                    time=tgt_time,
+                    rng=rng,
+                    source_port=src_port,
+                    transport=transport,
+                )
+            else:
+                self.generate_kerberos_tgt(
+                    username=machine_principal,
+                    source_ip=src_ip,
+                    dc_hostname=dc_hostname,
+                    time=tgt_time,
+                    source_port=src_port,
+                    transport=transport,
+                )
+        service_name = (
+            request.audit_service_name
+            or rng.choices(
+                [
+                    f"host/{dc_hostname}",
+                    f"ldap/{dc_hostname}",
+                    f"cifs/{dc_hostname}",
+                    f"DNS/{dc_hostname}",
+                ],
+                weights=[34, 36, 20, 10],
+                k=1,
+            )[0]
         )
-        service_name = rng.choices(
-            [
-                f"host/{dc_hostname}",
-                f"ldap/{dc_hostname}",
-                f"cifs/{dc_hostname}",
-                f"DNS/{dc_hostname}",
-            ],
-            weights=[34, 36, 20, 10],
-            k=1,
-        )[0]
-        machine_service_principal = (
-            f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
-        )
-        self.generate_kerberos_service_ticket(
-            username=machine_service_principal,
-            service_name=service_name,
-            source_ip=src_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-            source_port=src_port,
-            transport=transport,
-        )
+        if audit_mode in {"auto", "pair", "tgs"}:
+            service_principal = machine_principal
+            if audit_mode == "auto":
+                service_principal = (
+                    f"{machine_principal}@{getattr(self, '_ad_domain', 'corp.local').upper()}"
+                )
+            self.generate_kerberos_service_ticket(
+                username=service_principal,
+                service_name=service_name,
+                source_ip=src_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
+                source_port=src_port,
+                transport=transport,
+            )
 
     def generate_connection(
         self,
@@ -24890,6 +24940,9 @@ class ActivityGenerator:
         preserve_dst_ip: bool = False,
         preserve_http_outcome: bool = False,
         suppress_application_side_effects: bool = False,
+        kerberos_audit_mode: Literal["auto", "none", "tgt", "tgs", "pair"] = "auto",
+        kerberos_audit_username: str = "",
+        kerberos_audit_service_name: str = "",
         suppress_source_pid_inference: bool = False,
         preserve_explicit_payload: bool = False,
         suppress_prereq_dns: bool = False,
@@ -24984,6 +25037,9 @@ class ActivityGenerator:
             preserve_dst_ip=preserve_dst_ip,
             preserve_http_outcome=preserve_http_outcome,
             suppress_application_side_effects=suppress_application_side_effects,
+            kerberos_audit_mode=kerberos_audit_mode,
+            kerberos_audit_username=kerberos_audit_username,
+            kerberos_audit_service_name=kerberos_audit_service_name,
             suppress_source_pid_inference=suppress_source_pid_inference,
             preserve_explicit_payload=preserve_explicit_payload,
             suppress_prereq_dns=suppress_prereq_dns,
@@ -34324,32 +34380,12 @@ class ActivityGenerator:
             tgs_before_ms=(8, 65),
             tgt_before_tgs_ms=(35, 220),
         )
-        kerberos_source_port = self._reserve_kerberos_source_port(
-            source_ip,
-            dc_hostname,
-            tgt_time,
-        )
-        self.generate_kerberos_tgt(
-            username=machine_username,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgt_time,
-            source_port=kerberos_source_port,
-        )
         service, destination_port = rng.choices(
             [("ldap", 389), ("cifs", 445)],
             weights=[55, 45],
             k=1,
         )[0]
         service_name = f"{service}/{dc_hostname}"
-        self.generate_kerberos_service_ticket(
-            username=machine_username,
-            service_name=service_name,
-            source_ip=source_ip,
-            dc_hostname=dc_hostname,
-            time=tgs_time,
-            source_port=kerberos_source_port,
-        )
         target_system = self._ip_to_system.get(dc_ip)
         if target_system is None:
             target_system = System(
@@ -34357,6 +34393,39 @@ class ActivityGenerator:
                 ip=dc_ip,
                 os="Windows Server 2022",
                 type="domain_controller",
+            )
+        source_system = self._ip_to_system.get(source_ip)
+        if source_system is not None:
+            transport_start = tgt_time - timedelta(milliseconds=20)
+            self.generate_connection(
+                src_ip=source_ip,
+                dst_ip=dc_ip,
+                time=transport_start,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=max(0.08, (time - transport_start).total_seconds() - 0.02),
+                orig_bytes=rng.randint(520, 1600),
+                resp_bytes=rng.randint(1800, 5200),
+                source_system=source_system,
+                emit_dns=False,
+                kerberos_audit_mode="pair",
+                kerberos_audit_username=machine_username,
+                kerberos_audit_service_name=service_name,
+            )
+        else:
+            self.generate_kerberos_tgt(
+                username=machine_username,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgt_time,
+            )
+            self.generate_kerberos_service_ticket(
+                username=machine_username,
+                service_name=service_name,
+                source_ip=source_ip,
+                dc_hostname=dc_hostname,
+                time=tgs_time,
             )
         service_source_port = self._allocate_ephemeral_port(
             source_ip,
@@ -36189,10 +36258,39 @@ class ActivityGenerator:
             if has_source_ip
             else 0
         )
+        transport: NetworkTransactionPlan | None = None
+        if emit_connection and has_source_ip:
+            dc_system = self._dc_system_for_hostname(dc_hostname)
+            dc_ip = str(getattr(dc_system, "ip", "") or "")
+            if dc_ip:
+                capture = NetworkConnectionIdentityCapture()
+                self.generate_connection(
+                    src_ip=source_ip.removeprefix("::ffff:"),
+                    dst_ip=dc_ip,
+                    time=time - timedelta(milliseconds=20),
+                    dst_port=88,
+                    proto="tcp",
+                    service="kerberos",
+                    duration=rng.uniform(0.08, 0.16),
+                    orig_bytes=rng.randint(180, 900),
+                    resp_bytes=rng.randint(80, 500),
+                    src_port=source_port,
+                    source_system=getattr(self, "_ip_to_system", {}).get(
+                        source_ip.removeprefix("::ffff:")
+                    ),
+                    conn_state="SF",
+                    emit_dns=False,
+                    suppress_application_side_effects=True,
+                    identity_capture=capture,
+                )
+                transport = capture.transaction
+                if transport is None:
+                    raise StateError("Kerberos pre-auth transport did not publish its identity")
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="kerberos_preauth_failed",
             dst_host=dc_host,
+            network=transport,
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=getattr(self, "_ad_domain", "corp.local").upper(),
@@ -36205,6 +36303,15 @@ class ActivityGenerator:
                 source_port=source_port,
                 reporting_pid=reporting_pid,
             ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
+            ),
         )
         self._dispatch_prepared_kerberos_audit(
             event,
@@ -36212,29 +36319,6 @@ class ActivityGenerator:
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             source_port=source_port,
-        )
-
-        if not emit_connection or not has_source_ip:
-            return
-        dc_system = self._dc_system_for_hostname(dc_hostname)
-        dc_ip = str(getattr(dc_system, "ip", "") or "")
-        if not dc_ip:
-            return
-        source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
-        self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=dc_ip,
-            time=time,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=rng.uniform(0.001, 0.04),
-            orig_bytes=rng.randint(180, 900),
-            resp_bytes=rng.randint(80, 500),
-            src_port=source_port,
-            source_system=source_system,
-            conn_state=rng.choices(["SF", "RSTR"], weights=[82, 18], k=1)[0],
-            emit_dns=False,
         )
 
     def _get_user_logon_id(

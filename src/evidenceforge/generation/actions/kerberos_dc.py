@@ -70,6 +70,9 @@ class KerberosConnectionAuditRequest:
     service: str
     source_system: System | None
     transport: NetworkTransactionPlan | None = None
+    audit_mode: str = "auto"
+    audit_username: str = ""
+    audit_service_name: str = ""
     conn_state: str = "SF"
     source: str = "network_connection"
 
@@ -83,6 +86,7 @@ class KerberosConnectionAuditRequest:
             f"{self.src_ip}:{self.src_port}:{self.dst_ip}:{self.dst_port}:"
             f"{self.proto}:{self.conn_state}:{self.service}:"
             f"{self.time.isoformat()}:{hostname}:{self.source}"
+            f":{self.audit_mode}:{self.audit_username}:{self.audit_service_name}"
         )
         return f"kerberos-connection-audit-{seed:016x}"
 

@@ -2126,12 +2126,12 @@ class TestInfrastructureDetection:
         assert activity_gen._kerberos_tgt_cache_until[tgt_key] > timestamp
         assert activity_gen._has_recent_kerberos_audit(source_ip, dc_hostname, timestamp)
 
-    def test_kerberos_transport_failure_retains_already_committed_primary_audit_points(
+    def test_kerberos_transport_failure_prevents_unadmitted_primary_audit_points(
         self,
         activity_gen,
         mock_emitters,
     ):
-        """A later KDC transport failure cannot erase an accepted primary 4771."""
+        """A failed KDC transport cannot publish a 4771 or reserve its audit points."""
 
         dc = System(
             hostname="DC-01",
@@ -2173,8 +2173,8 @@ class TestInfrastructureDetection:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
             if call[0][0].event_type == "kerberos_preauth_failed"
         ]
-        assert len(emitted) == 1
-        assert activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
+        assert emitted == []
+        assert not activity_gen._has_recent_kerberos_audit(client.ip, dc.hostname, timestamp)
         assert (
             activity_gen._kerberos_audit_count_for_connection(
                 client.ip,
@@ -2182,10 +2182,10 @@ class TestInfrastructureDetection:
                 source_port,
                 timestamp,
             )
-            == 1
+            == 0
         )
         census = activity_gen._network_transaction_runtime.census()
-        assert census.live_points == 2
+        assert census.live_points == 0
         assert census.prepared_transactions == census.claimed_transactions == 0
         assert census.reserved_points == census.preparation_fences == 0
 
