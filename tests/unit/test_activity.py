@@ -4781,6 +4781,19 @@ class TestActivityGenerator:
         state_manager.set_current_time(timestamp)
         for emitter in mock_emitters.values():
             emitter.can_handle.return_value = True
+        activity_gen._ip_to_system["10.0.1.10"] = System(
+            hostname="WKS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system["10.0.2.10"] = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
 
         sessions_before = len(state_manager.state.active_sessions)
         activity_gen.generate_machine_account_logon(
@@ -4806,7 +4819,7 @@ class TestActivityGenerator:
         assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
         assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
         assert all(
-            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+            abs((event.timestamp - timestamp).total_seconds()) < 4.0 for event in kerberos_events
         )
         machine_logon = next(
             event for event in security_events if event.event_type == "machine_logon"
@@ -4831,6 +4844,13 @@ class TestActivityGenerator:
             if call.args[0].event_type == "connection"
             and call.args[0].network.dst_port in {389, 445}
         )
+        kerberos_connection = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert max(event.timestamp for event in kerberos_events) < service_connection.timestamp
+        assert kerberos_connection.timestamp < service_connection.timestamp
         assert machine_logon.auth.source_port == service_connection.network.src_port
         assert (
             machine_logon.remote_auth.primary_transport.transaction_id

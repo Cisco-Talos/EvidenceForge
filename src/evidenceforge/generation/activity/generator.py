@@ -581,6 +581,9 @@ _FAILED_LINUX_SSH_PROCESS_CAUSAL_FLOOR_MS = 25
 _FAILED_LOGON_ENDPOINT_LATENCY_DEFAULT_MAX_MS = 100
 _FAILED_LOGON_KERBEROS_PREAUTH_LATEST_LEAD_MS = 40
 _FAILED_LOGON_NTLM_VALIDATION_DELAY_MAX_MS = 85
+# Fresh AS/TGS exchange evidence must precede the earliest possible dependent
+# Windows service transport (currently up to 900 ms before authentication).
+_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS = (2_400, 3_200)
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
     "mysql",
@@ -15035,7 +15038,7 @@ class ActivityGenerator:
         tgt_time, tgs_time = self._kerberos_ticket_times(
             time,
             rng,
-            tgs_before_ms=(20, 100),
+            tgs_before_ms=_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS,
             tgt_before_tgs_ms=(35, 240),
         )
         role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
@@ -34377,7 +34380,7 @@ class ActivityGenerator:
         tgt_time, tgs_time = self._kerberos_ticket_times(
             time,
             rng,
-            tgs_before_ms=(8, 65),
+            tgs_before_ms=_FRESH_KERBEROS_TGS_BEFORE_LOGON_MS,
             tgt_before_tgs_ms=(35, 220),
         )
         service, destination_port = rng.choices(

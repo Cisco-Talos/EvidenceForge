@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 36
+current_revision: 37
 history_start_revision: 1
-behavior_surface_sha256: "315ed77f4389fbff1cd45c4d056eb5fbd930d281d437b9f46f6659c20f0355cf"
+behavior_surface_sha256: "c6916d584af620a5a0081c7701b8443765d2b8a6fddacd33b0ba9238c2d2a66f"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -392,3 +392,15 @@ changes:
       - zeek_conn
       - ecar
     summary: Derives successful CONNECT duration from the nested tunnel lifecycle and removes fabricated summary slack so tunnel setup and payload remain bounded by the exact carrying client transport.
+  - revision: 37
+    id: kerberos-fresh-ticket-before-dependent-service
+    impact: material
+    domains:
+      - windows-authentication
+      - kerberos
+      - network-transport
+    formats:
+      - windows_event_security
+      - zeek_conn
+      - ecar
+    summary: Places modeled fresh AS/TGS acquisition far enough ahead of Windows remote authentication that KDC processing precedes the dependent target-service transport and successful logon after source-native timing is applied.
