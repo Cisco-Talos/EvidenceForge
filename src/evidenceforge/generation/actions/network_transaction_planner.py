@@ -5989,6 +5989,7 @@ class NetworkTransactionPlanner:
             executor._last_connection_effective_transaction_id = event.network.stable_id
             executor._last_connection_http_context = event.protocol.http
             executor._last_connection_file_transfers = event.protocol.file_transfers
+        kerberos_target_wfp_published = False
         if (
             kerberos_prerequisite_success
             and not suppress_application_side_effects
@@ -5997,9 +5998,34 @@ class NetworkTransactionPlanner:
             and event.network.protocol in {"tcp", "udp"}
             and event.network.src_port > 0
         ):
+            if (
+                not committed_suppressed
+                and deferred_published is None
+                and target_system is not None
+                and dst_host_ctx is not None
+                and dst_host_ctx.os_category == "windows"
+                and not event.network.application_layer_only
+                and executor._should_emit_windows_inbound_wfp(event, target_system)
+            ):
+                inbound_pid = event.network.responding_pid
+                inbound_application = executor._lookup_process_name(
+                    target_system.hostname,
+                    inbound_pid,
+                    "windows",
+                )
+                executor.generate_wfp_connection(
+                    system=target_system,
+                    time=time,
+                    network=event.network,
+                    pid=inbound_pid,
+                    application=inbound_application,
+                    parent_action_group_id=parent_action_group_id,
+                )
+                kerberos_target_wfp_published = True
             # Publish endpoint audit evidence only after the canonical transport
-            # and its final leased tuple have committed. Timestamp ordering is
-            # source truth and does not depend on publication call order.
+            # and its final leased tuple have committed.  When target WFP is
+            # visible, admit that exact source frontier before dependent KDC
+            # processing is planned.
             executor._emit_dc_audit_for_kerberos_connection(
                 src_ip=event.network.src_ip,
                 src_port=event.network.src_port,
@@ -6010,6 +6036,7 @@ class NetworkTransactionPlanner:
                 conn_state=event.network.conn_state,
                 service=event.network.service,
                 source_system=resolved_source_system,
+                transport=event.network,
             )
         if deferred_published is not None:
             publication = deferred_published.publication
@@ -6095,7 +6122,8 @@ class NetworkTransactionPlanner:
             )
 
         if (
-            target_system is not None
+            not kerberos_target_wfp_published
+            and target_system is not None
             and dst_host_ctx is not None
             and dst_host_ctx.os_category == "windows"
             and not event.network.application_layer_only

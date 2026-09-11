@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 31
+current_revision: 32
 history_start_revision: 1
-behavior_surface_sha256: "7be368c84bf4e383e2cb7d1e6b27bfb027b8fbcfcff9433428097ba185c5df44"
+behavior_surface_sha256: "ec319b714751c1baf1502465d9ff33fe5788ed8e22a76d6524e2f12644e1446a"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -336,3 +336,13 @@ changes:
     formats:
       - windows_event_sysmon
     summary: Compiles Explorer and high-volume Windows native process VERSIONINFO from exact host-build releases and preserves that metadata when service or task catalogs own the executable path.
+  - revision: 32
+    id: kdc-processing-after-packet-admission
+    impact: material
+    domains:
+      - kerberos-authentication
+      - network-transport
+      - source-timing
+    formats:
+      - windows_event_security
+    summary: Binds connection-triggered KDC audits to the exact canonical Kerberos transport and renders 4768, 4769, and 4771 strictly after target-side WFP admission and before transport close.

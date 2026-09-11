@@ -498,6 +498,80 @@ def test_machine_logon_follows_visible_kerberos_service_ticket() -> None:
     assert timedelta(milliseconds=3) <= login_time - ticket_time <= timedelta(milliseconds=135)
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    ["kerberos_tgt", "kerberos_service", "kerberos_preauth_failed"],
+)
+def test_transport_bound_kdc_audit_follows_target_wfp(event_type: str) -> None:
+    """KDC processing must render after exact target packet admission and before close."""
+
+    planner = SourceTimingPlanner()
+    start = _base_time()
+    dc = HostContext(
+        hostname="DC-01",
+        ip="10.0.0.10",
+        fqdn="DC-01.corp.local",
+        os="Windows Server 2022",
+        os_category="windows",
+        system_type="domain_controller",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+    transport = network_plan(
+        src_ip="10.0.0.20",
+        src_port=54123,
+        dst_ip=dc.ip,
+        dst_port=88,
+        protocol="tcp",
+        service="kerberos",
+        duration=0.18,
+        source_visible_start_time=start,
+        source_visible_close_time=start + timedelta(milliseconds=180),
+        conn_state="SF",
+    )
+    lifecycle = ActionLifecycleContext(
+        group_id=transport.stable_id,
+        canonical_start=transport.started_at,
+        phase="dependent",
+    )
+    wfp_event = OccurrenceBuilder(
+        timestamp=start,
+        event_type="wfp_connection",
+        src_host=dc,
+        network=transport,
+        lifecycle=lifecycle,
+    )
+    kdc_event = OccurrenceBuilder(
+        timestamp=start - timedelta(milliseconds=120),
+        event_type=event_type,
+        dst_host=dc,
+        network=transport,
+        kerberos=KerberosContext(
+            target_username="WIN-TEST-01$",
+            target_domain="CORP.LOCAL",
+            service_name="krbtgt" if event_type != "kerberos_service" else "host/DC-01",
+            source_ip="::ffff:10.0.0.20",
+            source_port=54123,
+        ),
+        lifecycle=lifecycle,
+    )
+
+    planner.plan_event(wfp_event, "windows_event_security")
+    planner.record_admitted_source_event(wfp_event, "windows_event_security")
+    planner.plan_event(kdc_event, "windows_event_security")
+
+    wfp_time = wfp_event.source_timing.finalized_times["windows.wfp_connection"]
+    kdc_time = kdc_event.source_timing.finalized_times[
+        endpoint_event_render_key("windows_event_security", dc.hostname)
+    ]
+    projected_close = transport.closed_at + planner.endpoint_clock_adjustment_for_host(
+        hostname=dc.hostname,
+        os_category=dc.os_category,
+        timestamp=transport.closed_at,
+    )
+    assert wfp_time < kdc_time < projected_close
+
+
 def test_machine_logon_after_closed_transport_still_follows_late_service_ticket() -> None:
     """A completed Kerberos socket cannot pull machine auth before its ticket."""
 

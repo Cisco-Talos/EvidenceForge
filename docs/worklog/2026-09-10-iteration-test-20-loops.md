@@ -589,3 +589,31 @@
 - Next highest-impact families: KDC/WFP causality, per-host Linux hardware inventory, and
   source-native SSH/IDS timestamp construction. Nmap command semantics remains queued from loops
   65–66.
+
+## Loop 68 Family Contract
+
+### KDC processing after exact packet-admission evidence
+
+- **Classification:** `family_level`; loop-67 `hard_contradiction` across Windows Security 5156
+  and Kerberos 4768/4769/4771 on both domain controllers.
+- **Owning abstraction:** the canonical network-connection bundle owns the KDC transport tuple and
+  transaction identity; `SourceTimingPlanner` owns the source-local WFP-admission frontier and the
+  dependent KDC audit timestamp.
+- **Invariant:** when a visible successful client-to-DC port-88 transaction produces both target
+  WFP and KDC audit evidence, the exact target-side Event 5156 renders before every 4768, 4769, or
+  4771 bound to that transport. Both rows remain inside the canonical transport lifetime after the
+  DC clock and source latency are applied.
+- **Entry paths:** baseline Kerberos connections, connection-triggered TGT/TGS repair, explicit
+  fresh-account exchanges, failed pre-authentication with wire evidence, machine-account traffic,
+  and higher-level authentication bundles that delegate to the network contract.
+- **Consumers:** Windows Security rendering, KDC/WFP tuple joins, machine-logon ticket ordering,
+  source-timing checkpoint/retry state, deterministic causality probes, and blind detection review.
+- **Layer rationale:** canonical connection materialization already owns the exact tuple and WFP
+  dependent event. The inversion occurs because connection-triggered KDC audits publish before the
+  target WFP frontier is admitted and carry no exact transport dependency. Bind that canonical
+  transport to the KDC occurrence and constrain it in shared source timing; do not rewrite emitter
+  timestamps.
+- **Sibling risks:** cached-TGT flows may legitimately omit 4768; standalone KDC audit events
+  without modeled transport retain their existing timing; denied/unanswered connections must not
+  acquire successful WFP/KDC evidence; short transports must fail safely rather than render audit
+  rows after close; source-side WFP and remote-auth ordering remain unchanged.

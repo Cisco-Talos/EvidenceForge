@@ -9255,6 +9255,7 @@ class ActivityGenerator:
         rng: random.Random,
         source_port: int | None = None,
         domain: str = "",
+        transport: NetworkTransactionPlan | None = None,
     ) -> bool:
         """Emit a TGT only when the client should not be using a cached ticket."""
         if not self._should_emit_visible_kerberos_tgt(username, source_ip, dc_hostname, time, rng):
@@ -9266,6 +9267,7 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            transport=transport,
         )
         return True
 
@@ -24747,6 +24749,7 @@ class ActivityGenerator:
         conn_state: str,
         service: str,
         source_system: System | None,
+        transport: NetworkTransactionPlan,
     ) -> None:
         """Emit DC-side Kerberos audit companions via an action bundle."""
         request = KerberosConnectionAuditRequest(
@@ -24759,6 +24762,7 @@ class ActivityGenerator:
             conn_state=conn_state,
             service=service,
             source_system=source_system,
+            transport=transport,
         )
         KerberosConnectionAuditActionBundle(self, request).execute()
 
@@ -24776,6 +24780,7 @@ class ActivityGenerator:
         conn_state = request.conn_state
         service = request.service
         source_system = request.source_system
+        transport = request.transport
 
         if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
             return
@@ -24820,6 +24825,7 @@ class ActivityGenerator:
             time=tgt_time,
             rng=rng,
             source_port=src_port,
+            transport=transport,
         )
         service_name = rng.choices(
             [
@@ -24841,6 +24847,7 @@ class ActivityGenerator:
             dc_hostname=dc_hostname,
             time=tgs_time,
             source_port=src_port,
+            transport=transport,
         )
 
     def generate_connection(
@@ -34486,6 +34493,7 @@ class ActivityGenerator:
         time: datetime,
         domain: str = "",
         source_port: int | None = None,
+        transport: NetworkTransactionPlan | None = None,
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
         request = KerberosTgtRequest(
@@ -34495,6 +34503,7 @@ class ActivityGenerator:
             time=time,
             domain=domain,
             source_port=source_port,
+            transport=transport,
         )
         KerberosTgtActionBundle(self, request).execute()
 
@@ -34508,6 +34517,7 @@ class ActivityGenerator:
         time = request.time
         domain = request.domain
         source_port = request.source_port
+        transport = request.transport
 
         # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
@@ -34538,6 +34548,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="kerberos_tgt",
             dst_host=self._build_dc_host_context(dc_hostname),
+            network=transport,
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
@@ -34552,6 +34563,15 @@ class ActivityGenerator:
                 cert_thumbprint=tgt_fields["cert_thumbprint"],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=source_port,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
             ),
         )
 
@@ -34651,6 +34671,7 @@ class ActivityGenerator:
         domain: str = "",
         source_port: int | None = None,
         service_account_name: str = "",
+        transport: NetworkTransactionPlan | None = None,
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         request = KerberosServiceTicketRequest(
@@ -34662,6 +34683,7 @@ class ActivityGenerator:
             domain=domain,
             source_port=source_port,
             service_account_name=service_account_name,
+            transport=transport,
         )
         KerberosServiceTicketActionBundle(self, request).execute()
 
@@ -34702,6 +34724,7 @@ class ActivityGenerator:
         time = request.time
         domain = request.domain
         source_port = request.source_port
+        transport = request.transport
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
@@ -34734,6 +34757,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="kerberos_service",
             dst_host=self._build_dc_host_context(dc_hostname),
+            network=transport,
             kerberos=KerberosContext(
                 target_username=(
                     username
@@ -34752,6 +34776,15 @@ class ActivityGenerator:
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=source_port,
+            ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=transport.stable_id,
+                    canonical_start=transport.started_at,
+                    phase="dependent",
+                )
+                if transport is not None
+                else None
             ),
         )
 

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from evidenceforge.events.network import NetworkTransactionPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
@@ -68,6 +69,7 @@ class KerberosConnectionAuditRequest:
     proto: str
     service: str
     source_system: System | None
+    transport: NetworkTransactionPlan | None = None
     conn_state: str = "SF"
     source: str = "network_connection"
 
@@ -95,6 +97,7 @@ class KerberosTgtRequest:
     time: datetime
     domain: str = ""
     source_port: int | None = None
+    transport: NetworkTransactionPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -104,7 +107,8 @@ class KerberosTgtRequest:
         seed = _stable_seed(
             "action_bundle:kerberos_tgt:"
             f"{self.username}:{self.source_ip}:{self.dc_hostname}:{self.time.isoformat()}:"
-            f"{self.domain}:{self.source_port or ''}:{self.source}"
+            f"{self.domain}:{self.source_port or ''}:"
+            f"{self.transport.stable_id if self.transport is not None else ''}:{self.source}"
         )
         return f"kerberos-tgt-{seed:016x}"
 
@@ -145,6 +149,7 @@ class KerberosServiceTicketRequest:
     domain: str = ""
     source_port: int | None = None
     service_account_name: str = ""
+    transport: NetworkTransactionPlan | None = None
     source: str = "activity_generator"
 
     @property
@@ -155,7 +160,8 @@ class KerberosServiceTicketRequest:
             "action_bundle:kerberos_service_ticket:"
             f"{self.username}:{self.service_name}:{self.source_ip}:{self.dc_hostname}:"
             f"{self.time.isoformat()}:{self.domain}:{self.source_port or ''}:"
-            f"{self.service_account_name}:{self.source}"
+            f"{self.service_account_name}:"
+            f"{self.transport.stable_id if self.transport is not None else ''}:{self.source}"
         )
         return f"kerberos-service-ticket-{seed:016x}"
 
