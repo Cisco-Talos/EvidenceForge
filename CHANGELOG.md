@@ -6,37 +6,76 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.0.0 (2026-09-11)
+
+This final 2.0 release completes the post-RC3 realism gate, closes the remaining hard
+cross-source contradictions, and ships the release-candidate architecture with verified
+checkpoint, lifecycle, performance, and authoring behavior.
+
+**Final realism assessment and evidence hygiene**
+
+- Completed assessment loops 57–75 plus a targeted final blind evaluation, repairing DHCP parent
+  and phase timing, DNS/RDP terminal lifecycles, proxy/token phase alignment, single-exchange DNS
+  timing, submillisecond WFP admission, Windows provider identifiers, source-native identifiers,
+  logind close identity, canonical binary rendering/deployment, Linux process and shell identity,
+  remote-session readiness, native Windows deployment metadata, KDC transport ordering, Linux TTY
+  stability, SMB packet texture, proxy authority/tunnel/byte accounting, Zeek file digests, and the
+  final hard contradictions (`759a46b3`, `a8cbf1bf`, `1840f066`, `7b947962`, `b5b9617f`,
+  `1cb4fbfc`, `bbd00737`, `ab6c55e0`, `f1caae5c`, `28cccc2c`, `9eb47c99`, `e13597b6`,
+  `44107766`, `a9d2b7bf`, `de59b2c6`, `cdb16120`, `ec461d22`, `b7624c7c`, `72de4fb4`,
+  `4347ff4e`, `85e118f9`, `dc94d15a`, `8dc3eaa2`, `8fca52b6`, `1e287427`, `f18b47dd`).
+- Recorded the assessment sequence, final session summary, and refreshed 2.0 positioning in the
+  maintained worklog and documentation (`5adbea2f`, `35407c20`, `12e96aab`, `31bacea2`,
+  `a1156b2f`, `e04c3f0f`, `eecde20a`, `32354f2e`, `08aaf902`, `539ccd80`, `8ba1c0d6`,
+  `c08c9fc4`, `d52edf54`, `bf0a7aac`, `84916060`, `8d9e8ffc`, `b3b79d62`, `1872353a`,
+  `c1ca05c2`, `c475a088`).
+- Stopped tracking ignored blind-assessment outputs while preserving the local artifacts and the
+  curated worklog, restoring the established public-source evidence policy (`0a2b957d`).
+
 **2.0 P1 realism and identity completion**
 
 - Added typed Windows foreground lifetime plans so one-shot commands close promptly and
-  operation/session/persistent processes retain only their actual owner.
+  operation/session/persistent processes retain only their actual owner (`ad2661ae`, `d8eb6364`).
 - Added canonical responder endpoint observations and inbound Sysmon Event 3
   `Initiated=false` alongside responder-owned Security 5156, with shared transaction/process
-  identity and deployment, denial, and observation-policy gating.
+  identity and deployment, denial, and observation-policy gating (`e1638663`, `7f775abd`).
 - Added `public_identity_profiles.yaml` as the canonical role/provider registry for generated
   public IP, DNS/PTR, TLS, and client traits. Shipped external-actor, mail, CDN, DNS, and NTP data
   now use it; user-owned legacy identity overlays translate silently through 2.x, while only
   `eforge validate` emits one actionable migration warning per consumed file. Compatibility
-  adapters are scheduled for removal in 3.0; a scenario-local schema field remains future work.
+  adapters are scheduled for removal in 3.0; a scenario-local schema field remains future work
+  (`7fa7563f`, `234324fe`, `20e15d5d`).
+
+**Lifecycle, checkpoint, and release contracts**
+
+- Kept SMB clients inside their owning sessions, separated collection cutoff from modeled
+  lifecycle end, preserved process lineage and sensor-route identity, and validated evidence
+  reachability with retained ancestry (`4587acfe`, `85affb5c`, `9ef89297`, `000cac47`).
+- Prevented resumed machine-authentication source-port collisions and preserved semantic
+  checkpoint identity across recovery (`0b42e52e`, `f879c6a0`).
+- Aligned iteration-pack migration expectations, adopted Python 3.12 typing syntax, refreshed
+  Ruff, reconciled the 2.0 roadmap, and recorded successful scenario-authoring acceptance
+  (`b877a942`, `3102b60a`, `5a157543`, `bf3e2c2a`, `12988ce7`).
 
 **Performance**
 
+- Added reusable opt-in generation profiling without changing deterministic output (`946a1569`).
 - Reduced exact SMB connection-state validation work by collapsing redundant validation within
   locked transitions, retaining already-validated authority state, and avoiding temporary text and
   integer encodings during callback-safe key checks. In the original pre-`dev`-integration
   assessment, the representative all-source median improved by 5.64%. Post-integration correctness
   and determinism were revalidated; all 25 concrete log formats and deterministic sidecars remain
-  byte-identical to the preceding build.
+  byte-identical to the preceding build (`e0c74465`, `0efd6eac`).
 - Reused the existing timing-seed byte contract more efficiently and cached pure deterministic
   source-clock wander knots in a bounded process-local store. In the original pre-`dev`-integration
   assessment, the representative all-source median improved by a further 6.66%. Post-integration
   correctness and determinism were revalidated; all 25 concrete log formats and deterministic
-  sidecars remain byte-identical to the preceding build.
+  sidecars remain byte-identical to the preceding build (`ffc034d2`).
 - Specialized the exact packed-digest index read loop while preserving unsigned-64-bit validation,
   sentinel normalization, probing, collision behavior, and defaults. Focused hit/miss throughput
   improved by about 35%/39%, target-exclusive samples fell 77.8%, and the corrected-baseline
   all-source median improved by at least 3.59%. All 25 concrete log formats, artifacts, and
-  deterministic sidecars remain byte-identical to the preceding build.
+  deterministic sidecars remain byte-identical to the preceding build (`77b09990`, `595aaaba`).
 
 **Performance and deterministic output changes**
 
@@ -48,19 +87,23 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
   unchanged. Repeated generation and same-build checkpoint resume are byte-identical. Checkpoints
   created before this change require `--resume-policy attempt` after successful full hydration;
   the measured revision-12 all-source checkpoint completed byte-identically, but historical output
-  equivalence remains conservatively unguaranteed for that compatibility transition.
+  equivalence remains conservatively unguaranteed for that compatibility transition (`f16bfd50`).
 
 **Fixed**
 
+- Repaired final release gates by rebuilding compiled deployment state after checkpoint restore,
+  preserving DNS RTT-owned transport duration, serializing concurrent sudo TTY bootstrap,
+  retaining repaired visible SSH session duration through logout, and synchronizing exact
+  identity/timing inventories (`f3f7db40`).
 - Kept failure cleanup usable for partially constructed generation-engine recovery and test
-  harnesses that do not carry the optional process-local profiler field.
+  harnesses that do not carry the optional process-local profiler field (`5a2a55ef`).
 - Kept the opt-in generation profiler outside checkpoint payloads so checkpoint-enabled generation
-  can suspend and each resumed invocation retains only its own profiling state.
+  can suspend and each resumed invocation retains only its own profiling state (`bff4bf7c`).
 - Prevented a later SSH transport that reuses a completed network tuple from inheriting the
   earlier session's `sshd` worker, including when resuming a legacy checkpoint with a retained
-  window-long responder binding.
+  window-long responder binding (`23b6ecad`).
 - Corrected the progress average after checkpoint resume so previously completed simulated hours
-  no longer make the displayed generation rate artificially fast.
+  no longer make the displayed generation rate artificially fast (`56894bc9`).
 
 ## v2.0.0rc3 (2026-09-06)
 
