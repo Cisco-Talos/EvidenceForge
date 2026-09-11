@@ -711,3 +711,26 @@
 - **Sibling risks:** preserve deterministic output across workers and hash seeds; keep auth before
   tree-connect, tree-connect before file operations, every SMB child inside transport bounds, and
   source-local multi-sensor timing relationships valid.
+
+## Loop 70 Result
+
+- **Implementation commit:** `4347ff4e7` (`fix: add packet texture to SMB tree timing`).
+- **Behavior contract:** revision 34,
+  `9958d695d3e7470381cd44a9e91869dee545bb45b8eed53c59bcdaddd5f4ca9d`.
+- **Verification:** 8,403 routine tests passed, 5 skipped, and 2,009 deselected; Ruff check and
+  format check passed across 769 files; all 92 configuration files validated; the scenario remained
+  valid with the existing 24 informational pivot notes.
+- **Rendered invariant:** 119 core SMB mappings had zero missing parent connections, zero
+  integer-millisecond offsets, 108 distinct microsecond residues, and setup gaps from 68.184 to
+  159.981 milliseconds.
+- **Automated evaluation:** 97.04987120041729 PASS across 124,333 records (parseability
+  99.99919570829948, plausibility 96.85872154275857, causality 97.12464221795368, timing
+  92.77135773874691).
+- **Initial panel:** Threat Hunter 66 (Synthetic, 78 verdict confidence), Detection Engineer 34
+  (Real, 72), Network Forensics 36 (Real, 78), Host/EDR 64 (Synthetic, 80); mean 50.0.
+- **Deliberation:** triggered by verdict disagreement and a 32-point spread. Revised scores were
+  68, 48, 50, and 62; mean 57.0 with an Inconclusive, synthetic-leaning panel.
+- **Target-family disposition:** the loop-69 120-of-120 SMB integer-millisecond timing lattice did
+  not recur in rendered probes or any initial expert report.
+- **Next family:** preserve canonical HTTP authority and Referer semantics across explicit-proxy
+  client and origin legs; six Host mutations and one isolated cross-source Referer mismatch remain.
