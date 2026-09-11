@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 25
+current_revision: 26
 history_start_revision: 1
-behavior_surface_sha256: "1ffc409e1424464935982502f3beec72a6ed61e54ee90a482605b77ca0eff1c6"
+behavior_surface_sha256: "7f62ff26bd8f880b68bd475b06ef88ee9c573cf709247013767bfaf795f3717b"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -272,3 +272,13 @@ changes:
       - proxy_access
       - syslog
     summary: Derives visible proxy tunnel, compiled storage file, and Postfix queue identifiers from full-width seed-scoped digests instead of zero-padded 32-bit seeds.
+  - revision: 26
+    id: preserve-orphaned-logind-close-identity
+    impact: localized
+    domains:
+      - linux-session-identity
+      - syslog-terminal-normalization
+    formats:
+      - ecar
+      - syslog
+    summary: Preserves canonical systemd-logind IDs on observation-orphaned close rows so SSH session and process identities remain joinable across syslog and eCAR.

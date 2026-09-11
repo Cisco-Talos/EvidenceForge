@@ -349,3 +349,31 @@
 - The repaired identifier fingerprint was absent from all reports.
 - Next highest-impact families: SSH continuation/session identity, canonical public IPv6 identity,
   UFW host-clock/scanner texture, and process-termination outcomes.
+
+## Loop 63 Family Contract
+
+### Observation-orphaned systemd-logind close identity
+
+- **Classification:** `exact_regression`; loop-62 `hard_contradiction` against the existing
+  canonical SSH/logind session-identity contract.
+- **Owning abstraction:** canonical session allocation owns the logind session ID; the syslog
+  renderer may order and format rows but must not replace that shared identity during terminal
+  normalization.
+- **Invariant:** every visible `New session N` or `Removed session N` row preserves the canonical
+  `AuthContext.session_id` used by eCAR `USER_SESSION` and process lifecycle rows. If observation
+  drops a matching opener, the orphaned closer keeps `N`; final rendering must not guess that it
+  represents a pre-window session and synthesize a different ID. Repair of duplicate or
+  backward-moving visible `New session` rows remains scoped to genuinely noncanonical compatibility
+  input and carries a rewritten ID only to an explicitly matched visible closer.
+- **Entry paths:** deferred and compatibility SSH action bundles, baseline remote administration,
+  storyline SSH, SCP receiver sessions, local Linux logons, pre-window sessions, and direct syslog
+  compatibility fixtures.
+- **Consumers:** systemd-logind syslog, eCAR `USER_SESSION` and process rows, SSH/PAM lifecycle
+  joins, blind-review correlation, terminal host normalization, checkpoint replay, and SOF-ELK®
+  rendering.
+- **Layer rationale:** the continuation and canonical event already agree on the ID. The defect is
+  introduced only by terminal syslog rewriting after observation, so the smallest owning-layer fix
+  is to preserve unmatched close IDs rather than mutate canonical planning or patch SSH messages.
+- **Sibling risks:** matched rewritten compatibility sessions must still keep New/Removed parity;
+  malformed oversized IDs remain nonfatal; genuine pre-window closes remain valid orphan rows and
+  are not fabricated into visible opens.

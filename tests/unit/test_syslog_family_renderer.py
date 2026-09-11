@@ -353,6 +353,22 @@ def test_normalize_logind_session_ids_repairs_backward_new_session() -> None:
     assert removed_session == 7616
 
 
+def test_normalize_logind_session_ids_preserves_observation_orphaned_close() -> None:
+    """A dropped opener must not split a canonical SSH identity from eCAR."""
+    lines = [
+        "<86>1 2024-03-18T12:04:40.000000Z linux01 systemd-logind 22523 - - New session 7616 of user root.",
+        "<86>1 2024-03-18T12:12:00.000000Z linux01 systemd-logind 22523 - - Removed session 8124.",
+        "<86>1 2024-03-18T12:20:09.000000Z linux01 systemd-logind 22523 - - New session 8240 of user admin.",
+    ]
+
+    normalized = SyslogEmitter._normalize_logind_session_ids_for_lines(
+        lines,
+        "linux01.example.test",
+    )
+
+    assert normalized == lines
+
+
 def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
     lines = [
         "<30>1 2024-03-18T12:00:00.000000Z app unattended-upgr 100 - - Packages checked",
