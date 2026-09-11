@@ -53,8 +53,8 @@ checkpoint, lifecycle, performance, and authoring behavior.
   reachability with retained ancestry (`4587acfe`, `85affb5c`, `9ef89297`, `000cac47`).
 - Prevented resumed machine-authentication source-port collisions and preserved semantic
   checkpoint identity across recovery (`0b42e52e`, `f879c6a0`).
-- Extended the required slow-release CI timeout to accommodate the complete 2.0 suite and its
-  cross-Python checkpoint-portability check (`79330ecd`).
+- Extended the required slow-release CI timeout for the measured hosted-runner runtime of the
+  complete 2.0 suite and its cross-Python checkpoint-portability check (`79330ecd`, `c4a06d19`).
 - Aligned iteration-pack migration expectations, adopted Python 3.12 typing syntax, refreshed
   Ruff, reconciled the 2.0 roadmap, and recorded successful scenario-authoring acceptance
   (`b877a942`, `3102b60a`, `5a157543`, `bf3e2c2a`, `12988ce7`).
