@@ -784,3 +784,80 @@
 - **Next family:** bind each CONNECT tunnel's advertised duration and close to the exact carrying
   client-to-proxy TCP interval; 416 of 639 uniquely keyed completed sessions currently violate the
   outer-transport lifecycle, including 262 exact bidirectional-byte matches.
+
+## Loop 72 Family Contract
+
+### CONNECT tunnel lifetime bounded by its carrying TCP session
+
+- **Classification:** `family_level`; loop-71 `hard_contradiction` across explicit-proxy access
+  records and the exact client-to-proxy Zeek transport.
+- **Owning abstraction:** the explicit-proxy transaction bundle and channel manager own the CONNECT
+  tunnel as an application lifecycle nested inside one canonical client transport; the network
+  connection bundle owns that outer transport's final interval.
+- **Invariant:** for every completed explicit-proxy CONNECT transaction, tunnel setup and advertised
+  tunnel duration fit entirely inside the exact carrying client-to-proxy TCP interval. Proxy close,
+  channel retirement, byte ledgers, and source-native duration fields consume the same final close
+  bound rather than independently sampled intervals.
+- **Entry paths:** one-shot CONNECT, successful HTTPS inspection, persistent tunnel reuse, failed or
+  denied CONNECT attempts, right-censored end-of-window sessions, recovery/retry publication, and
+  direct transaction-bundle calls.
+- **Consumers:** proxy access `tunnel_duration_ms`, Zeek client transport duration/state, eCAR client
+  FLOW, firewall visibility, channel reuse/retirement, byte accounting, checkpoint recovery, and
+  blind network joins keyed by client source port and tunnel identity.
+- **Layer rationale:** the proxy field and Zeek row are faithful renderings of separately retained
+  lifecycle values. Their contradiction must be removed where the nested tunnel and outer transport
+  close are planned and committed, not by clamping an emitter field after canonical publication.
+- **Sibling risks:** preserve successful tunnel payload accounting and exact source-port identity;
+  do not turn denied/auth-required CONNECT control messages into tunnels; retain valid reuse and
+  right-censor semantics; keep process ownership through the outer close; maintain deterministic
+  recovery and source-specific observation timing.
+
+## Loop 72 Result
+
+- **Implementation commit:** `dc94d15a7` (`fix: bound proxy tunnels by client transport`).
+- **Behavior contract:** revision 36,
+  `315ed77f4389fbff1cd45c4d056eb5fbd930d281d437b9f46f6659c20f0355cf`.
+- **Verification:** 8,405 routine tests passed, 5 skipped, and 2,009 deselected; Ruff check and
+  format check passed across 769 files; all 92 configuration files validated; the scenario remained
+  valid with the existing 24 informational pivot notes.
+- **Rendered invariant:** all 642 successful CONNECT tunnels joined to a carrying client transport,
+  with zero duration overruns and a minimum remaining outer-transport margin of 79 milliseconds.
+- **Automated evaluation:** 97.04960531289694 PASS across 124,332 records (parseability
+  99.99919570183059, plausibility 96.85765800043988, causality 97.12464221795368, timing
+  92.77135773874691).
+- **Initial panel:** Threat Hunter 66 (Synthetic, 70 verdict confidence), Detection Engineer 76
+  (Synthetic, 88), Network Forensics 34 (Real, 78), Host/EDR 32 (Real, 72); mean 52.0.
+- **Deliberation:** triggered by verdict disagreement and a 44-point spread. Revised scores were
+  72, 78, 52, and 42; mean 61.0 with two Synthetic, one Inconclusive, and one Real verdict.
+- **Target-family disposition:** the Loop 71 CONNECT/TCP lifetime contradiction did not recur in
+  the rendered probe or any initial expert report.
+- **Next family:** order fresh Kerberos AS/TGS acquisition and port-88 transport before the
+  successful logon and service traffic that consume those credentials.
+
+## Loop 73 Family Contract
+
+### Fresh Kerberos acquisition before dependent logon and service use
+
+- **Classification:** `family_level`; Loop 72 `hard_contradiction` across Windows Security 4624,
+  4768/4769, Zeek port-88 transport, and dependent LDAP/service traffic on both domain controllers.
+- **Owning abstraction:** authentication action bundles and the canonical KDC exchange planner own
+  credential acquisition as a prerequisite of the exact logon/service activity; source timing owns
+  only source-native observation offsets inside that dependency graph.
+- **Invariant:** when a modeled successful Kerberos logon or service connection consumes a newly
+  acquired ticket, its client-to-KDC transport, 4768 AS result, and required 4769 service-ticket
+  result render before the dependent 4624 and service transport. A cached-ticket path must not bind
+  a later fresh exchange to the already completed use.
+- **Entry paths:** machine-account network logons, user network logons, domain authentication
+  bundles, LDAP and SMB access, scheduled/service activity, causal ticket repair, failed pre-auth
+  recovery, and direct compatibility calls.
+- **Consumers:** Windows Security KDC and logon records, Zeek port-88 and dependent service flows,
+  WFP admission, eCAR sessions, state-managed ticket cache, source timing, evaluator joins, and blind
+  detection/network pivots.
+- **Layer rationale:** the inversion recurs across both DCs because KDC and dependent activity are
+  scheduled as nearby siblings rather than one credential-consumption graph. Emitters faithfully
+  render those separate times, so the repair belongs in bundle/planner dependency ownership rather
+  than timestamp rewriting in Windows or Zeek output.
+- **Sibling risks:** preserve legitimate cached-ticket logons without redundant 4768; retain AS
+  before TGS and KDC WFP-before-audit guarantees; do not convert NTLM or local logons to Kerberos;
+  keep failed exchanges non-successful; respect transport/process/session bounds, DC clock offsets,
+  checkpoint recovery, and deterministic replay.
