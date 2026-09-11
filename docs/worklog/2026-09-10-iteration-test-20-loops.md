@@ -1005,3 +1005,125 @@
   source-semantic Samba and workstation lock lifecycles, and host-state-driven Linux background
   texture.
 - **Session disposition:** stopped after this loop at the user's request. Loop 76 was not started.
+
+## Post-Loop-75 Targeted Repair Contracts
+
+### Process-owned dependent activity bounded by process lifetime
+
+- **Classification:** `family_level`; Loop 75 `hard_contradiction` across eCAR FLOW, Zeek DNS,
+  connection, HTTP, and OCSP evidence attributed to a Linux service-healthcheck process after its
+  endpoint termination.
+- **Owning abstraction:** the canonical network transaction planner owns process attribution and
+  the final transport interval; the activity generator's process-hold registry owns the matching
+  termination frontier.
+- **Invariant:** every process-attributed canonical connection, including causally expanded DNS,
+  TLS, HTTP, and OCSP children, extends its owning process hold through the final connection close;
+  rendered dependent activity cannot begin after that process terminates.
+- **Entry paths:** baseline and storyline connections, server health checks, browser traffic,
+  explicit proxy legs, nested OCSP transactions, direct connection-bundle calls, and suppressed or
+  deferred source publication after a committed canonical transport.
+- **Consumers:** process finalizers and state, eCAR PROCESS/FLOW rows, Sysmon process/network rows,
+  Windows WFP, Zeek protocol logs, source timing, and lifecycle validation.
+- **Layer rationale:** the connection planner has the final canonical PID and close time shared by
+  every source. Extending the hold there repairs all renderers and causal children without moving a
+  termination independently in one output format.
+- **Sibling risks:** do not revive stale or unattributed PIDs; preserve authoritative session-end
+  bounds, one-shot finalizers, deferred publication recovery, process-less inbound flows, and
+  deterministic close jitter.
+
+### Scenario-date-valid application release selection
+
+- **Classification:** `family_level`; Loop 75 `hard_contradiction` across Sysmon process and module
+  metadata for Zoom, Webex, and Postman versions released after the March 2024 scenario.
+- **Owning abstraction:** the data-driven application catalog owns release validity metadata and the
+  deployment compiler owns scenario-date eligibility before installation, assignment, or binary
+  identity compilation.
+- **Invariant:** an application platform release is eligible only when the scenario collection date
+  falls within its catalog validity window; every executable, child, module, installed release,
+  and process metadata consumer receives the same eligible release identity.
+- **Entry paths:** default catalog compilation, explicitly supplied catalog entries, host and user
+  deployment overrides, machine- and user-scoped installations, module compilation, and descriptor
+  lookup by executable.
+- **Consumers:** deployment/content registries, process generation, Sysmon process and image-load
+  records, eCAR software/process rows, installed-software inventory, hashes, and command paths.
+- **Layer rationale:** release chronology is deployment truth. Filtering before registry compilation
+  prevents future binaries from existing in the modeled world instead of concealing their version
+  in Sysmon output.
+- **Sibling risks:** retain deterministic catalog order and selection ordinals, allow open-ended
+  validity, reject inverted windows, preserve explicit historical catalogs, and avoid suppressing
+  OS-native artifacts that share a path with an ineligible application.
+
+### Directory-native Samba browse semantics
+
+- **Classification:** `family_level`; Loop 75 `hard_contradiction` across Samba
+  `vfs_full_audit` rows that reported successful `opendir` calls on regular document paths.
+- **Owning abstraction:** the SMB activity action bundle owns whether an operation targets a file or
+  its containing directory; Samba rendering only maps the canonical event type to a native verb.
+- **Invariant:** successful `smb_directory_enumeration` events carry a directory path and no regular
+  file identity, size, content version, or file handle; file open/read/close siblings retain the
+  selected file's exact identity.
+- **Entry paths:** persistent and compatibility SMB browse activities, Windows and Linux clients,
+  Windows and Samba servers, explicit file references, path selectors, and baseline browse noise.
+- **Consumers:** Samba audit, Windows share/object audit, eCAR FILE rows, SMB channel lifecycle,
+  evaluator joins, and rendered path probes.
+- **Layer rationale:** the contradiction is created when the action bundle reuses file-oriented
+  context for a directory phase. Correcting the canonical phase context keeps all source-native
+  projections consistent without teaching the Samba emitter about filename extensions.
+- **Sibling risks:** preserve file open/close lifecycle and FUID correlations, share-root browsing,
+  POSIX/UNC path conversion, denied operations, state mutation, and transfer byte accounting.
+
+### Source-visible workstation lock lifecycle
+
+- **Classification:** `family_level`; Loop 75 `hard_contradiction` across Windows Security 4800,
+  Type 7 4624, and 4801 records compressed and inverted by cross-batch source timing.
+- **Owning abstraction:** Windows Security source finalization owns chronological publication of the
+  source-native lock state machine after canonical and provider timing have been frozen.
+- **Invariant:** for each computer, LogonID, and SessionID, 4800 precedes its matching Type 7 4624,
+  which precedes 4801; the visible 4800-to-4801 dwell is at least the configured human-scale
+  minimum even when a prior batch advanced the host's rendered clock.
+- **Entry paths:** same-batch and deferred cross-hour unlocks, in-memory and spooled finalization,
+  baseline and authored transitions, finalized source-timing rows, duplicate suppression, and
+  prior-host-clock clamping.
+- **Consumers:** Windows Security XML/Snare output, record-ID ordering, session-state evaluation,
+  source-timing diagnostics, and blind host review.
+- **Layer rationale:** only source finalization sees the complete publication order and retained
+  cross-batch host watermark. Repairing the three-row source lifecycle there preserves canonical
+  intent while preventing a source-native clock artifact from becoming impossible evidence.
+- **Sibling risks:** keep unrelated Type 7 logons untouched, preserve matching LogonID/SessionID,
+  avoid duplicate unlock companions, retain deterministic re-auth gaps, and update spool sort keys
+  atomically before record IDs are assigned.
+
+## Post-Loop-75 Targeted Repair and Loop 76 Result
+
+- **Implementation classification:** four `family_level` repairs at the canonical network/process
+  hold, deployment catalog/compiler, SMB action-bundle context, and Windows Security source-
+  finalization owners described above.
+- **Behavior contract:** revision 40,
+  `612484f5ef8f70dce7a1f34294089f52b865c6efe2f5b7d92d8d3ff145c4976e`.
+- **Verification:** 8,413 routine tests passed, 5 skipped, and 2,009 deselected. Focused regression
+  tests passed; Ruff check and format check passed across 769 files; all 92 config files validated;
+  the scenario remained valid with its existing 24 informational pivot notes.
+- **Rendered hard probes:** zero violations across 13,478 process-attributed eCAR rows; 4,797 Zeek
+  rows on 3,646 process-owned joined transports; 24 date-bound application Sysmon rows; five
+  successful Samba `opendir` rows; and four 4800→Type 7→4801 lock cycles. Minimum visible lock
+  dwell was 127.953321 seconds.
+- **Automated evaluation:** 96.78058419612987 PASS across 123,267 records (parseability
+  99.9991887528698, plausibility 96.89598075580601, causality 95.56852312311956, timing
+  93.32350800268763).
+- **Blind panel model:** four independent `gpt-5.6-sol` reviewers at high reasoning effort, each
+  restricted to the isolated 108-file, 74 MiB review corpus with path-independent SHA-256
+  `1b935cc51842d5f97cad8b1b16aed2708229eb3844bd80f5c60e89a1161c2075`.
+- **Blind scores:** Threat Hunter 74 (Synthetic, 82 verdict confidence), Detection Engineer 64
+  (Synthetic, 76), Network Forensics 74 (Synthetic, 86), and Host/EDR 84 (Synthetic, 88); initial
+  mean 74.00. Unanimous verdicts and a 20-point spread did not trigger deliberation.
+- **Target-family disposition:** all four rendered probes passed, and no reviewer reported a
+  recurrence of the repaired process-lifetime, software-date, Samba-object, or workstation-lock
+  contradiction. Host/EDR explicitly validated all four lock cycles; Detection explicitly found
+  zero post-termination actor references.
+- **Score movement:** loop 76 was 0.25 points below loop 75's initial mean, effectively flat. The
+  role-level movement and replacement of hard contradictions with process-population, metadata,
+  timing/loss, and host-state texture findings indicate deeper-issue surfacing plus reviewer
+  variance rather than a repair regression.
+- **Next priorities:** inventory-bound browser/Electron process families and PE identity; causal
+  TLS duration and sensor-local loss; host-specific Linux hardware/resolver/cron state; role-bound
+  user agents; and complete PE/file analyzer plus build-specific Windows event-version contracts.

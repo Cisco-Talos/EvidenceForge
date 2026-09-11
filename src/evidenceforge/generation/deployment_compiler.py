@@ -15,6 +15,7 @@ import posixpath
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import replace
+from datetime import UTC, date
 from itertools import islice
 
 import evidenceforge.generation.deployment_registry as deployment_registry
@@ -253,6 +254,17 @@ def _compiled_application_descriptor(
         ),
         singleton_per_session=application.singleton_per_session,
         selection_ordinal=selection_ordinal,
+    )
+
+
+def _platform_release_available(platform_config: PlatformConfig, scenario_date: date) -> bool:
+    """Return whether one catalog platform release exists on the scenario date."""
+
+    return not (
+        platform_config.available_from is not None
+        and scenario_date < platform_config.available_from
+        or platform_config.available_until is not None
+        and scenario_date > platform_config.available_until
     )
 
 
@@ -794,11 +806,16 @@ def compile_deployment_registry(
     applications, known_personas, application_selection_ordinals = _deployment_application_entries(
         application_entries
     )
+    scenario_date = scenario.time_window.start.astimezone(UTC).date()
     compiled_application_descriptors: list[CompiledApplicationDescriptor] = []
     application_descriptor_text_bytes = 0
     for application in applications:
         for platform, platform_config in application.platforms.items():
-            if platform not in {"windows", "linux", "macos"} or platform_config.deployment is None:
+            if (
+                platform not in {"windows", "linux", "macos"}
+                or platform_config.deployment is None
+                or not _platform_release_available(platform_config, scenario_date)
+            ):
                 continue
             if (
                 len(compiled_application_descriptors)
@@ -842,7 +859,11 @@ def compile_deployment_registry(
     for application in applications:
         for platform in ("windows", "linux", "macos"):
             platform_config = application.platforms.get(platform)
-            if platform_config is None or platform_config.deployment is None:
+            if (
+                platform_config is None
+                or platform_config.deployment is None
+                or not _platform_release_available(platform_config, scenario_date)
+            ):
                 continue
             application_owned_path_sets[platform].add(
                 canonical_native_path(platform_config.image_path, platform)
@@ -1158,7 +1179,11 @@ def compile_deployment_registry(
 
         for application in applications:
             platform_config = application.platforms.get(platform)
-            if platform_config is None or platform_config.deployment is None:
+            if (
+                platform_config is None
+                or platform_config.deployment is None
+                or not _platform_release_available(platform_config, scenario_date)
+            ):
                 continue
             if application.system_types is not None and system.type not in application.system_types:
                 continue

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 39
+current_revision: 40
 history_start_revision: 1
-behavior_surface_sha256: "ccf193ccfc507846ebf4044d8b0af7a6e3b8116add68bb3a4549f20303987776"
+behavior_surface_sha256: "612484f5ef8f70dce7a1f34294089f52b865c6efe2f5b7d92d8d3ff145c4976e"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -427,3 +427,19 @@ changes:
       - zeek_conn
       - ecar
     summary: Derives inspected CONNECT tunnel counters from the exact carrying client transport so proxy, Zeek, and endpoint wire-byte views consume one canonical directional payload ledger.
+  - revision: 40
+    id: post-assessment-hard-contradiction-repairs
+    impact: material
+    domains:
+      - process-lifecycle
+      - application-deployment
+      - smb
+      - windows-authentication
+      - source-timing
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek
+    summary: Retains process owners through canonical dependent connections, gates catalog releases by scenario date, renders SMB browse phases as directory operations, and preserves source-visible workstation lock dwell and re-authentication order.

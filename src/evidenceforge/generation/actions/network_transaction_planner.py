@@ -5984,6 +5984,13 @@ class NetworkTransactionPlanner:
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
         executor._last_connection_effective_transaction_id = ""
+        process_owner_system = resolved_source_system or source_system
+        if process_owner_system is not None and event.network.initiating_pid > 0:
+            executor._remember_process_connection_hold(
+                system=process_owner_system,
+                pid=event.network.initiating_pid,
+                close_time=event.network.closed_at,
+            )
         if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
             executor._last_connection_effective_tuple = (
                 event.network.src_ip,

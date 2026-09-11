@@ -211,6 +211,40 @@ def test_client_path_upload_reuses_runtime_artifact_identity_and_size() -> None:
     assert resolved.mime_type == content.mime_type
 
 
+def test_smb_browse_directory_phase_drops_regular_file_identity() -> None:
+    """A browse phase targets the containing directory, not the selected document."""
+
+    bundle = object.__new__(SmbActivityActionBundle)
+    bundle.request = SimpleNamespace(spec=SimpleNamespace(client=None, path_style="mounted"))
+    bundle.client_access = "cifs_mount"
+    bundle.mapping = SimpleNamespace(mount="/mnt/research", drive="")
+    bundle.world = SimpleNamespace(
+        server_local_path=lambda _share, path: (
+            "/srv/samba/research" + (f"/{path.replace(chr(92), '/')}" if path else "")
+        )
+    )
+    share = SimpleNamespace(system="FILE-LNX-01", name="ClinicalResearch")
+    common = {
+        "share_path": r"Studies\2024\model_validation.csv",
+        "file_id": "model-validation",
+        "content_version": 3,
+        "local_file_id": "local-model-validation",
+        "local_content_version": 3,
+        "handle_id": "handle-9",
+        "size_bytes": 8192,
+    }
+
+    directory = bundle._directory_phase_common(common, share)
+
+    assert directory["share_path"] == r"Studies\2024"
+    assert directory["client_path"] == "/mnt/research/Studies/2024"
+    assert directory["server_path"] == "/srv/samba/research/Studies/2024"
+    assert directory["file_id"] == ""
+    assert directory["content_version"] == 0
+    assert directory["handle_id"] == ""
+    assert directory["size_bytes"] == 0
+
+
 def test_omitted_storage_compiles_duration_independent_diverse_defaults(
     scenarios_dir: Path,
 ) -> None:

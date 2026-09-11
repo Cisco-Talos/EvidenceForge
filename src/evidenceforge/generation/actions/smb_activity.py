@@ -2228,6 +2228,9 @@ class SmbActivityActionBundle:
                 encrypted=share.encryption == "required",
                 audit=share.audit,
             )
+            phase_common = (
+                self._directory_phase_common(common, share) if action == "browse" else common
+            )
             file_transfer = None
             if result == "success" and phase in {"read", "write"}:
                 content = self._file_content_identity(state)
@@ -2314,7 +2317,7 @@ class SmbActivityActionBundle:
                             previous_path=previous_path,
                             previous_client_path=previous_client_path,
                             previous_server_path=previous_server_path,
-                            **common,
+                            **phase_common,
                         ),
                         file_transfer=file_transfer,
                         identity_plan=EventIdentityPlan(
@@ -4629,6 +4632,9 @@ class SmbActivityActionBundle:
                 "delete": "smb_file_delete",
             }[action]
             phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
+            phase_common = (
+                self._directory_phase_common(common, share) if action == "browse" else common
+            )
             previous_path = ""
             previous_client_path = ""
             previous_server_path = ""
@@ -4708,7 +4714,7 @@ class SmbActivityActionBundle:
                     previous_path=previous_path,
                     previous_client_path=previous_client_path,
                     previous_server_path=previous_server_path,
-                    **common,
+                    **phase_common,
                 ),
                 file_transfer=file_transfer,
             )
@@ -5350,6 +5356,28 @@ class SmbActivityActionBundle:
         if drive:
             return f"{drive}\\{path}"
         return self.world.unc_path(share, path)
+
+    def _directory_phase_common(
+        self,
+        common: dict[str, Any],
+        share: CompiledStorageShare,
+    ) -> dict[str, Any]:
+        """Return file-free canonical fields for one directory enumeration phase."""
+
+        directory = ntpath.dirname(str(common["share_path"]))
+        return {
+            **common,
+            "client_path": self._client_path(directory, share),
+            "local_path": "",
+            "share_path": directory,
+            "server_path": self.world.server_local_path(share, directory),
+            "file_id": "",
+            "content_version": 0,
+            "local_file_id": "",
+            "local_content_version": 0,
+            "handle_id": "",
+            "size_bytes": 0,
+        }
 
     def _local_path(self, remote_path: str) -> str:
         source = self.request.spec.source

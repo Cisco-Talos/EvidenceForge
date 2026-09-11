@@ -12100,6 +12100,55 @@ class TestActivityGenerator:
         assert event.process is None
         assert event.network.initiating_pid == -1
 
+    def test_generate_connection_extends_process_hold_through_transport_close(
+        self,
+        activity_gen,
+        state_manager,
+        mock_emitters,
+        test_user,
+        test_system,
+    ):
+        """Every process-attributed connection must retain its owner through close."""
+        start_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=0,
+            image=r"C:\Program Files\Java\bin\java.exe",
+            command_line="java.exe -jar service-healthcheck.jar",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=8.5,
+            orig_bytes=500,
+            resp_bytes=2500,
+            pid=pid,
+            source_system=test_system,
+            process_image=r"C:\Program Files\Java\bin\java.exe",
+            emit_dns=False,
+        )
+
+        process = state_manager.get_process(test_system.hostname, pid)
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert process is not None
+        assert process.last_activity_time == event.network.closed_at
+        assert (
+            activity_gen._process_connection_hold_until[
+                activity_gen._process_instance_key(test_system.hostname, pid)
+            ]
+            == event.network.closed_at
+        )
+
     def test_generate_connection_preserves_public_vip_for_inbound_web_host(
         self,
         state_manager,

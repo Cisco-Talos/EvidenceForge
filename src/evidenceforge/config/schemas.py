@@ -16,6 +16,7 @@ import ipaddress
 import math
 import re
 from copy import deepcopy
+from datetime import date
 from string import Formatter
 from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlparse
@@ -842,6 +843,8 @@ class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
     image_path: str
+    available_from: date | None = None
+    available_until: date | None = None
     deployment: (
         ApplicationDeploymentEntry
         | CatalogApplicationDeploymentEntry
@@ -853,6 +856,18 @@ class PlatformConfig(BaseModel, extra="forbid"):
     command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
+
+    @model_validator(mode="after")
+    def valid_release_window(self) -> Self:
+        """Require an ordered inclusive release-validity window."""
+
+        if (
+            self.available_from is not None
+            and self.available_until is not None
+            and self.available_until < self.available_from
+        ):
+            raise ValueError("application platform available_until precedes available_from")
+        return self
 
 
 class ApplicationEntry(BaseModel, extra="forbid"):

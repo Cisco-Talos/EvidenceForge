@@ -1,0 +1,47 @@
+{
+  "bundle": "scenarios/iteration-test",
+  "status": "PASS",
+  "probes": {
+    "process_owned_activity_lifecycle": {
+      "status": "PASS",
+      "ecar_attributed_rows_checked": 13478,
+      "ecar_violations": [],
+      "zeek_connections_joined": 3646,
+      "zeek_attributed_rows_checked": 4797,
+      "zeek_violations": []
+    },
+    "scenario_date_software_releases": {
+      "status": "PASS",
+      "sysmon_rows_checked": 24,
+      "expected_releases": {
+        "Zoom Meetings": {
+          "version": "5.17.6.24660",
+          "available_from": "2024-02-26"
+        },
+        "Cisco Webex": {
+          "version": "44.3.0.28993",
+          "available_from": "2024-03-12"
+        },
+        "Postman": {
+          "version": "10.24.3",
+          "available_from": "2024-03-01"
+        }
+      },
+      "forbidden_marker_hits": {},
+      "violations": []
+    },
+    "samba_opendir_object_type": {
+      "status": "PASS",
+      "successful_opendir_rows_checked": 5,
+      "known_manifest_file_names": 14,
+      "violations": []
+    },
+    "windows_lock_unlock_lifecycle": {
+      "status": "PASS",
+      "pairs_checked": 4,
+      "minimum_dwell_seconds": 127.953321,
+      "maximum_dwell_seconds": 2147.216474,
+      "violations": []
+    }
+  }
+}

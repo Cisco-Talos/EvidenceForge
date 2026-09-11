@@ -46,6 +46,7 @@ from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
     _enforce_windows_lock_dwell_after_normalization,
     _normalize_windows_time_created,
+    _repair_windows_lock_lifecycle_rows,
     _shift_windows_lock_lifecycle_after_rendered_clock,
     _special_privilege_fallback,
     _windows_pid_hex,
@@ -1893,6 +1894,54 @@ class TestWindowsEventEmitter:
 
         assert unlock["TimeCreated"] == lock_time + timedelta(seconds=min_unlock_gap_seconds())
         assert not rendered_locks
+
+    def test_finalized_lock_lifecycle_repairs_reauth_order_and_dwell(self):
+        """Frozen cross-batch timing must still retain 4800 -> Type 7 -> 4801 order."""
+        computer = "WIN-TEST-01.corp.local"
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        rows = [
+            (
+                10,
+                {
+                    "EventID": 4800,
+                    "TimeCreated": lock_time,
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                11,
+                {
+                    "EventID": 4624,
+                    "LogonType": 7,
+                    "TimeCreated": lock_time - timedelta(seconds=29),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+            (
+                12,
+                {
+                    "EventID": 4801,
+                    "TimeCreated": lock_time + timedelta(milliseconds=2),
+                    "Computer": computer,
+                    "TargetLogonId": "0x4f2a1b",
+                    "SessionId": 2,
+                    "_TimingFinalized": "source-timing-v1",
+                },
+            ),
+        ]
+
+        changed = _repair_windows_lock_lifecycle_rows(rows, {})
+
+        reauth_time = rows[1][1]["TimeCreated"]
+        unlock_time = rows[2][1]["TimeCreated"]
+        assert changed == {11, 12}
+        assert lock_time < reauth_time < unlock_time
+        assert unlock_time - lock_time == timedelta(seconds=min_unlock_gap_seconds())
 
     def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
         """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
