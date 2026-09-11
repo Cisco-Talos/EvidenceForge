@@ -241,3 +241,64 @@
   three Synthetic verdicts and one Inconclusive, synthetic-leaning verdict.
 - Next highest-impact families: host-specific Windows execution metadata, browser
   process action lifecycles, and source-coherent SSH observation.
+
+## Loop 61 Family Contract
+
+### Host/provider Windows execution metadata
+
+- **Classification:** `family_level`; loop-60 `distribution_texture` fingerprint in Windows
+  Security source-native metadata.
+- **Owning abstraction:** `WindowsEventEmitter` owns the Security provider's `System/Execution`
+  projection; its deterministic provider-thread lifecycle derives from canonical host, provider
+  process, source time, and occurrence identity.
+- **Invariant:** execution ThreadIDs are four-byte aligned, stable for one deterministic
+  host/provider thread lifetime, reused across related event families through that provider, and
+  independently populated per host. Successful and failed authentication must not use visibly
+  disjoint hard-coded pools, and high-volume WFP events must not exhaust the same finite range on
+  every system.
+- **Entry paths:** all canonical Windows Security renderers, including WFP 5156, authentication,
+  Kerberos, process auditing, SMB auditing, account management, workstation transitions, service
+  and task management, and compatibility rows that already carry explicit execution metadata.
+- **Consumers:** Windows XML and Snare projections, parser validation, exact source publication,
+  source-finalization replay, and metadata-distribution probes.
+- **Layer rationale:** Execution PID/TID is source-local provider metadata rather than canonical
+  activity truth. Central normalization in the Windows emitter keeps every event family and output
+  projection consistent without polluting shared events.
+- **Sibling risks:** direct compatibility fixtures without a canonical occurrence retain their
+  explicit values. Thread identity must remain order-, worker-, retry-, and checkpoint-independent;
+  it must not introduce mutable renderer state or change event timestamps.
+
+### Installation-specific NT device-volume identity
+
+- **Classification:** `family_level`; loop-60 sibling `distribution_texture` in the same Windows
+  source-native host identity family.
+- **Owning abstraction:** Windows Security path projection owns drive-letter to NT device-volume
+  rendering, keyed by the concrete host installation and drive.
+- **Invariant:** one host/drive maps consistently to one `HarddiskVolumeN`, different drives on one
+  host do not alias, and a heterogeneous fleet does not collapse every C: path to Volume1. Existing
+  NT device paths and the kernel `System` image pass through unchanged.
+- **Entry paths:** outbound and inbound WFP 5156 application paths and direct path-conversion
+  compatibility calls.
+- **Consumers:** Windows Security 5156, WFP policy bucketing, endpoint-flow joins, and source-native
+  field probes.
+- **Layer rationale:** the mapping is installation-local rendering truth; canonical process images
+  correctly remain drive-letter paths shared with Sysmon and eCAR.
+- **Sibling risks:** this loop does not claim to model dynamic volume remounting. The stable mapping
+  is scoped to the six-hour host installation and preserves path identity within that scope.
+
+## Loop 61 Verification
+
+- Implementation commit: `bbd007373` (`fix: diversify Windows provider metadata`).
+- Routine gate: 8,383 passed, 5 skipped; Ruff check and format check passed across 769 files.
+- Generated bundle: 122,916 records across 22 evaluated sources.
+- Deterministic evaluation: 96.2817, acceptance PASS; pillars 100.00 parseability,
+  96.82 plausibility, 93.95 causality, and 92.95 timing.
+- Rendered Windows probe: all 18,232 Security rows have aligned execution ThreadIDs;
+  per-host WFP populations contain 307–799 unique IDs with zero identical host-pair sets.
+  Ten Windows hosts use seven stable installation-specific NT volume identities instead of
+  universal `HarddiskVolume1`.
+- Blind panel: scores 84/66/68/83 (mean 75.25), unanimously Synthetic. Deliberation was not
+  triggered: average verdict confidence was 87.25 and score spread was 18.
+- The repaired execution-thread and NT-volume fingerprints were absent from every report.
+- Next highest-impact families: source-native identifier entropy across proxy/eCAR/Postfix,
+  Sysmon Event 8 target-thread semantics, and command-derived process/scan execution.
