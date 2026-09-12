@@ -34,13 +34,11 @@ from evidenceforge.generation.source_timing import (
     active_source_timing_planning_runtime,
 )
 from evidenceforge.generation.timing import (
-    ConstantDistribution,
-    DistributionSpec,
-    MixtureDistribution,
     TimingRuntime,
     TimingScope,
-    TriangularDistribution,
-    WeightedDistribution,
+)
+from evidenceforge.generation.timing.distributions import (
+    uniform_distribution as _uniform_distribution,
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_stable_zeek_uid
@@ -166,25 +164,6 @@ def ocsp_generated_child_bound_inputs() -> tuple[float, float, float] | None:
         _OCSP_REQUEST_DELAY_MAX_MS / 1_000.0,
         response_duration,
         proxy_origin_duration,
-    )
-
-
-def _uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
-    """Return the exact continuous-uniform law using supported timing primitives."""
-
-    if minimum == maximum:
-        return ConstantDistribution(minimum)
-    return MixtureDistribution(
-        (
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
-            ),
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
-            ),
-        )
     )
 
 

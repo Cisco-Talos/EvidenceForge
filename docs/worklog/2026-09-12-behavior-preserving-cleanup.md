@@ -40,3 +40,20 @@
   differed; effective seed remained 42. Final automated provenance comparison remains outstanding.
 - An exploratory standard run begun before item 1 also passed (8,397 tests); the dedicated item 1
   gate above is the authoritative validation after all production changes.
+
+### Item 2 — shared timing constructor
+
+- Shared the existing mixture constructor through `timing.distributions.uniform_distribution`;
+  retained action-local import aliases and exact distribution classes/representation.
+- Added exact sample expectations captured from the original build for seeds 42 and 137.
+- Gates: 39 focused tests passed; 8,412 standard tests passed, 27 skipped, 2,009 deselected
+  (285.44 seconds); Ruff lint/format and whitespace passed. Behavior revision 44 validated.
+- All-format/default/42 evidence matched both original `dev` and item 1 (26 artifacts).
+- Full original-build repeat matrix passed all 32 cases, including both seeds, three targets,
+  serial/threaded emitters, format filtering, and Windows/Linux SMB.
+- Automated original-default/42 checkpoint hydration, compatible migration, and evidence comparison
+  passed. Verification's protected-path checks reject the macOS `/var` temporary-path alias;
+  the harness now supplies a canonical temporary directory, without changing product checks.
+- Standard-suite skips include unavailable gitignored `sample_data/` and optional external-parser
+  fixtures; full reason list is in `/private/tmp/eforge-cleanup-item2-tests.log`.
+- Items 3–7 and the final full standard/slow and expanded checkpoint matrix remain outstanding.

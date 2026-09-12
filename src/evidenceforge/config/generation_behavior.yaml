@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 43
+current_revision: 44
 history_start_revision: 1
-behavior_surface_sha256: "8d18cfd881633d453949c56aa4d0b875ecfe335a513494be33f8b083f99d7196"
+behavior_surface_sha256: "686acb5d4a2b96a9cf14c30e97811a02f39afde397440a4d990dd36dfad92c2f"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -472,3 +472,10 @@ changes:
       - shell-history-policy
     formats: []
     summary: Shares unchanged account eligibility between scenario validation and shell-history generation.
+  - revision: 44
+    id: shared-uniform-timing-constructor
+    impact: none
+    domains:
+      - canonical-timing
+    formats: []
+    summary: Shares the unchanged mixture-based uniform timing constructor across DHCP, file transfers, and OCSP.

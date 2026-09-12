@@ -37,35 +37,18 @@ from evidenceforge.generation.source_timing import (
 )
 from evidenceforge.generation.timing import (
     ConstantDistribution,
-    DistributionSpec,
     MixtureDistribution,
     TimingRuntime,
     TimingScope,
     TriangularDistribution,
     WeightedDistribution,
 )
+from evidenceforge.generation.timing.distributions import (
+    uniform_distribution as _uniform_distribution,
+)
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
-
-
-def _uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
-    """Return a continuous-uniform law using supported timing primitives."""
-
-    if minimum == maximum:
-        return ConstantDistribution(minimum)
-    return MixtureDistribution(
-        (
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
-            ),
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
-            ),
-        )
-    )
 
 
 def _planning_timing_runtime(
