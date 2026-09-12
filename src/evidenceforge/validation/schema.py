@@ -3432,7 +3432,7 @@ class ScenarioValidator:
 
         # Canonical non-interactive bash-user set, reused so the validator cannot
         # drift from the generator's actual bash-history suppression behaviour.
-        from evidenceforge.generation.activity.generator import _NONINTERACTIVE_BASH_USERS
+        from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
         from evidenceforge.generation.spillage import (
             HTTP_SURFACES,
             LINUX_ONLY_SURFACES,
@@ -3536,10 +3536,7 @@ class ScenarioValidator:
 
                 # Non-interactive service accounts get no bash history, so a
                 # shell_history spill for them would never land.
-                if (
-                    spec.surface == "shell_history"
-                    and event.actor.lower() in _NONINTERACTIVE_BASH_USERS
-                ):
+                if spec.surface == "shell_history" and is_noninteractive_bash_user(event.actor):
                     self.issues.append(
                         ValidationIssue(
                             severity="error",

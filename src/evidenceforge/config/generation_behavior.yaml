@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 42
+current_revision: 43
 history_start_revision: 1
-behavior_surface_sha256: "6ed79f5fc695e1a385379427e6c4601cd2dcd4cd674546ba73621f6ed87f2caa"
+behavior_surface_sha256: "8d18cfd881633d453949c56aa4d0b875ecfe335a513494be33f8b083f99d7196"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -465,3 +465,10 @@ changes:
       - ecar
       - syslog
     summary: Serializes concurrent sudo TTY bootstrap claims, preserves one controlling terminal per live session, and sizes delayed SSH logout windows from the repaired visible session duration.
+  - revision: 43
+    id: shared-shell-history-eligibility-policy
+    impact: none
+    domains:
+      - shell-history-policy
+    formats: []
+    summary: Shares unchanged account eligibility between scenario validation and shell-history generation.

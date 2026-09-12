@@ -52,6 +52,7 @@ from typing import Any, Literal, Optional, cast
 from urllib.parse import urlsplit
 
 import evidenceforge.events.dispatcher as dispatcher_types
+from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
 )
@@ -2569,14 +2570,6 @@ def _dns_payload_accounting(
         normalized_duration = dns.rtt
 
     return normalized_duration, normalized_orig, normalized_resp
-
-
-_NONINTERACTIVE_BASH_USERS = {"apache", "www-data", "nginx", "httpd", "tomcat"}
-
-
-def _is_noninteractive_bash_user(user: User) -> bool:
-    """Return True for service accounts that should not render shell history."""
-    return user.username.lower() in _NONINTERACTIVE_BASH_USERS
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -31001,7 +30994,7 @@ class ActivityGenerator:
         """Return true when bash-history evidence should be suppressed."""
 
         _ = system
-        return _is_noninteractive_bash_user(user)
+        return is_noninteractive_bash_user(user.username)
 
     @staticmethod
     def _prepare_bash_history_command(system: System, command: str) -> str:
@@ -31033,7 +31026,7 @@ class ActivityGenerator:
         command: str,
     ) -> None:
         """Dispatch a bash-history event at an already scheduled command time."""
-        if _is_noninteractive_bash_user(user):
+        if is_noninteractive_bash_user(user.username):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
                 user.username,
