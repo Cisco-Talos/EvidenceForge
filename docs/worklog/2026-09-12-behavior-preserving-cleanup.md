@@ -1,6 +1,18 @@
 # Behavior-preserving 2.0.0 cleanup
 
-## Final status
+## Second-pass status — acceptance reopened
+
+The first-pass preservation claim below is limited to its exercised matrix. Review found a
+misplaced scenario-deadline lookup in the process service. The user authorized a six-item second
+pass: correct foreground ownership against real process/session behavior, then consolidate shell
+policy, storyline session resolution, handler helpers, network stage records, and process services.
+Original dev remains a comparison reference, not the correctness authority for the correction.
+The first-pass checkout is preserved at `/private/tmp/eforge-cleanup-first-pass` (`2c7dee2a`).
+No dependency/version/checkpoint-schema changes, merge, or release are authorized.
+
+Implementation is in progress. Final acceptance is not complete.
+
+## First-pass status (historical)
 
 All seven items are complete on `codex/2.0.0-code-cleanup`, in seven sequential refactor commits.
 Final gates: **8,418 standard tests passed** (27 existing skips), **1,780 slow tests passed**,
@@ -245,3 +257,94 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
 `/private/tmp/eforge-cleanup-final-targeted-soak.log`, and
 `/private/tmp/eforge-cleanup-final-checkpoints.log`. Final behavior surface digest:
 `bfb6f5cb93f045f2248734740261068f605a9fed3c42251275499a2b1031f0bf` (revision 48).
+
+## Second-pass execution
+
+### Item 1 — foreground ownership
+
+- Active unbounded foreground occupancy is derived from existing process/session state; no new
+  durable owner map or invented collection-end termination is introduced. Unknown release means
+  later same-shell work is unavailable. Prospective session fences are derived, not cached as
+  actual releases, so earlier actual termination can release the shell.
+- Removed the misplaced service-local scenario-end lookup along with the original speculative
+  release bookkeeping. Generation/telemetry callers now handle unavailable shell slots explicitly.
+- Focused tests, matrix attribution, behavior revision, and checkpoint acceptance are pending.
+
+- Revision 49 is localized. Revision 48's preservation claim was incomplete: its service-local
+  deadline lookup dropped original dev's fallback reservation. Original dev also incorrectly
+  retained speculative collection/session reservations after actual earlier termination.
+- Added native eCAR lifecycle captures (eight fixed cases, seeds 42/137, serial/threaded), plus
+  six end-to-end shell cases. Native seed 42 demonstrates: original dev reserves 13:12:00.991
+  despite no known completion; revision 48 admits a second command at 13:00:30; the correction
+  reports no available slot. Earlier real termination now permits the 13:00:30 command,
+  including an exact legacy reservation. Separate shells and explicit concurrency remain usable.
+- Investigation preserved the existing background-monitor contract: shell preparation explicitly
+  adds `&` to tail/watch/follow history, while process argv omits shell syntax. A trial treating
+  those stripped arguments as foreground incorrectly blocked later work and was discarded.
+  The new six-case scenario reproduces byte-identically under original dev, revision 48, and
+  the final item-1 implementation; direct canonical fixtures cover truly unknown foreground release.
+- Focused suites passed 578 cases before discarding that background-policy trial; the final
+  selection has 576 cases (two redundant trial-only parameters removed). An added completion
+  test exposed a datetime-max overflow in legacy matching; skipping impossible candidate deadlines
+  fixed it. The manifest's first summary exceeded its 240-character schema limit and was shortened.
+- The first two standard runs and core captures were intentionally interrupted during the policy
+  investigation. A subsequent standard run stopped making progress at the ASA identifier test;
+  it was interrupted for a repeat with faulthandler diagnostics. None counts as a passing gate.
+  The initial new scenario draft used unsupported zero traffic rates; it was rejected before
+  generation, then corrected to bounded supported positive rates before controls were frozen.
+
+- Full-suite diagnostics isolated an existing ASA weak-reference registry deadlock: cyclic GC
+  runs `discard()` while `bind()` holds its non-reentrant lock (stack in standard-4.log).
+  The new bounded subprocess regression also times out against preserved revision 48, proving
+  the defect predates this pass. The constructor registry now uses an RLock; rendering, state,
+  authentication checks, and writer locks are unchanged. Revision 50 records this internal repair
+  as impact none. It is included as a small prerequisite to reliable acceptance gates.
+- Actual earlier completion now supersedes bounded-process reservations too (sleep 600 terminated
+  at 20 seconds), while a remaining pipeline sibling retains its own planned completion fence.
+  Only an exact process-owned reservation is removed, using existing finalizer/session state.
+- Final focused item-1 process/ASA tests: 650 passed, 2 deselected. Supplemental timing and manifest
+  checks: 42 passed. The first full run after the GC fix completed with 8,406 passed and 23 failures:
+  it overlapped the final bounded-release edits, invalidating loaded-source inspection and cached
+  behavior digests. That run is not an acceptance gate; a fresh run against frozen sources is active.
+- Native fixture coverage is now nine cases × two seeds × serial/threaded = 36. All corrected
+  state contracts pass. Original and corrected repeatability controls are retained. The corrected
+  old-build checkpoint/default/42 resumes to exactly the corrected uninterrupted CLI evidence and
+  ground truth; its earlier comparison with original dev correctly failed on Linux eCAR/syslog
+  timing. Exact-policy rejection, integrity, migration history, and compatible hydration passed.
+- The initial 32 core captures were byte-identical before bounded early-release correction.
+  The final core comparison now has intentional differences and is being completed and attributed;
+  existing accepted controls are preserved, never rewritten. Final source edits are frozen during
+  these gates. Structural baseline inventory is in 2026-09-12-second-pass-structure-before.json.
+
+- Final typed admission regression: rejected foreground work must not emit preparatory bash
+  history. Its targeted test failed before moving the existing friction emission behind the
+  read-only availability check, then passed. The 196 process/storyline tests passed afterward.
+  Full-coverage/42 and all six typed cases stayed byte-identical to the accepted correction.
+- **Item 1 acceptance:** standard suite **8,432 passed, 27 existing skips, 2,009 deselected**
+  (299.37 s); focused process/ASA **650 passed**; final process/storyline **196 passed**;
+  targeted slow timing-policy tests **3 passed, 116 deselected**; both Ruff checks and manifest
+  validation against `2c7dee2a` passed (revision 50, digest
+  `31ec2940524b29b9efdeb0cd61ef7b15c236574fbd160b6294947aa6e18055b3`).
+- The 44 existing cases retain identical ground truth. Eight core cases intentionally change
+  only Linux eCAR/syslog: all-format seed 42 full-format runs across the three targets and two
+  emission modes; full-coverage/42 (MAIL-01 and WEB-01); Linux SMB/137 (SAMBA-01). All other
+  files and all other 36 existing cases are byte-identical to original dev. The early-release
+  change is isolated by the preceding 32-case control, which retained the old bounded release
+  and reproduced all original bytes. For example, one default/42 sudo `free -m` launch moves
+  from 10:00:39.748 to 10:00:39.396, and its child/termination records and time-derived process
+  identities follow the corrected launch. Counts, principals, commands, and unrelated sources
+  are preserved in that example. This is a scheduling correction, not an output normalization.
+- Six new end-to-end shell cases are identical across original dev, revision 48, and correction.
+  The native 36-case matrix exercises the intentional differences directly; both original and
+  corrected repeatability controls pass. Explicit concurrency is unchanged, unknown release no
+  longer admits a sibling, and early completion/termination releases both bounded and unbounded
+  commands. Ground truth in those native controls deliberately records the changed admission.
+- **All 12 checkpoint resumes passed** (original compatible plus current exact for seeds 42/137
+  and default/sof-elk/splunk), using the corrected uninterrupted build as the evidence authority.
+  All six originals are rejected under exact policy without pointer mutation. File hashes,
+  integrity/hydration, migration history and provenance were verified. The checkpoint matrix
+  now accepts `--control-source` to make the selected corrected reference explicit.
+- Structural baseline: 46 handler helper-name imports from the coordinator; network records have
+  240 field declarations, 240 input-unpack assignments and 78 pure-forward locals (22 in commit);
+  process creation/termination consume 53/17 broad runtime members. These are measured by
+  `scripts/measure_cleanup_structure.py` for the remaining five items.

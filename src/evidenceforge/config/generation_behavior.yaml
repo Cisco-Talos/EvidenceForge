@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 48
+current_revision: 50
 history_start_revision: 1
-behavior_surface_sha256: "bfb6f5cb93f045f2248734740261068f605a9fed3c42251275499a2b1031f0bf"
+behavior_surface_sha256: "31ec2940524b29b9efdeb0cd61ef7b15c236574fbd160b6294947aa6e18055b3"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -509,3 +509,18 @@ changes:
       - network-transaction
     formats: []
     summary: Moves unchanged protocol helpers and process execution into explicit services and decomposes network planning while retaining original transaction authority and recovery boundaries.
+  - revision: 49
+    id: linux-foreground-ownership-until-modeled-release
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - linux-shell-scheduling
+    formats: []
+    summary: Keeps unbounded Linux foreground ownership until modeled release, rejects overlapping sequential work, and honors early termination without collection-end reservations. Corrects revision 48's deadline lookup and preservation claim.
+  - revision: 50
+    id: asa-binding-retirement-gc-reentrancy
+    impact: none
+    domains:
+      - emitter-resource-retirement
+    formats: [cisco_asa]
+    summary: Allows same-thread weak-reference retirement during ASA constructor binding under cyclic garbage collection, preserving rendering and checkpoint representation while removing a standard-suite deadlock.

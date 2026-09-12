@@ -1197,7 +1197,7 @@ def test_linux_unbounded_foreground_child_reserves_until_session_boundary() -> N
     )
 
     assert reserved > session_end
-    assert authored == start + timedelta(seconds=30)
+    assert authored == reserved  # Authored timing cannot overlap a live foreground owner.
 
 
 def test_anchored_linux_client_uses_sibling_shell_when_foreground_is_busy() -> None:
@@ -2245,3 +2245,395 @@ def test_process_termination_dedup_allows_reused_windows_pid() -> None:
 
     assert state.get_process(system.hostname, reused_pid) is None
     assert generator._process_termination_recorded(system.hostname, reused_pid, reused_start_time)
+
+
+@pytest.mark.parametrize(
+    ("image", "command"),
+    [
+        ("/usr/bin/smbclient", "smbclient //FILE-SRV/Shared"),
+        ("/usr/bin/journalctl", "journalctl -f"),
+    ],
+)
+def test_unbounded_foreground_without_deadline_survives_collection_end(
+    image: str, command: str
+) -> None:
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    generator._scenario_end_time = start + timedelta(minutes=12)
+    pid = generator.generate_process(
+        user,
+        system,
+        start,
+        logon_id,
+        image,
+        command,
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="foreground:smbclient",
+    )
+    assert pid > 0
+    assert not generator._foreground_shell_next_time
+    generator.finalize_foreground_process_lifetimes(generator._scenario_end_time)
+    for requested in (start + timedelta(seconds=30), start + timedelta(minutes=15)):
+        assert (
+            generator.reserve_linux_foreground_process_start(
+                system=system,
+                username=user.username,
+                logon_id=logon_id,
+                parent_pid=shell_pid,
+                requested_time=requested,
+                process_name="/usr/bin/hostname",
+                command_line="hostname",
+            )
+            is None
+        )
+    assert state.get_process(system.hostname, pid).end_time is None
+    assert not any(event.event_type == "process_terminate" for event in events)
+    before = len(events)
+    assert (
+        generator.generate_process(
+            user,
+            system,
+            start + timedelta(seconds=30),
+            logon_id,
+            "/usr/bin/hostname",
+            "hostname",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+        )
+        == 0
+    )
+    assert len(events) == before
+
+
+@pytest.mark.parametrize("release", ["completion", "session_teardown"])
+def test_unbounded_foreground_honors_modeled_release(release: str) -> None:
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    end = start + timedelta(minutes=2)
+    pid = generator.generate_process(
+        user,
+        system,
+        start,
+        logon_id,
+        "/usr/bin/smbclient",
+        "smbclient //FILE-SRV/Shared",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    if release == "completion":
+        generator._remember_foreground_process_finalizer(
+            system=system,
+            user=user,
+            pid=pid,
+            process_name="/usr/bin/smbclient",
+            logon_id=logon_id,
+            termination_time=end,
+        )
+        reserved = generator.reserve_linux_foreground_process_start(
+            system=system,
+            username=user.username,
+            logon_id=logon_id,
+            parent_pid=shell_pid,
+            requested_time=start + timedelta(seconds=30),
+            process_name="/usr/bin/hostname",
+            command_line="hostname",
+        )
+        assert reserved is not None and end < reserved < end + timedelta(seconds=5)
+        generator.finalize_foreground_process_lifetimes(end + timedelta(seconds=5))
+    else:
+        generator.generate_logoff(user, system, end, logon_id, from_storyline=True)
+    assert state.get_process(system.hostname, pid) is None
+    assert any(
+        event.event_type == "process_terminate" and event.process.pid == pid for event in events
+    )
+
+
+@pytest.mark.parametrize("session_deadline", [False, True])
+@pytest.mark.parametrize("legacy_reservation", [False, True])
+def test_unbounded_foreground_early_termination_releases_actual_slot(
+    session_deadline: bool,
+    legacy_reservation: bool,
+) -> None:
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    generator._scenario_end_time = start + timedelta(minutes=12)
+    if session_deadline:
+        state.update_session_metadata(logon_id, network_close_time=start + timedelta(minutes=10))
+    pid = generator.generate_process(
+        user,
+        system,
+        start,
+        logon_id,
+        "/usr/bin/smbclient",
+        "smbclient //FILE-SRV/Shared",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    if legacy_reservation:
+        # Reproduce the exact reservation serialized by original dev or revision 48.
+        generator._remember_foreground_shell_available(
+            system=system,
+            username=user.username,
+            logon_id=logon_id,
+            parent_pid=shell_pid,
+            termination_time=start + timedelta(minutes=10 if session_deadline else 12),
+            seed_text="smbclient //FILE-SRV/Shared",
+        )
+    generator.generate_process_termination(
+        user,
+        system,
+        start + timedelta(seconds=45),
+        pid,
+        "/usr/bin/smbclient",
+        logon_id,
+    )
+    reserved = generator.reserve_linux_foreground_process_start(
+        system=system,
+        username=user.username,
+        logon_id=logon_id,
+        parent_pid=shell_pid,
+        requested_time=start + timedelta(seconds=46),
+        process_name="/usr/bin/hostname",
+        command_line="hostname",
+    )
+    assert reserved is not None
+    assert start + timedelta(seconds=45) < reserved < start + timedelta(seconds=55)
+    assert (
+        generator.generate_process(
+            user,
+            system,
+            reserved,
+            logon_id,
+            "/usr/bin/hostname",
+            "hostname",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+        )
+        > 0
+    )
+
+
+def test_unbounded_foreground_preserves_explicit_concurrency_and_other_shells() -> None:
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    group = "pipeline:interactive"
+    assert (
+        generator.generate_process(
+            user,
+            system,
+            start,
+            logon_id,
+            "/usr/bin/smbclient",
+            "smbclient //FILE-SRV/Shared",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            concurrency_group_id=group,
+        )
+        > 0
+    )
+    assert (
+        generator.generate_process(
+            user,
+            system,
+            start + timedelta(seconds=1),
+            logon_id,
+            "/usr/bin/head",
+            "head -20",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            concurrency_group_id=group,
+        )
+        > 0
+    )
+    sibling = state.create_process(
+        system.hostname,
+        0,
+        "/bin/bash",
+        "-bash",
+        user.username,
+        "Medium",
+        logon_id=logon_id,
+    )
+    assert generator.reserve_linux_foreground_process_start(
+        system=system,
+        username=user.username,
+        logon_id=logon_id,
+        parent_pid=sibling,
+        requested_time=start + timedelta(seconds=30),
+        process_name="/usr/bin/hostname",
+        command_line="hostname",
+    ) == start + timedelta(seconds=30)
+
+
+@pytest.mark.parametrize("remaining_pipeline_member", [False, True])
+def test_bounded_foreground_early_termination_supersedes_planned_completion(
+    remaining_pipeline_member: bool,
+) -> None:
+    generator, _state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    if remaining_pipeline_member:
+        assert (
+            generator.generate_process(
+                user,
+                system,
+                start,
+                logon_id,
+                "/usr/bin/sleep",
+                "sleep 100",
+                parent_pid=shell_pid,
+                suppress_command_file_effect=True,
+                concurrency_group_id="pipeline:sleep",
+            )
+            > 0
+        )
+    pid = generator.generate_process(
+        user,
+        system,
+        start,
+        logon_id,
+        "/usr/bin/sleep",
+        "sleep 600",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        concurrency_group_id="pipeline:sleep",
+    )
+    assert generator.foreground_process_termination_time(system.hostname, pid) > start + timedelta(
+        minutes=9
+    )
+    generator.generate_process_termination(
+        user,
+        system,
+        start + timedelta(seconds=20),
+        pid,
+        "/usr/bin/sleep",
+        logon_id,
+    )
+    reserved = generator.reserve_linux_foreground_process_start(
+        system=system,
+        username=user.username,
+        logon_id=logon_id,
+        parent_pid=shell_pid,
+        requested_time=start + timedelta(seconds=30),
+        process_name="/usr/bin/hostname",
+        command_line="hostname",
+    )
+    if remaining_pipeline_member:
+        assert start + timedelta(seconds=100) < reserved < start + timedelta(seconds=110)
+    else:
+        assert reserved == start + timedelta(seconds=30)
+
+
+def test_unbounded_foreground_occupancy_hydrates_from_existing_checkpoint_owners() -> None:
+    from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
+    from evidenceforge.generation.checkpoints.state_manager_head import StateManagerParticipant
+
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    generator._scenario_environment = SimpleNamespace(systems=[system])
+    generator._scenario_end_time = start + timedelta(minutes=12)
+    assert (
+        generator.generate_process(
+            user,
+            system,
+            start,
+            logon_id,
+            "/usr/bin/smbclient",
+            "smbclient //FILE-SRV/Shared",
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+        )
+        > 0
+    )
+    state_seal = StateManagerParticipant(state).prepare_checkpoint(0)
+    activity_seal = ActivityGeneratorStateParticipant(generator).prepare_checkpoint(0)
+    restored_state = StateManager()
+    StateManagerParticipant(restored_state).restore_checkpoint(
+        state_seal.head.payload,
+        tuple(segment.payload for segment in state_seal.segments),
+    )
+    restored = ActivityGenerator(restored_state, {})
+    restored._scenario_environment = SimpleNamespace(systems=[system])
+    ActivityGeneratorStateParticipant(restored).restore_checkpoint(activity_seal.head.payload, ())
+    for runtime in (generator, restored):
+        assert (
+            runtime.reserve_linux_foreground_process_start(
+                system=system,
+                username=user.username,
+                logon_id=logon_id,
+                parent_pid=shell_pid,
+                requested_time=start + timedelta(seconds=30),
+                process_name="/usr/bin/hostname",
+                command_line="hostname",
+            )
+            is None
+        )
+
+
+def test_occupied_storyline_shell_rejects_before_preparatory_history() -> None:
+    from evidenceforge.generation.engine.storyline import StorylineMixin
+    from evidenceforge.generation.engine.typed_handlers.context import TypedEventContext
+    from evidenceforge.generation.engine.typed_handlers.process import handle_process
+    from evidenceforge.models.scenario import ProcessEventSpec
+
+    generator, state, system, user, logon_id, shell_pid, events = _linux_interactive_shell(
+        session_kind="interactive"
+    )
+    start = datetime(2024, 3, 18, 13, tzinfo=UTC)
+    generator.generate_process(
+        user,
+        system,
+        start,
+        logon_id,
+        "/usr/bin/smbclient",
+        "smbclient //FILE-SRV/Shared",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+    )
+    engine = object.__new__(StorylineMixin)
+    engine.state_manager = state
+    engine.activity_generator = generator
+    engine.scenario = SimpleNamespace(
+        environment=SimpleNamespace(systems=[system], users=[user]), storyline=[]
+    )
+    engine._storyline_process_ref_for_parent = Mock(return_value=(shell_pid, "/bin/bash"))
+    engine._emit_linux_storyline_shell_friction = Mock()
+    context = TypedEventContext(
+        actor=user,
+        system=system,
+        time=start + timedelta(minutes=2),
+        activity="dump database",
+        explicit_types={"process"},
+        future_specs=(),
+        authored_time_shift=timedelta(),
+        session_required_until=None,
+        rng=random.Random(1),
+        dispatcher=generator.dispatcher,
+        malicious_event={},
+        _ground_truth_uid=lambda _uid, _src, _dst: "unused",
+    )
+    before = len(events)
+    result = handle_process(
+        engine,
+        ProcessEventSpec(
+            process_name="/usr/bin/mysqldump",
+            command_line="mysqldump db > /tmp/db.sql",
+            parent_ref="shell",
+        ),
+        context,
+    )
+    assert result["skipped_reason"] == "shell_foreground_occupied"
+    engine._emit_linux_storyline_shell_friction.assert_not_called()
+    assert len(events) == before

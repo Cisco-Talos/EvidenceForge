@@ -244,15 +244,6 @@ def handle_process(
                 process_command_line,
             )
     if os_category == "linux":
-        self._emit_linux_storyline_shell_friction(
-            actor=process_actor,
-            system=system,
-            time=time,
-            process_name=process_name,
-            command_line=command_line,
-            output_file=output_file,
-            rng=rng,
-        )
         reserved_start_time = self.activity_generator.reserve_linux_foreground_process_start(
             system=system,
             username=process_actor.username,
@@ -262,6 +253,20 @@ def handle_process(
             process_name=process_name,
             command_line=process_command_line,
             authoritative_time=True,
+        )
+        if reserved_start_time is None:
+            malicious_event["process_name"] = process_name
+            malicious_event["command_line"] = command_line
+            malicious_event["skipped_reason"] = "shell_foreground_occupied"
+            return malicious_event
+        self._emit_linux_storyline_shell_friction(
+            actor=process_actor,
+            system=system,
+            time=time,
+            process_name=process_name,
+            command_line=command_line,
+            output_file=output_file,
+            rng=rng,
         )
         if isinstance(reserved_start_time, datetime):
             time = reserved_start_time

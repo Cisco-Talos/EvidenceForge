@@ -27,6 +27,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--baseline-source", type=Path, required=True)
+    parser.add_argument(
+        "--control-source",
+        type=Path,
+        help="Uninterrupted reference build; defaults to baseline-source. Use the accepted correction for semantic fixes.",
+    )
     parser.add_argument("--original-checkpoints", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -34,7 +39,8 @@ def main() -> None:
     scripts = Path(__file__).resolve().parent
     fixture = args.baseline_source / "tests/fixtures/scenarios/checkpoint-all-formats.yaml"
     environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(args.baseline_source.resolve() / "src")
+    control_source = args.control_source or args.baseline_source
+    environment["PYTHONPATH"] = str(control_source.resolve() / "src")
     environment["TMPDIR"] = str(args.output.resolve())
     for target in ("default", "sof-elk", "splunk"):
         for seed in (42, 137):

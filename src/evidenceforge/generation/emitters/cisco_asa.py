@@ -41,7 +41,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any, cast
 from weakref import ReferenceType, ref
 
@@ -253,7 +253,8 @@ def _new_cisco_exact_projection_binding_registry() -> tuple[
         raise ExactPublicationError("Built-in Cisco ASA format must decode to one exact mapping")
     canonical_snapshot = _exact_cisco_format_snapshot(FormatDefinition(**canonical_data))
     bindings: dict[int, tuple[ReferenceType[object], _CiscoExactProjectionBinding]] = {}
-    registry_lock = Lock()
+    # Allocation while binding may collect another owner and invoke discard inline.
+    registry_lock = RLock()
 
     def discard(owner_id: int, owner_reference: ReferenceType[object]) -> None:
         with registry_lock:

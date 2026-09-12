@@ -626,6 +626,8 @@ class ProcessExecutionService:
                 seed_text=command_line,
                 concurrency_group_id=concurrency_group_id,
             )
+            if time is None:
+                return 0
             if (
                 session_end_plan is not None
                 and session_end_plan.is_hard_deadline
@@ -1088,38 +1090,6 @@ class ProcessExecutionService:
                 logon_id=running_proc.logon_id,
                 termination_time=provisional_process_termination,
             )
-        if (
-            _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is None
-            and runtime._foreground_shell_key(
-                system=system,
-                username=running_proc.username,
-                logon_id=running_proc.logon_id,
-                parent_pid=running_proc.parent_pid,
-            )
-            is not None
-        ):
-            owning_session = self.state_manager.get_session(running_proc.logon_id)
-            shell_deadline = (
-                self.state_manager.get_session_end_time(running_proc.logon_id)
-                if running_proc.logon_id
-                else None
-            )
-            if shell_deadline is None and owning_session is not None:
-                shell_deadline = owning_session.network_close_time
-            if shell_deadline is None:
-                shell_deadline = getattr(self, "_scenario_end_time", None)
-            if shell_deadline is not None:
-                runtime._remember_foreground_shell_available(
-                    system=system,
-                    username=running_proc.username,
-                    logon_id=running_proc.logon_id,
-                    parent_pid=running_proc.parent_pid,
-                    termination_time=ensure_utc(shell_deadline),
-                    seed_text=running_proc.command_line,
-                    concurrency_group_id=running_proc.concurrency_group_id,
-                )
         if _get_os_category(system.os) == "windows":
             runtime._emit_windows_process_startup_modules(
                 user=user,
@@ -1387,6 +1357,9 @@ class ProcessTerminationService:
             )
             is not None
         ):
+            runtime._discard_superseded_foreground_reservation(
+                system=system, process=running_proc, termination_time=ensure_utc(event.timestamp)
+            )
             runtime._remember_foreground_shell_available(
                 system=system,
                 username=running_proc.username,

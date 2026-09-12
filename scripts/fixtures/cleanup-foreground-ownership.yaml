@@ -1,0 +1,155 @@
+version: '1.0'
+name: cleanup-foreground-ownership
+description: Frozen foreground occupancy, sequential command, teardown, and independent-shell
+  evidence
+environment:
+  description: Minimal test environment
+  users:
+  - username: test_user
+    full_name: Test User
+    email: test.user@example.com
+    primary_system: TEST-01
+    enabled: true
+  - username: other_user
+    full_name: Other User
+    email: other@example.test
+    primary_system: TEST-01
+  systems:
+  - hostname: TEST-01
+    ip: 10.0.0.1
+    os: Ubuntu 22.04
+    type: workstation
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      exposure: internal
+      systems:
+      - TEST-01
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - cisco_asa
+time_window:
+  start: '2024-01-15T10:00:00Z'
+  duration: 25m
+  warmup: 1h
+baseline_activity:
+  description: Minimal baseline activity
+  intensity: low
+  variation: low
+  traffic_rates:
+    user_activity: 1
+    web: 1
+    persona_connections: 1
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: bash_history
+  destination: ./output
+  compression: false
+storyline:
+- id: known-completion
+  time: +2m
+  actor: test_user
+  system: TEST-01
+  activity: known completion
+  events:
+  - type: process
+    process_name: /usr/bin/hostname
+    command_line: hostname
+- id: known-completion-next
+  time: +3m
+  actor: test_user
+  system: TEST-01
+  activity: known completion next
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: id
+- id: foreground-follow
+  time: +8m
+  actor: test_user
+  system: TEST-01
+  activity: foreground follow
+  events:
+  - type: process
+    process_name: /usr/bin/tail
+    command_line: tail -f /var/log/syslog
+- id: occupied-sequential
+  time: +9m
+  actor: test_user
+  system: TEST-01
+  activity: occupied sequential
+  events:
+  - type: process
+    process_name: /usr/bin/hostname
+    command_line: hostname
+- id: independent-shell
+  time: +10m
+  actor: other_user
+  system: TEST-01
+  activity: independent shell
+  events:
+  - type: process
+    process_name: /usr/bin/hostname
+    command_line: hostname
+- id: explicit-background
+  time: +12m
+  actor: other_user
+  system: TEST-01
+  activity: explicit background
+  events:
+  - type: process
+    process_name: /usr/bin/tail
+    command_line: tail -f /var/log/syslog &
+- id: background-next
+  time: +13m
+  actor: other_user
+  system: TEST-01
+  activity: background next
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: id
+- id: session-teardown
+  time: +20m
+  actor: test_user
+  system: TEST-01
+  activity: session teardown
+  events:
+  - type: logoff
+- id: new-session
+  time: +21m
+  actor: test_user
+  system: TEST-01
+  activity: new session
+  events:
+  - type: process
+    process_name: /usr/bin/hostname
+    command_line: hostname
+- id: collection-end-occupied
+  time: +23m
+  actor: other_user
+  system: TEST-01
+  activity: collection end occupied
+  events:
+  - type: process
+    process_name: /usr/bin/tail
+    command_line: tail -f /var/log/auth.log

@@ -6179,6 +6179,58 @@ class ActivityGenerator:
         shell_logon_id = proc.logon_id or logon_id
         return (system.hostname, username, shell_logon_id, parent_pid)
 
+    def _unbounded_foreground_shell_ready_at(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        concurrency_group_id: str = "",
+    ) -> datetime | None:
+        """Derive open foreground occupancy from canonical process/session state.
+
+        None means no release has been modeled. Collection boundaries are not
+        lifecycle deadlines, and no prospective release is cached here.
+        """
+        if (
+            self._foreground_shell_key(
+                system=system, username=username, logon_id=logon_id, parent_pid=parent_pid
+            )
+            is None
+        ):
+            return requested_time
+        ready_at = requested_time
+        for process in self.state_manager.get_processes_for_session(logon_id, system.hostname):
+            if (
+                process.parent_pid != parent_pid
+                or process.start_time > requested_time
+                or (process.end_time is not None and process.end_time <= requested_time)
+                or (concurrency_group_id and process.concurrency_group_id == concurrency_group_id)
+                or not _linux_shell_process_reserves_foreground(process.image, process.command_line)
+                or _linux_foreground_lifetime(process.image, process.command_line) is not None
+            ):
+                continue
+            session = self.state_manager.get_session(process.logon_id)
+            deadlines = [
+                value
+                for value in (
+                    process.end_time,
+                    self.foreground_process_termination_time(system.hostname, process.pid),
+                    self.state_manager.get_session_end_time(process.logon_id),
+                    session.network_close_time if session is not None else None,
+                )
+                if value is not None
+            ]
+            if not deadlines:
+                return None
+            deadline = min(ensure_utc(value) for value in deadlines)
+            if deadline > requested_time:
+                # This is a scheduling fence, not a fabricated process close.
+                ready_at = max(ready_at, deadline + timedelta(milliseconds=1))
+        return ready_at
+
     def _reserve_foreground_shell_time(
         self,
         *,
@@ -6189,7 +6241,7 @@ class ActivityGenerator:
         requested_time: datetime,
         seed_text: str,
         concurrency_group_id: str = "",
-    ) -> datetime:
+    ) -> datetime | None:
         """Delay a new foreground command until the same interactive shell is free."""
         key = self._foreground_shell_key(
             system=system,
@@ -6199,6 +6251,17 @@ class ActivityGenerator:
         )
         if key is None:
             return requested_time
+        ready_at = self._unbounded_foreground_shell_ready_at(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=requested_time,
+            concurrency_group_id=concurrency_group_id,
+        )
+        if ready_at is None:
+            return None
+        requested_time = max(requested_time, ready_at)
         shell_proc = self.state_manager.get_process(system.hostname, parent_pid)
         if shell_proc is not None:
             shell_start = ensure_utc(shell_proc.start_time)
@@ -6233,6 +6296,27 @@ class ActivityGenerator:
         )
         return next_time + timedelta(milliseconds=rng.randint(120, 900))
 
+    @staticmethod
+    def _foreground_shell_release_time(
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        termination_time: datetime,
+        seed_text: str,
+    ) -> datetime:
+        """Compute the established deterministic gap after an actual shell release."""
+        rng = random.Random(
+            _stable_seed(
+                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
+                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
+            )
+        )
+        return termination_time + timedelta(
+            milliseconds=rng.randint(180, _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS)
+        )
+
     def _remember_foreground_shell_available(
         self,
         *,
@@ -6245,14 +6329,13 @@ class ActivityGenerator:
         concurrency_group_id: str = "",
     ) -> None:
         """Remember when an interactive Linux shell can plausibly accept more input."""
-        rng = random.Random(
-            _stable_seed(
-                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
-                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
-            )
-        )
-        release_time = termination_time + timedelta(
-            milliseconds=rng.randint(180, _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS)
+        release_time = self._foreground_shell_release_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            termination_time=termination_time,
+            seed_text=seed_text,
         )
         bash_key = (system.hostname, username, logon_id)
         self._bash_history_next_time[bash_key] = max(
@@ -6279,6 +6362,87 @@ class ActivityGenerator:
         if self._foreground_shell_next_time[key] == release_time:
             self._foreground_shell_release_groups[key] = concurrency_group_id
 
+    def _discard_superseded_foreground_reservation(
+        self, *, system: System, process: RunningProcess, termination_time: datetime
+    ) -> None:
+        """Retire an exact planned or older-build release superseded by termination.
+
+        Old checkpoints can retain a session/collection deadline as shell readiness.
+        Match its deterministic value and group before removing it; unrelated shell
+        and history reservations must survive. Canonical process state owns occupancy.
+        """
+        key = self._foreground_shell_key(
+            system=system,
+            username=process.username,
+            logon_id=process.logon_id,
+            parent_pid=process.parent_pid,
+        )
+        if (
+            key is None
+            or self._foreground_shell_release_groups.get(key) != process.concurrency_group_id
+        ):
+            return
+        reserved = self._foreground_shell_next_time.get(key)
+        session = self.state_manager.get_session(process.logon_id)
+        deadlines = [self.foreground_process_termination_time(system.hostname, process.pid)]
+        if _linux_foreground_lifetime(process.image, process.command_line) is None:
+            deadlines.extend(
+                (
+                    self.state_manager.get_session_end_time(process.logon_id),
+                    session.network_close_time if session is not None else None,
+                    getattr(self, "_scenario_end_time", None),
+                )
+            )
+        for deadline in deadlines:
+            if (
+                reserved is None
+                or deadline is None
+                or deadline >= reserved
+                or deadline <= termination_time
+            ):
+                continue
+            legacy_release = self._foreground_shell_release_time(
+                system=system,
+                username=process.username,
+                logon_id=process.logon_id,
+                parent_pid=process.parent_pid,
+                termination_time=deadline,
+                seed_text=process.command_line,
+            )
+            if reserved != legacy_release:
+                continue
+            self._foreground_shell_next_time.pop(key)
+            self._foreground_shell_release_groups.pop(key)
+            for history_logon in (process.logon_id, ""):
+                history_key = (system.hostname, process.username, history_logon)
+                if self._bash_history_next_time.get(history_key) == legacy_release:
+                    self._bash_history_next_time.pop(history_key)
+            # The removed maximum may have hidden another pipeline member's
+            # still-valid completion. Rebuild only from existing lifecycle owners.
+            for sibling in self.state_manager.get_processes_for_session(
+                process.logon_id, system.hostname
+            ):
+                if (
+                    sibling.pid == process.pid
+                    or sibling.parent_pid != process.parent_pid
+                    or not _linux_shell_process_reserves_foreground(
+                        sibling.image, sibling.command_line
+                    )
+                ):
+                    continue
+                completion = self.foreground_process_termination_time(system.hostname, sibling.pid)
+                if completion is not None and completion > termination_time:
+                    self._remember_foreground_shell_available(
+                        system=system,
+                        username=sibling.username,
+                        logon_id=sibling.logon_id,
+                        parent_pid=sibling.parent_pid,
+                        termination_time=completion,
+                        seed_text=sibling.command_line,
+                        concurrency_group_id=sibling.concurrency_group_id,
+                    )
+            return
+
     def reserve_linux_foreground_process_start(
         self,
         *,
@@ -6290,7 +6454,7 @@ class ActivityGenerator:
         process_name: str,
         command_line: str,
         authoritative_time: bool = False,
-    ) -> datetime:
+    ) -> datetime | None:
         """Return a shell-serialized start time for a Linux foreground process.
 
         Authored events can be visited after later baseline reservations. When
@@ -6299,7 +6463,7 @@ class ActivityGenerator:
         """
         if _get_os_category(system.os) != "linux":
             return requested_time
-        if _linux_foreground_lifetime(process_name, command_line) is None:
+        if not _linux_shell_process_reserves_foreground(process_name, command_line):
             return requested_time
         authored_candidate = requested_time
         session = self.state_manager.get_session(logon_id)
@@ -6330,7 +6494,19 @@ class ActivityGenerator:
             requested_time=reserved_time,
             seed_text=command_line,
         )
+        if serialized_time is None:
+            return None
         if authoritative_time:
+            # An authored anchor cannot bypass an actually occupied shell.
+            occupied_until = self._unbounded_foreground_shell_ready_at(
+                system=system,
+                username=username,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                requested_time=authored_candidate,
+            )
+            if occupied_until is None or occupied_until > authored_candidate:
+                return serialized_time
             session_deadline = self.state_manager.get_session_end_time(logon_id)
             active_deadline = _session_activity_end_time(session) if session is not None else None
             if active_deadline is not None:
@@ -6425,7 +6601,7 @@ class ActivityGenerator:
         requested_time: datetime,
         command: str,
         session: ActiveSession | None,
-    ) -> datetime:
+    ) -> datetime | None:
         """Return an exact-or-conservative pre-mutation sudo serialization ceiling."""
 
         requested_time = ensure_utc(requested_time)
@@ -11194,7 +11370,7 @@ class ActivityGenerator:
                 requested_time=process_time,
                 seed_text=command_line,
             )
-            if reserved_time < deadline:
+            if reserved_time is not None and reserved_time < deadline:
                 return shell.pid, reserved_time
 
         non_shell_parent = self._linux_non_shell_session_parent_pid(
@@ -11275,7 +11451,7 @@ class ActivityGenerator:
             requested_time=process_time,
             seed_text=command_line,
         )
-        if reserved_time >= deadline:
+        if reserved_time is None or reserved_time >= deadline:
             return None
         return shell_pid, reserved_time
 
@@ -17616,6 +17792,19 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        if _get_os_category(system.os) == "linux" and _linux_shell_process_reserves_foreground(
+            process_name, command_line
+        ):
+            ready_at = self._unbounded_foreground_shell_ready_at(
+                system=system,
+                username=user.username,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                requested_time=ensure_utc(time),
+                concurrency_group_id=concurrency_group_id,
+            )
+            if ready_at is None or ready_at > ensure_utc(time):
+                return 0
         request = ProcessExecutionRequest(
             user=user,
             system=system,
@@ -18880,6 +19069,11 @@ class ActivityGenerator:
                 seed_text=command_line,
                 concurrency_group_id=request.concurrency_group_id,
             )
+            if started_at is None:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "process parent shell has a foreground command without a modeled release",
+                )
         if not request.from_storyline and request.source_visible_by is None:
             started_at = self._space_interactive_shell_child_launch(
                 system=system,
@@ -28238,6 +28432,8 @@ class ActivityGenerator:
                 seed_text=f"{command}:command:{group_index}",
                 concurrency_group_id=concurrency_group_id,
             )
+            if base_process_time is None:
+                break
             stage_times = plan_linux_pipeline_stage_times(
                 base_process_time,
                 stage_count=len(process_group),
@@ -28431,6 +28627,8 @@ class ActivityGenerator:
             scheduled_time,
             command,
         )
+        if scheduled_time is None:
+            return None
         scheduled_time = self._fit_bash_history_time_to_linux_session(
             user,
             system,
@@ -28485,7 +28683,7 @@ class ActivityGenerator:
         system: System,
         scheduled_time: datetime,
         command: str,
-    ) -> datetime:
+    ) -> datetime | None:
         """Move bash history to the same foreground-shell slot as process telemetry."""
         if _get_os_category(system.os) != "linux":
             return scheduled_time
@@ -31007,6 +31205,8 @@ class ActivityGenerator:
                                 seed_text=f"{shell_command_line}:command:{group_index}",
                                 concurrency_group_id=concurrency_group_id,
                             )
+                        if group_process_time is None:
+                            break
                         stage_times = plan_linux_pipeline_stage_times(
                             group_process_time,
                             stage_count=len(source_process_group),
@@ -31284,7 +31484,7 @@ class ActivityGenerator:
                         requested_time=process_time,
                         seed_text=command_line,
                     )
-                    if not self._is_within_scenario_window(process_time):
+                    if process_time is None or not self._is_within_scenario_window(process_time):
                         return
                     pid = self.generate_process(
                         user,
@@ -36991,6 +37191,8 @@ class ActivityGenerator:
                     command=command,
                     session=session,
                 )
+                if serialization_ceiling is None:
+                    return 0, None, timing_shift, assigned_tty
                 admission_shift = serialization_ceiling - effective_sudo_time
                 if complete_by + admission_shift > ensure_utc(latest_end):
                     return 0, None, timing_shift, assigned_tty
@@ -37083,6 +37285,13 @@ class ActivityGenerator:
             process_name="/usr/bin/sudo",
             command_line=f"sudo {command}",
         )
+        if reserved_sudo_time is None:
+            self._update_linux_sudo_tty_availability(
+                tty_key,
+                session.logon_id,
+                available,
+            )
+            return 0, None, timing_shift, assigned_tty
         shell_shift = reserved_sudo_time - effective_sudo_time
         effective_sudo_time = reserved_sudo_time
         child_time += shell_shift

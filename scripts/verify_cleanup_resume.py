@@ -1,4 +1,4 @@
-"""Compare original-build checkpoints with original uninterrupted evidence."""
+"""Compare checkpoint resumes with the selected accepted uninterrupted evidence."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def compare_resumed(
     left, right = snapshot(control), snapshot(resumed)
     del left["GENERATION_MANIFEST.json"], right["GENERATION_MANIFEST.json"]
     if left != right or not left:
-        raise ValueError("Resumed evidence differs from original uninterrupted output")
+        raise ValueError("Resumed evidence differs from the selected uninterrupted control")
     original = json.loads((control / "GENERATION_MANIFEST.json").read_text())
     candidate = json.loads((resumed / "GENERATION_MANIFEST.json").read_text())
     provenance = candidate.pop("resume_provenance")
