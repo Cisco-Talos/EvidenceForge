@@ -12,7 +12,16 @@ from typing import Protocol
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import NmapCommandProbeRequest
-from evidenceforge.generation.actions.process_execution import ProcessTerminationRequest
+from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionRequest,
+    ProcessExecutionReuseIntent,
+    ProcessTerminationRequest,
+)
+from evidenceforge.generation.actions.scanner_probe import (
+    NmapCommandProbePlan,
+    NmapCommandProbePlanningProfile,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.scenario import System, User
@@ -235,4 +244,20 @@ class FrozenGenericLogoffProcessCloseCapability(Protocol):
         self, request: ProcessTerminationRequest, running_process: RunningProcess | None
     ) -> FrozenSessionProcessClose | None:
         """Return the authenticated teardown close when this session owns it."""
+        ...
+
+
+class BoundedProcessReuseCapability(Protocol):
+    def __call__(
+        self, *, request: ProcessExecutionRequest, actor: PreparedProcessEffectActor
+    ) -> tuple[bool, ProcessExecutionReuseIntent | None]:
+        """Preview reuse through the existing process execution owner."""
+        ...
+
+
+class PlanNmapCommandProbesCapability(Protocol):
+    def __call__(
+        self, request: NmapCommandProbeRequest, planning_profile: NmapCommandProbePlanningProfile
+    ) -> NmapCommandProbePlan | None:
+        """Use the existing scanner planner without exposing unrelated runtime state."""
         ...

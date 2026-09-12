@@ -121,6 +121,7 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.actions import (
     network_transaction_planner as network_planner_module,
 )
+from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -995,9 +996,9 @@ class TestActivityGenerator:
                 return 0.0
 
         monkeypatch.setattr(
-            activity_gen,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
-            lambda _request, _actor: AlwaysSideEffectRng(1),
+            staticmethod(lambda _request, _actor: AlwaysSideEffectRng(1)),
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.edr_pools.select_file_side_effect",
@@ -8664,7 +8665,7 @@ class TestActivityGenerator:
         )
 
         with patch.object(
-            activity_gen,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=RegistryOnlyRandom(),
         ):
@@ -8689,7 +8690,7 @@ class TestActivityGenerator:
         """Process-owned registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(ActivityGenerator._plan_process_execution_side_effects)
+        source = inspect.getsource(ProcessPreflightPlanner._plan_process_execution_side_effects)
         assert (
             "key, value_name, details, value_type = materialize_registry_effect(\n"
             "                    (key, value_name, details),\n"
@@ -8741,7 +8742,7 @@ class TestActivityGenerator:
 
         with (
             patch.object(
-                activity_gen,
+                ProcessPreflightPlanner,
                 "_process_endpoint_effect_rng",
                 return_value=RegistryOnlyRandom(),
             ),

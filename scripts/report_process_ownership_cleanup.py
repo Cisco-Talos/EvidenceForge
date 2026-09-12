@@ -81,6 +81,7 @@ def structural_inventory(repository: Path) -> dict[str, Any]:
         }
     hooks = (
         "_preflight_bounded_process_source_deadline",
+        "_nmap_command_probe_count",
         "_plan_process_execution_effects",
         "_plan_process_execution_side_effects",
         "_process_endpoint_effect_rng",

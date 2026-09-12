@@ -43,6 +43,7 @@ from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionRequest,
 )
 from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
+from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbeRequest
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.deployment_registry import (
@@ -332,7 +333,7 @@ def test_missing_dispatcher_artifact_registry_binds_exact_runtime_owner() -> Non
     image = r"C:\Users\Public\missing-registry-retry.exe"
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -427,7 +428,7 @@ def test_guaranteed_file_create_uses_exact_process_plan_and_preserves_fields() -
     image = r"C:\Users\Public\dropper.exe"
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -491,7 +492,7 @@ def test_required_storyline_redirect_is_one_planned_realized_process_linked_file
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -601,7 +602,7 @@ def test_second_required_redirect_prepare_rejection_leaves_every_authority_uncha
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -676,7 +677,7 @@ def test_process_artifacts_commit_before_timing_and_projection(
     emitter.emit.side_effect = record_publication
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -759,7 +760,7 @@ def test_required_artifact_failure_rolls_back_production_action_cohort(
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -821,7 +822,7 @@ def test_process_action_cohort_preflight_failure_releases_source_timing(
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -908,7 +909,7 @@ def test_filtered_multi_occurrence_effect_cohort_commits_rows_and_latest_frontie
     monkeypatch.setattr(generator.dispatcher, "prepare_builder", capture_prepare)
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -986,7 +987,7 @@ def test_process_endpoint_action_cohort_rejects_over_member_cap_before_mutation(
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -1042,7 +1043,7 @@ def test_equal_time_multi_occurrence_closure_uses_distinct_plan_owned_keys() -> 
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1113,7 +1114,7 @@ def test_scanner_effect_intent_bypasses_process_endpoint_action_cohort(
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1177,7 +1178,7 @@ def test_no_session_linux_nmap_preserves_process_probes_and_foreground_hold() ->
     state.set_current_time(timestamp)
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1298,7 +1299,7 @@ def test_scanner_multi_occurrence_endpoint_rejects_without_owner_residue(
     before_cohort = generator.dispatcher.action_cohort_publication_census()
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -1393,7 +1394,7 @@ def test_unregistered_state_session_multi_occurrence_rejects_without_owner_resid
     before_cohort = generator.dispatcher.action_cohort_publication_census()
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -1440,7 +1441,7 @@ def test_required_executable_file_commits_one_exact_artifact_before_publication(
     image = r"C:\Users\Public\dropper.exe"
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1493,7 +1494,7 @@ def test_unresolved_root_executable_commits_exact_binary_without_file_effect() -
     image = r"C:\Users\alice\AppData\Local\Temp\dotnet-sdk-installer.exe"
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1541,7 +1542,7 @@ def test_missing_compiled_runtime_owner_is_typed_and_leaves_every_authority_unch
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -1623,7 +1624,7 @@ def test_nested_parent_admission_rejection_cancels_outer_plan_without_mutation()
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -1739,7 +1740,7 @@ def test_prepared_linux_actor_re_resolves_future_session_shell_without_time_drif
     generator._scenario_start_time = timestamp - timedelta(minutes=10)
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1781,7 +1782,7 @@ def test_linux_root_runtime_binary_uses_system_profile_without_fabricated_user()
     image = "/usr/libexec/gnome-terminal-server"
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1858,7 +1859,7 @@ def test_distinct_dependent_file_binds_same_required_root_binary_token() -> None
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -1891,7 +1892,7 @@ def test_registry_lottery_reconciles_one_exact_process_owned_effect() -> None:
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_RegistryOnlyRandom(),
     ):
@@ -1932,7 +1933,7 @@ def test_required_near_window_contradiction_has_zero_root_mutation() -> None:
 
     with (
         patch.object(
-            generator,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=_NoAmbientEffectsRandom(),
         ),
@@ -2160,7 +2161,7 @@ def test_sessionless_linux_process_effect_retains_exact_lifecycle_actor() -> Non
     )
 
     with patch.object(
-        generator,
+        ProcessPreflightPlanner,
         "_process_endpoint_effect_rng",
         return_value=_NoAmbientEffectsRandom(),
     ):
@@ -2215,7 +2216,9 @@ def test_process_preparation_keeps_root_uncommitted_until_publication(
 
     monkeypatch.setattr(ProcessExecutionService, "_publish_process", publish)
     with patch.object(
-        generator, "_process_endpoint_effect_rng", return_value=_NoAmbientEffectsRandom()
+        ProcessPreflightPlanner,
+        "_process_endpoint_effect_rng",
+        return_value=_NoAmbientEffectsRandom(),
     ):
         pid = generator.generate_process(
             user,
@@ -2228,3 +2231,167 @@ def test_process_preparation_keeps_root_uncommitted_until_publication(
         )
     assert observed == [pid]
     assert registry.census().claimed_publications == 0
+
+
+def test_preflight_cleanup_is_idempotent_for_unpublished_artifact_tokens() -> None:
+    generator, state, emitter, user, system, timestamp, registry = _artifact_fixture()
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=timestamp,
+        logon_id="0x12345",
+        process_name=r"C:\Users\Public\dropper.exe",
+        command_line=r"C:\Users\Public\dropper.exe",
+        ensure_file_event=True,
+        suppress_command_file_effect=True,
+    )
+    before = state.materialization_digest()
+    with patch.object(
+        ProcessPreflightPlanner,
+        "_process_endpoint_effect_rng",
+        return_value=_NoAmbientEffectsRandom(),
+    ):
+        prepared = ProcessExecutionActionBundle(generator, request).preflight().prepared_effects
+    assert prepared is not None and prepared.artifact_publications
+    assert registry.census().prepared_publications > 0
+    generator._cancel_uncommitted_process_artifact_publications(prepared)
+    after = registry.census()
+    assert after.prepared_publications == 0 and after.reserved_slots == 0
+    generator._cancel_uncommitted_process_artifact_publications(prepared)
+    generator._cancel_uncommitted_process_artifact_publications(None)
+    assert registry.census() == after
+    assert state.materialization_digest() == before
+    emitter.emit.assert_not_called()
+
+
+def test_failed_preflight_cancels_new_reservations_but_keeps_caller_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from typing import Any
+
+    from evidenceforge.generation.deployment_registry import LocalArtifactPublishToken
+
+    generator, state, emitter, user, system, timestamp, registry = _artifact_fixture()
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=timestamp,
+        logon_id="0x12345",
+        process_name=r"C:\Users\Public\dropper.exe",
+        command_line=r"C:\Users\Public\dropper.exe",
+        ensure_file_event=True,
+        suppress_command_file_effect=True,
+    )
+    with patch.object(
+        ProcessPreflightPlanner,
+        "_process_endpoint_effect_rng",
+        return_value=_NoAmbientEffectsRandom(),
+    ):
+        prepared = ProcessExecutionActionBundle(generator, request).preflight().prepared_effects
+    assert prepared is not None and prepared.endpoint is not None
+    supplied = prepared.endpoint.effects[0]
+    assert isinstance(supplied.payload, PreparedFileEffectPayload)
+    assert supplied.payload.artifact_publication is not None
+    second_path = r"C:\Users\Public\second.txt"
+    second = PreparedEndpointEffect(
+        spec=EndpointEffectSpec(
+            intent=FileEffectIntent(FileEffectAction.CREATE, second_path),
+            occurrence_times=(timestamp + timedelta(seconds=5),),
+            instance_key="second-output",
+            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
+            retention_deadline=timestamp + timedelta(hours=1),
+        ),
+        event_type="file_create",
+        payload=PreparedFileEffectPayload(path=second_path, action=FileEffectAction.CREATE),
+    )
+    request = replace(
+        request, ensure_file_event=False, requested_endpoint_effects=(supplied, second)
+    )
+    before = state.materialization_digest()
+    census = registry.census()
+    original_prepare = generator._runtime_content_manager.prepare_effect_publication
+    attempts: list[str] = []
+
+    def prepare(
+        manager: RuntimeContentIdentityManager, **kwargs: Any
+    ) -> LocalArtifactPublishToken | None:
+        assert manager is generator._runtime_content_manager
+        attempts.append(kwargs["native_path"])
+        return original_prepare(**kwargs)
+
+    monkeypatch.setattr(RuntimeContentIdentityManager, "prepare_effect_publication", prepare)
+    with (
+        patch.object(
+            ProcessPreflightPlanner,
+            "_process_endpoint_effect_rng",
+            return_value=_NoAmbientEffectsRandom(),
+        ),
+        patch.object(
+            ProcessPreflightPlanner,
+            "_plan_process_lifetime",
+            side_effect=ValueError("injected lifetime rejection"),
+        ),
+        pytest.raises(ValueError, match="injected lifetime rejection"),
+    ):
+        ProcessExecutionActionBundle(generator, request).preflight()
+    assert attempts == [second_path]
+    assert registry.census().prepared_publications == census.prepared_publications
+    assert registry.census().reserved_slots == census.reserved_slots
+    assert state.materialization_digest() == before
+    emitter.emit.assert_not_called()
+    assert registry.cancel_prepared(supplied.payload.artifact_publication)
+    assert registry.census().prepared_publications == 0
+
+
+@pytest.mark.soak
+def test_repeated_preflight_cleanup_retains_no_services_or_artifact_reservations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gc
+    import weakref
+
+    from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
+
+    generator, state, emitter, user, system, timestamp, registry = _artifact_fixture()
+    references: list[weakref.ReferenceType[ProcessPreflightPlanner]] = []
+    original_bind = generator._process_preflight
+
+    def bind() -> ProcessPreflightPlanner:
+        planner = original_bind()
+        assert (
+            planner.sources._process_source_create_times is generator._process_source_create_times
+        )
+        references.append(weakref.ref(planner))
+        return planner
+
+    monkeypatch.setattr(generator, "_process_preflight", bind)
+    initial_state = state.materialization_digest()
+    for ordinal in range(1000):
+        request = ProcessExecutionRequest(
+            user=user,
+            system=system,
+            time=timestamp + timedelta(minutes=ordinal),
+            logon_id="0x12345",
+            process_name=r"C:\Users\Public\dropper.exe",
+            command_line=r"C:\Users\Public\dropper.exe",
+            ensure_file_event=True,
+            suppress_command_file_effect=True,
+        )
+        with patch.object(
+            ProcessPreflightPlanner,
+            "_process_endpoint_effect_rng",
+            return_value=_NoAmbientEffectsRandom(),
+        ):
+            prepared = ProcessExecutionActionBundle(generator, request).preflight().prepared_effects
+        assert prepared is not None and prepared.artifact_publications
+        generator._cancel_uncommitted_process_artifact_publications(prepared)
+        census = registry.census()
+        assert census.prepared_publications == 0 and census.claimed_publications == 0
+        assert census.reserved_slots == 0 and census.live_versions == 0
+        if ordinal % 100 == 0:
+            generator._process_source_create_times = {}
+            gc.collect()
+            assert references and all(reference() is None for reference in references)
+    assert state.materialization_digest() == initial_state
+    emitter.emit.assert_not_called()

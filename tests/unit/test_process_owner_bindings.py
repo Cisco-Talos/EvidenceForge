@@ -173,3 +173,62 @@ def test_unseeded_process_binding_cannot_retain_a_parallel_role_table() -> None:
     generator._system_pids = {system.hostname: {"systemd": pid}}
     assert generator._process_parents()._system_pids is generator._system_pids
     assert generator._process_reuse()._system_pids is generator._system_pids
+
+
+def test_preflight_rebinds_replaced_state_timing_registry_and_cache_owners() -> None:
+    from datetime import UTC, datetime
+
+    from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
+
+    def make_generator() -> ActivityGenerator:
+        state = StateManager()
+        return ActivityGenerator(
+            state,
+            {},
+            dispatcher=EventDispatcher(
+                state_manager=state,
+                emitters={},
+                local_artifact_registry=LocalArtifactVersionRegistry(capacity=16),
+            ),
+        )
+
+    generator = make_generator()
+    first = generator._process_preflight()
+    replacement = make_generator()
+    names = (
+        "state_manager",
+        "timing_runtime",
+        "dispatcher",
+        "_runtime_content_manager",
+        "_source_timing_planner",
+        "_lifecycle_authority",
+        "_process_source_create_times",
+        "_process_source_create_bounds",
+        "_foreground_shell_next_time",
+        "_last_one_shot_cli_launch_by_command",
+        "_preferred_browser_by_session",
+    )
+    for name in names:
+        setattr(generator, name, getattr(replacement, name))
+    deadline = datetime(2026, 9, 12, tzinfo=UTC)
+    generator._scenario_end_time = deadline
+    original_fields = set(vars(generator))
+    current = generator._process_preflight()
+    assert current is not first
+    assert current.state_manager is replacement.state_manager
+    assert current.actors.state_manager is replacement.state_manager
+    assert current.parents.state_manager is replacement.state_manager
+    assert current.timing_runtime is replacement.timing_runtime
+    assert current.dispatcher is replacement.dispatcher
+    assert current._runtime_content_manager is not first._runtime_content_manager
+    assert current._runtime_content_manager is replacement._runtime_content_manager
+    assert current._scenario_end_time == deadline
+    assert current.sources._process_source_create_times is replacement._process_source_create_times
+    assert current.foreground._foreground_shell_next_time is replacement._foreground_shell_next_time
+    assert (
+        current.actors.scheduling._last_one_shot_cli_launch_by_command
+        is replacement._last_one_shot_cli_launch_by_command
+    )
+    assert set(vars(generator)) == original_fields
+    assert all(getattr(current, field.name) is not generator for field in fields(current))

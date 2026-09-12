@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 60
+current_revision: 61
 history_start_revision: 1
-behavior_surface_sha256: "d8e9447c3fb1787a6c3dc137b84b05a763d09dae6406df0b3a38f633f8646de1"
+behavior_surface_sha256: "bf62dcb13a743846cec4b2b300cb40dc1849d35e059b5ffc9a60ffff212a56cb"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -587,3 +587,11 @@ changes:
       - process-preflight
     formats: []
     summary: Routes the frozen 35 internal parent-helper calls directly through freshly bound parent owners, preserving compatibility adapters, arguments and operation boundaries.
+  - revision: 61
+    id: explicit-process-preflight-ownership
+    impact: none
+    domains:
+      - process-preflight
+      - process-runtime-artifacts
+    formats: []
+    summary: Moves bounded source admission, effect planning, lifetime previews and uncommitted artifact cleanup into an ephemeral planner bound to current owners, preserving scoped draws, preparation order, failure scopes and public hooks.

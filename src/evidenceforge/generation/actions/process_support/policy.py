@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.authentication import WINDOWS_DESKTOP_LOGON_TYPES
+from evidenceforge.events.content_identity import Platform
 from evidenceforge.generation.actions import (
     ExecutionEffectPlanError,
     ExecutionEffectPlanErrorCode,
@@ -25,10 +26,12 @@ from evidenceforge.generation.actions.process_execution import (
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_common import _command_tokens as _command_tokens
+from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNT_LOGON_IDS
 from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS as _SYSTEM_ACCOUNTS
 from evidenceforge.generation.activity.process_helpers import (
     _linux_foreground_lifetime as _linux_foreground_lifetime,
 )
+from evidenceforge.generation.runtime_content import RuntimeArtifactOwnerKind
 from evidenceforge.generation.timing import (
     DistributionSpec,
     TimingScope,
@@ -745,3 +748,27 @@ def system_process_roles(
 ) -> dict[str, dict[str, int]]:
     """Use the existing role table, or a fresh fallback for an unseeded generator read."""
     return existing if existing is not None else {}
+
+
+_FILE_ACTION_EVENT_TYPES = {
+    "read": "file_read",
+    "create": "file_create",
+    "modify": "file_modify",
+    "delete": "file_delete",
+}
+
+
+def _runtime_artifact_owner_kind(
+    platform: Platform,
+    principal: str,
+    logon_id: str,
+) -> RuntimeArtifactOwnerKind:
+    """Classify one process owner consistently for runtime artifact publication."""
+
+    if (
+        principal in _SYSTEM_ACCOUNTS
+        or logon_id in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+        or (platform == "linux" and principal == "root")
+    ):
+        return "system"
+    return "user"

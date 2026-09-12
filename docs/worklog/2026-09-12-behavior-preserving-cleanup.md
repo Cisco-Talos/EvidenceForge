@@ -107,6 +107,44 @@ Report: `2026-09-12-process-parent-callers-evidence.json`, SHA-256
 Logs: `/private/tmp/eforge-cleanup-pass3-item2-{focused,caller-tests,standard,standard-repeat,
 core,native,supplements}.log`. Existing adapters and all public family action interfaces remain.
 
+### Item 3a acceptance — explicit process preflight owner
+
+Item 2 is committed as `c72b3a4f`. `ProcessPreflightPlanner` now owns bounded source-deadline
+admission, command/endpoint planning, lifetime previews, scoped endpoint RNG construction,
+and uncommitted artifact cleanup. Its 11 explicit dependencies are existing state/timing/
+dispatch/content owners, four existing process owners, and narrow reuse/scanner capabilities.
+No generator object or new durable state is introduced. Generator hooks and the scanner-count
+entrypoint forward; eight implementations shrink from 785 generator lines to 65 forwarding lines.
+The shared file-action mapping and process artifact-owner classifier moved to existing pure policy.
+
+Scratch extraction drafts had relative/duplicate-import and indentation issues; these were fixed
+before production extraction. The first focused production run passed 563 and failed four tests
+that still patched the old RNG owner or inspected the generator implementation. Patches and source
+inspection now target the planner; expected evidence and assertions remain unchanged. The repeat
+passed **567 tests**, four deselected (11.04 seconds). **78 artifact rollback/recovery tests** pass
+(4.44 seconds), as do **75 targeted slow timing/parent checks** (14.94 seconds). A new bounded
+retention soak passes 1,000 prepare/cancel operations with no live planner references, reserved
+slots, prepared/claimed publications, or canonical artifact/process residue (1.87 seconds).
+
+Revision 61 uses digest `bf62dcb13a743846cec4b2b300cb40dc1849d35e059b5ffc9a60ffff212a56cb`.
+Both Ruff checks and manifest validation against `c72b3a4f` pass. Standard tests and the complete
+194-case byte matrix are running; this item is not committed or accepted yet.
+
+### Item 3a accepted — preflight implementation ownership
+
+The complete standard suite passes **8,489 tests**, with 27 existing skips and 2,011 deselected
+(300.15 seconds). All **194 raw-byte cases** match `010ae90f` and `c72b3a4f`, with artifact
+hash verification. Combined with 567 focused, 78 rollback/recovery, 75 targeted slow tests,
+the 1,000-operation reservation soak, both Ruff checks and revision-61 validation, all owner
+extraction gates pass. No changes to prepared-result types, bundle cleanup placement, optional
+hook discovery, execution publication/commit boundaries or checkpoint representations were made.
+
+Report: `2026-09-12-process-preflight-owner-evidence.json`, SHA-256
+`407b4cbd93dd5f47c71d20a43a096a82b88524e26c6fa3d1c3980b88e0fe2e3c`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item3a-{focused,focused-repeat,standard,core,native,
+supplements,recovery,slow,reservation-soak}.log`. The two endpoint-preparation failure scopes
+are still intact; separating their cohesive operations is the next independently gated substep.
+
 ## Second-pass final status
 
 The first-pass preservation claim below is limited to its exercised matrix. Review found a
