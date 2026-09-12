@@ -50,10 +50,7 @@ from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
-    from evidenceforge.events.dispatcher import EventDispatcher
-    from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
-    from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
-    from evidenceforge.generation.state_manager import StateManager
+    from .process_execution_service import ProcessExecutionService, ProcessTerminationService
 
 
 class ProcessLifetimeMode(StrEnum):
@@ -368,10 +365,13 @@ class ProcessTerminationRequest:
 class ProcessExecutionExecutor(Protocol):
     """Existing owners injected into bundle-owned process execution."""
 
-    state_manager: StateManager
-    dispatcher: EventDispatcher
-    _lifecycle_authority: GeneratorLifecycleAuthority
-    _runtime_content_manager: RuntimeContentIdentityManager
+    def _process_execution_service(self) -> ProcessExecutionService:
+        """Bind creation to the current state, timing, identity and lifecycle owners."""
+        ...
+
+    def _process_termination_service(self) -> ProcessTerminationService:
+        """Bind termination to the current owners without retaining a generator."""
+        ...
 
 
 class ProcessExecutionEffectPlanner(Protocol):
@@ -420,9 +420,7 @@ class ProcessExecutionActionBundle:
 
         request = self.preflight()
         try:
-            from .process_execution_service import ProcessExecutionService
-
-            return ProcessExecutionService.from_runtime(self._executor).create(request)
+            return self._executor._process_execution_service().create(request)
         finally:
             cleanup = getattr(
                 self._executor,
@@ -539,6 +537,4 @@ class ProcessTerminationActionBundle:
     def execute(self) -> None:
         """Emit process-termination evidence."""
 
-        from .process_execution_service import ProcessTerminationService
-
-        ProcessTerminationService.from_runtime(self._executor).terminate(self._request)
+        self._executor._process_termination_service().terminate(self._request)

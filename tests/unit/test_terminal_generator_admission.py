@@ -1064,6 +1064,10 @@ def test_sudo_missing_ssh_shell_uses_full_bootstrap_and_readiness_ceiling(
             return 5_199
         return stable_seed(text)
 
+    from evidenceforge.generation.actions.process_support import actors, foreground
+
+    monkeypatch.setattr(actors, "_stable_seed", maximum_shell_seed)
+    monkeypatch.setattr(foreground, "_stable_seed", maximum_shell_seed)
     monkeypatch.setattr(generator_module, "_stable_seed", maximum_shell_seed)
     monkeypatch.setattr(network_planner_module, "_stable_seed", maximum_shell_seed)
     complete_by = _START + timedelta(seconds=1, milliseconds=50)

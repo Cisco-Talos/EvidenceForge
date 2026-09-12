@@ -42,6 +42,7 @@ from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionPreparedEffects,
     ProcessExecutionRequest,
 )
+from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbeRequest
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.deployment_registry import (
@@ -1628,7 +1629,7 @@ def test_nested_parent_admission_rejection_cancels_outer_plan_without_mutation()
         ),
         patch.object(generator.dispatcher, "resolve_process_binary_identity", return_value=None),
         patch.object(
-            generator,
+            ProcessParentResolver,
             "_sanitize_user_parent_pid",
             side_effect=ExecutionEffectPlanError(
                 ExecutionEffectPlanErrorCode.INVALID_ACTOR,

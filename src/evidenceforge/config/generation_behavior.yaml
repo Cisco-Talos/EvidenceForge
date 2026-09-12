@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 57
+current_revision: 58
 history_start_revision: 1
-behavior_surface_sha256: "5080fb93deec21296908ef1499ed6a06bcbed2494272556b9f49ee1dd21ff8f1"
+behavior_surface_sha256: "d9cafeb7c0b89b37c6868472fb1a685235dc57f008b5b0e825033a6b7bf37c9c"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -567,3 +567,9 @@ changes:
     domains: [process-execution, endpoint-effects, lifecycle-publication]
     formats: []
     summary: Separates actor and parent resolution, launch and root planning, evidence preparation, publication and bookkeeping, preserving early reuse exits and the existing State, artifact and timing commit boundaries.
+  - revision: 58
+    id: explicit-process-owner-capabilities
+    impact: none
+    domains: [process-execution, process-preflight, process-lifecycle, endpoint-effects, source-timing]
+    formats: []
+    summary: Moves process identity, parent, reuse, timing, lifecycle and evidence operations behind explicit owner bindings. Generator entrypoints forward to ephemeral services bound to current State, caches, timing and publication authorities.

@@ -12,7 +12,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.content_identity import Platform, UnresolvedBinaryIdentity
@@ -78,9 +78,6 @@ from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
-if TYPE_CHECKING:
-    from evidenceforge.generation.activity.generator import ActivityGenerator
-
 from .process_execution_stages import (
     PreparedProcessPublication,
     ProcessActorResolution,
@@ -89,6 +86,20 @@ from .process_execution_stages import (
     ProcessLaunchPlan,
     ProcessRootPlan,
 )
+from .process_support import policy
+from .process_support.actors import ProcessActorResolver
+from .process_support.capabilities import (
+    FrozenGenericLogoffProcessCloseCapability,
+    ProcessActivityTiming,
+    ProcessIdentityCapabilities,
+)
+from .process_support.effects import ProcessEvidencePreparer
+from .process_support.foreground import ProcessForegroundLifecycle
+from .process_support.parents import ProcessParentResolver
+from .process_support.queries import ProcessStateQueries
+from .process_support.reuse import ProcessReusePolicy
+from .process_support.scheduling import ProcessLaunchScheduler
+from .process_support.sources import ProcessSourceTiming
 
 logger = logging.getLogger(__name__)
 
@@ -116,22 +127,20 @@ class ProcessReuseCandidate:
 class ProcessExecutionService:
     """Ephemeral dependency binding; all durable state remains on existing owners."""
 
-    runtime: ActivityGenerator
+    actors: ProcessActorResolver
+    reuse: ProcessReusePolicy
+    parents: ProcessParentResolver
+    scheduling: ProcessLaunchScheduler
+    foreground: ProcessForegroundLifecycle
+    sources: ProcessSourceTiming
+    effects: ProcessEvidencePreparer
+    queries: ProcessStateQueries
+    identity: ProcessIdentityCapabilities
+    activity_timing: ProcessActivityTiming
     state_manager: StateManager
     dispatcher: EventDispatcher
     lifecycle_authority: GeneratorLifecycleAuthority
-    runtime_content_manager: RuntimeContentIdentityManager
-
-    @classmethod
-    def from_runtime(cls, runtime: ActivityGenerator) -> ProcessExecutionService:
-        """Bind the existing state, dispatch, lifecycle, and content owners."""
-        return cls(
-            runtime,
-            runtime.state_manager,
-            runtime.dispatcher,
-            runtime._lifecycle_authority,
-            runtime._runtime_content_manager,
-        )
+    runtime_content_manager: RuntimeContentIdentityManager | None
 
     def bounded_reuse_intent(
         self,
@@ -185,7 +194,7 @@ class ProcessExecutionService:
             request.system.hostname,
             candidate_pid,
         )
-        source_frontier = self.runtime.process_source_create_bound(request.system, candidate_pid)
+        source_frontier = self.sources.process_source_create_bound(request.system, candidate_pid)
         if running is None or identity is None or source_frontier is None:
             return True, None
         if source_frontier > ensure_utc(request.source_visible_by):
@@ -211,15 +220,13 @@ class ProcessExecutionService:
     ) -> int:
         """Revalidate one immutable bounded reuse token before activity mutation."""
 
-        runtime = self.runtime
-
         intent = request.reuse_intent
         deadline = request.source_visible_by
         if intent is None or deadline is None:
             return 0
         identity = self.state_manager.get_process_identity(intent.hostname, intent.pid)
         running = self.state_manager.get_process(intent.hostname, intent.pid)
-        source_frontier = runtime.process_source_create_bound(request.system, intent.pid)
+        source_frontier = self.sources.process_source_create_bound(request.system, intent.pid)
         if (
             identity is None
             or running is None
@@ -236,7 +243,7 @@ class ProcessExecutionService:
             or actor.image != intent.image
             or actor.username != intent.username
             or actor.logon_id != intent.logon_id
-            or not runtime._is_pid_active_at(request.system, intent.pid, actor.started_at)
+            or not self.queries._is_pid_active_at(request.system, intent.pid, actor.started_at)
         ):
             return 0
         reuse_found, authenticated = self.bounded_reuse_intent(
@@ -265,7 +272,6 @@ class ProcessExecutionService:
         preflight: bool = False,
     ) -> ProcessReuseCandidate | None:
         """Select in the existing precedence order, keeping preflight allocation-free."""
-        runtime = self.runtime
         system = request.system
         if (
             not preflight
@@ -277,14 +283,14 @@ class ProcessExecutionService:
             and _is_bare_windows_explorer_launch(process_name, command_line)
             and logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
         ):
-            pid = runtime._ensure_session_explorer_pid(
-                system, runtime._user_model_for_username(username), time, logon_id
+            pid = self.parents._ensure_session_explorer_pid(
+                system, self.identity.user_for_username(username), time, logon_id
             )
             if pid is not None:
                 return ProcessReuseCandidate(pid, ProcessReuseKind.EXPLORER)
 
         candidate_pid = (
-            runtime._existing_windows_singleton_pid(system, process_name, time)
+            self.reuse._existing_windows_singleton_pid(system, process_name, time)
             if preflight or (not prepared_requires_new_root and not request.require_exact_parent)
             else None
         )
@@ -299,7 +305,7 @@ class ProcessExecutionService:
             and explicit_parent is not None
             and ntpath.basename(explicit_parent.image).lower() == "services.exe"
         ):
-            candidate_pid = runtime._existing_windows_singleton_service_pid(
+            candidate_pid = self.reuse._existing_windows_singleton_service_pid(
                 system=system,
                 process_name=process_name,
                 time=time,
@@ -309,7 +315,7 @@ class ProcessExecutionService:
             if candidate_pid is not None:
                 return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.SERVICE)
         if not prepared_requires_new_root and not request.from_storyline:
-            candidate_pid = runtime._existing_persistent_user_app_pid(
+            candidate_pid = self.reuse._existing_persistent_user_app_pid(
                 system=system,
                 username=username,
                 logon_id=logon_id,
@@ -328,7 +334,7 @@ class ProcessExecutionService:
             and request.allow_existing_browser_reuse
             and request.source_visible_by is None
         ):
-            candidate_pid = runtime._existing_user_browser_pid(
+            candidate_pid = self.reuse._existing_user_browser_pid(
                 system=system,
                 username=username,
                 logon_id=logon_id,
@@ -352,11 +358,11 @@ class ProcessExecutionService:
         if candidate.kind not in {
             ProcessReuseKind.EXPLORER,
             ProcessReuseKind.BOUNDED,
-        } and not self.runtime._process_source_visible_by(
+        } and not self.sources._process_source_visible_by(
             system=request.system, pid=candidate.pid, deadline=request.source_visible_by
         ):
             return 0
-        self.runtime._record_reused_process_optional_effects(request.prepared_effects)
+        self.reuse._record_reused_process_optional_effects(request.prepared_effects)
         if candidate.kind in {
             ProcessReuseKind.EXPLORER,
             ProcessReuseKind.SINGLETON,
@@ -380,7 +386,7 @@ class ProcessExecutionService:
         if isinstance(launch, int):
             return launch
         # Due closes own independent commits and must precede frozen State/timing plans.
-        self.runtime._finalize_due_process_lifetimes(launch.time, exhaust=False)
+        self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
         root = self._prepare_root(request, admission, launch)
         evidence = self._prepare_evidence(request, admission, launch, root)
         publication = self._prepare_publication(request, admission, root, evidence)
@@ -389,7 +395,6 @@ class ProcessExecutionService:
 
     def _prepare_execution(self, request: ProcessExecutionRequest) -> ProcessExecutionAdmission:
         """Validate prepared effects and actor identity before launch decisions."""
-        runtime = self.runtime
         prepared_endpoint = (
             request.prepared_effects.endpoint if request.prepared_effects is not None else None
         )
@@ -407,7 +412,7 @@ class ProcessExecutionService:
         uses_action_cohort = bool(
             prepared_endpoint is not None
             and prepared_actor is not None
-            and runtime._process_endpoint_uses_action_cohort(
+            and self.actors._process_endpoint_uses_action_cohort(
                 actor=prepared_actor,
                 admitted_effects=prepared_endpoint.admitted_effects,
                 effect_plan=request.effect_plan,
@@ -436,7 +441,7 @@ class ProcessExecutionService:
             )
         )
         if prepared_actor is not None:
-            expected_actor = runtime._prepare_process_effect_actor(
+            expected_actor = self.actors._prepare_process_effect_actor(
                 replace(request, prepared_effects=None)
             )
             if expected_actor != prepared_actor:
@@ -453,7 +458,6 @@ class ProcessExecutionService:
         self, request: ProcessExecutionRequest, admission: ProcessExecutionAdmission
     ) -> ProcessActorResolution | int:
         """Resolve actor identity and preserve the existing early reuse and service-worker paths."""
-        runtime = self.runtime
         time = admission.actor.started_at if admission.actor is not None else request.time
         logon_id = admission.actor.logon_id if admission.actor is not None else request.logon_id
         process_name = (
@@ -470,7 +474,7 @@ class ProcessExecutionService:
                 actor=(
                     admission.actor
                     if admission.actor is not None
-                    else runtime._prepare_process_effect_actor(request)
+                    else self.actors._prepare_process_effect_actor(request)
                 ),
             )
 
@@ -482,7 +486,7 @@ class ProcessExecutionService:
         )
         if profiled_worker is not None and not request.require_exact_parent:
             family_name, worker_name, _family = profiled_worker
-            return runtime._ensure_profiled_service_worker(
+            return self.parents._ensure_profiled_service_worker(
                 system=request.system,
                 worker_time=time,
                 activity_time=time,
@@ -542,7 +546,7 @@ class ProcessExecutionService:
             _BROWSER_EXES = {"chrome.exe", "msedge.exe", "firefox.exe"}
             if _exe_lower in _BROWSER_EXES:
                 _parent_image = (
-                    runtime._lookup_process_name(
+                    self.queries._lookup_process_name(
                         request.system.hostname, parent_pid, _get_os_category(request.system.os)
                     )
                     or ""
@@ -556,7 +560,7 @@ class ProcessExecutionService:
             process_username = admission.actor.username
             process_logon_id = admission.actor.logon_id
         else:
-            process_username, process_logon_id = runtime._resolve_process_identity(
+            process_username, process_logon_id = self.actors._resolve_process_identity(
                 system=request.system,
                 username=request.user.username,
                 logon_id=logon_id,
@@ -577,10 +581,10 @@ class ProcessExecutionService:
             and _get_os_category(request.system.os) == "linux"
             and process_logon_id == "0x3e7"
             and request.logon_id != "0x3e7"
-            and runtime._linux_process_is_system_background_helper(process_name, command_line)
+            and policy._linux_process_is_system_background_helper(process_name, command_line)
         ):
             _integrity = "System"
-            parent_pid = runtime._linux_system_parent_fallback(request.system, time)
+            parent_pid = self.parents._linux_system_parent_fallback(request.system, time)
         linux_session_end_time = (
             self.state_manager.get_session_end_time(process_logon_id)
             if _get_os_category(request.system.os) == "linux" and process_logon_id
@@ -590,15 +594,15 @@ class ProcessExecutionService:
             admission.actor is None
             and linux_session_end_time is not None
             and ensure_utc(time) >= ensure_utc(linux_session_end_time)
-            and runtime._linux_process_is_system_background_helper(process_name, command_line)
+            and policy._linux_process_is_system_background_helper(process_name, command_line)
         ):
-            process_username = runtime._linux_background_helper_username(
+            process_username = policy._linux_background_helper_username(
                 process_name,
                 command_line,
             )
             process_logon_id = "0x3e7"
             _integrity = "System"
-            parent_pid = runtime._linux_system_parent_fallback(request.system, time)
+            parent_pid = self.parents._linux_system_parent_fallback(request.system, time)
         if admission.actor is not None and (
             process_name != admission.actor.image
             or command_line != admission.actor.command_line
@@ -629,7 +633,6 @@ class ProcessExecutionService:
         actor: ProcessActorResolution,
     ) -> ProcessLaunchPlan | int:
         """Resolve session, reuse, parent and shell launch timing in their original order."""
-        runtime = self.runtime
         _integrity = actor.integrity
         parent_pid = actor.parent_pid
         time = actor.time
@@ -640,7 +643,7 @@ class ProcessExecutionService:
             and time >= session_end_time
             and actor.logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
         ):
-            time = session_end_time - runtime._sample_profile_activity_gap(
+            time = session_end_time - self.activity_timing.sample_profile_gap(
                 "windows.process_create_before_logoff",
                 stable_id=request.stable_id,
                 host=request.system.hostname,
@@ -651,7 +654,7 @@ class ProcessExecutionService:
         session = self.state_manager.get_session(actor.logon_id)
         process_logon_type = session.logon_type if session is not None else 2
         if admission.actor is None and session is not None and time <= session.start_time:
-            logon_gap = runtime._sample_activity_gap(
+            logon_gap = self.activity_timing.sample_gap(
                 relationship_key="activity.process.start_after_logon",
                 stable_id=request.stable_id,
                 minimum_ms=100,
@@ -668,7 +671,7 @@ class ProcessExecutionService:
             and explicit_parent is not None
             and time <= explicit_parent.start_time
         ):
-            parent_gap = runtime._sample_activity_gap(
+            parent_gap = self.activity_timing.sample_gap(
                 relationship_key="activity.process.start_after_parent",
                 stable_id=request.stable_id,
                 minimum_ms=50,
@@ -687,7 +690,7 @@ class ProcessExecutionService:
             and not request.from_storyline
             and request.source_visible_by is None
         ):
-            spaced_time = runtime._space_one_shot_cli_launch(
+            spaced_time = self.scheduling._space_one_shot_cli_launch(
                 system=request.system,
                 username=actor.username,
                 logon_id=actor.logon_id,
@@ -699,7 +702,7 @@ class ProcessExecutionService:
             if spaced_time != time:
                 time = spaced_time
             if request.allow_browser_launch_spacing:
-                spaced_time = runtime._space_browser_launch(
+                spaced_time = self.scheduling._space_browser_launch(
                     system=request.system,
                     username=actor.username,
                     logon_id=actor.logon_id,
@@ -760,7 +763,7 @@ class ProcessExecutionService:
             and _linux_shell_process_reserves_foreground(actor.image, actor.command_line)
             and _linux_foreground_lifetime(actor.image, actor.command_line) is not None
         ):
-            time = runtime._reserve_foreground_shell_time(
+            time = self.foreground._reserve_foreground_shell_time(
                 system=request.system,
                 username=actor.username,
                 logon_id=actor.logon_id,
@@ -784,7 +787,7 @@ class ProcessExecutionService:
         if not request.from_storyline:
             if request.source_visible_by is None:
                 if admission.actor is None:
-                    spaced_time = runtime._space_interactive_shell_child_launch(
+                    spaced_time = self.scheduling._space_interactive_shell_child_launch(
                         system=request.system,
                         process_name=actor.image,
                         parent_pid=parent_pid,
@@ -813,13 +816,12 @@ class ProcessExecutionService:
         parent_pid: int,
     ) -> int:
         """Resolve or repair the parent while preserving exact-parent and prepared-actor checks."""
-        runtime = self.runtime
         if request.require_exact_parent:
-            if not runtime._is_valid_process_parent_at(
+            if not self.queries._is_valid_process_parent_at(
                 system=request.system,
                 parent_pid=parent_pid,
                 time=time,
-            ) or not runtime._parent_process_matches_logon(
+            ) or not self.queries._parent_process_matches_logon(
                 hostname=request.system.hostname,
                 parent_pid=parent_pid,
                 logon_id=actor.logon_id,
@@ -831,7 +833,7 @@ class ProcessExecutionService:
                     f"child={actor.image!r}"
                 )
         elif admission.requires_new_root:
-            parent_pid = runtime._resolve_existing_prepared_process_parent(
+            parent_pid = self.parents._resolve_existing_prepared_process_parent(
                 system=request.system,
                 user=request.user,
                 time=time,
@@ -840,7 +842,7 @@ class ProcessExecutionService:
                 process_username=actor.username,
             )
         else:
-            parent_pid = runtime._sanitize_user_parent_pid(
+            parent_pid = self.parents._sanitize_user_parent_pid(
                 system=request.system,
                 user=request.user,
                 time=time,
@@ -850,14 +852,14 @@ class ProcessExecutionService:
                 parent_pid=parent_pid,
                 process_username=actor.username,
             )
-            parent_pid = runtime._materialize_visible_linux_shell_parent_for_child(
+            parent_pid = self.parents._materialize_visible_linux_shell_parent_for_child(
                 system=request.system,
                 time=time,
                 logon_id=actor.logon_id,
                 parent_pid=parent_pid,
                 process_username=actor.username,
             )
-            parent_pid = runtime._repair_process_parent_pid(
+            parent_pid = self.parents._repair_process_parent_pid(
                 system=request.system,
                 time=time,
                 logon_id=actor.logon_id,
@@ -866,14 +868,14 @@ class ProcessExecutionService:
                 parent_pid=parent_pid,
                 process_username=actor.username,
             )
-        if admission.actor is not None and not runtime._is_valid_process_parent_at(
+        if admission.actor is not None and not self.queries._is_valid_process_parent_at(
             system=request.system,
             parent_pid=parent_pid,
             time=time,
         ):
             # Legacy repair may select a future shell because non-prepared callers
             # can move the child after it. A prepared actor's start is immutable.
-            parent_pid = runtime._resolve_existing_prepared_process_parent(
+            parent_pid = self.parents._resolve_existing_prepared_process_parent(
                 system=request.system,
                 user=request.user,
                 time=time,
@@ -891,9 +893,8 @@ class ProcessExecutionService:
         launch: ProcessLaunchPlan,
     ) -> ProcessRootPlan:
         """Freeze exact State identities without consuming the process allocator."""
-        runtime = self.runtime
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
-        process_session_id = runtime._session_id_for_logon(launch.actor.logon_id)
+        process_session_id = self.queries._session_id_for_logon(launch.actor.logon_id)
         process_session_identity = self.state_manager.get_session_identity(launch.actor.logon_id)
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
@@ -972,7 +973,6 @@ class ProcessExecutionService:
         root: ProcessRootPlan,
     ) -> ProcessEvidencePlan:
         """Build canonical process evidence with its existing lifetime and source deadlines."""
-        runtime = self.runtime
         process_identity = root.process.identity
         # Phase 2: Build and validate the complete root/dependent publication batch.
         provisional_process_termination = (
@@ -987,7 +987,7 @@ class ProcessExecutionService:
             and _linux_shell_process_reserves_foreground(
                 launch.actor.image, launch.actor.command_line
             )
-            and runtime._foreground_shell_key(
+            and self.foreground._foreground_shell_key(
                 system=request.system,
                 username=process_identity.principal,
                 logon_id=process_identity.logon_id,
@@ -1028,7 +1028,7 @@ class ProcessExecutionService:
             and _linux_shell_process_reserves_foreground(
                 launch.actor.image, launch.actor.command_line
             )
-            and runtime._foreground_shell_key(
+            and self.foreground._foreground_shell_key(
                 system=request.system,
                 username=process_identity.principal,
                 logon_id=process_identity.logon_id,
@@ -1052,10 +1052,10 @@ class ProcessExecutionService:
         event = OccurrenceBuilder(
             timestamp=launch.time,
             event_type="process_create",
-            src_host=runtime._build_host_context(request.system),
+            src_host=self.identity.host_context(request.system),
             auth=AuthContext(
                 username=launch.actor.username,
-                user_sid=runtime._get_sid(launch.actor.username),
+                user_sid=self.identity.user_sid(launch.actor.username),
                 logon_id=launch.actor.logon_id,
                 session_id=root.session_id,
                 logon_type=launch.logon_type,
@@ -1069,19 +1069,19 @@ class ProcessExecutionService:
                 username=launch.actor.username,
                 integrity_level=launch.integrity,
                 logon_id=launch.actor.logon_id,
-                parent_image=runtime._lookup_process_name(
+                parent_image=self.queries._lookup_process_name(
                     request.system.hostname, launch.parent_pid, _get_os_category(request.system.os)
                 ),
-                parent_command_line=runtime._lookup_parent_command_line(
+                parent_command_line=self.queries._lookup_parent_command_line(
                     request.system.hostname, launch.parent_pid
                 ),
-                parent_start_time=runtime._lookup_parent_start_time(
+                parent_start_time=self.queries._lookup_parent_start_time(
                     request.system.hostname, launch.parent_pid
                 ),
                 token_elevation=launch.token_elevation,
                 mandatory_label=launch.mandatory_label,
                 start_time=process_identity.started_at,
-                current_directory=runtime._derive_current_directory(
+                current_directory=self.actors._derive_current_directory(
                     system=request.system,
                     username=launch.actor.username,
                     process_name=launch.actor.image,
@@ -1150,7 +1150,6 @@ class ProcessExecutionService:
         evidence: ProcessEvidencePlan,
     ) -> PreparedProcessPublication:
         """Prepare and validate source, artifact and optional cohort capabilities before commit."""
-        runtime = self.runtime
         process_plan = root.process
         process_identity = root.process.identity
         event = evidence.event
@@ -1174,7 +1173,7 @@ class ProcessExecutionService:
                 and request.prepared_effects.lifetime_plan is not None
             ):
                 lifetime_distribution, lifetime_relationship, _scope, _sample_key = (
-                    runtime._process_provisional_termination_timing_request(
+                    policy._process_provisional_termination_timing_request(
                         request,
                         request.prepared_effects.actor,
                         request.prepared_effects.lifetime_plan,
@@ -1184,7 +1183,7 @@ class ProcessExecutionService:
                     lifetime_distribution,
                     relationship_key=lifetime_relationship,
                 )
-            runtime._plan_process_source_create_times(
+            self.sources._plan_process_source_create_times(
                 event,
                 not_after=evidence.source_visible_by,
             )
@@ -1195,7 +1194,7 @@ class ProcessExecutionService:
             ] = ()
             if admission.endpoint is not None:
                 endpoint_reconciliation, endpoint_builders = (
-                    runtime._prepare_process_owned_endpoint_effects_for_publication(
+                    self.effects._prepare_process_owned_endpoint_effects_for_publication(
                         system=request.system,
                         process_identity=process_identity,
                         process_closes_at=evidence.provisional_termination,
@@ -1303,7 +1302,7 @@ class ProcessExecutionService:
                 )
             except BaseException as primary:
                 if not timing_preparation.committed:
-                    runtime._reconcile_generator_cleanup(
+                    policy._reconcile_generator_cleanup(
                         primary,
                         "process action-cohort source timing",
                         timing_preparation.cancel,
@@ -1328,7 +1327,6 @@ class ProcessExecutionService:
         publication: PreparedProcessPublication,
     ) -> RunningProcess:
         """Publish only through the established cohort or materialization commit boundary."""
-        runtime = self.runtime
         process_plan = root.process
         timing_preparation = publication.timing
         if root.cohort is not None:
@@ -1370,7 +1368,7 @@ class ProcessExecutionService:
                     materialization_receipt=materialization_receipt,
                 )
             if publication.reconciliation is not None:
-                runtime._execution_effect_audit.record(publication.reconciliation)
+                self.effects._execution_effect_audit.record(publication.reconciliation)
 
         return running_proc
 
@@ -1383,10 +1381,9 @@ class ProcessExecutionService:
         running_proc: RunningProcess,
     ) -> int:
         """Record lifecycle state and emit the established post-launch effects in order."""
-        runtime = self.runtime
         event = evidence.event
         if not request.from_storyline:
-            runtime._remember_one_shot_cli_launch(
+            self.scheduling._remember_one_shot_cli_launch(
                 system=request.system,
                 username=launch.actor.username,
                 logon_id=launch.actor.logon_id,
@@ -1398,14 +1395,14 @@ class ProcessExecutionService:
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
                 session.last_activity_time = launch.time
-        runtime._record_process_source_create_time(
+        self.sources._record_process_source_create_time(
             request.system.hostname,
             root.process.identity.pid,
             event,
             not_after=evidence.source_visible_by,
         )
         if evidence.provisional_termination is not None:
-            runtime._remember_foreground_process_finalizer(
+            self.foreground._remember_foreground_process_finalizer(
                 system=request.system,
                 user=request.user,
                 pid=root.process.identity.pid,
@@ -1414,7 +1411,7 @@ class ProcessExecutionService:
                 termination_time=evidence.provisional_termination,
             )
         if _get_os_category(request.system.os) == "windows":
-            runtime._emit_windows_process_startup_modules(
+            self.effects._emit_windows_process_startup_modules(
                 user=request.user,
                 system=request.system,
                 time=launch.time,
@@ -1422,7 +1419,7 @@ class ProcessExecutionService:
                 process_name=launch.actor.image,
                 from_storyline=request.from_storyline,
             )
-        runtime._emit_process_command_network_effects(
+        self.effects._emit_process_command_network_effects(
             user=request.user,
             system=request.system,
             time=launch.time,
@@ -1438,7 +1435,7 @@ class ProcessExecutionService:
             else None
         )
         if runtime_image_load is not None:
-            runtime.generate_image_load(
+            self.effects.generate_image_load(
                 user=request.user,
                 system=request.system,
                 time=runtime_image_load.timestamp,
@@ -1461,18 +1458,18 @@ class ProcessExecutionService:
 class ProcessTerminationService:
     """Bind only the owners needed for termination, without new durable state."""
 
-    runtime: ActivityGenerator
+    actors: ProcessActorResolver
+    foreground: ProcessForegroundLifecycle
+    sources: ProcessSourceTiming
+    queries: ProcessStateQueries
+    identity: ProcessIdentityCapabilities
+    frozen_session_close: FrozenGenericLogoffProcessCloseCapability
+
     state_manager: StateManager
     dispatcher: EventDispatcher
 
-    @classmethod
-    def from_runtime(cls, runtime: ActivityGenerator) -> ProcessTerminationService:
-        """Bind existing process/session state and event dispatch."""
-        return cls(runtime, runtime.state_manager, runtime.dispatcher)
-
     def terminate(self, request: ProcessTerminationRequest) -> None:
         """Execute the canonical process terminate path."""
-        runtime = self.runtime
 
         user = request.user
         system = request.system
@@ -1485,13 +1482,13 @@ class ProcessTerminationService:
         authoritative_latest_allowed: datetime | None = None
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
-        frozen_generic_close = runtime._frozen_generic_logoff_process_close(request, running_proc)
+        frozen_generic_close = self.frozen_session_close(request, running_proc)
         frozen_generic_close_time = (
             frozen_generic_close.end_time if frozen_generic_close is not None else None
         )
         if frozen_generic_close_time is not None:
             time = frozen_generic_close_time
-        if runtime._process_termination_recorded(
+        if self.queries._process_termination_recorded(
             system.hostname,
             pid,
             running_proc.start_time if running_proc is not None else None,
@@ -1580,8 +1577,8 @@ class ProcessTerminationService:
                 time = min(time, latest_allowed)
         if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
             deadline = ensure_utc(authoritative_end_plan.canonical_end)
-            hold_until = runtime._process_connection_hold_until.get(
-                runtime._process_instance_key(system.hostname, pid)
+            hold_until = self.foreground._process_connection_hold_until.get(
+                self.queries._process_instance_key(system.hostname, pid)
             )
             if hold_until is not None and ensure_utc(hold_until) >= deadline:
                 raise StateError(
@@ -1605,7 +1602,7 @@ class ProcessTerminationService:
                 authoritative_latest_allowed = deadline - timedelta(milliseconds=end_margin_ms)
                 time = min(ensure_utc(time), authoritative_latest_allowed)
         else:
-            time = runtime._held_process_termination_time(
+            time = self.foreground._held_process_termination_time(
                 system=system,
                 pid=pid,
                 requested_time=time,
@@ -1614,7 +1611,7 @@ class ProcessTerminationService:
             if process_username in _SYSTEM_ACCOUNTS:
                 process_logon_id = "0x3e7"
             else:
-                resolved_username, resolved_logon_id = runtime._resolve_process_identity(
+                resolved_username, resolved_logon_id = self.actors._resolve_process_identity(
                     system=system,
                     username=process_username,
                     logon_id=logon_id,
@@ -1624,7 +1621,7 @@ class ProcessTerminationService:
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
         if authoritative_latest_allowed is None and frozen_generic_close_time is None:
-            time = runtime._clamp_after_visible_process_create(
+            time = self.sources._clamp_after_visible_process_create(
                 system,
                 pid,
                 time,
@@ -1645,10 +1642,10 @@ class ProcessTerminationService:
         event = OccurrenceBuilder(
             timestamp=time,
             event_type="process_terminate",
-            src_host=runtime._build_host_context(system),
+            src_host=self.identity.host_context(system),
             auth=AuthContext(
                 username=process_username,
-                user_sid=runtime._get_sid(process_username),
+                user_sid=self.identity.user_sid(process_username),
                 logon_id=process_logon_id,
                 session_id=process_session_id,
                 logon_type=session_logon_type or 0,
@@ -1668,7 +1665,7 @@ class ProcessTerminationService:
             storyline_origin=from_storyline,
         )
 
-        runtime._record_process_source_terminate_time(system.hostname, pid, event)
+        self.sources._record_process_source_terminate_time(system.hostname, pid, event)
         if (
             running_proc is not None
             and _get_os_category(system.os) == "linux"
@@ -1676,7 +1673,7 @@ class ProcessTerminationService:
                 running_proc.image,
                 running_proc.command_line,
             )
-            and runtime._foreground_shell_key(
+            and self.foreground._foreground_shell_key(
                 system=system,
                 username=running_proc.username,
                 logon_id=running_proc.logon_id,
@@ -1684,10 +1681,10 @@ class ProcessTerminationService:
             )
             is not None
         ):
-            runtime._discard_superseded_foreground_reservation(
+            self.foreground._discard_superseded_foreground_reservation(
                 system=system, process=running_proc, termination_time=ensure_utc(event.timestamp)
             )
-            runtime._remember_foreground_shell_available(
+            self.foreground._remember_foreground_shell_available(
                 system=system,
                 username=running_proc.username,
                 logon_id=running_proc.logon_id,
@@ -1698,10 +1695,10 @@ class ProcessTerminationService:
             )
         self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
-        termination_key = (system.hostname, pid, termination_start_time)
-        runtime._terminated_process_keys.add(termination_key)
-        runtime._terminated_process_times[termination_key] = ensure_utc(event.timestamp)
-        runtime._terminate_completed_one_shot_shell_parent(
+        self.foreground.record_termination(
+            system.hostname, pid, termination_start_time, event.timestamp
+        )
+        self.foreground._terminate_completed_one_shot_shell_parent(
             user=user,
             system=system,
             child=running_proc,

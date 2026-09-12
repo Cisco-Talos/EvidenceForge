@@ -38,6 +38,7 @@ def test_bounded_reuse_precedence_and_visibility(
     exact_parent: bool,
     late: bool,
     expected: int | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     time = datetime(2024, 3, 18, 13, tzinfo=UTC)
     state = StateManager()
@@ -73,9 +74,24 @@ def test_bounded_reuse_precedence_and_visibility(
     calls.singleton.return_value = single
     calls.service.return_value = service
     calls.application.return_value = application
-    generator._existing_windows_singleton_pid = calls.singleton
-    generator._existing_windows_singleton_service_pid = calls.service
-    generator._existing_persistent_user_app_pid = calls.application
+    from evidenceforge.generation.actions.process_support.reuse import ProcessReusePolicy
+    from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
+
+    monkeypatch.setattr(
+        ProcessReusePolicy,
+        "_existing_windows_singleton_pid",
+        lambda self, *args, **kwargs: calls.singleton(*args, **kwargs),
+    )
+    monkeypatch.setattr(
+        ProcessReusePolicy,
+        "_existing_windows_singleton_service_pid",
+        lambda self, *args, **kwargs: calls.service(*args, **kwargs),
+    )
+    monkeypatch.setattr(
+        ProcessReusePolicy,
+        "_existing_persistent_user_app_pid",
+        lambda self, *args, **kwargs: calls.application(*args, **kwargs),
+    )
     generator.state_manager = calls.state
     parent = SimpleNamespace(image=r"C:\Windows\System32\services.exe")
     running = SimpleNamespace(
@@ -88,7 +104,11 @@ def test_bounded_reuse_precedence_and_visibility(
     )
     calls.state.get_process.side_effect = lambda host, pid: parent if pid == 1000 else running
     calls.state.get_process_identity.return_value = SimpleNamespace(object_id="fixture-object")
-    generator.process_source_create_bound = calls.source_bound
+    monkeypatch.setattr(
+        ProcessSourceTiming,
+        "process_source_create_bound",
+        lambda self, *args: calls.source_bound(*args),
+    )
     calls.source_bound.return_value = time + timedelta(seconds=10 if late else -1)
     rng_before = _get_rng().getstate()
 

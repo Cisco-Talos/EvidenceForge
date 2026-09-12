@@ -1072,7 +1072,9 @@ def test_rejected_dns_normalization_does_not_mutate_the_caller_context() -> None
     emitter.emit.assert_not_called()
 
 
-def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> None:
+def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The pre-transport Windows visibility repair cannot advance base timing."""
 
     generator, state, emitter = _generator()
@@ -1097,7 +1099,14 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
     )
     state.materialize_process(process_plan)
     generator._ip_to_system = {source.ip: source}
-    generator.process_source_create_bound = Mock(return_value=_START + timedelta(milliseconds=10))
+    from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
+
+    source_bound = Mock(return_value=_START + timedelta(milliseconds=10))
+    monkeypatch.setattr(
+        ProcessSourceTiming,
+        "process_source_create_bound",
+        lambda self, system, pid: source_bound(system, pid),
+    )
     timing_before = generator._source_timing_planner.state_digest()
 
     def _reject() -> None:
@@ -1126,7 +1135,7 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
         )
 
     assert generator._source_timing_planner.state_digest() == timing_before
-    generator.process_source_create_bound.assert_called_with(source, process_plan.identity.pid)
+    source_bound.assert_called_with(source, process_plan.identity.pid)
     emitter.emit.assert_not_called()
 
 

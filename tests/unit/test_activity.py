@@ -6033,19 +6033,16 @@ class TestActivityGenerator:
             command_line="cmd.exe /c dir",
         )
         executor = Mock()
-        from evidenceforge.generation.actions.process_execution_service import (
-            ProcessExecutionService,
-        )
 
         service = Mock()
         service.create.return_value = 4242
         factory = Mock(return_value=service)
-        monkeypatch.setattr(ProcessExecutionService, "from_runtime", factory)
+        monkeypatch.setattr(executor, "_process_execution_service", factory)
 
         pid = ProcessExecutionActionBundle(executor, request).execute()
 
         assert pid == 4242
-        factory.assert_called_once_with(executor)
+        factory.assert_called_once_with()
         service.create.assert_called_once_with(request)
 
     def test_process_execution_bundle_preflights_effect_plan_before_service(
@@ -6076,11 +6073,9 @@ class TestActivityGenerator:
                 calls.append(("execute", execution_request.effect_plan))
                 return 4242
 
-        from evidenceforge.generation.actions.process_execution_service import (
-            ProcessExecutionService,
+        monkeypatch.setattr(
+            Executor, "_process_execution_service", lambda self: Service(), raising=False
         )
-
-        monkeypatch.setattr(ProcessExecutionService, "from_runtime", lambda executor: Service())
         pid = ProcessExecutionActionBundle(Executor(), request).execute()
 
         assert pid == 4242
@@ -6105,12 +6100,9 @@ class TestActivityGenerator:
         )
         executor = Mock()
         executor._plan_process_execution_effects = Mock(return_value="invalid-plan")
-        from evidenceforge.generation.actions.process_execution_service import (
-            ProcessExecutionService,
-        )
 
         factory = Mock()
-        monkeypatch.setattr(ProcessExecutionService, "from_runtime", factory)
+        monkeypatch.setattr(executor, "_process_execution_service", factory)
 
         with pytest.raises(ExecutionEffectPlanError) as exc_info:
             ProcessExecutionActionBundle(executor, request).execute()
@@ -6133,19 +6125,15 @@ class TestActivityGenerator:
         )
         executor = Mock()
 
-        from evidenceforge.generation.actions.process_execution_service import (
-            ProcessTerminationService,
-        )
-
         service = Mock()
         factory = Mock(return_value=service)
-        monkeypatch.setattr(ProcessTerminationService, "from_runtime", factory)
+        monkeypatch.setattr(executor, "_process_termination_service", factory)
         ProcessTerminationActionBundle(executor, request).execute()
 
         anchor = ProcessTerminationActionBundle(Mock(), request).anchor
         assert anchor.family == "process_termination"
         assert anchor.stable_id.startswith("process-termination-")
-        factory.assert_called_once_with(executor)
+        factory.assert_called_once_with()
         service.terminate.assert_called_once_with(request)
 
     def test_generate_process_hosts_windows_batch_scripts_under_cmd(

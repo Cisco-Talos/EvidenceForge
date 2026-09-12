@@ -1,6 +1,6 @@
 # Behavior-preserving 2.0.0 cleanup
 
-## Second-pass status — acceptance reopened
+## Second-pass final status
 
 The first-pass preservation claim below is limited to its exercised matrix. Review found a
 misplaced scenario-deadline lookup in the process service. The user authorized a six-item second
@@ -8,9 +8,20 @@ pass: correct foreground ownership against real process/session behavior, then c
 policy, storyline session resolution, handler helpers, network stage records, and process services.
 Original dev remains a comparison reference, not the correctness authority for the correction.
 The first-pass checkout is preserved at `/private/tmp/eforge-cleanup-first-pass` (`2c7dee2a`).
-No dependency/version/checkpoint-schema changes, merge, or release are authorized.
+All six second-pass items are complete on `codex/2.0.0-code-cleanup`. Final gates pass:
+**8,468 standard tests** (27 existing skips), **1,780 slow tests**, **122 frozen byte comparisons**,
+**12 checkpoint resumes**, **six targeted retention soak tests**, both Ruff checks, artifact-hash
+verification and behavior-manifest validation. Full soak remains excluded as agreed.
+No dependency/version/checkpoint-schema or fingerprint-algorithm changes, merge, or release were
+made. Original checkpoints remain load-compatible; exact policy still rejects a different build.
 
-Implementation is in progress. Final acceptance is not complete.
+Revision 49 records the intentional foreground correction. Eight original matrix cases change
+only Linux eCAR/syslog evidence; the remaining original evidence and ground truth stay identical.
+All subsequent refactors match the accepted corrected references byte for byte. The final
+structural review, measured counts, limitations, hashes and reproduction tools appear below.
+This final status supersedes historical pending notes; failed and interrupted attempts remain
+recorded for handoff. Original dev and first-pass preservation claims do not override the
+foreground lifecycle correction.
 
 ## First-pass status (historical)
 
@@ -491,3 +502,148 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   `5080fb93deec21296908ef1499ed6a06bcbed2494272556b9f49ee1dd21ff8f1`.
 - **Item 6c acceptance:** standard **8,465 passed, 27 existing skips, 2,009 deselected**
   (296.56 s). All focused, slow timing, lint, manifest and selected byte gates passed.
+
+### Item 6d — explicit process owners and current capability bindings
+
+- Item 6c committed as `7a28bbda`. Creation and termination services no longer import, accept,
+  or hold a broad generator object. The bundle asks its provider for a freshly bound service.
+  Process actors, canonical State queries, parent/service chains, reuse, launch scheduling,
+  foreground lifecycle, source timing and endpoint evidence now have focused implementation owners.
+  System-process execution and image-load implementation moved too; generator entrypoints forward.
+- This moves 108 generator method implementations, 26 module-level policy definitions and eight
+  class policy sets into process-owned modules. All dictionaries, caches, RNGs and lifecycle,
+  timing, identity and publication authorities stay on their existing owners. Factories bind
+  current references on each call, including after hydration or watermark replacement. Existing
+  lazy source-cache initialization remains on the generator binding boundary.
+- Remaining cross-family capabilities are 16 typed callbacks for host/user identity, shared
+  activity timing, session bootstrap/teardown, collection visibility, scanner requests and public
+  process action requests. They do not reproduce the old 53-member creation/17-member termination
+  generator interface. Session teardown's ContextVar and exact generator-owner authentication
+  remain with the session implementation; process operations ask that owner about frozen closes.
+- Initial extraction diagnostics caught missing/relative imports, a generated annotation typo and
+  a misplaced declaration block; these were fixed before acceptance tests. The first focused run
+  still patched the old reuse owner; the next identified four old service-factory patches and one
+  parent fault-injection patch. Updating the patch locations preserved all behavioral assertions.
+- Focused process/activity **630 passed**, 62 deselected; separate process/cache retention
+  **21 passed**; timing inventory/claim-order slow **15 passed**. A mistaken ownership-test command
+  named nonexistent files and collected nothing; the corrected invocation ran the 21 real cases.
+- The first full standard run was **9 failed, 8,458 passed, 27 existing skips, 2,009 deselected**.
+  Those failures were partial `object.__new__` fixtures or patches at former helper locations.
+  Tests now construct initialized owners and patch actual source-timing/SSH/foreground helpers.
+  No expected values were changed. A repeat found one more nested partial fixture; the complete
+  affected group then passed **178 tests**. The full standard gate is being repeated.
+- All **122 frozen byte cases** and **12 checkpoint resumes** pass. The final report re-verifies
+  each file set, every raw evidence/ground-truth hash, manifest-listed hashes, and the exact
+  field-level resume/provenance policy. Seventy-nine relevant cases also match item 6c directly.
+  Original-build exact policy rejects all six older checkpoints without rewriting their pointers;
+  compatible policy hydrates them and yields the corrected uninterrupted reference.
+- Targeted network retention soak: **5 passed**, 68 deselected (44.29 s), including 45 simulated
+  days and capacity-one ordinary/HTTP/proxy publication. Targeted process soak: **1 passed**,
+  2 deselected (4.76 s), covering 960 create/terminate lifecycles over 30 simulated days. At days
+  7 and 30 no ephemeral services remain reachable; source/terminal caches drain and successive
+  operations bind the replacement watermark-owned dictionaries.
+- Revision 58 validates against both item 6c and original dev. Digest:
+  `1f5580ec1a92690365240ba80e90e64fad178c2beb46158c6a654cf17f9ab84b`.
+  Full slow release gate is running; full soak remains excluded.
+- The repeated standard gate passed **8,467 tests**, 27 existing skips, 2,010 deselected
+  (309.46 s). Final inspection then identified an unseeded-generator edge: binding a missing
+  `_system_pids` to a temporary dictionary could retain that fallback across helper calls. The
+  binding now carries absence explicitly and obtains the original fresh fallback for each read;
+  an actual seeded role table still passes by reference. A new integration check confirms that
+  canonical systemd materialization creates no parallel role table on the ephemeral service.
+- The first full slow run was deliberately stopped (exit 143) before that final production edit;
+  it is **incomplete**, not passing. Its 60-second faulthandler reports came from long-running
+  medium-dataset/iteration tests, not assertion failures. All final gates are rerunning in fresh
+  `pass2-final2-*` captures; the earlier passing captures and report remain preserved separately.
+  Final focused repeat: **631 passed**, 63 deselected.
+- The first exploratory process-soak probe omitted its `EventDispatcher` and failed before
+  parent publication. Supplying the production-shaped dispatcher corrected the probe setup.
+  The final-source targeted retention repeat passes **6 tests**, 71 deselected (51.62 s).
+
+### Final structural review
+
+| Contract | Before this pass | Final implementation |
+|---|---|---|
+| Shell-history eligibility | Shared predicate plus an EDR duplicate | One predicate used by validation and both generation paths |
+| Storyline process sessions | Separate typed and spill decisions | One resolver, with the existing no-world-planner fallback |
+| Handler imports of coordinator helpers | 46 imported helper names | 0 runtime helper imports back to the coordinator |
+| Network stage fields | 240 declarations / 240 top-level unpacks | 129 declarations / 39 group or phase unpacks |
+| Network locals used solely to forward fields | 78 | 0 |
+| Broad generator members used by create/terminate services | 53 / 17 | 0 / 0 |
+| Process implementation ownership | Generator callbacks behind the services | 108 moved methods and explicit State/timing/lifecycle/evidence owners |
+
+The 16 remaining typed callbacks cross actual shared-identity, timing, session, scanner or
+public action-request boundaries. They are not a renamed generator facade. All creation,
+termination, system-process and image-load implementations now live in process-owned services;
+generator methods preserve forwarding entrypoints. Services retain no independent RNG or durable
+cache. The serialized runtime owners and fingerprint algorithms are unchanged.
+
+Representative paths checked:
+
+- Typed process and standalone command spill → common session resolver → existing process bundle.
+  Interactive root, local daemons, existing-session precedence and absent world planner retain
+  their prior branch order and exact RNG state.
+- Ordinary process → admission → actor → launch/parent → independent due closes → exact root
+  plan → canonical evidence → prepared publication → original commit boundary → bookkeeping.
+  Reuse can return before root allocation; exact-parent and visibility rejection remain intact.
+- Network → request resolution → transport planning → protocol evidence → publication preparation
+  → commit → publication. The same transaction boundary owns all claims, cancellation, timing
+  seals and recovery. Before-commit rejection and after-commit recovery remain distinct.
+- Occupied Linux shell → existing process/session lifecycle lookup. Unknown completion blocks
+  sequential work; actual termination or teardown releases it. Collection cutoff creates no close.
+  Explicit concurrency and other shells retain their existing independent paths.
+
+Remaining opportunities are narrower follow-ups: separate Windows and Linux parent-selection
+policy within the large parent owner, and migrate additional callers from compatibility adapters
+to the focused owners where that improves clarity. The existing preflight endpoint-effect planner
+and artifact-reservation cleanup entrypoints also remain in the generator; this pass shares their
+normalization, actor and reuse decisions with execution, but does not extract that separate
+artifact-planning coordinator. The creation/termination services and their process helpers consume
+the explicit owners described above. These remaining areas are outside the dependency count,
+which measures the creation and termination services specifically.
+
+### Final-source acceptance results
+
+The final source is frozen at behavior revision 58 with surface digest
+`d9cafeb7c0b89b37c6868472fb1a685235dc57f008b5b0e825033a6b7bf37c9c`.
+The earlier revision-58 digest above describes the superseded pre-fallback capture, not this
+accepted source. All final captures use the new, separately preserved `pass2-final2-*` prefix.
+
+- Standard: **8,468 passed, 27 existing skips, 2,010 deselected** (312.76 s).
+- Full slow suite: **1,780 passed, 8,725 deselected** (1,155.62 s). This is the complete
+  `uv run pytest -m slow --no-cov` gate against the final source, with no skips or failures.
+- Focused process/activity: **631 passed**, 63 deselected (11.43 s).
+- Behavior compatibility, RNG inventory and timing/claim contracts: **38 passed** (14.16 s).
+- Targeted process/network retention soak: **6 passed**, 71 deselected (51.62 s).
+- Both Ruff checks pass: **833 files already formatted**. Whitespace validation passes.
+- Behavior-manifest validation passes against item 6c (`7a28bbda`) and original dev (`e4035435`).
+- Expanded matrix: **122 raw-byte comparisons pass** against the accepted corrected references;
+  **79** relevant captures also match item 6c directly. No additional evidence or ground-truth
+  differences were accepted during items 2–6.
+- **12 checkpoint resumes pass**: six original-build compatible resumes and six same-build exact
+  resumes. The six original checkpoints are also rejected under exact policy. Integrity, actual
+  manifest-listed artifact hashes and the field-level provenance allowlist all verify.
+- Final structural inventory was recomputed and matches the source. Version, dependency,
+  checkpoint-schema and fingerprint-algorithm files are unchanged from the first-pass endpoint.
+- **All final acceptance gates pass.** The full soak tier was excluded as agreed; the six
+  relevant retention soak cases ran. The 27 standard skips remain the existing three SOF-ELK
+  parser integrations, one Splunk integration, one full-engine web-access case and 22 external
+  sample-data checks. No new skips or changed golden expectations were introduced.
+
+The final machine-readable reports are:
+
+- `2026-09-12-second-pass-evidence.json`: SHA-256
+  `97e61e2c86eeddd3bf96b0802430f5bef615a26dbadfc4095be639c0701f47ae`.
+- `2026-09-12-second-pass-structure-comparison.json`: SHA-256
+  `4244d8eeaf52c0e9db469140b53c517896cc63bfb99b199aae7b7de523ec8f2b`.
+
+Final logs are `/private/tmp/eforge-cleanup-pass2-final2-{standard,slow,core,native,supplements,
+checkpoints,behavior-timing,retention-soak}.log`; the focused final-source log is
+`/private/tmp/eforge-cleanup-pass2-item6d-focused-final-2.log`. Frozen captures and original,
+first-pass and accepted corrected checkouts remain in their recorded `/private/tmp` locations.
+
+Delivery remains the dedicated branch. Items 1–5 and process substeps 6a–6c are recorded in
+`ffdce735`, `bd20077e`, `233bbf7a`, `5858a0a8`, `5bcad92d`, `2ebd6d09`, `79529f46`, and
+`7a28bbda`; the final capability-binding substep and this acceptance record are delivered together
+as `refactor: bind process services to explicit current owners`. No merge or release is part of
+this effort.

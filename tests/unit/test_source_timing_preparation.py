@@ -553,7 +553,7 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
             "_publish_process",
         ): "materialize_process",
         (
-            "src/evidenceforge/generation/activity/generator.py",
+            "src/evidenceforge/generation/actions/process_support/parents.py",
             "_ensure_parent_chain",
         ): "materialize_process",
     }

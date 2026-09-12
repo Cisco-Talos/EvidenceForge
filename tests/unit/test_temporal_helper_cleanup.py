@@ -76,9 +76,7 @@ def _lightweight_process_bound_generator(
         os_category="linux",
         start_time=_START,
     )
-    generator = object.__new__(ActivityGenerator)
-    generator.timing_runtime = runtime
-    generator.state_manager = state_manager
+    generator = ActivityGenerator(state_manager, {}, timing_runtime=runtime)
     generator._source_timing_planner = source_timing_planner or SourceTimingPlanner(
         "enterprise_standard",
         timing_runtime=runtime,

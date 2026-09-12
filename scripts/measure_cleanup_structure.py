@@ -93,12 +93,40 @@ def measure(source: Path) -> dict[str, Any]:
                 node.attr
                 for node in ast.walk(cls)
                 if isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "runtime"
+                and (
+                    (isinstance(node.value, ast.Name) and node.value.id == "runtime")
+                    or ast.unparse(node.value) == "self.runtime"
+                )
             }
         )
         for cls in services.body
         if isinstance(cls, ast.ClassDef)
+    }
+    service_fields = {
+        cls.name: {
+            node.target.id: ast.unparse(node.annotation)
+            for node in cls.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        }
+        for cls in services.body
+        if isinstance(cls, ast.ClassDef) and cls.name.endswith("Service")
+    }
+    support_root = source / "src/evidenceforge/generation/actions/process_support"
+    support = {path.stem: ast.parse(path.read_text()) for path in sorted(support_root.glob("*.py"))}
+    callbacks = sorted(
+        cls.name
+        for module in support.values()
+        for cls in module.body
+        if isinstance(cls, ast.ClassDef)
+        and any(isinstance(node, ast.FunctionDef) and node.name == "__call__" for node in cls.body)
+    )
+    helper_implementations = {
+        name: {
+            node.name: node.end_lineno - node.lineno + 1
+            for node in ast.walk(module)
+            if isinstance(node, ast.FunctionDef) and name != "capabilities"
+        }
+        for name, module in support.items()
     }
     handlers = source / "src/evidenceforge/generation/engine/typed_handlers"
     imports = {
@@ -114,6 +142,9 @@ def measure(source: Path) -> dict[str, Any]:
             len(stage["forwarded_only_fields"]) for stage in stages.values()
         ),
         "process_broad_runtime_dependencies": service_dependencies,
+        "process_service_fields": service_fields,
+        "process_cross_family_callbacks": callbacks,
+        "process_helper_implementations": helper_implementations,
         "handler_coordinator_runtime_imports": imports,
         "handler_coordinator_imported_names": sum(map(len, imports.values())),
     }

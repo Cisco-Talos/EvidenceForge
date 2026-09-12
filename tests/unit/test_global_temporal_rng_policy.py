@@ -68,7 +68,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|activity/generator.py|_ensure_email_server_process|uniform
 2|activity/generator.py|_ensure_explicit_proxy_client_process|uniform
 2|activity/generator.py|_ensure_linux_apt_frontend_process|uniform
-1|activity/generator.py|_ensure_parent_chain|uniform
+1|actions/process_support/parents.py|_ensure_parent_chain|uniform
 2|activity/generator.py|_ensure_system_connection_owner_process|uniform
 2|activity/generator.py|_ensure_user_connection_owner_process|uniform
 1|activity/generator.py|_ensure_visible_created_account_kerberos_exchange|uniform
@@ -83,7 +83,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|activity/generator.py|_external_sender_received_headers|uniform
 1|activity/generator.py|_factory|uniform
 1|activity/generator.py|_generate_bounded_foreground_process_termination|uniform
-1|activity/generator.py|_held_process_termination_time|uniform
+1|actions/process_support/foreground.py|_held_process_termination_time|uniform
 4|activity/generator.py|_jitter_default_connection_duration|uniform
 1|activity/generator.py|_maybe_generate_email_recipient_reads|uniform
 1|activity/generator.py|_nmap_concurrent_probe_offsets|betavariate
@@ -94,9 +94,9 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|activity/generator.py|_remember_system_connection_owner_finalizer|uniform
 8|activity/generator.py|_schedule_bash_history_time|uniform
 2|activity/generator.py|_smtp_transfer_sizes|uniform
-1|activity/generator.py|_space_browser_launch|uniform
-1|activity/generator.py|_space_interactive_shell_child_launch|uniform
-2|activity/generator.py|_space_one_shot_cli_launch|uniform
+1|actions/process_support/scheduling.py|_space_browser_launch|uniform
+1|actions/process_support/scheduling.py|_space_interactive_shell_child_launch|uniform
+2|actions/process_support/scheduling.py|_space_one_shot_cli_launch|uniform
 1|activity/generator.py|ensure_smb_client_process|uniform
 6|activity/generator.py|execute_baseline_activity|uniform
 1|activity/generator.py|generate_adversarial_payload|uniform
