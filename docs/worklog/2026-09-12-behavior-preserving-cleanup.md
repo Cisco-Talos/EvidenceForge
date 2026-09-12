@@ -348,3 +348,20 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   240 field declarations, 240 input-unpack assignments and 78 pure-forward locals (22 in commit);
   process creation/termination consume 53/17 broad runtime members. These are measured by
   `scripts/measure_cleanup_structure.py` for the remaining five items.
+
+### Item 2 — shared shell-history policy
+
+- Item 1 committed as `ffdce735`; its accepted source is preserved separately at
+  `/private/tmp/eforge-cleanup-corrected`. The durable corrected evidence reference has 86 cases
+  and 12 verified resumes; original controls remain intact.
+- EDR shell-history file selection now calls the same predicate as validation and bash generation.
+  The surrounding executable/path conditions, lowercasing behavior, and random draws are unchanged.
+  Other account classifications remain purpose-specific. Revision 51 declares impact none.
+- Item 2 gates pending.
+
+- **Item 2 acceptance:** focused tests **109 passed**; standard suite **8,432 passed, 27 existing
+  skips, 2,009 deselected** (291.12 s); Ruff and revision-51 manifest validation passed. All-format
+  default/42 plus all six typed-handler captures are byte-identical to the corrected item-1
+  reference. The isolated five-account EDR duplicate is removed; validation and both generation
+  paths now consume the one shared predicate. Digest:
+  `98710feccb126f39e59257e823d199cf0bfc375109ced87fdad4464906803c18`.

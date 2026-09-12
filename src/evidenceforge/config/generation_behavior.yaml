@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 50
+current_revision: 51
 history_start_revision: 1
-behavior_surface_sha256: "31ec2940524b29b9efdeb0cd61ef7b15c236574fbd160b6294947aa6e18055b3"
+behavior_surface_sha256: "98710feccb126f39e59257e823d199cf0bfc375109ced87fdad4464906803c18"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -524,3 +524,10 @@ changes:
       - emitter-resource-retirement
     formats: [cisco_asa]
     summary: Allows same-thread weak-reference retirement during ASA constructor binding under cyclic garbage collection, preserving rendering and checkpoint representation while removing a standard-suite deadlock.
+  - revision: 51
+    id: shared-edr-shell-history-eligibility
+    impact: none
+    domains:
+      - shell-history-policy
+    formats: [ecar, bash_history]
+    summary: Uses the shared case-insensitive noninteractive-account predicate for EDR shell-history file artifacts, preserving surrounding selection and random-number consumption.
