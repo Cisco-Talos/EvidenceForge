@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 47
+current_revision: 48
 history_start_revision: 1
-behavior_surface_sha256: "93c87a9dc15dd527b2dc41d4a9cbde5e5cbb9971cea06ac1e6bd8961a95807d5"
+behavior_surface_sha256: "bfb6f5cb93f045f2248734740261068f605a9fed3c42251275499a2b1031f0bf"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -501,3 +501,11 @@ changes:
       - emitter-spool
     formats: [windows, sysmon]
     summary: Composes identical protected spool and finalization operations over existing Windows and Sysmon owner state while retaining provider entrypoints and checkpoint representations.
+  - revision: 48
+    id: process-network-execution-ownership-cleanup
+    impact: none
+    domains:
+      - process-execution
+      - network-transaction
+    formats: []
+    summary: Moves unchanged protocol helpers and process execution into explicit services and decomposes network planning while retaining original transaction authority and recovery boundaries.

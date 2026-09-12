@@ -21,6 +21,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
     ActivityGenerator,
@@ -105,6 +108,7 @@ def _execute_rdp(
     generator = _generator(runtime, source_system=source_system, remote_ip=remote_ip)
     rng = _selection_rng()
     monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
     generator.execute_baseline_activity(_user(), _target(), _ACTIVITY_TIME, "logon")
     assert generator.generate_rdp_session.call_count == 1
     return generator, generator.generate_rdp_session.call_args.kwargs
@@ -232,6 +236,7 @@ def test_rdp_outer_skips_conditional_and_inadmissible_samples(
     self_generator._all_system_ips = [_target().ip]
     rng = _selection_rng()
     monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
     self_generator.execute_baseline_activity(_user(), _target(), _ACTIVITY_TIME, "logon")
     assert self_generator.generate_rdp_session.call_count == 0
     assert self_generator.generate_logon.call_count == 1

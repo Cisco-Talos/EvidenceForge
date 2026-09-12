@@ -14,13 +14,18 @@ def main() -> None:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        default=Path(__file__).parent / "fixtures" / "cleanup-typed-handlers.yaml",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     harness = Path(__file__).with_name("compare_cleanup_output.py")
-    fixture = Path(__file__).parent / "fixtures" / "cleanup-typed-handlers.yaml"
+    fixture = args.fixture
     for seed in (42, 137):
         for target in ("default", "sof-elk", "splunk"):
-            name = f"typed-handlers-{seed}-{target}"
+            name = f"{fixture.stem.removeprefix('cleanup-')}-{seed}-{target}"
             destination = args.output / name
             with (args.output / f"{name}.log").open("w") as log:
                 subprocess.run(

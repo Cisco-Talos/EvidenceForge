@@ -549,8 +549,8 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
             "_materialize_prepared_network_transaction",
         ): "materialize_connection_composite",
         (
-            "src/evidenceforge/generation/activity/generator.py",
-            "_execute_process_create_bundle",
+            "src/evidenceforge/generation/actions/process_execution_service.py",
+            "create",
         ): "materialize_process",
         (
             "src/evidenceforge/generation/activity/generator.py",

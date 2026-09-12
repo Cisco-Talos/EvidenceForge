@@ -10,6 +10,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
@@ -113,6 +116,7 @@ def test_exhausted_candidate_draws_fail_instead_of_reusing_a_live_tuple(
 
     generator = _generator()
     monkeypatch.setattr(generator_module, "_ephemeral_port", lambda _rng, _os: _SOURCE_PORT)
+    monkeypatch.setattr(network_planner_module, "_ephemeral_port", lambda _rng, _os: _SOURCE_PORT)
     first = generator.reserve_ssh_source_port(
         _SOURCE_IP,
         _TARGET_IP,
@@ -151,6 +155,11 @@ def test_reservation_avoids_a_tuple_already_owned_by_network_runtime(
     candidate_ports = iter((_SOURCE_PORT, _SOURCE_PORT + 1))
     monkeypatch.setattr(
         generator_module,
+        "_ephemeral_port",
+        lambda _rng, _os: next(candidate_ports),
+    )
+    monkeypatch.setattr(
+        network_planner_module,
         "_ephemeral_port",
         lambda _rng, _os: next(candidate_ports),
     )

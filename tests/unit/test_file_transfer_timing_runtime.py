@@ -311,7 +311,7 @@ def test_http_transfer_callers_inject_timing_and_direct_rng_inventory_is_zero() 
 
     generation_root = Path(file_transfer_module.__file__).parents[1]
     caller_counts = {
-        generation_root / "activity" / "generator.py": 2,
+        generation_root / "activity" / "network_http.py": 2,
         generation_root / "actions" / "proxy_transaction.py": 2,
     }
     for path, expected_count in caller_counts.items():

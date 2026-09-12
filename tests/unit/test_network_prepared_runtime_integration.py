@@ -42,6 +42,9 @@ from evidenceforge.events.dispatcher import (
     PreparedDispatchStateIntent,
     PreparedNetworkDependentBatch,
 )
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.actions import network_transaction_planner as planner_module
 from evidenceforge.generation.actions.command_effects import (
     PreparedExecutionEffectAuditCommit,
@@ -1042,11 +1045,25 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
     """The prepared region uses only revocable capabilities before authority commit."""
 
     tree = ast.parse(Path(planner_module.__file__).read_text(encoding="utf-8"))
-    execute = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute"
+    phase_names = (
+        "_resolve_network_request",
+        "_plan_network_transport",
+        "_plan_network_protocol_evidence",
+        "_prepare_network_publication",
+        "_commit_prepared_network",
+        "_publish_committed_network",
     )
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    execute = ast.Module(body=[functions[name] for name in phase_names], type_ignores=[])
+    coordinator_calls = [
+        node.func.attr
+        for node in ast.walk(functions["_execute"])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+    ]
+    assert coordinator_calls == list(phase_names)
 
     def call_name(call: ast.Call) -> str:
         def expression_name(expression: ast.expr) -> str:
@@ -1079,7 +1096,7 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         "executor.state_manager.set_current_time",
         "executor.state_manager.update_process_activity_time",
         "executor.state_manager.update_session_activity_time",
-        "generator_module._get_rng",
+        "_get_rng",
     }
     assert prepared_names.isdisjoint(forbidden)
 
@@ -1096,9 +1113,7 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         assert isinstance(runtime_keyword.value, ast.Attribute)
         assert runtime_keyword.value.attr == "_timing_runtime"
 
-    status_call = next(
-        node for node in prepared_calls if call_name(node) == "generator_module._get_http_status"
-    )
+    status_call = next(node for node in prepared_calls if call_name(node) == "_get_http_status")
     cache_keyword = next(
         keyword for keyword in status_call.keywords if keyword.arg == "publish_cache"
     )
@@ -1501,6 +1516,7 @@ def test_direct_dns_cache_deadline_is_bounded_by_network_runtime_window(
 
     generator, _state, _emitter = _generator()
     monkeypatch.setattr(generator_module, "_dns_base_ttl", lambda _query, _internal: 86_400)
+    monkeypatch.setattr(network_planner_module, "_dns_base_ttl", lambda _query, _internal: 86_400)
 
     generator.generate_connection(
         src_ip="10.0.0.10",
@@ -1580,6 +1596,9 @@ def test_rejected_command_http_root_without_prerequisite_is_owner_neutral(
     generator._ip_to_system = {source.ip: source}
     command_parser = Mock(wraps=generator_module._http_context_from_process_command)
     monkeypatch.setattr(generator_module, "_http_context_from_process_command", command_parser)
+    monkeypatch.setattr(
+        network_planner_module, "_http_context_from_process_command", command_parser
+    )
     capture = NetworkConnectionIdentityCapture()
     owner_rng = generator_module._get_rng()
     state_before = state.materialization_digest()

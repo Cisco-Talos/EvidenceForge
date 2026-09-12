@@ -23,6 +23,9 @@ import yaml
 from evidenceforge.config.schemas import ApplicationEntry
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation import world_model as world_model_module
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import application_catalog
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import ActivityGenerator
@@ -453,6 +456,7 @@ def test_activity_uses_exact_compiled_assignment_materialization_and_singleton(
     )
     _forbid_packaged_catalog(monkeypatch)
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(17))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(17))
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -481,6 +485,7 @@ def test_activity_bound_registry_never_falls_back_or_consumes_selection_rng(
     rng = random.Random(23)
     before = rng.getstate()
     monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -505,6 +510,7 @@ def test_activity_bound_registry_uses_compiled_macos_platform(
     )
     _forbid_packaged_catalog(monkeypatch)
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(37))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(37))
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -530,6 +536,7 @@ def test_activity_bound_registry_unsupported_host_fails_closed_without_rng(
     rng = random.Random(39)
     before = rng.getstate()
     monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -560,6 +567,7 @@ def test_activity_bound_registry_fails_closed_after_assignment_selection(
     generator, _state, user, system, generated = _activity_harness(registry)
     _forbid_packaged_catalog(monkeypatch)
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(41))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(41))
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -594,6 +602,7 @@ def test_activity_compiled_browser_affinity_is_bounded(
     generator, _state, user, system, generated = _activity_harness(registry)
     _forbid_packaged_catalog(monkeypatch)
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(seed))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(seed))
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 
@@ -620,6 +629,7 @@ def test_activity_without_registry_preserves_legacy_catalog_and_children(
         lambda *_args: calls.append("children") or [],
     )
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(29))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(29))
 
     generator.execute_baseline_activity(user, system, _ACTIVITY_TIME, "process_user_apps")
 

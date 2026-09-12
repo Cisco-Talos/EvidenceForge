@@ -22,6 +22,9 @@ from evidenceforge.generation.actions import (
     WebScanRequest,
     WorkstationLockResult,
 )
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
@@ -1940,6 +1943,7 @@ class TestDnsTunnelEventSpec:
         rng = random.Random(42)
         monkeypatch.setattr(storyline, "_get_rng", lambda: rng)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
         before = (
             state_manager.materialization_digest(),
             activity_generator._network_transaction_runtime.state_digest(),

@@ -25,19 +25,121 @@
 from __future__ import annotations
 
 import copy
+import logging
 import math
+import random
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DnsContext,
+    FileContext,
+    HttpContext,
+    NetworkTransactionDraft,
+    ProcessContext,
+)
+from evidenceforge.events.contracts import (
+    EffectOccurrenceKind,
+    OccurrenceRole,
+    OwnedEffectOccurrencePlan,
+    SemanticOccurrenceKey,
+)
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+)
+from evidenceforge.events.lifecycle import (
+    ActionLifecycleContext,
+)
+from evidenceforge.generation.actions import (
+    NetworkConnectionRequest,
+    http_response_parent_duration_floor,
+)
+from evidenceforge.generation.actions.network_connection import (
+    DeferredSessionNetworkAuthority,
+)
 from evidenceforge.generation.actions.network_identity import (
     _network_transport_occurrence_stable_id,
     _trusted_network_request_stable_id,
 )
+from evidenceforge.generation.activity.helpers import (
+    _get_os_category,
+    _get_rng,
+)
+from evidenceforge.generation.activity.network import (
+    REVERSE_DNS,
+    _generate_internal_hostname,
+    _generate_random_hostname,
+    _is_private_ip,
+)
+from evidenceforge.generation.activity.network_common import (
+    _extract_ssh_attempted_username,
+    _get_http_status,
+    _is_invalid_network_connection,
+    _is_modeled_local_ip,
+    _zeek_conn_observation_time,
+    get_timing_window,
+)
+from evidenceforge.generation.activity.network_dns import (
+    _dns_base_ttl,
+    _dns_is_internal_name,
+    _dns_observation_cache_key,
+    _dns_payload_accounting,
+)
+from evidenceforge.generation.activity.network_http import (
+    _apply_plaintext_http_policy,
+    _attach_http_file_transfers,
+    _http_context_flow_body_len,
+    _http_context_from_process_command,
+    _http_flow_payload_bytes,
+    _is_tool_http_user_agent,
+    _normalize_http_context_for_source_native_response,
+    _source_native_http_referrer,
+)
+from evidenceforge.generation.activity.network_ntp import (
+    _NTP_STRATUM_TIMING,
+    _ntp_observed_response_fields,
+    _ntp_parser_min_gap_seconds,
+    _ntp_payload_accounting,
+    _ntp_stratum_and_ref_id,
+    _select_public_ntp_ip,
+)
+from evidenceforge.generation.activity.network_proxy import (
+    _PROXY_CS_OVERHEAD,
+    _PROXY_SC_OVERHEAD,
+    _proxy_action_for_context,
+    _proxy_request_allows_cache_hit,
+    _proxy_time_taken_ms,
+)
+from evidenceforge.generation.activity.network_transport import (
+    _AUTO_WEIRD_ENABLED,
+    _TCP_CONN_ENTRIES,
+    _TCP_CONN_WEIGHTS,
+    _TCP_OVERHEAD_VALUES,
+    _TCP_OVERHEAD_WEIGHTS,
+    _UDP_CONN_ENTRIES,
+    _UDP_CONN_WEIGHTS,
+    _UDP_OVERHEAD_VALUES,
+    _UDP_OVERHEAD_WEIGHTS,
+    _align_tcp_network_payload_with_history,
+    _ephemeral_port,
+    _icmp_echo_duration,
+    _icmp_echo_payload_size,
+    _preserve_explicit_tcp_payload_overrides,
+    _tcp_ip_byte_count,
+    _tcp_packet_counts_from_payload_and_history,
+    _tcp_payload_bytes_consistent_with_history,
+    _tcp_success_history,
+)
 from evidenceforge.generation.http_channels import HttpChannelAffinity
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+)
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
     NetworkRuntimePointFamily,
@@ -52,6 +154,8 @@ from evidenceforge.generation.persistent_smb_continuation import (
 from evidenceforge.generation.state_manager import (
     ConnectionExistingSessionLifecycleDisposition,
     ConnectionMaterializationMode,
+    ProcessMaterializationPlan,
+    SessionMaterializationPlan,
 )
 from evidenceforge.generation.timing import (
     ClockWanderSpec,
@@ -66,13 +170,28 @@ from evidenceforge.generation.timing import (
     WeightedDistribution,
 )
 from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.models.scenario import (
+    User,
+)
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
+from .network_execution_stages import (
+    CommittedNetworkPublication,
+    PlannedNetworkEvidence,
+    PlannedNetworkTransport,
+    PreparedNetworkPublication,
+    ResolvedNetworkRequest,
+)
+
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from evidenceforge.events.base import OccurrenceBuilder
-    from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
-    from evidenceforge.generation.activity.generator import ActivityGenerator
+    from evidenceforge.generation.actions.network_connection import (
+        NetworkConnectionExecutor,
+        NetworkConnectionRequest,
+    )
 
 
 _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
@@ -612,7 +731,6 @@ class _PreparedNetworkBoundary:
             NetworkConnectionPublicationOutcome,
         )
         from evidenceforge.generation.lifecycle_authority import (
-            GeneratorLifecycleAuthority,
             LifecyclePreparedNetworkResult,
         )
 
@@ -744,7 +862,7 @@ class _PreparedNetworkBoundary:
     def begin(
         self,
         *,
-        executor: ActivityGenerator,
+        executor: NetworkConnectionExecutor,
         owner_rng: Any,
         stable_id: str,
         linearization_time: datetime,
@@ -888,15 +1006,14 @@ class _NetworkOccurrenceDraft:
     firewall: Any = None
     parent_action_group_id: str | None = None
 
-    def build_event(self, generator_module: ModuleType) -> OccurrenceBuilder:
+    def build_event(self) -> OccurrenceBuilder:
         """Construct the canonical event only after the transaction is frozen."""
 
         if self.network is None or self.network.transaction is None:
             raise ValueError("Cannot construct a network event before transaction finalization")
-        from evidenceforge.events.lifecycle import ActionLifecycleContext
 
         transaction = self.network.transaction
-        return generator_module.OccurrenceBuilder(
+        return OccurrenceBuilder(
             timestamp=self.timestamp,
             event_type="connection",
             src_host=self.src_host,
@@ -946,7 +1063,7 @@ class _HttpMultipartEndpointReadPlan:
 class NetworkTransactionPlanner:
     """Expand one network intent into a finalized canonical transaction."""
 
-    def __init__(self, executor: ActivityGenerator) -> None:
+    def __init__(self, executor: NetworkConnectionExecutor) -> None:
         self._executor = executor
         self._active_request: NetworkConnectionRequest | None = None
         self._active_request_stable_id = ""
@@ -966,25 +1083,17 @@ class NetworkTransactionPlanner:
         """
 
         from evidenceforge.events.base import OccurrenceBuilder
-        from evidenceforge.events.contexts import AuthContext, ProcessContext
+        from evidenceforge.events.contexts import ProcessContext
         from evidenceforge.events.contracts import (
             EventKind,
-            OccurrenceRole,
-            SemanticOccurrenceKey,
         )
-        from evidenceforge.events.identity import EventIdentityPlan
         from evidenceforge.events.lifecycle import ActionLifecycleContext
-        from evidenceforge.generation.actions.network_connection import (
-            DeferredSessionNetworkAuthority,
-        )
         from evidenceforge.generation.deferred_session_composition import DeferredSessionKind
         from evidenceforge.generation.deferred_session_preseal import (
             DeferredSessionDependentOccurrenceSpec,
         )
         from evidenceforge.generation.state_manager import (
             ConnectionExistingSessionPatch,
-            ProcessMaterializationPlan,
-            SessionMaterializationPlan,
         )
         from evidenceforge.generation.windows_tokens import windows_process_token_profile
 
@@ -1215,9 +1324,7 @@ class NetworkTransactionPlanner:
     ) -> bool:
         """Stage one resolver observation and report an overlapping visible TTL window."""
 
-        from evidenceforge.generation.activity import generator as generator_module
-
-        cache_key = generator_module._dns_observation_cache_key(src_ip, resolver_ip, dns)
+        cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
         if cache_key is None or not self._executor._dns_observation_time_is_visible(time):
             return False
         start = time.timestamp()
@@ -1781,7 +1888,6 @@ class NetworkTransactionPlanner:
     def _reconcile_application_payload(
         self,
         event: _NetworkOccurrenceDraft,
-        generator_module: ModuleType,
     ) -> bool:
         """Fit canonical application objects and framing inside transport payload."""
 
@@ -1792,7 +1898,7 @@ class NetworkTransactionPlanner:
         orig_floor = 0
         resp_floor = 0
         if event.http is not None:
-            http_orig, http_resp = generator_module._http_flow_payload_bytes(event.http)
+            http_orig, http_resp = _http_flow_payload_bytes(event.http)
             orig_floor = max(orig_floor, http_orig)
             resp_floor = max(resp_floor, http_resp)
 
@@ -1828,27 +1934,25 @@ class NetworkTransactionPlanner:
         if (network.orig_bytes, network.resp_bytes) == previous:
             return False
 
-        accounting_rng = generator_module.random.Random(
+        accounting_rng = random.Random(
             _stable_seed(
                 "network_application_payload_accounting:"
                 f"{network.src_ip}:{network.src_port}:{network.dst_ip}:{network.dst_port}:"
                 f"{network.protocol}:{network.zeek_uid}"
             )
         )
-        network.orig_pkts, network.resp_pkts = (
-            generator_module._tcp_packet_counts_from_payload_and_history(
-                network.orig_bytes,
-                network.resp_bytes,
-                network.history,
-                accounting_rng,
-            )
+        network.orig_pkts, network.resp_pkts = _tcp_packet_counts_from_payload_and_history(
+            network.orig_bytes,
+            network.resp_bytes,
+            network.history,
+            accounting_rng,
         )
-        network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+        network.orig_ip_bytes = _tcp_ip_byte_count(
             network.orig_bytes,
             network.orig_pkts,
             accounting_rng,
         )
-        network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+        network.resp_ip_bytes = _tcp_ip_byte_count(
             network.resp_bytes,
             network.resp_pkts,
             accounting_rng,
@@ -1872,11 +1976,9 @@ class NetworkTransactionPlanner:
             return None
 
         from evidenceforge.events.base import OccurrenceBuilder
-        from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
+        from evidenceforge.events.contexts import ProcessContext
         from evidenceforge.events.contracts import (
-            EffectOccurrenceKind,
             EffectOccurrenceOwner,
-            OwnedEffectOccurrencePlan,
         )
         from evidenceforge.generation.state_manager import ProcessActivityPatch
 
@@ -2329,18 +2431,35 @@ class NetworkTransactionPlanner:
         return result
 
     def _execute(
-        self,
-        request: NetworkConnectionRequest,
-        boundary: _PreparedNetworkBoundary,
+        self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
     ) -> str:
-        """Plan and publish one canonical network transaction."""
+        """Run explicit planning and publication phases under the original boundary."""
+        resolved = self._resolve_network_request(request, boundary)
+        if isinstance(resolved, str):
+            return resolved
+        transport = self._plan_network_transport(request, boundary, resolved)
+        if isinstance(transport, str):
+            return transport
+        evidence = self._plan_network_protocol_evidence(request, boundary, transport)
+        if isinstance(evidence, str):
+            return evidence
+        prepared = self._prepare_network_publication(request, boundary, evidence)
+        if isinstance(prepared, str):
+            return prepared
+        committed = self._commit_prepared_network(request, boundary, prepared)
+        if isinstance(committed, str):
+            return committed
+        return self._publish_committed_network(request, boundary, committed)
+
+    def _resolve_network_request(
+        self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
+    ) -> ResolvedNetworkRequest | str:
+        """Resolve the request and existing owners before opening transaction preparation."""
         from evidenceforge.generation.actions.proxy_transaction import (
-            ExplicitProxyOpenPreparation,
             ExplicitProxyRequestPreparation,
             ProxyTransactionActionBundle,
             ProxyTransactionRequest,
         )
-        from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
         stable_id = self._active_request_stable_id
@@ -2464,10 +2583,8 @@ class NetworkTransactionPlanner:
         caller_supplied_pid = pid > 0
         caller_owned_pid = pid if caller_supplied_pid else None
 
-        from evidenceforge.events.contexts import NetworkTransactionDraft
-
         if http is not None:
-            http = generator_module._normalize_http_context_for_source_native_response(http)
+            http = _normalize_http_context_for_source_native_response(http)
 
         caller_provided_duration = duration is not None
         caller_provided_conn_state = conn_state is not None
@@ -2490,10 +2607,8 @@ class NetworkTransactionPlanner:
             the generator's owner RNG is never advanced by discovery alone.
             """
 
-            return generator_module.random.Random(
-                generator_module._stable_seed(
-                    f"network_discovery:{purpose}:{stable_id}:{src_ip}:{dst_ip}"
-                )
+            return random.Random(
+                _stable_seed(f"network_discovery:{purpose}:{stable_id}:{src_ip}:{dst_ip}")
             )
 
         if http is not None and proto == "tcp" and conn_state is None:
@@ -2508,8 +2623,8 @@ class NetworkTransactionPlanner:
             )
 
             proto = pick_kerberos_transport(
-                generator_module.random.Random(
-                    generator_module._stable_seed(
+                random.Random(
+                    _stable_seed(
                         "kerberos_transport:"
                         f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
                     )
@@ -2518,8 +2633,8 @@ class NetworkTransactionPlanner:
         if service == "kerberos" and dst_port == 88 and proto == "tcp":
             deferred_kerberos_duration_proto = "tcp"
         if service == "kerberos" and dst_port == 88 and proto == "udp":
-            udp_kerberos_rng = generator_module.random.Random(
-                generator_module._stable_seed(
+            udp_kerberos_rng = random.Random(
+                _stable_seed(
                     "kerberos_udp_shape:"
                     f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
                 )
@@ -2545,7 +2660,7 @@ class NetworkTransactionPlanner:
         ):
             proc = executor.state_manager.get_process(source_system.hostname, pid)
             if proc is not None:
-                command_http = generator_module._http_context_from_process_command(
+                command_http = _http_context_from_process_command(
                     proc.image,
                     proc.command_line,
                     # Response sizing belongs to the prepared root. Parse the
@@ -2596,19 +2711,12 @@ class NetworkTransactionPlanner:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            reverse_hostname = executor._scenario_fqdn_for_ip(
-                dst_ip
-            ) or generator_module.REVERSE_DNS.get(dst_ip)
+            reverse_hostname = executor._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
             if reverse_hostname is not None:
                 hostname = reverse_hostname
                 hostname_from_reverse_dns = True
-            elif (
-                emit_dns
-                and proto == "tcp"
-                and dst_port not in (53,)
-                and generator_module._is_private_ip(dst_ip)
-            ):
-                hostname = generator_module._generate_internal_hostname(
+            elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
+                hostname = _generate_internal_hostname(
                     independent_discovery_rng("internal-hostname"),
                     dst_ip,
                     getattr(executor, "_ad_domain", "corp.local"),
@@ -2616,8 +2724,8 @@ class NetworkTransactionPlanner:
             else:
                 hostname = None
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
-            if not generator_module._is_private_ip(dst_ip):
-                hostname = generator_module._generate_random_hostname(
+            if not _is_private_ip(dst_ip):
+                hostname = _generate_random_hostname(
                     independent_discovery_rng("public-hostname"), dst_ip
                 )
 
@@ -2660,7 +2768,7 @@ class NetworkTransactionPlanner:
                 domain_ips = get_domain_ips(hostname)
                 if domain_ips and dst_ip not in domain_ips:
                     dst_ip = resolve_domain_ip(hostname, src_host=src_host)
-                elif not domain_ips and emit_dns and not generator_module._is_private_ip(dst_ip):
+                elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
                     dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         ad_domain = getattr(executor, "_ad_domain", "corp.local")
@@ -2670,9 +2778,7 @@ class NetworkTransactionPlanner:
             and not hostname.endswith(f".{ad_domain}")
             and not hostname.endswith(".local")
         )
-        proxyable_external_destination = (
-            hostname_is_external or not generator_module._is_private_ip(dst_ip)
-        )
+        proxyable_external_destination = hostname_is_external or not _is_private_ip(dst_ip)
         # Role-level server traffic often knows that a request occurred without
         # knowing which local process owned it. Preserve that uncertainty rather
         # than turning a sampled HTTP User-Agent into a fabricated PID-1 child.
@@ -2687,7 +2793,7 @@ class NetworkTransactionPlanner:
         linux_server_without_owner = (
             pid <= 0
             and source_system is not None
-            and generator_module._get_os_category(source_system.os) == "linux"
+            and _get_os_category(source_system.os) == "linux"
             and (
                 source_type in {"server", "domain_controller"}
                 or bool(
@@ -2736,12 +2842,12 @@ class NetworkTransactionPlanner:
             service = "http" if dst_port == 80 else "ssl"
         if proto == "udp" and dst_port == 123 and (service != "" or (resp_bytes or 0) > 0):
             service = "ntp"
-            if not generator_module._is_private_ip(dst_ip):
+            if not _is_private_ip(dst_ip):
                 from evidenceforge.generation.activity.network_params import public_ntp_ips
 
                 configured_ntp_ips = set(public_ntp_ips())
                 if configured_ntp_ips and dst_ip not in configured_ntp_ips:
-                    selected_ntp_ip = generator_module._select_public_ntp_ip(src_ip, dst_ip, time)
+                    selected_ntp_ip = _select_public_ntp_ip(src_ip, dst_ip, time)
                     if selected_ntp_ip:
                         dst_ip = selected_ntp_ip
 
@@ -2753,8 +2859,8 @@ class NetworkTransactionPlanner:
             and dns is None
             and http is None
             and not hostname_was_explicit
-            and generator_module._is_private_ip(src_ip)
-            and not generator_module._is_private_ip(dst_ip)
+            and _is_private_ip(src_ip)
+            and not _is_private_ip(dst_ip)
         ):
             hostname, dst_ip = executor._pick_profiled_tls_destination(
                 rng=independent_discovery_rng("profiled-tls-destination"),
@@ -2786,7 +2892,7 @@ class NetworkTransactionPlanner:
         )
 
         if http is not None and not preserve_http_outcome and not will_route_explicit_proxy:
-            http = generator_module._apply_plaintext_http_policy(
+            http = _apply_plaintext_http_policy(
                 http,
                 hostname=hostname,
                 dst_ip=dst_ip,
@@ -2845,8 +2951,8 @@ class NetworkTransactionPlanner:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
-        src_ip_is_local = generator_module._is_modeled_local_ip(executor, src_ip)
-        dst_ip_is_local = generator_module._is_modeled_local_ip(executor, dst_ip)
+        src_ip_is_local = _is_modeled_local_ip(executor, src_ip)
+        dst_ip_is_local = _is_modeled_local_ip(executor, dst_ip)
         force_visible_prereq_dns = (
             source_system is not None
             and "forward_proxy" in (source_system.roles or [])
@@ -2861,9 +2967,9 @@ class NetworkTransactionPlanner:
         local_only = src_ip == dst_ip
 
         # Validate connection is not fundamentally invalid (localhost, link-local, multicast)
-        is_invalid, reason = generator_module._is_invalid_network_connection(src_ip, dst_ip)
+        is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
-            generator_module.logger.warning(
+            logger.warning(
                 "Skipping invalid network connection: %s:%s -> %s:%s proto=%s. "
                 "Reason: %s. Check that all systems have routable IPs in the scenario.",
                 src_ip,
@@ -2957,17 +3063,15 @@ class NetworkTransactionPlanner:
             )
             if http.trans_depth > 1:
                 requested_http_time = http.canonical_request_time or time
-                http_timing = generator_module.get_timing_window(
+                http_timing = get_timing_window(
                     "source.zeek_http_request",
                     default_min_ms=1,
                     default_max_ms=35,
                     default_position="after",
                     default_class="same_observation",
                 )
-                request_file_floor = generator_module.http_response_parent_duration_floor(
-                    http.request_body_len or 0
-                )
-                response_file_floor = generator_module.http_response_parent_duration_floor(
+                request_file_floor = http_response_parent_duration_floor(http.request_body_len or 0)
+                response_file_floor = http_response_parent_duration_floor(
                     http.response_body_len or 0
                 )
                 required_http_duration = max(
@@ -2993,13 +3097,13 @@ class NetworkTransactionPlanner:
                     reused_http_conn_id = reuse.conn_id
                     http_application_layer_only = True
                     preserve_start_time = True
-                    http = generator_module.replace(
+                    http = replace(
                         http,
                         trans_depth=reuse.trans_depth,
                         canonical_request_time=reuse.canonical_request_time,
                     )
                 if not http_application_layer_only:
-                    http = generator_module.replace(http, trans_depth=1)
+                    http = replace(http, trans_depth=1)
 
         # A reused HTTPS request is an application child of the immutable TLS
         # parent. TLS-specific planning below excludes the child, while HTTP
@@ -3012,7 +3116,7 @@ class NetworkTransactionPlanner:
                 kerberos_dc_hostname = str(getattr(kerberos_dc, "hostname", "") or "")
 
         source_os_category = (
-            generator_module._get_os_category(resolved_source_system.os)
+            _get_os_category(resolved_source_system.os)
             if resolved_source_system is not None
             else "windows"
         )
@@ -3059,7 +3163,7 @@ class NetworkTransactionPlanner:
                 and resolved_process.start_time
                 and time < resolved_process.start_time
             ):
-                generator_module.logger.debug(
+                logger.debug(
                     "Dropping future connection PID attribution: "
                     "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
                     resolved_source_system.hostname,
@@ -3077,7 +3181,7 @@ class NetworkTransactionPlanner:
                 pid,
                 resolved_process.start_time if resolved_process is not None else None,
             ):
-                generator_module.logger.debug(
+                logger.debug(
                     "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
                     resolved_source_system.hostname,
                     pid,
@@ -3097,7 +3201,7 @@ class NetworkTransactionPlanner:
                 and owning_end_plan.is_authoritative
                 and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
             ):
-                generator_module.logger.debug(
+                logger.debug(
                     "Dropping connection PID after its owning session ended: "
                     "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
                     resolved_source_system.hostname,
@@ -3119,7 +3223,7 @@ class NetworkTransactionPlanner:
                     time,
                 )
             ):
-                generator_module.logger.debug(
+                logger.debug(
                     "Dropping expired foreground process attribution: "
                     "host=%s pid=%s image=%s dst=%s:%s",
                     resolved_source_system.hostname,
@@ -3132,7 +3236,7 @@ class NetworkTransactionPlanner:
                 resolved_process = None
                 drop_explicit_pid_without_inference = caller_supplied_pid
             elif resolved_process is None and pid != 4:
-                generator_module.logger.debug(
+                logger.debug(
                     "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
                     resolved_source_system.hostname,
                     pid,
@@ -3222,15 +3326,13 @@ class NetworkTransactionPlanner:
             and dst_port == 22
             and resolved_process is not None
         ):
-            ssh_attempted_username = generator_module._extract_ssh_attempted_username(
-                resolved_process.command_line
-            )
+            ssh_attempted_username = _extract_ssh_attempted_username(resolved_process.command_line)
 
         # Preserve the initiating application on the canonical DNS occurrence
         # after connection ownership has been resolved. The DNS bundle still
         # assigns resolver-service ownership to its separate UDP/53 transport.
         if force_visible_prereq_dns:
-            planned_query_time = time - generator_module.timedelta(seconds=2)
+            planned_query_time = time - timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
@@ -3273,7 +3375,7 @@ class NetworkTransactionPlanner:
             and src_ip_is_local
             and not suppress_prereq_dns
         ):
-            planned_query_time = time - generator_module.timedelta(seconds=2)
+            planned_query_time = time - timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
@@ -3297,9 +3399,163 @@ class NetworkTransactionPlanner:
         if resolved_source_system:
             state_source_hostname = executor._build_host_context(resolved_source_system).fqdn
 
-        # Phase 1: Open the sole State/RNG/runtime/timing preparation. All explicit
-        # DNS, owner, and Kerberos prerequisites above are already committed.
-        owner_rng = generator_module._get_rng()
+        return ResolvedNetworkRequest(
+            automatic_source_port=automatic_source_port,
+            caller_owned_pid=caller_owned_pid,
+            caller_provided_conn_state=caller_provided_conn_state,
+            caller_provided_duration=caller_provided_duration,
+            caller_provided_payload=caller_provided_payload,
+            command_http_needs_response_size=command_http_needs_response_size,
+            conn_state=conn_state,
+            deferred_authority=deferred_authority,
+            deferred_kerberos_duration_proto=deferred_kerberos_duration_proto,
+            dns=dns,
+            dns_server_ips=dns_server_ips,
+            dst_ip=dst_ip,
+            dst_ip_is_local=dst_ip_is_local,
+            dst_port=dst_port,
+            duration=duration,
+            email=email,
+            explicit_orig_bytes=explicit_orig_bytes,
+            explicit_proxy_request_preparation=explicit_proxy_request_preparation,
+            explicit_resp_bytes=explicit_resp_bytes,
+            file_transfer=file_transfer,
+            file_transfers=file_transfers,
+            firewall=firewall,
+            hostname=hostname,
+            hostname_was_explicit=hostname_was_explicit,
+            http=http,
+            http_application_layer_only=http_application_layer_only,
+            http_channel_affinity=http_channel_affinity,
+            ids_alerts=ids_alerts,
+            is_fw_deny=is_fw_deny,
+            is_tcp_probe=is_tcp_probe,
+            kerberos_dc_hostname=kerberos_dc_hostname,
+            kerberos_prerequisite_success=kerberos_prerequisite_success,
+            local_only=local_only,
+            ntp_timing=ntp_timing,
+            ocsp=ocsp,
+            orig_bytes=orig_bytes,
+            packet_overhead_bytes=packet_overhead_bytes,
+            parent_action_group_id=parent_action_group_id,
+            pe=pe,
+            persistent_smb_application_intent=persistent_smb_application_intent,
+            persistent_smb_file_journal=persistent_smb_file_journal,
+            persistent_smb_intent=persistent_smb_intent,
+            persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+            persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
+            pid=pid,
+            preserve_explicit_payload=preserve_explicit_payload,
+            preserve_start_time=preserve_start_time,
+            process_image=process_image,
+            proto=proto,
+            proxy=proxy,
+            resolved_process=resolved_process,
+            resolved_source_system=resolved_source_system,
+            resp_bytes=resp_bytes,
+            responding_pid=responding_pid,
+            reused_http_conn_id=reused_http_conn_id,
+            reused_http_uid=reused_http_uid,
+            service=service,
+            smtp=smtp,
+            source_os_category=source_os_category,
+            source_system=source_system,
+            src_ip=src_ip,
+            src_ip_is_local=src_ip_is_local,
+            src_port=src_port,
+            ssh_attempted_username=ssh_attempted_username,
+            stable_id=stable_id,
+            state_source_hostname=state_source_hostname,
+            state_source_system=state_source_system,
+            suppress_application_side_effects=suppress_application_side_effects,
+            time=time,
+            tls_hostname=tls_hostname,
+            x509=x509,
+            x509_chain=x509_chain,
+        )
+
+    def _plan_network_transport(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: ResolvedNetworkRequest,
+    ) -> PlannedNetworkTransport | str:
+        """Plan transport identity, accounting, and the occurrence draft under one boundary."""
+        executor = self._executor
+        automatic_source_port = stage_input.automatic_source_port
+        caller_owned_pid = stage_input.caller_owned_pid
+        caller_provided_conn_state = stage_input.caller_provided_conn_state
+        caller_provided_duration = stage_input.caller_provided_duration
+        caller_provided_payload = stage_input.caller_provided_payload
+        command_http_needs_response_size = stage_input.command_http_needs_response_size
+        conn_state = stage_input.conn_state
+        deferred_authority = stage_input.deferred_authority
+        deferred_kerberos_duration_proto = stage_input.deferred_kerberos_duration_proto
+        dns = stage_input.dns
+        dns_server_ips = stage_input.dns_server_ips
+        dst_ip = stage_input.dst_ip
+        dst_ip_is_local = stage_input.dst_ip_is_local
+        dst_port = stage_input.dst_port
+        duration = stage_input.duration
+        email = stage_input.email
+        explicit_orig_bytes = stage_input.explicit_orig_bytes
+        explicit_proxy_request_preparation = stage_input.explicit_proxy_request_preparation
+        explicit_resp_bytes = stage_input.explicit_resp_bytes
+        file_transfer = stage_input.file_transfer
+        file_transfers = stage_input.file_transfers
+        firewall = stage_input.firewall
+        hostname = stage_input.hostname
+        hostname_was_explicit = stage_input.hostname_was_explicit
+        http = stage_input.http
+        http_application_layer_only = stage_input.http_application_layer_only
+        http_channel_affinity = stage_input.http_channel_affinity
+        ids_alerts = stage_input.ids_alerts
+        is_fw_deny = stage_input.is_fw_deny
+        is_tcp_probe = stage_input.is_tcp_probe
+        kerberos_dc_hostname = stage_input.kerberos_dc_hostname
+        kerberos_prerequisite_success = stage_input.kerberos_prerequisite_success
+        local_only = stage_input.local_only
+        ntp_timing = stage_input.ntp_timing
+        ocsp = stage_input.ocsp
+        orig_bytes = stage_input.orig_bytes
+        packet_overhead_bytes = stage_input.packet_overhead_bytes
+        parent_action_group_id = stage_input.parent_action_group_id
+        pe = stage_input.pe
+        persistent_smb_application_intent = stage_input.persistent_smb_application_intent
+        persistent_smb_file_journal = stage_input.persistent_smb_file_journal
+        persistent_smb_intent = stage_input.persistent_smb_intent
+        persistent_smb_terminal_authority = stage_input.persistent_smb_terminal_authority
+        persistent_smb_terminal_continuation = stage_input.persistent_smb_terminal_continuation
+        pid = stage_input.pid
+        preserve_explicit_payload = stage_input.preserve_explicit_payload
+        preserve_start_time = stage_input.preserve_start_time
+        process_image = stage_input.process_image
+        proto = stage_input.proto
+        proxy = stage_input.proxy
+        resolved_process = stage_input.resolved_process
+        resolved_source_system = stage_input.resolved_source_system
+        resp_bytes = stage_input.resp_bytes
+        responding_pid = stage_input.responding_pid
+        reused_http_conn_id = stage_input.reused_http_conn_id
+        reused_http_uid = stage_input.reused_http_uid
+        service = stage_input.service
+        smtp = stage_input.smtp
+        source_os_category = stage_input.source_os_category
+        source_system = stage_input.source_system
+        src_ip = stage_input.src_ip
+        src_ip_is_local = stage_input.src_ip_is_local
+        src_port = stage_input.src_port
+        ssh_attempted_username = stage_input.ssh_attempted_username
+        stable_id = stage_input.stable_id
+        state_source_hostname = stage_input.state_source_hostname
+        state_source_system = stage_input.state_source_system
+        suppress_application_side_effects = stage_input.suppress_application_side_effects
+        time = stage_input.time
+        tls_hostname = stage_input.tls_hostname
+        x509 = stage_input.x509
+        x509_chain = stage_input.x509_chain
+
+        owner_rng = _get_rng()
         network_preparation = boundary.begin(
             executor=executor,
             owner_rng=owner_rng,
@@ -3356,7 +3612,7 @@ class NetworkTransactionPlanner:
             )
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
             ad_domain = getattr(executor, "_ad_domain", "corp.local")
-            dns.AA = generator_module._dns_is_internal_name(dns.query or "", ad_domain)
+            dns.AA = _dns_is_internal_name(dns.query or "", ad_domain)
             if not is_fw_deny:
                 dns_has_protocol_response = bool(
                     dns.rtt is not None
@@ -3367,9 +3623,9 @@ class NetworkTransactionPlanner:
                 if dns_has_protocol_response and dns.rtt is None:
                     dns.rtt = self._dns_rtt_seconds(
                         request,
-                        is_public_resolver=not generator_module._is_private_ip(dst_ip),
+                        is_public_resolver=not _is_private_ip(dst_ip),
                     )
-                duration, orig_bytes, resp_bytes = generator_module._dns_payload_accounting(
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
                     dns=dns,
                     duration=duration,
                     orig_bytes=orig_bytes,
@@ -3380,11 +3636,9 @@ class NetworkTransactionPlanner:
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             if hostname and resp_bytes is not None and resp_bytes > 0:
                 dns_query = (
-                    hostname
-                    or generator_module.REVERSE_DNS.get(dst_ip)
-                    or f"host-{dst_ip.replace('.', '-')}"
+                    hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
                 )
-                fallback_dns = generator_module.DnsContext(
+                fallback_dns = DnsContext(
                     query=dns_query,
                     trans_id=0,
                     qtype=1,
@@ -3394,7 +3648,7 @@ class NetworkTransactionPlanner:
                     answers=[dst_ip],
                     rtt=duration,
                 )
-                duration, orig_bytes, resp_bytes = generator_module._dns_payload_accounting(
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
                     dns=fallback_dns,
                     duration=duration,
                     orig_bytes=orig_bytes,
@@ -3433,7 +3687,6 @@ class NetworkTransactionPlanner:
                 pid = -1
                 resolved_process = None
                 process_image = None
-                suppress_source_pid_inference = True
             else:
                 time = adjusted_time
         if src_port is None:
@@ -3448,7 +3701,7 @@ class NetworkTransactionPlanner:
             # scopes. The runtime replaces this provisional value with the
             # atomically leased port after the interval is final.
             if src_port is None:
-                src_port = generator_module._ephemeral_port(rng, source_os_category)
+                src_port = _ephemeral_port(rng, source_os_category)
 
         committed_suppressed = False
         if (
@@ -3460,9 +3713,9 @@ class NetworkTransactionPlanner:
         ):
             ad_domain = getattr(executor, "_ad_domain", "corp.local")
             dns_cache_key = (src_ip, dst_ip, hostname, "A")
-            cache_ttl = generator_module._dns_base_ttl(
+            cache_ttl = _dns_base_ttl(
                 hostname,
-                generator_module._dns_is_internal_name(hostname, ad_domain),
+                _dns_is_internal_name(hostname, ad_domain),
             )
             cached = network_preparation.read_point(
                 NetworkRuntimePointFamily.DIRECT_DNS_TTL,
@@ -3519,20 +3772,20 @@ class NetworkTransactionPlanner:
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
             if resp_bytes and resp_bytes > 0:
-                request_size = generator_module._icmp_echo_payload_size(rng, orig_bytes)
+                request_size = _icmp_echo_payload_size(rng, orig_bytes)
                 response_size = request_size
                 orig_bytes = request_size
                 resp_bytes = response_size
-                duration = generator_module._icmp_echo_duration(
+                duration = _icmp_echo_duration(
                     rng,
                     duration,
                     timing_runtime=self._timing_runtime,
                     stable_id=f"{stable_id}:{conn_id}:icmp-echo-duration",
                 )
             else:
-                orig_bytes = generator_module._icmp_echo_payload_size(rng, orig_bytes)
+                orig_bytes = _icmp_echo_payload_size(rng, orig_bytes)
                 resp_bytes = 0
-                duration = generator_module._icmp_echo_duration(
+                duration = _icmp_echo_duration(
                     rng,
                     duration,
                     timing_runtime=self._timing_runtime,
@@ -3556,7 +3809,7 @@ class NetworkTransactionPlanner:
                 }.get(conn_state, "Dd" if resp_bytes else "D")
             else:
                 if conn_state == "SF":
-                    history = generator_module._tcp_success_history(rng)
+                    history = _tcp_success_history(rng)
                 else:
                     history = {
                         "REJ": "Sr",
@@ -3567,7 +3820,7 @@ class NetworkTransactionPlanner:
                         "RSTO": "ShADaR",
                         "RSTR": "ShADadr",
                         "S1": "Sh",
-                    }.get(conn_state, generator_module._tcp_success_history(rng))
+                    }.get(conn_state, _tcp_success_history(rng))
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
@@ -3624,8 +3877,8 @@ class NetworkTransactionPlanner:
                 conn_state, history = "SF", "Dd"
             else:
                 entry = rng.choices(
-                    generator_module._UDP_CONN_ENTRIES,
-                    weights=generator_module._UDP_CONN_WEIGHTS,
+                    _UDP_CONN_ENTRIES,
+                    weights=_UDP_CONN_WEIGHTS,
                     k=1,
                 )[0]
                 conn_state, _, history = entry
@@ -3634,12 +3887,12 @@ class NetworkTransactionPlanner:
                 resp_bytes = 0
         else:
             if duration is not None:
-                tcp_entries = generator_module._TCP_CONN_ENTRIES
-                tcp_weights = generator_module._TCP_CONN_WEIGHTS
+                tcp_entries = _TCP_CONN_ENTRIES
+                tcp_weights = _TCP_CONN_WEIGHTS
                 if caller_provided_payload:
                     candidates = [
                         entry
-                        for entry in generator_module._TCP_CONN_ENTRIES
+                        for entry in _TCP_CONN_ENTRIES
                         if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
                     ]
                     if candidates:
@@ -3717,8 +3970,8 @@ class NetworkTransactionPlanner:
             # at least a ClientHello and server handshake payload at conn.log
             # accounting level, even when the logical request body is empty.
             if http is not None:
-                request_body_len = generator_module._http_context_flow_body_len(http, "request")
-                response_body_len = generator_module._http_context_flow_body_len(http, "response")
+                request_body_len = _http_context_flow_body_len(http, "request")
+                response_body_len = _http_context_flow_body_len(http, "response")
                 request_records = max(1, (request_body_len + 16_383) // 16_384)
                 response_records = max(1, (response_body_len + 16_383) // 16_384)
                 orig_bytes = (
@@ -3790,10 +4043,10 @@ class NetworkTransactionPlanner:
                 if proto == "udp":
                     history = "Dd" * kerberos_audit_count
                 else:
-                    history = generator_module._tcp_success_history(rng)
+                    history = _tcp_success_history(rng)
 
         if proto == "tcp":
-            orig_bytes, resp_bytes = generator_module._tcp_payload_bytes_consistent_with_history(
+            orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
                 orig_bytes,
                 resp_bytes,
                 history,
@@ -3810,12 +4063,8 @@ class NetworkTransactionPlanner:
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
-            orig_pkts = max(
-                history.count("D"), generator_module.math.ceil((orig_bytes or 0) / 1232)
-            )
-            resp_pkts = max(
-                history.count("d"), generator_module.math.ceil((resp_bytes or 0) / 1232)
-            )
+            orig_pkts = max(history.count("D"), math.ceil((orig_bytes or 0) / 1232))
+            resp_pkts = max(history.count("d"), math.ceil((resp_bytes or 0) / 1232))
             if orig_pkts > 0 and orig_bytes:
                 orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
@@ -3823,7 +4072,7 @@ class NetworkTransactionPlanner:
             elif resp_pkts == 0:
                 resp_bytes = 0
         elif proto == "tcp" and history and history != "-":
-            orig_pkts, resp_pkts = generator_module._tcp_packet_counts_from_payload_and_history(
+            orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
                 orig_bytes,
                 resp_bytes,
                 history,
@@ -3843,7 +4092,7 @@ class NetworkTransactionPlanner:
             resp_pkts = max(resp_pkts, kerberos_audit_count)
 
         if proto == "udp" and dst_port == 123:
-            orig_bytes, resp_bytes, duration = generator_module._ntp_payload_accounting(
+            orig_bytes, resp_bytes, duration = _ntp_payload_accounting(
                 src_ip=src_ip,
                 dst_ip=dst_ip,
                 time=time,
@@ -3856,8 +4105,8 @@ class NetworkTransactionPlanner:
             orig_pkts = max(1, (history or "").count("D"))
             resp_pkts = (history or "").count("d") if (resp_bytes or 0) > 0 else 0
             if conn_state == "SF" and resp_pkts > 0 and (resp_bytes or 0) > 0:
-                ntp_stratum, _ntp_ref_id = generator_module._ntp_stratum_and_ref_id(dst_ip)
-                median_rtt_ms, rtt_sigma = generator_module._NTP_STRATUM_TIMING.get(
+                ntp_stratum, _ntp_ref_id = _ntp_stratum_and_ref_id(dst_ip)
+                median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
                     ntp_stratum,
                     (10.0, 0.7),
                 )
@@ -3874,29 +4123,29 @@ class NetworkTransactionPlanner:
             overhead = packet_overhead_bytes
         elif proto == "udp":
             overhead = rng.choices(
-                generator_module._UDP_OVERHEAD_VALUES,
-                weights=generator_module._UDP_OVERHEAD_WEIGHTS,
+                _UDP_OVERHEAD_VALUES,
+                weights=_UDP_OVERHEAD_WEIGHTS,
                 k=1,
             )[0]
         elif proto == "icmp":
             overhead = 28
         else:
             overhead = rng.choices(
-                generator_module._TCP_OVERHEAD_VALUES,
-                weights=generator_module._TCP_OVERHEAD_WEIGHTS,
+                _TCP_OVERHEAD_VALUES,
+                weights=_TCP_OVERHEAD_WEIGHTS,
                 k=1,
             )[0]
         # Zeek count fields are source-observed IP payload totals. TCP gets
         # per-side header/control texture; UDP/ICMP keeps protocol-specific
         # fixed accounting for source-native packet sizes.
         if proto == "tcp":
-            orig_ip_bytes = generator_module._tcp_ip_byte_count(
+            orig_ip_bytes = _tcp_ip_byte_count(
                 orig_bytes,
                 orig_pkts,
                 rng,
                 overhead_override=packet_overhead_bytes,
             )
-            resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            resp_ip_bytes = _tcp_ip_byte_count(
                 resp_bytes,
                 resp_pkts,
                 rng,
@@ -3919,7 +4168,7 @@ class NetworkTransactionPlanner:
                 rng.randint(500, 50000)
 
         if not preserve_start_time:
-            time = generator_module._zeek_conn_observation_time(
+            time = _zeek_conn_observation_time(
                 time,
                 src_ip,
                 src_port,
@@ -3967,7 +4216,7 @@ class NetworkTransactionPlanner:
                     and final_end_plan.is_authoritative
                     and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
                 ):
-                    generator_module.logger.debug(
+                    logger.debug(
                         "Dropping connection PID after source timing crossed its session end: "
                         "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
                         resolved_source_system.hostname,
@@ -4046,7 +4295,7 @@ class NetworkTransactionPlanner:
                 resolved_source_system.hostname, pid
             )
             if running is not None:
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid,
                     image=running.image,
@@ -4059,7 +4308,7 @@ class NetworkTransactionPlanner:
                     ),
                 )
             elif process_image:
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=pid,
                     parent_pid=0,
                     image=process_image,
@@ -4166,7 +4415,160 @@ class NetworkTransactionPlanner:
             ),
         )
 
-        # Caller-provided context overrides
+        return PlannedNetworkTransport(
+            automatic_source_port=automatic_source_port,
+            caller_owned_pid=caller_owned_pid,
+            caller_provided_conn_state=caller_provided_conn_state,
+            canonical_terminal_duration=canonical_terminal_duration,
+            committed_suppressed=committed_suppressed,
+            conn_state=conn_state,
+            deferred_authority=deferred_authority,
+            dns=dns,
+            dns_server_ips=dns_server_ips,
+            dst_host_ctx=dst_host_ctx,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            duration=duration,
+            email=email,
+            event=event,
+            explicit_orig_bytes=explicit_orig_bytes,
+            explicit_resp_bytes=explicit_resp_bytes,
+            file_transfer=file_transfer,
+            file_transfers=file_transfers,
+            firewall=firewall,
+            generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+            hostname=hostname,
+            hostname_was_explicit=hostname_was_explicit,
+            http=http,
+            http_application_layer_only=http_application_layer_only,
+            http_channel_affinity=http_channel_affinity,
+            ids_alerts=ids_alerts,
+            is_fw_deny=is_fw_deny,
+            kerberos_prerequisite_success=kerberos_prerequisite_success,
+            local_only=local_only,
+            network_preparation=network_preparation,
+            ntp_timing=ntp_timing,
+            ocsp=ocsp,
+            orig_bytes=orig_bytes,
+            overhead=overhead,
+            owner_rng=owner_rng,
+            parent_action_group_id=parent_action_group_id,
+            pe=pe,
+            persistent_smb_application_intent=persistent_smb_application_intent,
+            persistent_smb_file_journal=persistent_smb_file_journal,
+            persistent_smb_intent=persistent_smb_intent,
+            persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+            persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
+            prepare_generic_smb_responder=prepare_generic_smb_responder,
+            prepare_generic_ssh_responder=prepare_generic_ssh_responder,
+            prepared_responder=prepared_responder,
+            preserve_explicit_payload=preserve_explicit_payload,
+            preserve_start_time=preserve_start_time,
+            proto=proto,
+            proxy=proxy,
+            resolved_source_system=resolved_source_system,
+            resp_bytes=resp_bytes,
+            responding_pid=responding_pid,
+            rng=rng,
+            service=service,
+            smtp=smtp,
+            source_os_category=source_os_category,
+            source_system=source_system,
+            src_ip=src_ip,
+            src_port=src_port,
+            ssh_attempted_username=ssh_attempted_username,
+            stable_id=stable_id,
+            state_source_hostname=state_source_hostname,
+            state_source_system=state_source_system,
+            suppress_application_side_effects=suppress_application_side_effects,
+            target_system=target_system,
+            time=time,
+            tls_hostname=tls_hostname,
+            uid=uid,
+            x509=x509,
+            x509_chain=x509_chain,
+        )
+
+    def _plan_network_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PlannedNetworkTransport,
+    ) -> PlannedNetworkEvidence | str:
+        """Plan protocol evidence and canonical timing before preparing publication."""
+        executor = self._executor
+        automatic_source_port = stage_input.automatic_source_port
+        caller_owned_pid = stage_input.caller_owned_pid
+        caller_provided_conn_state = stage_input.caller_provided_conn_state
+        canonical_terminal_duration = stage_input.canonical_terminal_duration
+        committed_suppressed = stage_input.committed_suppressed
+        conn_state = stage_input.conn_state
+        deferred_authority = stage_input.deferred_authority
+        dns = stage_input.dns
+        dns_server_ips = stage_input.dns_server_ips
+        dst_host_ctx = stage_input.dst_host_ctx
+        dst_ip = stage_input.dst_ip
+        dst_port = stage_input.dst_port
+        duration = stage_input.duration
+        email = stage_input.email
+        event = stage_input.event
+        explicit_orig_bytes = stage_input.explicit_orig_bytes
+        explicit_resp_bytes = stage_input.explicit_resp_bytes
+        file_transfer = stage_input.file_transfer
+        file_transfers = stage_input.file_transfers
+        firewall = stage_input.firewall
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        hostname = stage_input.hostname
+        hostname_was_explicit = stage_input.hostname_was_explicit
+        http = stage_input.http
+        http_application_layer_only = stage_input.http_application_layer_only
+        http_channel_affinity = stage_input.http_channel_affinity
+        ids_alerts = stage_input.ids_alerts
+        is_fw_deny = stage_input.is_fw_deny
+        kerberos_prerequisite_success = stage_input.kerberos_prerequisite_success
+        local_only = stage_input.local_only
+        network_preparation = stage_input.network_preparation
+        ntp_timing = stage_input.ntp_timing
+        ocsp = stage_input.ocsp
+        orig_bytes = stage_input.orig_bytes
+        overhead = stage_input.overhead
+        owner_rng = stage_input.owner_rng
+        parent_action_group_id = stage_input.parent_action_group_id
+        pe = stage_input.pe
+        persistent_smb_application_intent = stage_input.persistent_smb_application_intent
+        persistent_smb_file_journal = stage_input.persistent_smb_file_journal
+        persistent_smb_intent = stage_input.persistent_smb_intent
+        persistent_smb_terminal_authority = stage_input.persistent_smb_terminal_authority
+        persistent_smb_terminal_continuation = stage_input.persistent_smb_terminal_continuation
+        prepare_generic_smb_responder = stage_input.prepare_generic_smb_responder
+        prepare_generic_ssh_responder = stage_input.prepare_generic_ssh_responder
+        prepared_responder = stage_input.prepared_responder
+        preserve_explicit_payload = stage_input.preserve_explicit_payload
+        preserve_start_time = stage_input.preserve_start_time
+        proto = stage_input.proto
+        proxy = stage_input.proxy
+        resolved_source_system = stage_input.resolved_source_system
+        resp_bytes = stage_input.resp_bytes
+        responding_pid = stage_input.responding_pid
+        rng = stage_input.rng
+        service = stage_input.service
+        smtp = stage_input.smtp
+        source_os_category = stage_input.source_os_category
+        source_system = stage_input.source_system
+        src_ip = stage_input.src_ip
+        src_port = stage_input.src_port
+        ssh_attempted_username = stage_input.ssh_attempted_username
+        stable_id = stage_input.stable_id
+        state_source_hostname = stage_input.state_source_hostname
+        state_source_system = stage_input.state_source_system
+        suppress_application_side_effects = stage_input.suppress_application_side_effects
+        target_system = stage_input.target_system
+        time = stage_input.time
+        tls_hostname = stage_input.tls_hostname
+        uid = stage_input.uid
+        x509 = stage_input.x509
+        x509_chain = stage_input.x509_chain
+
         if ids_alerts:
             event.ids_alerts = list(ids_alerts)
         if email is not None:
@@ -4256,12 +4658,8 @@ class NetworkTransactionPlanner:
             and (hostname_was_explicit or dst_ip in dns_server_ips)
             and not is_fw_deny
         ):
-            dns_query = (
-                hostname
-                or generator_module.REVERSE_DNS.get(dst_ip)
-                or f"host-{dst_ip.replace('.', '-')}"
-            )
-            dns_is_internal = generator_module._dns_is_internal_name(
+            dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+            dns_is_internal = _dns_is_internal_name(
                 dns_query,
                 getattr(executor, "_ad_domain", ""),
             )
@@ -4269,9 +4667,9 @@ class NetworkTransactionPlanner:
             dns_answers = [dst_ip] if had_response_payload else []
             synthesized_rtt = self._dns_rtt_seconds(
                 request,
-                is_public_resolver=not generator_module._is_private_ip(dst_ip),
+                is_public_resolver=not _is_private_ip(dst_ip),
             )
-            event.dns = generator_module.DnsContext(
+            event.dns = DnsContext(
                 query=dns_query,
                 trans_id=rng.randint(1, 65535),
                 qtype=1,
@@ -4285,7 +4683,7 @@ class NetworkTransactionPlanner:
                     qtype_name="A",
                     answers=dns_answers,
                     is_internal=dns_is_internal,
-                    base_ttl=generator_module._dns_base_ttl(dns_query, dns_is_internal),
+                    base_ttl=_dns_base_ttl(dns_query, dns_is_internal),
                     time=time,
                 ),
                 rtt=synthesized_rtt,
@@ -4331,7 +4729,7 @@ class NetworkTransactionPlanner:
             and service in ("ssl", "http")
             and dst_port in (80, 443)
             and event.proxy is None
-            and not generator_module._is_private_ip(dst_ip)
+            and not _is_private_ip(dst_ip)
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         ):
             proxy_routes = getattr(executor, "_proxy_routes", {})
@@ -4350,9 +4748,9 @@ class NetworkTransactionPlanner:
                 if proxy_hostname is None and dns is not None and dns.query:
                     proxy_hostname = dns.query
                 if proxy_hostname is None:
-                    proxy_hostname = generator_module.REVERSE_DNS.get(dst_ip)
+                    proxy_hostname = REVERSE_DNS.get(dst_ip)
                 if proxy_hostname is None:
-                    proxy_hostname = generator_module._generate_random_hostname(rng, dst_ip)
+                    proxy_hostname = _generate_random_hostname(rng, dst_ip)
                 # Suppressed hostname → use raw IP for proxy logging
                 if proxy_hostname == "":
                     proxy_hostname = dst_ip
@@ -4389,11 +4787,7 @@ class NetworkTransactionPlanner:
                     proxy_referrer = event.http.referrer
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
-                    _src_os = (
-                        generator_module._get_os_category(source_system.os)
-                        if source_system
-                        else None
-                    )
+                    _src_os = _get_os_category(source_system.os) if source_system else None
                     (
                         path,
                         proxy_content_type,
@@ -4417,11 +4811,7 @@ class NetworkTransactionPlanner:
                         else pick_referrer(rng, proxy_hostname, context="general", port=443)
                     )
                 else:
-                    _src_os = (
-                        generator_module._get_os_category(source_system.os)
-                        if source_system
-                        else None
-                    )
+                    _src_os = _get_os_category(source_system.os) if source_system else None
                     (
                         path,
                         proxy_content_type,
@@ -4447,7 +4837,7 @@ class NetworkTransactionPlanner:
                 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
                 apply_domain_user_agent = event.http is None or (
-                    not generator_module._is_tool_http_user_agent(event.http.user_agent)
+                    not _is_tool_http_user_agent(event.http.user_agent)
                     and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
                 )
                 user_agent = executor._proxy_user_agent_for_context(
@@ -4460,14 +4850,14 @@ class NetworkTransactionPlanner:
                     apply_domain_override=apply_domain_user_agent,
                     source_identity=src_ip,
                 )
-                proxy_referrer = generator_module._source_native_http_referrer(
+                proxy_referrer = _source_native_http_referrer(
                     user_agent,
                     proxy_referrer,
                     request_scheme="https" if dst_port == 443 else "http",
                     request_port=dst_port,
                 )
                 cache_roll = rng.random()
-                proxy_cacheable = generator_module._proxy_request_allows_cache_hit(
+                proxy_cacheable = _proxy_request_allows_cache_hit(
                     method=proxy_method,
                     url=url,
                     content_type=proxy_content_type,
@@ -4493,7 +4883,7 @@ class NetworkTransactionPlanner:
                 # Proxy sc_bytes/cs_bytes are source-side accounting fields:
                 # payload plus HTTP/proxy headers for allowed responses,
                 # or proxy-generated error pages for failures.
-                _cs = (orig_bytes or 0) + rng.randint(*generator_module._PROXY_CS_OVERHEAD)
+                _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
                 _response_bytes = (
                     event.http.response_body_len if event.http is not None else (resp_bytes or 0)
                 )
@@ -4504,9 +4894,9 @@ class NetworkTransactionPlanner:
                 elif cache_result == "GATEWAY_ERROR":
                     _sc = rng.randint(250, 1800)
                 elif cache_result == "HIT":
-                    _sc = _response_bytes + rng.randint(*generator_module._PROXY_SC_OVERHEAD)
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 else:
-                    _sc = _response_bytes + rng.randint(*generator_module._PROXY_SC_OVERHEAD)
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 proxy_status_code = (
                     event.http.status_code
                     if event.http is not None
@@ -4531,7 +4921,7 @@ class NetworkTransactionPlanner:
                     status_code=proxy_status_code,
                     sc_bytes=_sc,
                     cs_bytes=_cs,
-                    time_taken=generator_module._proxy_time_taken_ms(
+                    time_taken=_proxy_time_taken_ms(
                         duration,
                         rng,
                         method=proxy_method,
@@ -4545,7 +4935,7 @@ class NetworkTransactionPlanner:
                     cache_result=cache_result,
                     referrer=proxy_referrer,
                     proxy_fqdn=proxy_fqdn,
-                    proxy_action=generator_module._proxy_action_for_context(
+                    proxy_action=_proxy_action_for_context(
                         method=proxy_method,
                         url=url,
                         status_code=proxy_status_code,
@@ -4596,11 +4986,7 @@ class NetworkTransactionPlanner:
         ):
             # Use the already-resolved hostname for HTTP Host header and URI templates.
             # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
-            host = (
-                hostname
-                if hostname is not None
-                else generator_module.REVERSE_DNS.get(dst_ip, dst_ip)
-            )
+            host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
             if host == "":
                 host = dst_ip
             if dst_port not in (80, 443):
@@ -4619,17 +5005,11 @@ class NetworkTransactionPlanner:
                 plaintext_http_redirect_status,
             )
 
-            web_host = (
-                hostname
-                if hostname is not None
-                else generator_module.REVERSE_DNS.get(dst_ip, dst_ip)
-            )
+            web_host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
             if web_host == "":
                 web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
-            _src_os_http = (
-                generator_module._get_os_category(source_system.os) if source_system else None
-            )
+            _src_os_http = _get_os_category(source_system.os) if source_system else None
             uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
                 rng,
                 web_host,
@@ -4658,7 +5038,7 @@ class NetworkTransactionPlanner:
                 status_code = redirect_status
                 status_msg = http_status_message(status_code)
             else:
-                status_code, status_msg = generator_module._get_http_status(
+                status_code, status_msg = _get_http_status(
                     dst_ip,
                     uri,
                     publish_cache=False,
@@ -4680,7 +5060,7 @@ class NetworkTransactionPlanner:
                     resp_body_len = coerce_response_size_for_mime(rng, mime_type, resp_bytes)
             if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
                 event.network.resp_bytes = resp_body_len
-                min_resp_pkts = max(1, generator_module.math.ceil(resp_body_len / 1460))
+                min_resp_pkts = max(1, math.ceil(resp_body_len / 1460))
                 event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
                 min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
                 event.network.resp_ip_bytes = max(
@@ -4694,13 +5074,13 @@ class NetworkTransactionPlanner:
                 if http_referrer_policy == "none"
                 else pick_referrer(rng, host, context="general", port=dst_port)
             )
-            _http_referer = generator_module._source_native_http_referrer(
+            _http_referer = _source_native_http_referrer(
                 ua,
                 _http_referer,
                 request_scheme="https" if dst_port == 443 else "http",
                 request_port=dst_port,
             )
-            event.http = generator_module.HttpContext(
+            event.http = HttpContext(
                 method=http_method,
                 host=host,
                 uri=uri,
@@ -4721,7 +5101,7 @@ class NetworkTransactionPlanner:
             )
 
         if not suppress_application_side_effects:
-            generator_module._attach_http_file_transfers(
+            _attach_http_file_transfers(
                 event,
                 dst_ip=dst_ip,
                 rng=rng,
@@ -4743,7 +5123,7 @@ class NetworkTransactionPlanner:
         ):
             from evidenceforge.events.contexts import NtpContext
 
-            stratum, ref_id = generator_module._ntp_stratum_and_ref_id(dst_ip)
+            stratum, ref_id = _ntp_stratum_and_ref_id(dst_ip)
             association = executor._ntp_association_profile(
                 event.network.src_ip,
                 dst_ip,
@@ -4763,9 +5143,7 @@ class NetworkTransactionPlanner:
                 if last_parser_time is None
                 else (event.timestamp - last_parser_time).total_seconds()
             )
-            if parser_gap is None or parser_gap >= generator_module._ntp_parser_min_gap_seconds(
-                poll_seconds
-            ):
+            if parser_gap is None or parser_gap >= _ntp_parser_min_gap_seconds(poll_seconds):
                 network_preparation.stage_point(
                     NetworkRuntimePointFamily.NTP_PARSER,
                     parser_key,
@@ -4773,9 +5151,7 @@ class NetworkTransactionPlanner:
                     expires_at=min(
                         boundary.network_runtime.window_end,
                         ensure_utc(event.timestamp)
-                        + timedelta(
-                            seconds=generator_module._ntp_parser_min_gap_seconds(poll_seconds)
-                        ),
+                        + timedelta(seconds=_ntp_parser_min_gap_seconds(poll_seconds)),
                     ),
                 )
                 server_response = executor._ntp_server_response_profile(
@@ -4784,14 +5160,14 @@ class NetworkTransactionPlanner:
                     timing_runtime=self._timing_runtime,
                     expires_at=boundary.network_runtime.window_end,
                 )
-                observed_response = generator_module._ntp_observed_response_fields(
+                observed_response = _ntp_observed_response_fields(
                     server_response,
                     dst_ip=dst_ip,
                     event_time=event.timestamp,
                     timing_runtime=self._timing_runtime,
                 )
                 if ntp_timing is None:
-                    median_rtt_ms, rtt_sigma = generator_module._NTP_STRATUM_TIMING.get(
+                    median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
                         stratum,
                         (10.0, 0.7),
                     )
@@ -4857,7 +5233,7 @@ class NetworkTransactionPlanner:
             and event.network.conn_state != "SF"
         ):
             event.network.conn_state = "SF"
-            event.network.history = generator_module._tcp_success_history(rng)
+            event.network.history = _tcp_success_history(rng)
             if event.network.duration is None:
                 event.network.duration = self._http_default_duration_seconds(request)
 
@@ -4875,16 +5251,12 @@ class NetworkTransactionPlanner:
             if event.http is not None:
                 method = (event.http.method or "GET").upper()
                 if event.network.service == "http" and method != "CONNECT":
-                    event.network.orig_bytes, event.network.resp_bytes = (
-                        generator_module._http_flow_payload_bytes(event.http)
+                    event.network.orig_bytes, event.network.resp_bytes = _http_flow_payload_bytes(
+                        event.http
                     )
                 else:
-                    request_body_len = generator_module._http_context_flow_body_len(
-                        event.http, "request"
-                    )
-                    response_body_len = generator_module._http_context_flow_body_len(
-                        event.http, "response"
-                    )
+                    request_body_len = _http_context_flow_body_len(event.http, "request")
+                    response_body_len = _http_context_flow_body_len(event.http, "response")
                     request_overhead = rng.randint(180, 620)
                     response_overhead = rng.randint(180, 900)
                     if event.http.status_code in {204, 304} or method == "HEAD":
@@ -4909,7 +5281,7 @@ class NetworkTransactionPlanner:
                     event.network.resp_bytes or 0, rng.randint(900, 4500)
                 )
             event.network.orig_pkts, event.network.resp_pkts = (
-                generator_module._tcp_packet_counts_from_payload_and_history(
+                _tcp_packet_counts_from_payload_and_history(
                     event.network.orig_bytes,
                     event.network.resp_bytes,
                     event.network.history,
@@ -4931,12 +5303,12 @@ class NetworkTransactionPlanner:
                     weights=[35, 25, 20, 15, 5],
                     k=1,
                 )[0]
-            event.network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+            event.network.orig_ip_bytes = _tcp_ip_byte_count(
                 event.network.orig_bytes,
                 event.network.orig_pkts,
                 rng,
             )
-            event.network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            event.network.resp_ip_bytes = _tcp_ip_byte_count(
                 event.network.resp_bytes,
                 event.network.resp_pkts,
                 rng,
@@ -4963,9 +5335,9 @@ class NetworkTransactionPlanner:
                 network_point_expires_at=boundary.network_runtime.window_end,
             )
 
-        generator_module._align_tcp_network_payload_with_history(event.network, rng)
+        _align_tcp_network_payload_with_history(event.network, rng)
         if preserve_explicit_payload:
-            generator_module._preserve_explicit_tcp_payload_overrides(
+            _preserve_explicit_tcp_payload_overrides(
                 event.network,
                 explicit_orig_bytes=explicit_orig_bytes,
                 explicit_resp_bytes=explicit_resp_bytes,
@@ -4980,7 +5352,7 @@ class NetworkTransactionPlanner:
         ):
             pass
 
-        self._reconcile_application_payload(event, generator_module)
+        self._reconcile_application_payload(event)
 
         scenario_end = getattr(executor, "_scenario_end_time", None)
         if scenario_end is not None and ensure_utc(request.time) == ensure_utc(scenario_end):
@@ -5035,7 +5407,7 @@ class NetworkTransactionPlanner:
         )
         event.network.source_visible_start_time = event.timestamp
         event.network.source_visible_close_time = (
-            event.timestamp + generator_module.timedelta(seconds=max(0.0, event.network.duration))
+            event.timestamp + timedelta(seconds=max(0.0, event.network.duration))
             if event.network.duration is not None
             else None
         )
@@ -5216,7 +5588,7 @@ class NetworkTransactionPlanner:
                 and client_process.transport_attribution == "process"
             ):
                 pid = persistent_smb_client_identity.pid
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=persistent_smb_client_identity.pid,
                     parent_pid=persistent_smb_client_identity.parent_pid,
                     image=persistent_smb_client_identity.image,
@@ -5257,14 +5629,93 @@ class NetworkTransactionPlanner:
                 ]
             )
         )
-        event = event.build_event(generator_module)
+        event = event.build_event()
 
-        # Automatic weird.log synthesis is intentionally disabled for now. The
-        # Zeek weird type space is broad and state-sensitive; poorly matched
-        # weird rows are more damaging than sparse weird.log output. Explicit
-        # WeirdContext events still render through ZeekWeirdEmitter. Keep one
-        # RNG draw to avoid reshaping unrelated deterministic traffic choices.
-        if not generator_module._AUTO_WEIRD_ENABLED:
+        return PlannedNetworkEvidence(
+            caller_owned_pid=caller_owned_pid,
+            committed_suppressed=committed_suppressed,
+            deferred_authority=deferred_authority,
+            dst_host_ctx=dst_host_ctx,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            event=event,
+            generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+            hostname=hostname,
+            http_channel_affinity=http_channel_affinity,
+            kerberos_prerequisite_success=kerberos_prerequisite_success,
+            network_preparation=network_preparation,
+            owner_rng=owner_rng,
+            parent_action_group_id=parent_action_group_id,
+            persistent_smb_application_intent=persistent_smb_application_intent,
+            persistent_smb_batch=persistent_smb_batch,
+            persistent_smb_file_journal=persistent_smb_file_journal,
+            persistent_smb_intent=persistent_smb_intent,
+            persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+            persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
+            pid=pid,
+            prepared_responder=prepared_responder,
+            process_ctx=process_ctx,
+            resolved_source_system=resolved_source_system,
+            rng=rng,
+            source_system=source_system,
+            src_ip=src_ip,
+            src_port=src_port,
+            ssh_attempted_username=ssh_attempted_username,
+            state_source_hostname=state_source_hostname,
+            state_source_system=state_source_system,
+            suppress_application_side_effects=suppress_application_side_effects,
+            target_system=target_system,
+            time=time,
+            uid=uid,
+        )
+
+    def _prepare_network_publication(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PlannedNetworkEvidence,
+    ) -> PreparedNetworkPublication | str:
+        """Assemble and validate state, lifecycle, and source publication capabilities."""
+        from evidenceforge.generation.actions.proxy_transaction import ExplicitProxyOpenPreparation
+
+        executor = self._executor
+        caller_owned_pid = stage_input.caller_owned_pid
+        committed_suppressed = stage_input.committed_suppressed
+        deferred_authority = stage_input.deferred_authority
+        dst_host_ctx = stage_input.dst_host_ctx
+        dst_ip = stage_input.dst_ip
+        dst_port = stage_input.dst_port
+        event = stage_input.event
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        hostname = stage_input.hostname
+        http_channel_affinity = stage_input.http_channel_affinity
+        kerberos_prerequisite_success = stage_input.kerberos_prerequisite_success
+        network_preparation = stage_input.network_preparation
+        owner_rng = stage_input.owner_rng
+        parent_action_group_id = stage_input.parent_action_group_id
+        persistent_smb_application_intent = stage_input.persistent_smb_application_intent
+        persistent_smb_batch = stage_input.persistent_smb_batch
+        persistent_smb_file_journal = stage_input.persistent_smb_file_journal
+        persistent_smb_intent = stage_input.persistent_smb_intent
+        persistent_smb_terminal_authority = stage_input.persistent_smb_terminal_authority
+        persistent_smb_terminal_continuation = stage_input.persistent_smb_terminal_continuation
+        pid = stage_input.pid
+        prepared_responder = stage_input.prepared_responder
+        process_ctx = stage_input.process_ctx
+        resolved_source_system = stage_input.resolved_source_system
+        rng = stage_input.rng
+        source_system = stage_input.source_system
+        src_ip = stage_input.src_ip
+        src_port = stage_input.src_port
+        ssh_attempted_username = stage_input.ssh_attempted_username
+        state_source_hostname = stage_input.state_source_hostname
+        state_source_system = stage_input.state_source_system
+        suppress_application_side_effects = stage_input.suppress_application_side_effects
+        target_system = stage_input.target_system
+        time = stage_input.time
+        uid = stage_input.uid
+
+        if not _AUTO_WEIRD_ENABLED:
             rng.random()
 
         application_window_end = getattr(executor, "_scenario_end_time", None)
@@ -5402,14 +5853,14 @@ class NetworkTransactionPlanner:
                         if session_identity is None
                         else (SessionActivityPatch(session_identity, activity_time),)
                     )
-                    hold_action_id = generator_module.stable_uuid(
+                    hold_action_id = stable_uuid(
                         "network-process-hold-action",
                         event.network.stable_id,
                         process_identity.object_id,
                     )
                     process_holds = (
                         LifecycleHold(
-                            hold_id=generator_module.stable_uuid(
+                            hold_id=stable_uuid(
                                 "network-process-hold",
                                 event.network.stable_id,
                                 process_identity.object_id,
@@ -5444,14 +5895,14 @@ class NetworkTransactionPlanner:
                     if patch.identity.object_id in held_object_ids:
                         continue
                     held_object_ids.add(patch.identity.object_id)
-                    hold_action_id = generator_module.stable_uuid(
+                    hold_action_id = stable_uuid(
                         "network-multipart-process-hold-action",
                         event.network.stable_id,
                         patch.identity.object_id,
                     )
                     additional_holds.append(
                         LifecycleHold(
-                            hold_id=generator_module.stable_uuid(
+                            hold_id=stable_uuid(
                                 "network-multipart-process-hold",
                                 event.network.stable_id,
                                 patch.identity.object_id,
@@ -5582,7 +6033,7 @@ class NetworkTransactionPlanner:
                 authority_hostname=authority_hostname,
                 src_hostname=source_lifecycle_hostname,
                 dst_hostname=destination_lifecycle_hostname,
-                action_id=generator_module.stable_uuid(
+                action_id=stable_uuid(
                     "network-transport-lifecycle",
                     event.network.stable_id,
                 ),
@@ -5815,6 +6266,91 @@ class NetworkTransactionPlanner:
                 authority=persistent_smb_terminal_authority,
                 continuation=persistent_smb_terminal_continuation,
             )
+
+        return PreparedNetworkPublication(
+            application_token=application_token if persistent_smb_intent is not None else None,
+            caller_owned_pid=caller_owned_pid,
+            committed_suppressed=committed_suppressed,
+            deferred_authority=deferred_authority,
+            deferred_composition=deferred_composition,
+            deferred_publication_batch=deferred_publication_batch,
+            dst_host_ctx=dst_host_ctx,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            event=event,
+            generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+            kerberos_prerequisite_success=kerberos_prerequisite_success,
+            lifecycle_token=lifecycle_token,
+            materialization_mode=materialization_mode,
+            owner_rng=owner_rng,
+            parent_action_group_id=parent_action_group_id,
+            persistent_smb_file_journal=persistent_smb_file_journal,
+            persistent_smb_intent=persistent_smb_intent,
+            persistent_smb_observations=persistent_smb_observations,
+            persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+            persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
+            pid=pid,
+            prepared_dispatch=prepared_dispatch,
+            prepared_multipart_batch=prepared_multipart_batch,
+            prepared_responder=prepared_responder,
+            process_ctx=process_ctx,
+            resolved_source_system=resolved_source_system,
+            root=root,
+            source_system=source_system,
+            src_ip=src_ip,
+            src_port=src_port,
+            ssh_attempted_username=ssh_attempted_username,
+            suppress_application_side_effects=suppress_application_side_effects,
+            target_system=target_system,
+            time=time,
+            uid=uid,
+        )
+
+    def _commit_prepared_network(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PreparedNetworkPublication,
+    ) -> CommittedNetworkPublication | str:
+        """Commit through the existing authority and preserve exact receipt recovery."""
+        executor = self._executor
+        application_token = stage_input.application_token
+        caller_owned_pid = stage_input.caller_owned_pid
+        committed_suppressed = stage_input.committed_suppressed
+        deferred_authority = stage_input.deferred_authority
+        deferred_composition = stage_input.deferred_composition
+        deferred_publication_batch = stage_input.deferred_publication_batch
+        dst_host_ctx = stage_input.dst_host_ctx
+        dst_ip = stage_input.dst_ip
+        dst_port = stage_input.dst_port
+        event = stage_input.event
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        kerberos_prerequisite_success = stage_input.kerberos_prerequisite_success
+        lifecycle_token = stage_input.lifecycle_token
+        materialization_mode = stage_input.materialization_mode
+        owner_rng = stage_input.owner_rng
+        parent_action_group_id = stage_input.parent_action_group_id
+        persistent_smb_file_journal = stage_input.persistent_smb_file_journal
+        persistent_smb_intent = stage_input.persistent_smb_intent
+        persistent_smb_observations = stage_input.persistent_smb_observations
+        persistent_smb_terminal_authority = stage_input.persistent_smb_terminal_authority
+        persistent_smb_terminal_continuation = stage_input.persistent_smb_terminal_continuation
+        pid = stage_input.pid
+        prepared_dispatch = stage_input.prepared_dispatch
+        prepared_multipart_batch = stage_input.prepared_multipart_batch
+        prepared_responder = stage_input.prepared_responder
+        process_ctx = stage_input.process_ctx
+        resolved_source_system = stage_input.resolved_source_system
+        root = stage_input.root
+        source_system = stage_input.source_system
+        src_ip = stage_input.src_ip
+        src_port = stage_input.src_port
+        ssh_attempted_username = stage_input.ssh_attempted_username
+        suppress_application_side_effects = stage_input.suppress_application_side_effects
+        target_system = stage_input.target_system
+        time = stage_input.time
+        uid = stage_input.uid
+
         try:
             deferred_published = (
                 executor._lifecycle_authority.materialize_prepared_deferred_session_publication(
@@ -5987,6 +6523,70 @@ class NetworkTransactionPlanner:
         except BaseException:
             raise
 
+        return CommittedNetworkPublication(
+            caller_owned_pid=caller_owned_pid,
+            committed_suppressed=committed_suppressed,
+            deferred_published=deferred_published,
+            dst_host_ctx=dst_host_ctx,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            event=event,
+            generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+            kerberos_prerequisite_success=kerberos_prerequisite_success,
+            materialization_mode=materialization_mode,
+            materialized=materialized,
+            parent_action_group_id=parent_action_group_id,
+            pid=pid,
+            prepared_dispatch=prepared_dispatch,
+            prepared_multipart_batch=prepared_multipart_batch,
+            prepared_responder=prepared_responder,
+            process_ctx=process_ctx,
+            resolved_source_system=resolved_source_system,
+            source_system=source_system,
+            src_ip=src_ip,
+            src_port=src_port,
+            ssh_attempted_username=ssh_attempted_username,
+            suppress_application_side_effects=suppress_application_side_effects,
+            target_system=target_system,
+            time=time,
+            uid=uid,
+        )
+
+    def _publish_committed_network(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: CommittedNetworkPublication,
+    ) -> str:
+        """Publish committed evidence and update the established runtime observations."""
+        executor = self._executor
+        caller_owned_pid = stage_input.caller_owned_pid
+        committed_suppressed = stage_input.committed_suppressed
+        deferred_published = stage_input.deferred_published
+        dst_host_ctx = stage_input.dst_host_ctx
+        dst_ip = stage_input.dst_ip
+        dst_port = stage_input.dst_port
+        event = stage_input.event
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        kerberos_prerequisite_success = stage_input.kerberos_prerequisite_success
+        materialization_mode = stage_input.materialization_mode
+        materialized = stage_input.materialized
+        parent_action_group_id = stage_input.parent_action_group_id
+        pid = stage_input.pid
+        prepared_dispatch = stage_input.prepared_dispatch
+        prepared_multipart_batch = stage_input.prepared_multipart_batch
+        prepared_responder = stage_input.prepared_responder
+        process_ctx = stage_input.process_ctx
+        resolved_source_system = stage_input.resolved_source_system
+        source_system = stage_input.source_system
+        src_ip = stage_input.src_ip
+        src_port = stage_input.src_port
+        ssh_attempted_username = stage_input.ssh_attempted_username
+        suppress_application_side_effects = stage_input.suppress_application_side_effects
+        target_system = stage_input.target_system
+        time = stage_input.time
+        uid = stage_input.uid
+
         executor._last_connection_effective_dst_ip = event.network.dst_ip
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
@@ -6121,9 +6721,7 @@ class NetworkTransactionPlanner:
                 attempted_username=ssh_attempted_username,
                 duration=event.network.duration,
             )
-        generator_module.logger.debug(
-            f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})"
-        )
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # Emit 5156 (WFP connection) on Windows source hosts when process ownership is known.
         # Unknown ownership is not PID 4 by default; rendering it as System makes ordinary
@@ -6132,7 +6730,7 @@ class NetworkTransactionPlanner:
         wfp_application = event.process.image if event.process is not None else None
         if (
             wfp_system
-            and generator_module._get_os_category(wfp_system.os) == "windows"
+            and _get_os_category(wfp_system.os) == "windows"
             and (pid > 0 or wfp_application is not None)
             and not event.network.application_layer_only
         ):
@@ -6195,11 +6793,9 @@ class NetworkTransactionPlanner:
                 if running is not None
                 else None
             )
-            if lifetime is not None and generator_module.re.match(
-                r"^[a-zA-Z0-9._$-]+$", running.username
-            ):
+            if lifetime is not None and re.match(r"^[a-zA-Z0-9._$-]+$", running.username):
                 known_users = getattr(executor, "_users_by_username", {})
-                process_user = known_users.get(running.username) or generator_module.User(
+                process_user = known_users.get(running.username) or User(
                     username=running.username,
                     full_name=running.username,
                     email=f"{running.username}@example.local",
@@ -6210,7 +6806,7 @@ class NetworkTransactionPlanner:
                     user=process_user,
                     system=resolved_source_system,
                     time=time
-                    + generator_module.timedelta(
+                    + timedelta(
                         seconds=self._foreground_teardown_delay_seconds(
                             request,
                             min_delay,

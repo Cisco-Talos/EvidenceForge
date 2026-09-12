@@ -496,7 +496,7 @@ def test_connection_pid_is_omitted_when_source_timing_crosses_session_end() -> N
     generator._ip_to_system = {source.ip: source}
 
     with patch(
-        "evidenceforge.generation.activity.generator._zeek_conn_observation_time",
+        "evidenceforge.generation.actions.network_transaction_planner._zeek_conn_observation_time",
         return_value=deadline + timedelta(seconds=30),
     ):
         generator.generate_connection(

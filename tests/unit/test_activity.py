@@ -118,6 +118,9 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockRequest,
     plan_linux_pipeline_stage_times,
 )
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -6016,8 +6019,10 @@ class TestActivityGenerator:
         assert first.family == "process_execution"
         assert first.stable_id.startswith("process-execution-")
 
-    def test_process_execution_bundle_delegates_to_adapter(self, test_user, test_system):
-        """The bundle should own the entrypoint while preserving the adapter contract."""
+    def test_process_execution_bundle_delegates_to_service(
+        self, test_user, test_system, monkeypatch
+    ):
+        """The bundle should bind its service to the existing runtime owners."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         request = ProcessExecutionRequest(
             user=test_user,
@@ -6028,19 +6033,28 @@ class TestActivityGenerator:
             command_line="cmd.exe /c dir",
         )
         executor = Mock()
-        executor._execute_process_create_bundle.return_value = 4242
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
+        )
+
+        service = Mock()
+        service.create.return_value = 4242
+        factory = Mock(return_value=service)
+        monkeypatch.setattr(ProcessExecutionService, "from_runtime", factory)
 
         pid = ProcessExecutionActionBundle(executor, request).execute()
 
         assert pid == 4242
-        executor._execute_process_create_bundle.assert_called_once_with(request)
+        factory.assert_called_once_with(executor)
+        service.create.assert_called_once_with(request)
 
-    def test_process_execution_bundle_preflights_effect_plan_before_adapter(
+    def test_process_execution_bundle_preflights_effect_plan_before_service(
         self,
         test_user,
         test_system,
+        monkeypatch,
     ):
-        """An opted-in executor should plan before entering its stateful adapter."""
+        """An opted-in executor should plan before entering the stateful service."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         request = ProcessExecutionRequest(
             user=test_user,
@@ -6057,10 +6071,16 @@ class TestActivityGenerator:
                 calls.append(("plan", planned_request.effect_plan))
                 return ExecutionEffectPlan(anchor)
 
-            def _execute_process_create_bundle(self, execution_request):
+        class Service:
+            def create(self, execution_request):
                 calls.append(("execute", execution_request.effect_plan))
                 return 4242
 
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
+        )
+
+        monkeypatch.setattr(ProcessExecutionService, "from_runtime", lambda executor: Service())
         pid = ProcessExecutionActionBundle(Executor(), request).execute()
 
         assert pid == 4242
@@ -6068,10 +6088,11 @@ class TestActivityGenerator:
         assert calls[1][0] == "execute"
         assert isinstance(calls[1][1], ExecutionEffectPlan)
 
-    def test_process_execution_bundle_rejects_invalid_plan_before_adapter(
+    def test_process_execution_bundle_rejects_invalid_plan_before_service(
         self,
         test_user,
         test_system,
+        monkeypatch,
     ):
         """Invalid preflight output must not enter PID/state allocation code."""
         request = ProcessExecutionRequest(
@@ -6084,14 +6105,22 @@ class TestActivityGenerator:
         )
         executor = Mock()
         executor._plan_process_execution_effects = Mock(return_value="invalid-plan")
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
+        )
+
+        factory = Mock()
+        monkeypatch.setattr(ProcessExecutionService, "from_runtime", factory)
 
         with pytest.raises(ExecutionEffectPlanError) as exc_info:
             ProcessExecutionActionBundle(executor, request).execute()
 
         assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_PLAN
-        executor._execute_process_create_bundle.assert_not_called()
+        factory.assert_not_called()
 
-    def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
+    def test_process_termination_bundle_delegates_to_service(
+        self, test_user, test_system, monkeypatch
+    ):
         """Termination should share the process action-bundle boundary."""
         timestamp = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
         request = ProcessTerminationRequest(
@@ -6104,12 +6133,20 @@ class TestActivityGenerator:
         )
         executor = Mock()
 
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessTerminationService,
+        )
+
+        service = Mock()
+        factory = Mock(return_value=service)
+        monkeypatch.setattr(ProcessTerminationService, "from_runtime", factory)
         ProcessTerminationActionBundle(executor, request).execute()
 
         anchor = ProcessTerminationActionBundle(Mock(), request).anchor
         assert anchor.family == "process_termination"
         assert anchor.stable_id.startswith("process-termination-")
-        executor._execute_process_termination_bundle.assert_called_once_with(request)
+        factory.assert_called_once_with(executor)
+        service.terminate.assert_called_once_with(request)
 
     def test_generate_process_hosts_windows_batch_scripts_under_cmd(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -15383,6 +15420,7 @@ class TestActivityGenerator:
                 return "du -sh /var/lib/mysql/*"
 
         monkeypatch.setattr(generator_module, "_get_rng", lambda: AssertingRng())
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: AssertingRng())
         linux = System(
             hostname="DB-PROD-01",
             ip="10.0.0.2",

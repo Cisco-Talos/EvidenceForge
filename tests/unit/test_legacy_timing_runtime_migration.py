@@ -373,7 +373,7 @@ def test_migrated_timing_sibling_callers_are_exact_and_runtime_wired() -> None:
         ("actions/ssh_session.py", "_plan_transport"),
         ("actions/ssh_session.py", "_predicted_transport_open_time"),
         ("actions/ssh_session.py", "_transport_open_time"),
-        ("activity/generator.py", "_zeek_conn_observation_time"),
+        ("activity/network_common.py", "_zeek_conn_observation_time"),
     }
     observed: set[tuple[str, str, str]] = set()
     owned_legacy_calls: set[tuple[str, str, str]] = set()
@@ -418,14 +418,18 @@ def test_migrated_timing_sibling_callers_are_exact_and_runtime_wired() -> None:
     assert owned_legacy_calls == set()
     assert production_packet_helper_calls == set()
     assert observed == {
-        ("actions/network_transaction_planner.py", "_execute", "_zeek_conn_observation_time"),
+        (
+            "actions/network_transaction_planner.py",
+            "_plan_network_transport",
+            "_zeek_conn_observation_time",
+        ),
         ("actions/rdp_session.py", "execute", "_target_logon_time"),
         ("actions/smb_activity.py", "_execute_persistent_windows", "packet_observation_delta"),
         ("actions/smb_activity.py", "execute", "packet_observation_delta"),
         ("actions/ssh_session.py", "_resolve_responder_pid", "_predicted_transport_open_time"),
         ("actions/ssh_session.py", "_transport_open_time", "packet_observation_delta"),
         ("actions/ssh_session.py", "execute_with_identity", "_plan_transport"),
-        ("activity/generator.py", "_zeek_conn_observation_time", "packet_observation_delta"),
+        ("activity/network_common.py", "_zeek_conn_observation_time", "packet_observation_delta"),
         ("activity/timing_profiles.py", "sample_packet_timing_delta", "packet_observation_delta"),
     }
     assert zeek_call is not None

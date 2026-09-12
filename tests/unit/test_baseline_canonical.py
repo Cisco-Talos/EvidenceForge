@@ -39,6 +39,9 @@ from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
     module_is_compatible_with_process,
@@ -1437,6 +1440,11 @@ class TestWebAccessCorrelation:
             "_get_http_status",
             lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
         )
+        monkeypatch.setattr(
+            network_planner_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1486,6 +1494,11 @@ class TestWebAccessCorrelation:
         )
         monkeypatch.setattr(
             generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
+        monkeypatch.setattr(
+            network_planner_module,
             "_get_http_status",
             lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
         )

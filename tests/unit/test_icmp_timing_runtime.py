@@ -385,8 +385,8 @@ def test_icmp_rtt_helper_and_planner_have_no_private_rng_or_identity_fallback() 
         node
         for node in ast.walk(planner_tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "_icmp_echo_duration"
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_icmp_echo_duration"
     ]
     assert len(calls) == 2
     for call in calls:

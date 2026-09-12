@@ -1,5 +1,6 @@
 {
   "checkpoint-all-formats.yaml": "80d2d66ebea1d1ee78d661104dd67a82c7566e6db6200f4b79c736de344c5c8e",
+  "cleanup-periodic-content.yaml": "65d9dc6fb69f400aa59780baad0396162b6e93ddcb51d2bfb6c9474554515602",
   "cleanup-typed-handlers.yaml": "ddf9f9002a1f383219bccd07aea3e69c5f5cbaab51800f73dc306a1f9abab8be",
   "full-coverage-apt.yaml": "75e30a3935661665885c9244da0fbee0bdeda899c596410da1cc2da4920890be",
   "minimal.yaml": "49f2abc4d370291124ccd1a73048e3bb7a3662c84541d5a6cae21e831618605a",

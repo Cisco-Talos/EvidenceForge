@@ -46,10 +46,14 @@ from evidenceforge.generation.actions import (
     SshSessionRequest,
 )
 from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
+from evidenceforge.generation.actions import (
     ssh_session as ssh_session_module,
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
+from evidenceforge.generation.activity import network_transport as network_transport_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
@@ -385,8 +389,14 @@ def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_
     """HTTP download semantics should not inherit tiny generic flow byte counts."""
     gen, events = activity_gen
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
+    monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(0))
     monkeypatch.setattr(
         generator_module,
+        "_get_http_status",
+        lambda _dst_ip, _uri, **_kwargs: (200, "OK"),
+    )
+    monkeypatch.setattr(
+        network_planner_module,
         "_get_http_status",
         lambda _dst_ip, _uri, **_kwargs: (200, "OK"),
     )
@@ -1926,8 +1936,14 @@ class TestSslContextPopulation:
         gen._proxy_routes = {source.ip: [proxy]}
         owner_rng = random.Random(7)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: owner_rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: owner_rng)
         monkeypatch.setattr(
             generator_module,
+            "_proxy_request_allows_cache_hit",
+            lambda **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            network_planner_module,
             "_proxy_request_allows_cache_hit",
             lambda **_kwargs: True,
         )
@@ -2130,6 +2146,11 @@ class TestSslContextPopulation:
 
         monkeypatch.setattr(
             generator_module, "_zeek_conn_observation_time", skew_client_observation
+        )
+        monkeypatch.setattr(
+            network_planner_module,
+            "_zeek_conn_observation_time",
+            skew_client_observation,
         )
         dns_requests = []
         original_emit_dns_lookup = gen._emit_dns_lookup
@@ -2957,6 +2978,11 @@ class TestSslContextPopulation:
         candidate_ports = iter([51111, 51112])
         monkeypatch.setattr(
             generator_module,
+            "_ephemeral_port",
+            lambda rng, os_category: next(candidate_ports),
+        )
+        monkeypatch.setattr(
+            network_planner_module,
             "_ephemeral_port",
             lambda rng, os_category: next(candidate_ports),
         )
@@ -3938,7 +3964,9 @@ class TestHttpContextPopulation:
         """SMB responder payload must not appear before any originator application payload."""
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
         monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
+        monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", [1])
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -3965,7 +3993,9 @@ class TestHttpContextPopulation:
         """Port-only database flows should follow the same client-before-server invariant."""
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
+        monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", [("RSTR", 1, "ShAdr")])
         monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", [1])
+        monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", [1])
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -4075,6 +4105,7 @@ class TestHttpContextPopulation:
 
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_tcp_effective_mss_bytes", lambda _rng: 1200)
+        monkeypatch.setattr(network_transport_module, "_tcp_effective_mss_bytes", lambda _rng: 1200)
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -4119,6 +4150,7 @@ class TestHttpContextPopulation:
 
         gen, events = activity_gen
         monkeypatch.setattr(generator_module, "_tcp_success_history", lambda _rng: "ShADadf")
+        monkeypatch.setattr(network_planner_module, "_tcp_success_history", lambda _rng: "ShADadf")
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -4258,8 +4290,14 @@ class TestFileTransferContext:
         import evidenceforge.generation.activity.proxy_uri as proxy_uri_module
 
         monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(7))
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(7))
         monkeypatch.setattr(
             generator_module,
+            "_get_http_status",
+            lambda _dst_ip, _uri, **_kwargs: (301, "Moved Permanently"),
+        )
+        monkeypatch.setattr(
+            network_planner_module,
             "_get_http_status",
             lambda _dst_ip, _uri, **_kwargs: (301, "Moved Permanently"),
         )
