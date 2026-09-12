@@ -40,7 +40,7 @@ _RAW_TEMPORAL_METHODS = frozenset(
 # growing while allowing any owner to remove a selector or lower its count.
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 4|actions/network_transaction_planner.py|_plan_network_transport|uniform
-1|actions/process_execution_service.py|create|uniform
+1|actions/process_execution_service.py|_prepare_evidence|uniform
 1|actions/rdp_session.py|execute|uniform
 1|actions/smb_activity.py|_directional_transport_byte_allocations|uniform
 1|actions/smb_activity.py|_duration|uniform

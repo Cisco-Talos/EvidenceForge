@@ -471,3 +471,23 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   revision-56 validation pass. All **79 selected byte cases** match both item 6a and frozen
   corrected references. Digest:
   `5027a78fa82410da461c82599a38ee488ef1b3d583e5c7182bd5d99285cdb611`.
+
+### Item 6c — explicit process preparation and publication
+
+- Item 6b committed as `79529f46`. Creation now coordinates admission, actor resolution, launch
+  and parent planning, exact root planning, canonical evidence preparation, source/artifact
+  preparation, publication, and post-publication bookkeeping. Each operation receives the records
+  it consumes; unchanged actor/root identities travel by reference. Due lifecycle closes still
+  commit before root allocation planning and source timing preparation.
+- The two existing cohort/materialization commit paths retain their claim order, cleanup and
+  publication handling. Two new integration cases inspect the actual publication boundary:
+  preparation has no root in State or emitted root row, and publication commits both State and
+  timing before post-launch work. Existing fault tests cover artifact and cohort rejection.
+- Focused **165 passed**, 60 deselected; targeted slow timing **12 passed** and RNG inventory
+  **3 passed**. The first timing invocation selected no tests because that file is slow-tier;
+  the explicit slow repeat passed. Inventory entries name the new evidence/publication operations.
+- All **79 selected raw-byte cases** match item 6b and their accepted corrected references.
+  Both Ruff checks and revision-57 manifest validation pass. Digest:
+  `5080fb93deec21296908ef1499ed6a06bcbed2494272556b9f49ee1dd21ff8f1`.
+- **Item 6c acceptance:** standard **8,465 passed, 27 existing skips, 2,009 deselected**
+  (296.56 s). All focused, slow timing, lint, manifest and selected byte gates passed.

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 56
+current_revision: 57
 history_start_revision: 1
-behavior_surface_sha256: "5027a78fa82410da461c82599a38ee488ef1b3d583e5c7182bd5d99285cdb611"
+behavior_surface_sha256: "5080fb93deec21296908ef1499ed6a06bcbed2494272556b9f49ee1dd21ff8f1"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -561,3 +561,9 @@ changes:
     domains: [process-execution, process-preflight, endpoint-effects]
     formats: []
     summary: Shares process-reuse precedence between bounded preflight and execution and centralizes completion bookkeeping while retaining visibility rejection, optional-effect auditing and existing activity-update order.
+  - revision: 57
+    id: explicit-process-execution-stages
+    impact: none
+    domains: [process-execution, endpoint-effects, lifecycle-publication]
+    formats: []
+    summary: Separates actor and parent resolution, launch and root planning, evidence preparation, publication and bookkeeping, preserving early reuse exits and the existing State, artifact and timing commit boundaries.

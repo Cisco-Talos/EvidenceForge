@@ -2178,3 +2178,52 @@ def test_sessionless_linux_process_effect_retains_exact_lifecycle_actor() -> Non
     file_event = next(event for event in _events(emitter) if event.event_type == "file_create")
     assert file_event.identity_plan is not None
     assert file_event.identity_plan.actor_id == process_identity.object_id
+
+
+@pytest.mark.parametrize("ensure_file_event", [False, True])
+def test_process_preparation_keeps_root_uncommitted_until_publication(
+    monkeypatch: pytest.MonkeyPatch, ensure_file_event: bool
+) -> None:
+    from evidenceforge.generation.actions.process_execution_service import ProcessExecutionService
+    from evidenceforge.generation.actions.process_execution_stages import (
+        PreparedProcessPublication,
+        ProcessRootPlan,
+    )
+    from evidenceforge.models.state import RunningProcess
+
+    generator, state, emitter, user, system, timestamp, registry = _artifact_fixture()
+    original_publish = ProcessExecutionService._publish_process
+    observed: list[int] = []
+
+    def publish(
+        service: ProcessExecutionService,
+        request: ProcessExecutionRequest,
+        root: ProcessRootPlan,
+        publication: PreparedProcessPublication,
+    ) -> RunningProcess:
+        pid = root.process.identity.pid
+        assert state.get_process(system.hostname, pid) is None
+        assert not publication.timing.committed
+        assert not _events(emitter)
+        running = original_publish(service, request, root, publication)
+        assert state.get_process(system.hostname, pid) is running
+        assert publication.timing.committed
+        assert _events(emitter)[0].event_type == "process_create"
+        observed.append(pid)
+        return running
+
+    monkeypatch.setattr(ProcessExecutionService, "_publish_process", publish)
+    with patch.object(
+        generator, "_process_endpoint_effect_rng", return_value=_NoAmbientEffectsRandom()
+    ):
+        pid = generator.generate_process(
+            user,
+            system,
+            timestamp,
+            "0x12345",
+            r"C:\Users\Public\dropper.exe",
+            r"C:\Users\Public\dropper.exe",
+            ensure_file_event=ensure_file_event,
+        )
+    assert observed == [pid]
+    assert registry.census().claimed_publications == 0

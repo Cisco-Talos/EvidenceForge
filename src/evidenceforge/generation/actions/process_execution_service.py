@@ -81,6 +81,15 @@ from evidenceforge.utils.time import ensure_utc
 if TYPE_CHECKING:
     from evidenceforge.generation.activity.generator import ActivityGenerator
 
+from .process_execution_stages import (
+    PreparedProcessPublication,
+    ProcessActorResolution,
+    ProcessEvidencePlan,
+    ProcessExecutionAdmission,
+    ProcessLaunchPlan,
+    ProcessRootPlan,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -362,12 +371,31 @@ class ProcessExecutionService:
         return candidate.pid
 
     def create(self, request: ProcessExecutionRequest) -> int:
-        """Execute the canonical process create path."""
-        runtime = self.runtime
+        """Execute process admission, planning, preparation, publication and bookkeeping."""
+        admission = self._prepare_execution(request)
+        actor = self._resolve_actor(request, admission)
+        if isinstance(actor, int):
+            return actor
+        launch = self._plan_launch(request, admission, actor)
+        if isinstance(launch, int):
+            return launch
+        # Due closes own independent commits and must precede frozen State/timing plans.
+        self.runtime._finalize_due_process_lifetimes(launch.time, exhaust=False)
+        root = self._prepare_root(request, admission, launch)
+        evidence = self._prepare_evidence(request, admission, launch, root)
+        publication = self._prepare_publication(request, admission, root, evidence)
+        running = self._publish_process(request, root, publication)
+        return self._finish_execution(request, launch, root, evidence, running)
 
-        prepared_effects = request.prepared_effects
-        prepared_endpoint = prepared_effects.endpoint if prepared_effects is not None else None
-        prepared_actor = prepared_effects.actor if prepared_effects is not None else None
+    def _prepare_execution(self, request: ProcessExecutionRequest) -> ProcessExecutionAdmission:
+        """Validate prepared effects and actor identity before launch decisions."""
+        runtime = self.runtime
+        prepared_endpoint = (
+            request.prepared_effects.endpoint if request.prepared_effects is not None else None
+        )
+        prepared_actor = (
+            request.prepared_effects.actor if request.prepared_effects is not None else None
+        )
         # Scanner transports still publish through the established post-process network path.
         # Keep their process/dependent rows on that same legacy boundary until one bounded
         # scanner transport collector can admit the complete probe group atomically.
@@ -395,14 +423,14 @@ class ProcessExecutionService:
                     "process endpoint action cohort exceeds its root/occurrence member limit",
                 )
         prepared_requires_new_root = bool(
-            prepared_effects is not None
+            request.prepared_effects is not None
             and (
-                prepared_effects.process_binary_publication is not None
+                request.prepared_effects.process_binary_publication is not None
                 or (
-                    prepared_effects.endpoint is not None
+                    request.prepared_effects.endpoint is not None
                     and any(
                         spec.requirement != EffectRequirement.OPTIONAL
-                        for spec in prepared_effects.endpoint.specs
+                        for spec in request.prepared_effects.endpoint.specs
                     )
                 )
             )
@@ -417,45 +445,50 @@ class ProcessExecutionService:
                     "prepared process actor drifted before root allocation",
                 )
 
-        user = request.user
-        system = request.system
-        time = prepared_actor.started_at if prepared_actor is not None else request.time
-        logon_id = prepared_actor.logon_id if prepared_actor is not None else request.logon_id
-        process_name = prepared_actor.image if prepared_actor is not None else request.process_name
+        return ProcessExecutionAdmission(
+            prepared_endpoint, prepared_actor, uses_action_cohort, prepared_requires_new_root
+        )
+
+    def _resolve_actor(
+        self, request: ProcessExecutionRequest, admission: ProcessExecutionAdmission
+    ) -> ProcessActorResolution | int:
+        """Resolve actor identity and preserve the existing early reuse and service-worker paths."""
+        runtime = self.runtime
+        time = admission.actor.started_at if admission.actor is not None else request.time
+        logon_id = admission.actor.logon_id if admission.actor is not None else request.logon_id
+        process_name = (
+            admission.actor.image if admission.actor is not None else request.process_name
+        )
         command_line = (
-            prepared_actor.command_line if prepared_actor is not None else request.command_line
+            admission.actor.command_line if admission.actor is not None else request.command_line
         )
         parent_pid = request.parent_pid
-        from_storyline = request.from_storyline
-        allow_browser_launch_spacing = request.allow_browser_launch_spacing
-        concurrency_group_id = request.concurrency_group_id
-        source_visible_by = request.source_visible_by
 
         if request.reuse_intent is not None:
             return self.execute_bounded_reuse(
                 request=request,
                 actor=(
-                    prepared_actor
-                    if prepared_actor is not None
+                    admission.actor
+                    if admission.actor is not None
                     else runtime._prepare_process_effect_actor(request)
                 ),
             )
 
         profiled_worker = matching_service_worker(
-            os_category=_get_os_category(system.os),
+            os_category=_get_os_category(request.system.os),
             image=process_name,
             command_line=command_line,
-            username=user.username,
+            username=request.user.username,
         )
         if profiled_worker is not None and not request.require_exact_parent:
             family_name, worker_name, _family = profiled_worker
             return runtime._ensure_profiled_service_worker(
-                system=system,
+                system=request.system,
                 worker_time=time,
                 activity_time=time,
                 family_name=family_name,
                 worker_name=worker_name,
-                source_visible_by=source_visible_by,
+                source_visible_by=request.source_visible_by,
             )
 
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
@@ -466,13 +499,13 @@ class ProcessExecutionService:
         ):
             raise StateError(
                 "Process activity cannot begin at or after its authoritative session end: "
-                f"{system.hostname} logon_id={logon_id} time={ensure_utc(time).isoformat()}"
+                f"{request.system.hostname} logon_id={logon_id} time={ensure_utc(time).isoformat()}"
             )
         process_name, command_line, _exe_lower = normalize_process_command(
             process_name,
             command_line,
-            os_category=_get_os_category(system.os),
-            hostname=system.hostname,
+            os_category=_get_os_category(request.system.os),
+            hostname=request.system.hostname,
         )
 
         # Determine integrity level per UAC model:
@@ -496,7 +529,7 @@ class ProcessExecutionService:
 
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
-        elif _get_os_category(system.os) == "windows" and any(
+        elif _get_os_category(request.system.os) == "windows" and any(
             marker in command_line.lower()
             for marker in ("sekurlsa::", "privilege::debug", "lsadump::", "token::elevate")
         ):
@@ -510,7 +543,7 @@ class ProcessExecutionService:
             if _exe_lower in _BROWSER_EXES:
                 _parent_image = (
                     runtime._lookup_process_name(
-                        system.hostname, parent_pid, _get_os_category(system.os)
+                        request.system.hostname, parent_pid, _get_os_category(request.system.os)
                     )
                     or ""
                 )
@@ -519,42 +552,42 @@ class ProcessExecutionService:
                     rng = _get_rng()
                     _integrity = "Low" if rng.random() < 0.65 else "Medium"
 
-        if prepared_actor is not None:
-            process_username = prepared_actor.username
-            process_logon_id = prepared_actor.logon_id
+        if admission.actor is not None:
+            process_username = admission.actor.username
+            process_logon_id = admission.actor.logon_id
         else:
             process_username, process_logon_id = runtime._resolve_process_identity(
-                system=system,
-                username=user.username,
+                system=request.system,
+                username=request.user.username,
                 logon_id=logon_id,
                 process_name=process_name,
                 time=time,
             )
         service_process_account = _windows_service_process_account(process_name, command_line)
         if (
-            prepared_actor is None
-            and _get_os_category(system.os) == "windows"
+            admission.actor is None
+            and _get_os_category(request.system.os) == "windows"
             and service_process_account is not None
         ):
             process_username = service_process_account
             process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
             _integrity = "System"
         if (
-            prepared_actor is not None
-            and _get_os_category(system.os) == "linux"
+            admission.actor is not None
+            and _get_os_category(request.system.os) == "linux"
             and process_logon_id == "0x3e7"
             and request.logon_id != "0x3e7"
             and runtime._linux_process_is_system_background_helper(process_name, command_line)
         ):
             _integrity = "System"
-            parent_pid = runtime._linux_system_parent_fallback(system, time)
+            parent_pid = runtime._linux_system_parent_fallback(request.system, time)
         linux_session_end_time = (
             self.state_manager.get_session_end_time(process_logon_id)
-            if _get_os_category(system.os) == "linux" and process_logon_id
+            if _get_os_category(request.system.os) == "linux" and process_logon_id
             else None
         )
         if (
-            prepared_actor is None
+            admission.actor is None
             and linux_session_end_time is not None
             and ensure_utc(time) >= ensure_utc(linux_session_end_time)
             and runtime._linux_process_is_system_background_helper(process_name, command_line)
@@ -565,49 +598,73 @@ class ProcessExecutionService:
             )
             process_logon_id = "0x3e7"
             _integrity = "System"
-            parent_pid = runtime._linux_system_parent_fallback(system, time)
-        if prepared_actor is not None and (
-            process_name != prepared_actor.image
-            or command_line != prepared_actor.command_line
-            or process_username != prepared_actor.username
-            or process_logon_id != prepared_actor.logon_id
+            parent_pid = runtime._linux_system_parent_fallback(request.system, time)
+        if admission.actor is not None and (
+            process_name != admission.actor.image
+            or command_line != admission.actor.command_line
+            or process_username != admission.actor.username
+            or process_logon_id != admission.actor.logon_id
         ):
             raise ExecutionEffectPlanError(
                 ExecutionEffectPlanErrorCode.INVALID_ACTOR,
                 "resolved process identity drifted from its allocation-free prepared actor",
             )
-        session_end_time = self.state_manager.get_session_end_time(process_logon_id)
+
+        return ProcessActorResolution(
+            process_name,
+            command_line,
+            _exe_lower,
+            process_username,
+            process_logon_id,
+            _integrity,
+            parent_pid,
+            time,
+            session_end_plan,
+        )
+
+    def _plan_launch(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        actor: ProcessActorResolution,
+    ) -> ProcessLaunchPlan | int:
+        """Resolve session, reuse, parent and shell launch timing in their original order."""
+        runtime = self.runtime
+        _integrity = actor.integrity
+        parent_pid = actor.parent_pid
+        time = actor.time
+        session_end_time = self.state_manager.get_session_end_time(actor.logon_id)
         if (
-            prepared_actor is None
+            admission.actor is None
             and session_end_time is not None
             and time >= session_end_time
-            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+            and actor.logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
         ):
             time = session_end_time - runtime._sample_profile_activity_gap(
                 "windows.process_create_before_logoff",
                 stable_id=request.stable_id,
-                host=system.hostname,
+                host=request.system.hostname,
                 source="endpoint_process",
-                lifecycle_id=process_logon_id,
+                lifecycle_id=actor.logon_id,
                 sample_key="before_logoff_gap",
             )
-        session = self.state_manager.get_session(process_logon_id)
+        session = self.state_manager.get_session(actor.logon_id)
         process_logon_type = session.logon_type if session is not None else 2
-        if prepared_actor is None and session is not None and time <= session.start_time:
+        if admission.actor is None and session is not None and time <= session.start_time:
             logon_gap = runtime._sample_activity_gap(
                 relationship_key="activity.process.start_after_logon",
                 stable_id=request.stable_id,
                 minimum_ms=100,
                 maximum_ms=1499,
-                host=system.hostname,
+                host=request.system.hostname,
                 source="endpoint_process",
-                lifecycle_id=process_logon_id,
+                lifecycle_id=actor.logon_id,
                 sample_key="after_logon_gap",
             )
             time = session.start_time + logon_gap
-        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        explicit_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
         if (
-            prepared_actor is None
+            admission.actor is None
             and explicit_parent is not None
             and time <= explicit_parent.start_time
         ):
@@ -616,53 +673,57 @@ class ProcessExecutionService:
                 stable_id=request.stable_id,
                 minimum_ms=50,
                 maximum_ms=499,
-                host=system.hostname,
+                host=request.system.hostname,
                 source="endpoint_process",
-                lifecycle_id=process_logon_id,
+                lifecycle_id=actor.logon_id,
                 sample_key="after_parent_gap",
             )
             time = explicit_parent.start_time + parent_gap
         # A caller-supplied source deadline means this process owns an already
         # anchored causal occurrence (for example an SSH socket). Optional
         # human-spacing must not move the canonical start beyond that anchor.
-        if prepared_actor is None and not from_storyline and source_visible_by is None:
+        if (
+            admission.actor is None
+            and not request.from_storyline
+            and request.source_visible_by is None
+        ):
             spaced_time = runtime._space_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
+                system=request.system,
+                username=actor.username,
+                logon_id=actor.logon_id,
+                process_name=actor.image,
+                command_line=actor.command_line,
                 time=time,
-                source_visible_by=source_visible_by,
+                source_visible_by=request.source_visible_by,
             )
             if spaced_time != time:
                 time = spaced_time
-            if allow_browser_launch_spacing:
+            if request.allow_browser_launch_spacing:
                 spaced_time = runtime._space_browser_launch(
-                    system=system,
-                    username=process_username,
-                    logon_id=process_logon_id,
-                    process_name=process_name,
-                    command_line=command_line,
+                    system=request.system,
+                    username=actor.username,
+                    logon_id=actor.logon_id,
+                    process_name=actor.image,
+                    command_line=actor.command_line,
                     time=time,
                 )
                 if spaced_time != time:
                     time = spaced_time
         if (
-            process_username != user.username
-            and process_username not in _SYSTEM_ACCOUNTS
+            actor.username != request.user.username
+            and actor.username not in _SYSTEM_ACCOUNTS
             and not (
-                _get_os_category(system.os) == "linux"
-                and process_logon_id == "0x3e7"
-                and process_username in {"root", "www-data", "proxy", "postfix"}
+                _get_os_category(request.system.os) == "linux"
+                and actor.logon_id == "0x3e7"
+                and actor.username in {"root", "www-data", "proxy", "postfix"}
             )
         ):
             _integrity = "Medium"
-        if _get_os_category(system.os) == "windows" and process_logon_type == 5:
+        if _get_os_category(request.system.os) == "windows" and process_logon_type == 5:
             _integrity = "High" if _integrity == "Medium" else _integrity
-        if _get_os_category(system.os) == "windows":
+        if _get_os_category(request.system.os) == "windows":
             _integrity, _token_elevation, _mandatory_label = _windows_token_profile(
-                process_username,
+                actor.username,
                 _integrity,
             )
         else:
@@ -671,168 +732,202 @@ class ProcessExecutionService:
 
         reused = self.select_existing_process(
             request,
-            process_name=process_name,
-            command_line=command_line,
-            username=process_username,
-            logon_id=process_logon_id,
+            process_name=actor.image,
+            command_line=actor.command_line,
+            username=actor.username,
+            logon_id=actor.logon_id,
             time=time,
             explicit_parent=explicit_parent,
-            prepared_requires_new_root=prepared_requires_new_root,
+            prepared_requires_new_root=admission.requires_new_root,
         )
         if reused is not None:
             return self.complete_process_reuse(request, reused, time=time)
 
-        if request.require_exact_parent:
-            if not runtime._is_valid_process_parent_at(
-                system=system,
-                parent_pid=parent_pid,
-                time=time,
-            ) or not runtime._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=parent_pid,
-                logon_id=process_logon_id,
-                os_category=_get_os_category(system.os),
-            ):
-                raise StateError(
-                    "Exact authored process parent is not live in the child session: "
-                    f"host={system.hostname} parent_pid={parent_pid} "
-                    f"child={process_name!r}"
-                )
-        elif prepared_requires_new_root:
-            parent_pid = runtime._resolve_existing_prepared_process_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        else:
-            parent_pid = runtime._sanitize_user_parent_pid(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-            parent_pid = runtime._materialize_visible_linux_shell_parent_for_child(
-                system=system,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-            parent_pid = runtime._repair_process_parent_pid(
-                system=system,
-                time=time,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        if prepared_actor is not None and not runtime._is_valid_process_parent_at(
-            system=system,
-            parent_pid=parent_pid,
-            time=time,
-        ):
-            # Legacy repair may select a future shell because non-prepared callers
-            # can move the child after it. A prepared actor's start is immutable.
-            parent_pid = runtime._resolve_existing_prepared_process_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        parent_pid = self._resolve_launch_parent(
+            request, admission, actor, time=time, parent_pid=parent_pid
+        )
+        repaired_parent = self.state_manager.get_process(request.system.hostname, parent_pid)
         if (
-            prepared_actor is None
+            admission.actor is None
             and repaired_parent is not None
             and time <= repaired_parent.start_time
         ):
             time = repaired_parent.start_time + timedelta(milliseconds=50)
         if (
-            prepared_actor is None
-            and _get_os_category(system.os) == "linux"
-            and source_visible_by is None
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is not None
+            admission.actor is None
+            and _get_os_category(request.system.os) == "linux"
+            and request.source_visible_by is None
+            and _linux_shell_process_reserves_foreground(actor.image, actor.command_line)
+            and _linux_foreground_lifetime(actor.image, actor.command_line) is not None
         ):
             time = runtime._reserve_foreground_shell_time(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
+                system=request.system,
+                username=actor.username,
+                logon_id=actor.logon_id,
                 parent_pid=parent_pid,
                 requested_time=ensure_utc(time),
-                seed_text=command_line,
-                concurrency_group_id=concurrency_group_id,
+                seed_text=actor.command_line,
+                concurrency_group_id=request.concurrency_group_id,
             )
             if time is None:
                 return 0
             if (
-                session_end_plan is not None
-                and session_end_plan.is_hard_deadline
-                and time >= ensure_utc(session_end_plan.canonical_end)
+                actor.session_end_plan is not None
+                and actor.session_end_plan.is_hard_deadline
+                and time >= ensure_utc(actor.session_end_plan.canonical_end)
             ):
                 raise StateError(
                     "Foreground process cannot begin after its owning shell session ends: "
-                    f"{system.hostname} logon_id={process_logon_id} "
+                    f"{request.system.hostname} logon_id={actor.logon_id} "
                     f"time={time.isoformat()}"
                 )
-        if not from_storyline:
-            if source_visible_by is None:
-                if prepared_actor is None:
+        if not request.from_storyline:
+            if request.source_visible_by is None:
+                if admission.actor is None:
                     spaced_time = runtime._space_interactive_shell_child_launch(
-                        system=system,
-                        process_name=process_name,
+                        system=request.system,
+                        process_name=actor.image,
                         parent_pid=parent_pid,
                         time=time,
                     )
                     if spaced_time != time:
                         time = spaced_time
 
-        # Drain independently committed due closes before freezing the root State and
-        # source-timing fences. Running this after a timing overlay is sealed or claimed
-        # would either stale that overlay or re-enter its locked canonical indexes.
-        runtime._finalize_due_process_lifetimes(time, exhaust=False)
+        return ProcessLaunchPlan(
+            actor,
+            time,
+            parent_pid,
+            process_logon_type,
+            _integrity,
+            _token_elevation,
+            _mandatory_label,
+        )
 
+    def _resolve_launch_parent(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        actor: ProcessActorResolution,
+        *,
+        time: datetime,
+        parent_pid: int,
+    ) -> int:
+        """Resolve or repair the parent while preserving exact-parent and prepared-actor checks."""
+        runtime = self.runtime
+        if request.require_exact_parent:
+            if not runtime._is_valid_process_parent_at(
+                system=request.system,
+                parent_pid=parent_pid,
+                time=time,
+            ) or not runtime._parent_process_matches_logon(
+                hostname=request.system.hostname,
+                parent_pid=parent_pid,
+                logon_id=actor.logon_id,
+                os_category=_get_os_category(request.system.os),
+            ):
+                raise StateError(
+                    "Exact authored process parent is not live in the child session: "
+                    f"host={request.system.hostname} parent_pid={parent_pid} "
+                    f"child={actor.image!r}"
+                )
+        elif admission.requires_new_root:
+            parent_pid = runtime._resolve_existing_prepared_process_parent(
+                system=request.system,
+                user=request.user,
+                time=time,
+                logon_id=actor.logon_id,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
+        else:
+            parent_pid = runtime._sanitize_user_parent_pid(
+                system=request.system,
+                user=request.user,
+                time=time,
+                logon_id=actor.logon_id,
+                process_name=actor.image,
+                command_line=actor.command_line,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
+            parent_pid = runtime._materialize_visible_linux_shell_parent_for_child(
+                system=request.system,
+                time=time,
+                logon_id=actor.logon_id,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
+            parent_pid = runtime._repair_process_parent_pid(
+                system=request.system,
+                time=time,
+                logon_id=actor.logon_id,
+                process_name=actor.image,
+                command_line=actor.command_line,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
+        if admission.actor is not None and not runtime._is_valid_process_parent_at(
+            system=request.system,
+            parent_pid=parent_pid,
+            time=time,
+        ):
+            # Legacy repair may select a future shell because non-prepared callers
+            # can move the child after it. A prepared actor's start is immutable.
+            parent_pid = runtime._resolve_existing_prepared_process_parent(
+                system=request.system,
+                user=request.user,
+                time=time,
+                logon_id=actor.logon_id,
+                parent_pid=parent_pid,
+                process_username=actor.username,
+            )
+
+        return parent_pid
+
+    def _prepare_root(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+    ) -> ProcessRootPlan:
+        """Freeze exact State identities without consuming the process allocator."""
+        runtime = self.runtime
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
-        process_session_id = runtime._session_id_for_logon(process_logon_id)
-        process_session_identity = self.state_manager.get_session_identity(process_logon_id)
+        process_session_id = runtime._session_id_for_logon(launch.actor.logon_id)
+        process_session_identity = self.state_manager.get_session_identity(launch.actor.logon_id)
         action_cohort_builder = (
-            self.state_manager.begin_action_cohort_materialization() if uses_action_cohort else None
+            self.state_manager.begin_action_cohort_materialization()
+            if admission.uses_action_cohort
+            else None
         )
         if action_cohort_builder is not None:
             process_plan = action_cohort_builder.plan_process(
-                system=system.hostname,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
+                system=request.system.hostname,
+                parent_pid=launch.parent_pid,
+                image=launch.actor.image,
+                command_line=launch.actor.command_line,
+                username=launch.actor.username,
+                integrity_level=launch.integrity,
+                logon_id=launch.actor.logon_id,
                 lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-                concurrency_group_id=concurrency_group_id,
-                os_category=_get_os_category(system.os),
-                start_time=ensure_utc(time),
-                parent_activity_time=(ensure_utc(time) if parent_pid not in {0, 4} else None),
+                concurrency_group_id=request.concurrency_group_id,
+                os_category=_get_os_category(request.system.os),
+                start_time=ensure_utc(launch.time),
+                parent_activity_time=(
+                    ensure_utc(launch.time) if launch.parent_pid not in {0, 4} else None
+                ),
                 auth_session_id=process_session_id,
-                auth_logon_type=process_logon_type,
+                auth_logon_type=launch.logon_type,
             )
             endpoint_activity_frontier = max(
-                ensure_utc(time),
-                prepared_endpoint.latest_admitted_occurrence or ensure_utc(time),
+                ensure_utc(launch.time),
+                admission.endpoint.latest_admitted_occurrence or ensure_utc(launch.time),
             )
             action_cohort_builder.patch_process_activity(
                 process_plan,
                 endpoint_activity_frontier,
             )
-            live_session = self.state_manager.get_session(process_logon_id)
+            live_session = self.state_manager.get_session(launch.actor.logon_id)
             if live_session is not None and process_session_identity is not None:
                 action_cohort_builder.patch_session_activity(
                     process_session_identity,
@@ -841,51 +936,74 @@ class ProcessExecutionService:
             action_cohort_state_plan = action_cohort_builder.seal()
         else:
             process_plan = self.state_manager.plan_process_materialization(
-                system=system.hostname,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
+                system=request.system.hostname,
+                parent_pid=launch.parent_pid,
+                image=launch.actor.image,
+                command_line=launch.actor.command_line,
+                username=launch.actor.username,
+                integrity_level=launch.integrity,
+                logon_id=launch.actor.logon_id,
                 lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-                concurrency_group_id=concurrency_group_id,
-                os_category=_get_os_category(system.os),
-                start_time=ensure_utc(time),
-                parent_activity_time=ensure_utc(time),
+                concurrency_group_id=request.concurrency_group_id,
+                os_category=_get_os_category(request.system.os),
+                start_time=ensure_utc(launch.time),
+                parent_activity_time=ensure_utc(launch.time),
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity
-        pid = process_identity.pid
         parent_identity = self.state_manager.get_process_identity(
-            system.hostname,
+            request.system.hostname,
             process_identity.parent_pid,
         )
 
+        return ProcessRootPlan(
+            process_plan,
+            action_cohort_state_plan,
+            process_session_id,
+            process_session_identity,
+            parent_identity,
+        )
+
+    def _prepare_evidence(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        root: ProcessRootPlan,
+    ) -> ProcessEvidencePlan:
+        """Build canonical process evidence with its existing lifetime and source deadlines."""
+        runtime = self.runtime
+        process_identity = root.process.identity
         # Phase 2: Build and validate the complete root/dependent publication batch.
         provisional_process_termination = (
-            prepared_effects.provisional_termination if prepared_effects is not None else None
+            request.prepared_effects.provisional_termination
+            if request.prepared_effects is not None
+            else None
         )
         if (
-            not uses_action_cohort
+            not admission.uses_action_cohort
             and provisional_process_termination is None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and _get_os_category(request.system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(
+                launch.actor.image, launch.actor.command_line
+            )
             and runtime._foreground_shell_key(
-                system=system,
+                system=request.system,
                 username=process_identity.principal,
                 logon_id=process_identity.logon_id,
                 parent_pid=process_identity.parent_pid,
             )
             is not None
         ):
-            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
+            provisional_lifetime = _linux_foreground_lifetime(
+                launch.actor.image, launch.actor.command_line
+            )
             if provisional_lifetime is not None:
                 provisional_rng = random.Random(
                     _stable_seed(
                         "canonical-linux-foreground-lifetime:"
-                        f"{system.hostname}:{pid}:{process_identity.started_at.isoformat()}:"
-                        f"{command_line}"
+                        f"{request.system.hostname}:{root.process.identity.pid}:{process_identity.started_at.isoformat()}:"
+                        f"{launch.actor.command_line}"
                     )
                 )
                 provisional_process_termination = ensure_utc(
@@ -904,79 +1022,85 @@ class ProcessExecutionService:
                     ensure_utc(process_identity.started_at) + timedelta(milliseconds=25),
                 )
         if (
-            uses_action_cohort
+            admission.uses_action_cohort
             and provisional_process_termination is None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
+            and _get_os_category(request.system.os) == "linux"
+            and _linux_shell_process_reserves_foreground(
+                launch.actor.image, launch.actor.command_line
+            )
             and runtime._foreground_shell_key(
-                system=system,
+                system=request.system,
                 username=process_identity.principal,
                 logon_id=process_identity.logon_id,
                 parent_pid=process_identity.parent_pid,
             )
             is not None
         ):
-            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
+            provisional_lifetime = _linux_foreground_lifetime(
+                launch.actor.image, launch.actor.command_line
+            )
             if provisional_lifetime is not None:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "Linux foreground process reached allocation without a frozen close time",
                 )
         process_binary_publication = (
-            prepared_effects.process_binary_publication if prepared_effects is not None else None
+            request.prepared_effects.process_binary_publication
+            if request.prepared_effects is not None
+            else None
         )
         event = OccurrenceBuilder(
-            timestamp=time,
+            timestamp=launch.time,
             event_type="process_create",
-            src_host=runtime._build_host_context(system),
+            src_host=runtime._build_host_context(request.system),
             auth=AuthContext(
-                username=process_username,
-                user_sid=runtime._get_sid(process_username),
-                logon_id=process_logon_id,
-                session_id=process_session_id,
-                logon_type=process_logon_type,
-                elevated=_integrity in {"High", "System"},
+                username=launch.actor.username,
+                user_sid=runtime._get_sid(launch.actor.username),
+                logon_id=launch.actor.logon_id,
+                session_id=root.session_id,
+                logon_type=launch.logon_type,
+                elevated=launch.integrity in {"High", "System"},
             ),
             process=ProcessContext(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
+                pid=root.process.identity.pid,
+                parent_pid=launch.parent_pid,
+                image=launch.actor.image,
+                command_line=launch.actor.command_line,
+                username=launch.actor.username,
+                integrity_level=launch.integrity,
+                logon_id=launch.actor.logon_id,
                 parent_image=runtime._lookup_process_name(
-                    system.hostname, parent_pid, _get_os_category(system.os)
+                    request.system.hostname, launch.parent_pid, _get_os_category(request.system.os)
                 ),
                 parent_command_line=runtime._lookup_parent_command_line(
-                    system.hostname, parent_pid
+                    request.system.hostname, launch.parent_pid
                 ),
-                parent_start_time=runtime._lookup_parent_start_time(system.hostname, parent_pid),
-                token_elevation=_token_elevation,
-                mandatory_label=_mandatory_label,
+                parent_start_time=runtime._lookup_parent_start_time(
+                    request.system.hostname, launch.parent_pid
+                ),
+                token_elevation=launch.token_elevation,
+                mandatory_label=launch.mandatory_label,
                 start_time=process_identity.started_at,
                 current_directory=runtime._derive_current_directory(
-                    system=system,
-                    username=process_username,
-                    process_name=process_name,
-                    command_line=command_line,
-                    parent_pid=parent_pid,
-                    logon_type=process_logon_type,
+                    system=request.system,
+                    username=launch.actor.username,
+                    process_name=launch.actor.image,
+                    command_line=launch.actor.command_line,
+                    parent_pid=launch.parent_pid,
+                    logon_type=launch.logon_type,
                 ),
-                concurrency_group_id=concurrency_group_id,
+                concurrency_group_id=request.concurrency_group_id,
                 binary_identity=(
                     process_binary_publication.record.binary
                     if process_binary_publication is not None
                     else None
                 ),
             ),
-            storyline_origin=from_storyline,
+            storyline_origin=request.from_storyline,
             identity_plan=EventIdentityPlan(
                 subject=process_identity,
-                actor=parent_identity,
-                session=(
-                    process_session_identity if action_cohort_state_plan is not None else None
-                ),
+                actor=root.parent_identity,
+                session=(root.session_identity if root.cohort is not None else None),
             ),
             lifecycle=ActionLifecycleContext(
                 group_id=process_identity.lifecycle_group_id,
@@ -987,29 +1111,49 @@ class ProcessExecutionService:
         )
 
         endpoint_source_deadline = (
-            prepared_endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
-            if prepared_endpoint is not None
-            and prepared_endpoint.earliest_admitted_occurrence is not None
+            admission.endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
+            if admission.endpoint is not None
+            and admission.endpoint.earliest_admitted_occurrence is not None
             else None
         )
         effective_source_visible_by = (
             min(
                 value
-                for value in (source_visible_by, endpoint_source_deadline)
+                for value in (request.source_visible_by, endpoint_source_deadline)
                 if value is not None
             )
-            if source_visible_by is not None or endpoint_source_deadline is not None
+            if request.source_visible_by is not None or endpoint_source_deadline is not None
             else None
         )
         if (
             provisional_process_termination is not None
-            and prepared_endpoint is not None
-            and prepared_endpoint.latest_admitted_occurrence is not None
+            and admission.endpoint is not None
+            and admission.endpoint.latest_admitted_occurrence is not None
         ):
             provisional_process_termination = max(
                 provisional_process_termination,
-                prepared_endpoint.latest_admitted_occurrence + timedelta(milliseconds=25),
+                admission.endpoint.latest_admitted_occurrence + timedelta(milliseconds=25),
             )
+
+        return ProcessEvidencePlan(
+            event,
+            provisional_process_termination,
+            effective_source_visible_by,
+            process_binary_publication,
+        )
+
+    def _prepare_publication(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        root: ProcessRootPlan,
+        evidence: ProcessEvidencePlan,
+    ) -> PreparedProcessPublication:
+        """Prepare and validate source, artifact and optional cohort capabilities before commit."""
+        runtime = self.runtime
+        process_plan = root.process
+        process_identity = root.process.identity
+        event = evidence.event
 
         def dependent_artifact_publications(
             publication: LocalArtifactPublishToken | None,
@@ -1017,23 +1161,23 @@ class ProcessExecutionService:
             """Bind the root binary plus a distinct dependent file publication."""
 
             publications: list[LocalArtifactPublishToken] = []
-            if process_binary_publication is not None:
-                publications.append(process_binary_publication)
-            if publication is not None and publication is not process_binary_publication:
+            if evidence.binary_publication is not None:
+                publications.append(evidence.binary_publication)
+            if publication is not None and publication is not evidence.binary_publication:
                 publications.append(publication)
             return tuple(publications)
 
         with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
             if (
-                prepared_effects is not None
-                and prepared_effects.provisional_termination is not None
-                and prepared_effects.lifetime_plan is not None
+                request.prepared_effects is not None
+                and request.prepared_effects.provisional_termination is not None
+                and request.prepared_effects.lifetime_plan is not None
             ):
                 lifetime_distribution, lifetime_relationship, _scope, _sample_key = (
                     runtime._process_provisional_termination_timing_request(
                         request,
-                        prepared_effects.actor,
-                        prepared_effects.lifetime_plan,
+                        request.prepared_effects.actor,
+                        request.prepared_effects.lifetime_plan,
                     )
                 )
                 timing_preparation.planning_runtime.sampler.record_logical_sample(
@@ -1042,22 +1186,22 @@ class ProcessExecutionService:
                 )
             runtime._plan_process_source_create_times(
                 event,
-                not_after=effective_source_visible_by,
+                not_after=evidence.source_visible_by,
             )
 
             endpoint_reconciliation = None
             endpoint_builders: tuple[
                 tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...
             ] = ()
-            if prepared_endpoint is not None:
+            if admission.endpoint is not None:
                 endpoint_reconciliation, endpoint_builders = (
                     runtime._prepare_process_owned_endpoint_effects_for_publication(
-                        system=system,
+                        system=request.system,
                         process_identity=process_identity,
-                        process_closes_at=provisional_process_termination,
-                        prepared=prepared_endpoint,
-                        storyline_origin=from_storyline,
-                        action_cohort_owned=action_cohort_state_plan is not None,
+                        process_closes_at=evidence.provisional_termination,
+                        prepared=admission.endpoint,
+                        storyline_origin=request.from_storyline,
+                        action_cohort_owned=root.cohort is not None,
                     )
                 )
 
@@ -1065,16 +1209,14 @@ class ProcessExecutionService:
                 event,
                 state_intent=(
                     PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
-                    if action_cohort_state_plan is not None
+                    if root.cohort is not None
                     else PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START
                 ),
-                lifecycle_ticket=(
-                    action_cohort_state_plan
-                    if action_cohort_state_plan is not None
-                    else process_plan
-                ),
+                lifecycle_ticket=(root.cohort if root.cohort is not None else process_plan),
                 artifact_publications=(
-                    (process_binary_publication,) if process_binary_publication is not None else ()
+                    (evidence.binary_publication,)
+                    if evidence.binary_publication is not None
+                    else ()
                 ),
                 source_timing_preparation=timing_preparation,
             )
@@ -1083,14 +1225,10 @@ class ProcessExecutionService:
                     builder,
                     state_intent=(
                         PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
-                        if action_cohort_state_plan is not None
+                        if root.cohort is not None
                         else PreparedDispatchStateIntent.EXTERNAL_DEPENDENT
                     ),
-                    lifecycle_ticket=(
-                        action_cohort_state_plan
-                        if action_cohort_state_plan is not None
-                        else process_plan
-                    ),
+                    lifecycle_ticket=(root.cohort if root.cohort is not None else process_plan),
                     artifact_publications=dependent_artifact_publications(publication),
                     source_timing_preparation=timing_preparation,
                 )
@@ -1101,7 +1239,9 @@ class ProcessExecutionService:
             self.dispatcher.validate_prepared(dependent_dispatch)
 
         artifact_publications = (
-            prepared_effects.artifact_publications if prepared_effects is not None else ()
+            request.prepared_effects.artifact_publications
+            if request.prepared_effects is not None
+            else ()
         )
         if artifact_publications and self.runtime_content_manager is None:
             raise ExecutionEffectPlanError(
@@ -1117,17 +1257,17 @@ class ProcessExecutionService:
                 "prepared process artifacts contain a duplicate publication token",
             )
 
-        if action_cohort_state_plan is not None:
+        if root.cohort is not None:
             from evidenceforge.generation.actions.command_effects import (
                 ExecutionEffectAuditCohortEntry,
             )
 
-            if endpoint_reconciliation is None or prepared_endpoint is None:
+            if endpoint_reconciliation is None or admission.endpoint is None:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "process endpoint action cohort lost its exact reconciliation",
                 )
-            endpoint_effect_plan = prepared_endpoint.execution_plan
+            endpoint_effect_plan = admission.endpoint.execution_plan
             if endpoint_effect_plan is None:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
@@ -1149,8 +1289,8 @@ class ProcessExecutionService:
             )
             try:
                 action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                    prepared_endpoint.root_anchor.action_id,
-                    action_cohort_state_plan,
+                    admission.endpoint.root_anchor.action_id,
+                    root.cohort,
                     (root_dispatch, *dependent_dispatches),
                     (
                         ExecutionEffectAuditCohortEntry(
@@ -1169,8 +1309,33 @@ class ProcessExecutionService:
                         timing_preparation.cancel,
                     )
                 raise
-            self.dispatcher.publish_prepared_action_cohort_batch(action_cohort_batch)
-            running_proc = self.state_manager.get_process(system.hostname, pid)
+        else:
+            action_cohort_batch = None
+
+        return PreparedProcessPublication(
+            root_dispatch,
+            dependent_dispatches,
+            timing_preparation,
+            artifact_publications,
+            endpoint_reconciliation,
+            action_cohort_batch,
+        )
+
+    def _publish_process(
+        self,
+        request: ProcessExecutionRequest,
+        root: ProcessRootPlan,
+        publication: PreparedProcessPublication,
+    ) -> RunningProcess:
+        """Publish only through the established cohort or materialization commit boundary."""
+        runtime = self.runtime
+        process_plan = root.process
+        timing_preparation = publication.timing
+        if root.cohort is not None:
+            self.dispatcher.publish_prepared_action_cohort_batch(publication.cohort)
+            running_proc = self.state_manager.get_process(
+                request.system.hostname, root.process.identity.pid
+            )
             if running_proc is None:  # pragma: no cover - authenticated State result invariant
                 raise StateError("Committed process action cohort did not publish its root")
         else:
@@ -1180,7 +1345,7 @@ class ProcessExecutionService:
                         artifact_stack.enter_context(
                             self.runtime_content_manager.registry.prepared_publication(publication)
                         )
-                        for publication in artifact_publications
+                        for publication in publication.artifacts
                     )
 
                     def finalize_prepared_capabilities() -> None:
@@ -1196,83 +1361,100 @@ class ProcessExecutionService:
                     )
 
             self.dispatcher.publish_prepared(
-                root_dispatch,
+                publication.root_dispatch,
                 materialization_receipt=materialization_receipt,
             )
-            for dependent_dispatch in dependent_dispatches:
+            for dependent_dispatch in publication.dependent_dispatches:
                 self.dispatcher.publish_prepared(
                     dependent_dispatch,
                     materialization_receipt=materialization_receipt,
                 )
-            if endpoint_reconciliation is not None:
-                runtime._execution_effect_audit.record(endpoint_reconciliation)
+            if publication.reconciliation is not None:
+                runtime._execution_effect_audit.record(publication.reconciliation)
 
-        if not from_storyline:
+        return running_proc
+
+    def _finish_execution(
+        self,
+        request: ProcessExecutionRequest,
+        launch: ProcessLaunchPlan,
+        root: ProcessRootPlan,
+        evidence: ProcessEvidencePlan,
+        running_proc: RunningProcess,
+    ) -> int:
+        """Record lifecycle state and emit the established post-launch effects in order."""
+        runtime = self.runtime
+        event = evidence.event
+        if not request.from_storyline:
             runtime._remember_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
+                system=request.system,
+                username=launch.actor.username,
+                logon_id=launch.actor.logon_id,
+                process_name=launch.actor.image,
+                command_line=launch.actor.command_line,
+                time=launch.time,
             )
-        if running_proc.logon_id and action_cohort_state_plan is None:
+        if running_proc.logon_id and root.cohort is None:
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
-                session.last_activity_time = time
+                session.last_activity_time = launch.time
         runtime._record_process_source_create_time(
-            system.hostname,
-            pid,
+            request.system.hostname,
+            root.process.identity.pid,
             event,
-            not_after=effective_source_visible_by,
+            not_after=evidence.source_visible_by,
         )
-        if provisional_process_termination is not None:
+        if evidence.provisional_termination is not None:
             runtime._remember_foreground_process_finalizer(
-                system=system,
-                user=user,
-                pid=pid,
-                process_name=process_name,
+                system=request.system,
+                user=request.user,
+                pid=root.process.identity.pid,
+                process_name=launch.actor.image,
                 logon_id=running_proc.logon_id,
-                termination_time=provisional_process_termination,
+                termination_time=evidence.provisional_termination,
             )
-        if _get_os_category(system.os) == "windows":
+        if _get_os_category(request.system.os) == "windows":
             runtime._emit_windows_process_startup_modules(
-                user=user,
-                system=system,
-                time=time,
-                pid=pid,
-                process_name=process_name,
-                from_storyline=from_storyline,
+                user=request.user,
+                system=request.system,
+                time=launch.time,
+                pid=root.process.identity.pid,
+                process_name=launch.actor.image,
+                from_storyline=request.from_storyline,
             )
         runtime._emit_process_command_network_effects(
-            user=user,
-            system=system,
-            time=time,
-            pid=pid,
-            process_name=process_name,
-            command_line=command_line,
+            user=request.user,
+            system=request.system,
+            time=launch.time,
+            pid=root.process.identity.pid,
+            process_name=launch.actor.image,
+            command_line=launch.actor.command_line,
             effect_plan=request.effect_plan,
         )
 
         runtime_image_load = (
-            prepared_effects.runtime_image_load if prepared_effects is not None else None
+            request.prepared_effects.runtime_image_load
+            if request.prepared_effects is not None
+            else None
         )
         if runtime_image_load is not None:
             runtime.generate_image_load(
-                user=user,
-                system=system,
+                user=request.user,
+                system=request.system,
                 time=runtime_image_load.timestamp,
-                pid=pid,
-                image=process_name,
+                pid=root.process.identity.pid,
+                image=launch.actor.image,
                 dll_path=runtime_image_load.path,
                 signed=runtime_image_load.signed,
                 signature=runtime_image_load.signature,
                 signature_status=runtime_image_load.signature_status,
                 load_phase="runtime",
-                from_storyline=from_storyline,
+                from_storyline=request.from_storyline,
             )
-        logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
-        return pid
+        logger.debug(
+            f"Generated process: {launch.actor.image} (PID: {root.process.identity.pid}) on {request.system.hostname}"
+        )
+        return root.process.identity.pid
 
 
 @dataclass(frozen=True)
