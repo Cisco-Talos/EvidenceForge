@@ -58,6 +58,7 @@ from evidenceforge.generation.emitters.base import (
     exact_publication_worker_attempt,
     stage_exact_publication_row,
 )
+from evidenceforge.generation.emitters.verification_resources import VerificationResources
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
@@ -797,6 +798,10 @@ class _PrivateJournalDirectory:
     """Own one protected SQLite directory outside attacker-controlled output paths."""
 
     def __init__(self, *, base_dir: Path, output_path: Path) -> None:
+        self._verification_resources = VerificationResources(self)
+        self._verification_resources.register(
+            "descriptor", "_parent_descriptor", "_directory_descriptor"
+        )
         self._base_dir, self._output_path = _require_contained(base_dir, output_path)
         self._journal_prefix = f".{_private_route_stem(base_dir, output_path)}.journal-"
         self.path: Path | None = None
@@ -1420,6 +1425,9 @@ class _SingleHistoryWriter:
         base_dir: Path,
         budget: _GlobalHistoryBudget,
     ) -> None:
+        self._verification_resources = VerificationResources(self)
+        self._verification_resources.register("connection", "_connection")
+        self._verification_resources.register("child", "_journal_directory")
         self._base_dir, self.output_path = _require_contained(base_dir, output_path)
         self._template = template
         self.buffer_size = buffer_size
@@ -3201,6 +3209,7 @@ class BashHistoryEmitter(LogEmitter):
             byte_capacity=journal_byte_capacity,
         )
         super().__init__(format_def, output_path, buffer_size, threaded)
+        self._verification_resources.register("children", "_writers")
 
     def _record_checkpoint_output(self, writer_key: tuple[str, str], rendered: str) -> None:
         """Track bounded route identity and semantic replacement since the last cadence point."""

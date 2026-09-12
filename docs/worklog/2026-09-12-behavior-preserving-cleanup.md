@@ -72,3 +72,19 @@
 - Behavior digest remains revision 44: neither CLI nor validation module paths belong to the
   existing generation behavior surface, and the checker confirms no surface change.
 - Items 4–7 and final standard/slow/expanded-checkpoint acceptance remain outstanding.
+
+### Item 4 — checkpoint scratch resource ownership
+
+- Replaced arbitrary object-graph traversal with construction-time owner registrations for
+  SQLite connections, directory descriptors, child writers, and base-emitter workers.
+  Disposal remains separate from normal finalization and preserves primary-error handling.
+- Focused regression coverage includes duplicate descriptors, partial initialization, unowned
+  handles, worker shutdown, repeated disposal, and SQLite close failure. The existing synthetic
+  checkpoint owner now explicitly registers its connection; its no-finalization assertion remains.
+- Gates: 146 focused tests, 3 targeted slow checkpoint tests, and 8,416 standard tests passed;
+  27 standard skips and 2,009 deselections (298.81 seconds). Initial focused failure was the
+  synthetic owner's missing registration; the corrected repeat passed. Ruff/format passed.
+- Revision 45 validated against item 3. All-format/default/42 raw evidence matches original
+  baseline and item 3. Original-build checkpoint verification and compatible resume also passed
+  with byte-identical evidence and validated provenance.
+- Items 5–7 and final comprehensive acceptance remain outstanding.

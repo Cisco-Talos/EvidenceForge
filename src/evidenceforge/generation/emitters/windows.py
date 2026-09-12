@@ -2523,6 +2523,10 @@ class WindowsEventEmitter(LogEmitter):
         self._host_writers_lock = Lock()
 
         super().__init__(format_def, output_path, buffer_size, threaded)
+        self._verification_resources.register("connection", "_spool_conn")
+        self._verification_resources.register(
+            "descriptor", "_spool_directory_descriptor", "_spool_root_descriptor"
+        )
         # Buffer raw event dicts instead of rendered strings
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}

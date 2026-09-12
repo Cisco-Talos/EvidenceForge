@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 44
+current_revision: 45
 history_start_revision: 1
-behavior_surface_sha256: "686acb5d4a2b96a9cf14c30e97811a02f39afde397440a4d990dd36dfad92c2f"
+behavior_surface_sha256: "cb01c8c07fb6cb61a0de5f32f8a673404a00f1d033317cb1c3ce8d69e1f56ba3"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -479,3 +479,10 @@ changes:
       - canonical-timing
     formats: []
     summary: Shares the unchanged mixture-based uniform timing constructor across DHCP, file transfers, and OCSP.
+  - revision: 45
+    id: explicit-checkpoint-scratch-resource-ownership
+    impact: none
+    domains:
+      - checkpoint-verification-cleanup
+    formats: []
+    summary: Discards checkpoint scratch workers and declared resource slots without inspecting arbitrary object graphs or finalizing sources.

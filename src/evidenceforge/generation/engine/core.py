@@ -32,7 +32,6 @@ from __future__ import annotations
 import logging
 import math
 import random
-import sqlite3
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
@@ -557,70 +556,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     raise first
 
     def _dispose_checkpoint_verification_scratch(self) -> None:
-        """Stop scratch workers and handles without normal source finalization."""
+        """Discard explicitly registered scratch resources without finalization."""
+        from evidenceforge.generation.emitters.verification_resources import (
+            discard_verification_resources,
+        )
 
-        import io
-        import os
-
-        visited: set[int] = set()
-        closed_descriptors: set[int] = set()
         emitters = getattr(self, "emitters", {})
-        pending: list[object] = list(emitters.values()) if type(emitters) is dict else []
-        failures: list[BaseException] = []
-        while pending:
-            owner = pending.pop()
-            identity = id(owner)
-            if identity in visited:
-                continue
-            visited.add(identity)
-            stop_event = getattr(owner, "_stop_event", None)
-            worker = getattr(owner, "_thread", None)
-            if stop_event is not None and worker is not None and worker.is_alive():
-                owner._verification_discard = True
-                stop_event.set()
-                worker.join(timeout=5.0)
-                if worker.is_alive():
-                    failures.append(RuntimeError("checkpoint verification worker did not stop"))
-            attributes = getattr(owner, "__dict__", {})
-            if type(attributes) is not dict:
-                continue
-            for name, value in attributes.items():
-                if isinstance(value, sqlite3.Connection):
-                    try:
-                        value.close()
-                    except sqlite3.Error as error:
-                        failures.append(error)
-                    else:
-                        setattr(owner, name, None)
-                elif isinstance(value, io.IOBase):
-                    try:
-                        value.close()
-                    except OSError as error:
-                        failures.append(error)
-                    else:
-                        setattr(owner, name, None)
-                elif (
-                    name.endswith("_descriptor")
-                    and type(value) is int
-                    and value > 2
-                    and value not in closed_descriptors
-                ):
-                    try:
-                        os.close(value)
-                    except OSError as error:
-                        failures.append(error)
-                    else:
-                        closed_descriptors.add(value)
-                        setattr(owner, name, None)
-                elif type(value) is dict:
-                    pending.extend(value.values())
-                elif value.__class__.__module__.startswith("evidenceforge.generation.emitters"):
-                    pending.append(value)
-        if failures:
-            first, *additional = failures
-            for failure in additional:
-                first.add_note(f"Additional scratch disposal failure: {failure!r}")
-            raise first
+        discard_verification_resources(emitters.values() if type(emitters) is dict else ())
 
     # behavior-surface: checkpoint-control-end
 
