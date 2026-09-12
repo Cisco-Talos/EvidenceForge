@@ -43,6 +43,7 @@ from evidenceforge.generation.engine.storyline import (
     _web_scan_path_allows_referrer,
     _web_scan_uri_with_runtime_variation,
 )
+from evidenceforge.generation.engine.storyline_helpers import periodic as periodic_helpers
 from evidenceforge.models import System, User
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
@@ -444,7 +445,6 @@ class TestIterPeriodicTicks:
         from types import SimpleNamespace
         from unittest.mock import Mock
 
-        from evidenceforge.generation.engine import storyline
         from evidenceforge.generation.engine.storyline import StorylineMixin
         from evidenceforge.models.scenario import System, User
 
@@ -463,9 +463,9 @@ class TestIterPeriodicTicks:
         engine.activity_generator._proxy_mode = "transparent"
 
         periodic = Mock(return_value=iter(expected_ticks))
-        monkeypatch.setattr(storyline, "_iter_periodic_ticks", periodic)
+        monkeypatch.setattr(periodic_helpers, "_iter_periodic_ticks", periodic)
         monkeypatch.setattr(
-            storyline,
+            periodic_helpers,
             "_iter_dns_tunnel_ticks",
             Mock(side_effect=AssertionError("generic beacons must not use DNS tunnel pacing")),
         )
@@ -495,7 +495,6 @@ class TestIterPeriodicTicks:
         """Beacon http_sequence should vary URI templates without hand-authored events."""
         from unittest.mock import Mock
 
-        from evidenceforge.generation.engine import storyline
         from evidenceforge.generation.engine.storyline import StorylineMixin
 
         start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
@@ -513,7 +512,7 @@ class TestIterPeriodicTicks:
         engine.activity_generator._proxy_mode = "transparent"
 
         monkeypatch.setattr(
-            storyline, "_iter_periodic_ticks", Mock(return_value=iter(expected_ticks))
+            periodic_helpers, "_iter_periodic_ticks", Mock(return_value=iter(expected_ticks))
         )
 
         spec = BeaconEventSpec(
@@ -562,8 +561,6 @@ class TestIterPeriodicTicks:
         """A SYSTEM beacon after service persistence should not fall back to svchost."""
         from unittest.mock import Mock
 
-        from evidenceforge.generation.engine import storyline
-
         start = datetime(2026, 4, 16, 16, 30, 0, tzinfo=UTC)
         system = System(
             hostname="DC-01",
@@ -593,7 +590,9 @@ class TestIterPeriodicTicks:
             service_account="LocalSystem",
             time=start - timedelta(minutes=10),
         )
-        monkeypatch.setattr(storyline, "_iter_periodic_ticks", Mock(return_value=iter([start])))
+        monkeypatch.setattr(
+            periodic_helpers, "_iter_periodic_ticks", Mock(return_value=iter([start]))
+        )
 
         spec = BeaconEventSpec(
             dst_ip="45.33.32.30",
@@ -635,8 +634,6 @@ class TestIterPeriodicTicks:
         """Beacon activity should not render /v2/status as stable text/html page traffic."""
         from unittest.mock import Mock
 
-        from evidenceforge.generation.engine import storyline
-
         start = datetime(2026, 4, 16, 16, 30, 0, tzinfo=UTC)
         system = System(hostname="DC-01", ip="10.0.2.10", os="Windows Server 2019", type="server")
         actor = User(username="SYSTEM", full_name="SYSTEM", email="system@example.com")
@@ -649,7 +646,9 @@ class TestIterPeriodicTicks:
         engine.activity_generator._ip_to_system = {system.ip: system}
         engine.activity_generator._proxy_routes = {}
         engine.activity_generator._proxy_mode = "transparent"
-        monkeypatch.setattr(storyline, "_iter_periodic_ticks", Mock(return_value=iter([start])))
+        monkeypatch.setattr(
+            periodic_helpers, "_iter_periodic_ticks", Mock(return_value=iter([start]))
+        )
 
         spec = BeaconEventSpec(
             dst_ip="45.33.32.30",
@@ -1438,7 +1437,7 @@ class TestWebScanPresets:
             generate_connection=lambda **kwargs: captured.append(kwargs),
         )
         monkeypatch.setattr(
-            storyline,
+            periodic_helpers,
             "_iter_periodic_ticks",
             lambda *args, **kwargs: iter([start]),
         )

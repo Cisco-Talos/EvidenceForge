@@ -40,13 +40,15 @@ def handle_connection(
     self: StorylineMixin, spec: ConnectionEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the connection evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
-        _build_ids_alert_contexts,
-        _ids_attachment_ground_truth,
+    from evidenceforge.generation.engine.storyline_helpers.http import (
         _is_c2_http_request,
         _is_exfil_connection_spec,
         _size_storyline_connection,
         _storyline_http_response_body_len,
+    )
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
+        _build_ids_alert_contexts,
+        _ids_attachment_ground_truth,
     )
 
     actor = context.actor
@@ -539,7 +541,7 @@ def handle_dhcp_lease(
     self: StorylineMixin, spec: DhcpLeaseEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the dhcp_lease evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
         _ids_attachment_ground_truth,
     )

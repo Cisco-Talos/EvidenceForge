@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 52
+current_revision: 53
 history_start_revision: 1
-behavior_surface_sha256: "baf280f1c716f03d4e47edafcf3cc35bdee73626dd9d6ade146b5dfb63ec161d"
+behavior_surface_sha256: "a37351d86be543418deebf730b4ba6b746d7c5032db6df1bb07840b6f343d2d6"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -537,3 +537,9 @@ changes:
     domains: [process-session-lifecycle, storyline-dispatch]
     formats: []
     summary: Shares session classification, reuse, creation and recording between typed processes and command spills, retaining the typed no-planner fallback and exact random-number consumption.
+  - revision: 53
+    id: one-way-storyline-handler-helper-dependencies
+    impact: none
+    domains: [storyline-dispatch, process-normalization, protocol-evidence, periodic-timing]
+    formats: []
+    summary: Moves shared IDS, HTTP sizing, process parsing and periodic timing helpers to focused owners imported directly by handlers and coordination, retaining compatibility aliases and random-number consumption.

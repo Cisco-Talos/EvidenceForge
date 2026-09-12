@@ -386,3 +386,19 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   (292.56 s). Both Ruff checks, revision-52 manifest validation against `bd20077e`, 292 focused
   cases, three targeted slow inventory cases, and the 12 evidence cases pass. Digest:
   `baf280f1c716f03d4e47edafcf3cc35bdee73626dd9d6ade146b5dfb63ec161d`.
+
+### Item 4 — one-way handler helper dependencies
+
+- Item 3 committed as `233bbf7a`. Twenty-eight shared helper implementations now live in four
+  focused IDS, HTTP, process parsing, and periodic modules. Coordinator exports retain explicit
+  aliases, while execution references the owning modules. The 46 runtime helper-name imports
+  back from typed handlers to the coordinator are gone; annotation-only imports remain.
+- AST comparison confirms all 28 moved function bodies are unchanged. Regression checks enforce
+  the dependency direction and alias identity. Periodic tests patch the actual helper owner;
+  the slow timing inventory changes source paths only. Preparation included a transient syntax
+  error from an overly broad annotation edit; it was corrected before running acceptance tests.
+- **Item 4 acceptance:** focused **372 passed**; standard **8,452 passed, 27 existing skips,
+  2,009 deselected** (297.17 s); targeted slow timing inventory **3 passed**. Both Ruff checks
+  and revision-53 manifest validation against `233bbf7a` pass. Six typed and six periodic cases
+  match both item 3 and the corrected reference; all-format/default/42 matches the corrected
+  reference too. Digest: `a37351d86be543418deebf730b4ba6b746d7c5032db6df1bb07840b6f343d2d6`.

@@ -185,9 +185,9 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|engine/storyline.py|_execute_single_storyline_event|uniform
 1|engine/storyline.py|_execute_storyline|uniform
 3|engine/storyline.py|_execute_web_scan_bundle|uniform
-1|engine/storyline.py|_iter_dns_tunnel_ticks|expovariate
-2|engine/storyline.py|_iter_dns_tunnel_ticks|uniform
-1|engine/storyline.py|_iter_periodic_ticks|uniform
+1|engine/storyline_helpers/periodic.py|_iter_dns_tunnel_ticks|expovariate
+2|engine/storyline_helpers/periodic.py|_iter_dns_tunnel_ticks|uniform
+1|engine/storyline_helpers/periodic.py|_iter_periodic_ticks|uniform
 4|engine/storyline.py|_port_scan_connection_profile|uniform
 2|engine/storyline.py|_resolve_storyline_process_logon_id|uniform
 2|engine/storyline.py|_storyline_event_offsets|uniform

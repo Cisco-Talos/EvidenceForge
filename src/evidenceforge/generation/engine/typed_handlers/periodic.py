@@ -35,17 +35,21 @@ def handle_beacon(
     self: StorylineMixin, spec: BeaconEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the beacon evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
-        _build_ids_alert_contexts,
+    from evidenceforge.generation.engine.storyline_helpers.http import (
         _c2_http_response_size,
-        _entry_value,
-        _ids_attachment_ground_truth,
         _is_c2_http_request,
+        _size_storyline_connection,
+        _storyline_http_response_body_len,
+    )
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
+        _build_ids_alert_contexts,
+        _ids_attachment_ground_truth,
+    )
+    from evidenceforge.generation.engine.storyline_helpers.periodic import (
+        _entry_value,
         _iter_periodic_ticks,
         _range_or_value,
         _render_beacon_template,
-        _size_storyline_connection,
-        _storyline_http_response_body_len,
         _weighted_profile_entry,
     )
 
@@ -629,7 +633,7 @@ def handle_dns_query(
     self: StorylineMixin, spec: DnsQueryEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the dns_query evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
         _ids_attachment_ground_truth,
     )
@@ -737,11 +741,11 @@ def handle_dga_queries(
     self: StorylineMixin, spec: DgaQueriesEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the dga_queries evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
         _ids_attachment_ground_truth,
-        _iter_periodic_ticks,
     )
+    from evidenceforge.generation.engine.storyline_helpers.periodic import _iter_periodic_ticks
 
     system = context.system
     time = context.time
@@ -875,15 +879,17 @@ def handle_dns_tunnel(
     self: StorylineMixin, spec: DnsTunnelEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the dns_tunnel evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
+        _ids_attachment_ground_truth,
+    )
+    from evidenceforge.generation.engine.storyline_helpers.periodic import (
         _choose_dns_tunnel_campaign_ttl,
         _choose_dns_tunnel_response_template,
         _choose_dns_tunnel_response_ttl,
         _dns_periodic_exclusive_start_fence,
         _dns_tunnel_background_txt_record,
         _dns_tunnel_extra_labels,
-        _ids_attachment_ground_truth,
         _iter_dns_tunnel_ticks,
         _render_dns_tunnel_response_template,
     )

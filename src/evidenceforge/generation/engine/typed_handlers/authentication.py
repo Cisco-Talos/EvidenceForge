@@ -182,7 +182,7 @@ def handle_ssh_session(
     self: StorylineMixin, spec: SshSessionEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the ssh_session evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
         _ids_attachment_ground_truth,
     )
@@ -281,7 +281,7 @@ def handle_rdp_session(
     self: StorylineMixin, spec: RdpSessionEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the rdp_session evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.ids import (
         _build_ids_alert_contexts,
         _ids_attachment_ground_truth,
     )
@@ -369,7 +369,7 @@ def handle_credential_spray(
     self: StorylineMixin, spec: CredentialSprayEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the credential_spray evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import _iter_periodic_ticks
+    from evidenceforge.generation.engine.storyline_helpers.periodic import _iter_periodic_ticks
 
     actor = context.actor
     system = context.system

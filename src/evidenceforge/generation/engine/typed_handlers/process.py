@@ -37,7 +37,7 @@ def handle_process(
     self: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the process evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import (
+    from evidenceforge.generation.engine.storyline_helpers.process import (
         _IPV4_LITERAL_RE,
         _estimate_process_lifetime,
         _extract_schtasks_option,
@@ -784,7 +784,9 @@ def handle_create_remote_thread(
     self: StorylineMixin, spec: CreateRemoteThreadEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the create_remote_thread evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import _normalize_storyline_process_image
+    from evidenceforge.generation.engine.storyline_helpers.process import (
+        _normalize_storyline_process_image,
+    )
 
     actor = context.actor
     system = context.system
@@ -841,7 +843,9 @@ def handle_process_access(
     self: StorylineMixin, spec: ProcessAccessEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the process_access evidence path using the existing runtime owners."""
-    from evidenceforge.generation.engine.storyline import _normalize_storyline_process_image
+    from evidenceforge.generation.engine.storyline_helpers.process import (
+        _normalize_storyline_process_image,
+    )
 
     actor = context.actor
     system = context.system

