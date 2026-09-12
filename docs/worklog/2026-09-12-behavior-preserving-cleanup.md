@@ -57,3 +57,18 @@
 - Standard-suite skips include unavailable gitignored `sample_data/` and optional external-parser
   fixtures; full reason list is in `/private/tmp/eforge-cleanup-item2-tests.log`.
 - Items 3–7 and the final full standard/slow and expanded checkpoint matrix remain outstanding.
+
+### Item 3 — configuration validation phases
+
+- Moved reusable validation to `validation/configuration.py` with explicit legacy CLI re-exports.
+  The public coordinator is 26 lines; effective loading/orchestration is 253 lines, followed by
+  12 explicitly ordered domain checks. DNS indexes and shared IDS callbacks have a named result.
+- Raw overlay validation precedes delayed scope activation. The scoped overlay discovery pass
+  remains explicit, preserving the old recursive pass's scope-dependent diagnostics and counts.
+- Default configuration result exactly matches original `dev`: 92 files checked, no issues.
+- Gates: 65 focused non-soak tests and all 91 exhaustive configuration soak cases passed;
+  8,412 standard tests passed, 27 skipped, 2,009 deselected (289.08 seconds). Ruff and whitespace
+  passed. All-format/default/42 bytes match both original baseline and item 2.
+- Behavior digest remains revision 44: neither CLI nor validation module paths belong to the
+  existing generation behavior surface, and the checker confirms no surface change.
+- Items 4–7 and final standard/slow/expanded-checkpoint acceptance remain outstanding.

