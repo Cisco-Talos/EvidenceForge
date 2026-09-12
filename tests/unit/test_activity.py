@@ -8690,7 +8690,7 @@ class TestActivityGenerator:
         """Process-owned registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(ProcessPreflightPlanner._plan_process_execution_side_effects)
+        source = inspect.getsource(ProcessPreflightPlanner._select_endpoint_effects)
         assert (
             "key, value_name, details, value_type = materialize_registry_effect(\n"
             "                    (key, value_name, details),\n"

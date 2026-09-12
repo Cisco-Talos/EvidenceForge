@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 61
+current_revision: 62
 history_start_revision: 1
-behavior_surface_sha256: "bf62dcb13a743846cec4b2b300cb40dc1849d35e059b5ffc9a60ffff212a56cb"
+behavior_surface_sha256: "52f9757f67793ce4771f6b93cc9aeeebe826d10f01553f7dfc1d4458774a8180"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -595,3 +595,11 @@ changes:
       - process-runtime-artifacts
     formats: []
     summary: Moves bounded source admission, effect planning, lifetime previews and uncommitted artifact cleanup into an ephemeral planner bound to current owners, preserving scoped draws, preparation order, failure scopes and public hooks.
+  - revision: 62
+    id: staged-process-preflight-reservations
+    impact: none
+    domains:
+      - process-preflight
+      - process-runtime-artifacts
+    formats: []
+    summary: Separates effect selection, allocation-free validation, endpoint reservations, lifetime admission and root-binary reservation while preserving order, one preparation-local reservation list, exception scopes and prepared results.

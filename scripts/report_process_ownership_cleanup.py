@@ -6,6 +6,7 @@ import argparse
 import ast
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -89,10 +90,58 @@ def structural_inventory(repository: Path) -> dict[str, Any]:
         "_plan_process_lifetime",
         "_cancel_uncommitted_process_artifact_publications",
     )
+    baseline_tree = ast.parse(
+        subprocess.check_output(
+            [
+                "git",
+                "show",
+                "010ae90ff3dc345d5f05224345c4d529b87fe37a:src/evidenceforge/generation/activity/generator.py",
+            ],
+            cwd=repository,
+            text=True,
+        )
+    )
+    baseline_hooks = [
+        node
+        for owner in baseline_tree.body
+        if isinstance(owner, ast.ClassDef) and owner.name == "ActivityGenerator"
+        for node in owner.body
+        if isinstance(node, ast.FunctionDef) and node.name in hooks
+    ]
+    baseline_attributes = {
+        node.attr
+        for method in baseline_hooks
+        for node in ast.walk(method)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    }
+    baseline_optional_attributes = {
+        node.args[1].value
+        for method in baseline_hooks
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "self"
+        and isinstance(node.args[1], ast.Constant)
+    }
     return {
         "baseline_forwarding_calls": 35,
         "remaining_forwarding_calls": remaining,
         "owners": implementations,
+        "baseline_preflight": {
+            "generator_lines": sum(node.end_lineno - node.lineno + 1 for node in baseline_hooks),
+            "direct_generator_attributes_including_internal_helpers": sorted(baseline_attributes),
+            "optional_generator_attributes": sorted(baseline_optional_attributes),
+            "side_effect_coordinator_lines": next(
+                node.end_lineno - node.lineno + 1
+                for node in baseline_hooks
+                if node.name == "_plan_process_execution_side_effects"
+            ),
+        },
         "generator_preflight_hooks": {
             name: {
                 "lines": functions[name].end_lineno - functions[name].lineno + 1,
@@ -161,10 +210,19 @@ def main() -> None:
                     compare_resumed(
                         control, resumed, same_build=same_build, expected_change_ids=expected
                     )
+                    exact_rejection_sha256: str | None = None
+                    if not same_build:
+                        rejection = resumed.with_suffix(".exact-rejection.log")
+                        if "requires the complete original fingerprint" not in " ".join(
+                            rejection.read_text().split()
+                        ):
+                            raise ValueError(f"Missing older-build exact rejection: {kind}-{name}")
+                        exact_rejection_sha256 = hashlib.sha256(rejection.read_bytes()).hexdigest()
                     resumes.append(
                         {
                             "case": f"{kind}-{name}",
                             "origin_revision": revision,
+                            "exact_rejection_sha256": exact_rejection_sha256,
                             "raw_file_sha256": raw_hashes(resumed),
                             "control_raw_file_sha256": raw_hashes(control),
                         }

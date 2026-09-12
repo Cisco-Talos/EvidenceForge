@@ -1,11 +1,21 @@
 # Behavior-preserving 2.0.0 cleanup
 
-## Final process-ownership pass — in progress
+## Final process-ownership pass — complete
 
-The approved follow-up starts from clean `010ae90ff3dc345d5f05224345c4d529b87fe37a`
-on `codex/2.0.0-code-cleanup`. Its four gated commits will separate platform parent policy,
-remove the frozen internal forwarding hops, establish a process preflight owner, and divide
-preflight planning from reservations. This pass admits no new evidence differences.
+All three remaining opportunities are complete in four independently gated implementation commits
+on `codex/2.0.0-code-cleanup`, starting from clean
+`010ae90ff3dc345d5f05224345c4d529b87fe37a`: platform parent policies, the 35 selected internal
+forwarding calls, explicit preflight ownership, and staged planning/reservations.
+The corrected foreground behavior is preserved. No evidence exception, golden update,
+package/dependency/schema change, fingerprint-policy change, merge or release was introduced.
+
+Final acceptance passes: **8,489 standard tests** (27 unchanged existing skips), **1,780 slow
+tests**, **194 raw-byte comparisons**, **18 successful checkpoint resumes**, **12 older-build
+exact-policy rejections**, **seven targeted retention soak tests**, both Ruff checks and behavior
+validation against the previous item, `010ae90f` and original dev. Full soak is excluded as agreed.
+Artifact hashes and field-level provenance were verified; the final report is
+`2026-09-12-process-ownership-evidence.json`. Final acceptance below supersedes historical pending
+notes; all failed attempts and repairs remain recorded.
 
 The starting checkout is preserved at `/private/tmp/eforge-cleanup-process-baseline`.
 The existing 122 byte controls and 12 resumes re-verify, with a fresh verification report at
@@ -144,6 +154,105 @@ Report: `2026-09-12-process-preflight-owner-evidence.json`, SHA-256
 Logs: `/private/tmp/eforge-cleanup-pass3-item3a-{focused,focused-repeat,standard,core,native,
 supplements,recovery,slow,reservation-soak}.log`. The two endpoint-preparation failure scopes
 are still intact; separating their cohesive operations is the next independently gated substep.
+
+### Item 3b / final acceptance — in progress
+
+Item 3a is committed as `e65109ce`. Preparation now follows six explicit operations in its
+original order: actor/effect selection (277 lines), allocation-free endpoint/cohort validation
+(29), endpoint artifact reservation (85 after correcting the issue below), lifetime/deadline
+preview (49), root-binary reservation (69), and existing prepared-result assembly. The coordinating
+side-effect method shrinks from 540 to 62 lines. Three ephemeral records carry only produced
+values (five selection fields, three reservation fields, two lifetime fields); runtime owners,
+mutable drafts and RNGs are not copied into these records.
+
+The first focused run passed 566 and failed the new caller-token regression: an extracted local
+`newly_reserved` declaration shadowed the preparation-owned list, so a later lifetime rejection
+left one new token reserved. Removed that declaration; both reservation stages now append to the
+same preparation-local list, and the original two exception scopes remain intact. The repeat
+passes **567 tests**, four deselected (10.42 seconds). No expected value or golden evidence was
+changed to accommodate the failure. The existing registry source-inspection assertion now points
+to the effect-selection operation containing that unchanged logic.
+
+Final-source **78 rollback/recovery tests** pass (3.87 seconds), and **seven targeted retention
+soak tests** pass (48.00 seconds), including the new 1,000-cycle reservation cleanup check.
+Full soak remains excluded. Revision 62 uses digest
+`52f9757f67793ce4771f6b93cc9aeeebe826d10f01553f7dfc1d4458774a8180` and validates against
+`e65109ce`, `010ae90f` and original dev `e4035435`; both Ruff checks pass.
+Full standard/slow suites, 194 byte comparisons and the expanded 18-resume checkpoint gate are
+running against this frozen production source. Item 3b is not yet accepted or committed.
+
+Final candidate prefix: `/private/tmp/eforge-cleanup-evidence/pass3-final`.
+Final checkpoint root: `/private/tmp/eforge-cleanup-evidence/pass3-final-checkpoints`.
+The six preserved `010ae90f` checkpoints are in `pass3-baseline-checkpoints`, alongside the
+preserved original-dev checkpoints. Final logs use `/private/tmp/eforge-cleanup-pass3-final-*`.
+
+### Final process-ownership acceptance and review
+
+All requested final gates pass on the frozen revision-62 source:
+
+| Gate | Result |
+|---|---|
+| Full standard suite | 8,489 passed; 27 existing skips; 2,011 deselected; 311.56 seconds |
+| Full slow suite | 1,780 passed; 8,747 deselected; 1,136.22 seconds |
+| Final focused process tests | 567 passed; four deselected; 10.42 seconds |
+| Final artifact rollback/recovery | 78 passed; 3.87 seconds |
+| Targeted process/network retention soak | Seven passed; 108 deselected; 48.00 seconds |
+| Frozen evidence and ground truth | 194 cases match both `010ae90f` and the preceding accepted commit |
+| Checkpoint hydration/resume | Original dev compatible: six; revision 58 compatible: six; final exact: six |
+| Older-build exact policy | 12 rejections; checkpoint pointers unchanged before compatible retries |
+| Ruff / whitespace / behavior history | All pass; revision 62 validates against `e65109ce`, `010ae90f`, `e4035435` |
+
+The 27 skipped test identities were compared with the previously accepted standard log and are
+identical: three external parser checks, one optional Splunk integration, one full-engine web-access
+case and 22 external sample-data checks. No new skip was introduced. The full soak tier and release
+coverage gate are outside this feature-branch scope. An optional OS process-status probe was denied
+by the sandbox; completed pytest logs and tool exit statuses independently confirmed the gates.
+
+The final raw-byte/provenance verification was repeated after all tests completed, and the report
+itself was byte-identical. Report SHA-256:
+`b91f1885d83db5ab3fdde8d2940aa28040a8e702f239bbeac0fa7f71f654448d`.
+It records every case's actual file hashes, all 18 resume artifact sets, 12 exact-rejection log
+hashes, frozen input hashes, the original caller inventory, baseline dependency access counts and
+current owner fields/operation sizes. The package version and dependency declarations were also
+compared as raw bytes with `010ae90f` and are unchanged.
+
+| Structural measure | Before | After |
+|---|---|---|
+| Shared parent coordinator | 2,074 lines | 1,400 lines; shared ancestry, history coordination and recursive/service-worker materialization remain here |
+| Platform parent policy | Embedded in coordinator | One Windows helper (six explicit inputs), one Linux helper (seven), shared history helper (three) |
+| Frozen internal parent forwarding calls | 35 across 20 methods | Zero; all compatibility forwarders remain available |
+| Generator preflight implementation | 785 lines across eight methods | 65 forwarding lines; implementation belongs to `ProcessPreflightPlanner` |
+| Preflight preparation coordinator | 540 lines | 62 lines following the six preparation phases |
+| Preflight dependency contract | 18 direct generator attributes, including internal helpers, plus one optional cutoff attribute | 11 named current-owner/capability inputs; no broad generator field |
+
+The dependency counts describe different interface shapes, not a claim that eight independent
+runtime authorities disappeared. Existing state, timing, registry, cache and lifecycle owners
+remain authoritative. The new records contain only phase results. No planner retains independent
+state or RNGs; current bindings and zero retained services/reservations are exercised by the
+replacement-owner tests and retention cases.
+
+Representative final paths are shared parent validation → platform policy → shared recursive
+materialization; direct internal caller → fresh parent owner; and bounded admission → actor/effect
+selection → allocation-free endpoint/cohort validation → endpoint reservations → lifetime/deadline
+preview → root-binary reservation → existing prepared result → unchanged bundle execution and cleanup.
+A failure during endpoint reservation uses its existing inner cleanup scope. A later lifetime or
+root-binary failure uses the existing outer scope over the same local new-token list. Explicitly
+supplied tokens stay outside that list. Publication and canonical commit remain execution-owned.
+
+Residual complexity is deliberate: shared ancestry repair remains substantial, effect selection
+still contains the existing file/module/registry branches, and compatibility/public action adapters
+remain. This pass completes its three opportunities without a broader adapter purge or a change to
+those policies. Raw evidence, ground truth, corrected foreground behavior, checkpoint representations,
+and compatible/exact policy behavior remain preserved by the exercised gates.
+
+Implementation history: `788c3680` (platform parents), `c72b3a4f` (35 internal calls),
+`e65109ce` (preflight owner), followed by the final `refactor: stage process preflight reservations`
+commit containing revision 62 and this acceptance record. Final logs are
+`/private/tmp/eforge-cleanup-pass3-final-{standard,slow,core,native,supplements,checkpoints,
+recovery,retention-soak}.log`; the staged-preflight focused attempts use
+`/private/tmp/eforge-cleanup-pass3-item3b-focused{,-repeat}.log`.
+All earlier checkouts, captures and reports remain preserved. Delivery is the dedicated branch;
+no merge or release is part of this effort.
 
 ## Second-pass final status
 

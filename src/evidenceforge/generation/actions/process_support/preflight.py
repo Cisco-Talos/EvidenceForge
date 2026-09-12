@@ -31,10 +31,21 @@ from evidenceforge.generation.actions import (
     ScannerEffectIntent,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.command_effects import (
+    EffectRequirement,
+    FileEffectAction,
+    FileEffectIntent,
+    RegistryEffectAction,
+    RegistryEffectIntent,
+)
 from evidenceforge.generation.actions.endpoint_effects import (
+    EndpointEffectSpec,
+    EndpointStateDisposition,
     PreparedEndpointEffect,
+    PreparedFileEffectPayload,
     PreparedProcessEffectActor,
     PreparedProcessEndpointEffectPlan,
+    PreparedRegistryEffectPayload,
 )
 from evidenceforge.generation.actions.process_execution import (
     ProcessLifetimeMode,
@@ -78,6 +89,34 @@ _runtime_artifact_owner_kind = process_policy._runtime_artifact_owner_kind
 _session_source_ready_time = process_policy._session_source_ready_time
 _windows_process_lifetime_plan = process_policy._windows_process_lifetime_plan
 _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS = process_policy._LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS
+
+
+@dataclass(frozen=True)
+class SelectedProcessEffects:
+    """Actor and scoped effect choices before endpoint validation or reservations."""
+
+    actor: PreparedProcessEffectActor
+    window_end: datetime
+    effects: tuple[PreparedEndpointEffect, ...]
+    runtime_image_load: ProcessRuntimeImageLoadPlan | None
+    os_category: str
+
+
+@dataclass(frozen=True)
+class EndpointArtifactReservations:
+    """Prepared endpoint payloads and the exact deployment facts used to reserve them."""
+
+    effects: tuple[PreparedEndpointEffect, ...]
+    architecture: Architecture | None
+    deployment_registry: DeploymentContentRegistry | None
+
+
+@dataclass(frozen=True)
+class ProcessLifetimePreview:
+    """Allocation-free lifetime choice and its deadline-validated close time."""
+
+    plan: ProcessLifetimePlan
+    termination: datetime | None
 
 
 @dataclass(frozen=True)
@@ -207,21 +246,6 @@ class ProcessPreflightPlanner:
                 actor=self.actors._prepare_process_effect_actor(request),
             )
 
-        from evidenceforge.generation.actions.command_effects import (
-            EffectRequirement,
-            FileEffectAction,
-            FileEffectIntent,
-            RegistryEffectAction,
-            RegistryEffectIntent,
-        )
-        from evidenceforge.generation.actions.endpoint_effects import (
-            EndpointEffectSpec,
-            EndpointStateDisposition,
-            PreparedEndpointEffect,
-            PreparedFileEffectPayload,
-            PreparedRegistryEffectPayload,
-        )
-
         if (
             matching_service_worker(
                 os_category=_get_os_category(request.system.os),
@@ -232,7 +256,48 @@ class ProcessPreflightPlanner:
             is not None
         ):
             return None
+        selection = self._select_endpoint_effects(request)
+        allocation_free_endpoint = self._validate_endpoint_effects(request, anchor, selection)
+        runtime_content_manager = self._runtime_content_manager
+        newly_reserved: list[LocalArtifactPublishToken] = []
+        reservations = self._reserve_endpoint_artifacts(request, anchor, selection, newly_reserved)
+        try:
+            endpoint = (
+                replace(allocation_free_endpoint, effects=reservations.effects)
+                if allocation_free_endpoint is not None
+                else None
+            )
+            lifetime = self._preview_lifetime(request, selection, endpoint)
+            root_binary_publication = self._reserve_root_binary(
+                request, anchor, selection, endpoint, reservations, newly_reserved
+            )
+            return ProcessExecutionPreparedEffects(
+                root_anchor=anchor,
+                actor=selection.actor,
+                endpoint=endpoint,
+                runtime_image_load=selection.runtime_image_load,
+                lifetime_plan=lifetime.plan,
+                provisional_termination=lifetime.termination,
+                root_binary_publication=root_binary_publication,
+            )
+        except RuntimeContentOwnerError as exc:
+            if runtime_content_manager is not None:
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+            raise ExecutionEffectPlanError(
+                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                "prepared process runtime-content owner is inadmissible: "
+                f"host={request.system.hostname!r} principal={selection.actor.username!r} "
+                f"image={selection.actor.image!r}: {exc}",
+            ) from exc
+        except (ExecutionEffectPlanError, StateError, ValueError):
+            if runtime_content_manager is not None:
+                for publication in newly_reserved:
+                    runtime_content_manager.registry.cancel_prepared(publication)
+            raise
 
+    def _select_endpoint_effects(self, request: ProcessExecutionRequest) -> SelectedProcessEffects:
+        """Resolve the actor and draw the existing effect choices in their original order."""
         actor = self.actors._prepare_process_effect_actor(request)
         rng = self._process_endpoint_effect_rng(request, actor)
         endpoint_window_candidates = [actor.started_at + timedelta(days=1)]
@@ -505,16 +570,26 @@ class ProcessPreflightPlanner:
                         ),
                     )
                 )
+        return SelectedProcessEffects(
+            actor, endpoint_window_end, tuple(planned), runtime_image_load, os_category
+        )
 
+    def _validate_endpoint_effects(
+        self,
+        request: ProcessExecutionRequest,
+        anchor: ActionAnchor,
+        selection: SelectedProcessEffects,
+    ) -> PreparedProcessEndpointEffectPlan | None:
+        """Validate endpoint windows and cohort admission without allocating artifacts."""
         allocation_free_endpoint = (
             PreparedProcessEndpointEffectPlan(
                 root_anchor=anchor,
-                actor=actor,
-                window_end=endpoint_window_end,
-                retention_horizon_end=endpoint_window_end,
-                effects=tuple(planned),
+                actor=selection.actor,
+                window_end=selection.window_end,
+                retention_horizon_end=selection.window_end,
+                effects=tuple(selection.effects),
             )
-            if planned
+            if selection.effects
             else None
         )
         if allocation_free_endpoint is not None:
@@ -523,11 +598,23 @@ class ProcessPreflightPlanner:
                 anchor,
             )
             self.actors._process_endpoint_uses_action_cohort(
-                actor=actor,
+                actor=selection.actor,
                 admitted_effects=allocation_free_endpoint.admitted_effects,
                 effect_plan=root_effect_plan,
             )
+        return allocation_free_endpoint
 
+    def _reserve_endpoint_artifacts(
+        self,
+        request: ProcessExecutionRequest,
+        anchor: ActionAnchor,
+        selection: SelectedProcessEffects,
+        newly_reserved: list[LocalArtifactPublishToken],
+    ) -> EndpointArtifactReservations:
+        """Reserve missing endpoint artifacts; keep caller-supplied tokens outside rollback."""
+        planned: tuple[PreparedEndpointEffect, ...] | list[PreparedEndpointEffect] = (
+            selection.effects
+        )
         runtime_content_manager = self._runtime_content_manager
         deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
         host_deployment = (
@@ -538,9 +625,8 @@ class ProcessPreflightPlanner:
         effective_architecture: Architecture | None = request.system.architecture or (
             host_deployment.architecture if host_deployment is not None else None
         )
-        newly_reserved: list[LocalArtifactPublishToken] = []
         if runtime_content_manager is not None:
-            platform = cast(Platform, os_category)
+            platform = cast(Platform, selection.os_category)
             prepared_file_effects: list[PreparedEndpointEffect] = []
             try:
                 for effect in planned:
@@ -554,7 +640,7 @@ class ProcessPreflightPlanner:
                     same_as_actor_image = canonical_native_path(
                         payload.path,
                         platform,
-                    ) == canonical_native_path(actor.image, platform)
+                    ) == canonical_native_path(selection.actor.image, platform)
                     executable = same_as_actor_image and effective_architecture is not None
                     publication = runtime_content_manager.prepare_effect_publication(
                         root_action_id=anchor.action_id,
@@ -563,7 +649,7 @@ class ProcessPreflightPlanner:
                             f"{effect.spec.intent.semantic_key}"
                         ),
                         hostname=request.system.hostname,
-                        principal=actor.username,
+                        principal=selection.actor.username,
                         platform=platform,
                         architecture=effective_architecture,
                         native_path=payload.path,
@@ -571,11 +657,11 @@ class ProcessPreflightPlanner:
                         observed_at=effect.spec.occurrence_times[0],
                         owner_kind=_runtime_artifact_owner_kind(
                             platform,
-                            actor.username,
-                            actor.logon_id,
+                            selection.actor.username,
+                            selection.actor.logon_id,
                         ),
                         deployment_registry=deployment_registry,
-                        actor_image=actor.image,
+                        actor_image=selection.actor.image,
                         executable=executable,
                     )
                     if publication is not None:
@@ -592,147 +678,137 @@ class ProcessPreflightPlanner:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_ACTOR,
                     "prepared process runtime-content owner is inadmissible: "
-                    f"host={request.system.hostname!r} principal={actor.username!r} "
-                    f"image={actor.image!r}: {exc}",
+                    f"host={request.system.hostname!r} principal={selection.actor.username!r} "
+                    f"image={selection.actor.image!r}: {exc}",
                 ) from exc
             except (ExecutionEffectPlanError, StateError, ValueError):
                 for publication in newly_reserved:
                     runtime_content_manager.registry.cancel_prepared(publication)
                 raise
             planned = prepared_file_effects
+        return EndpointArtifactReservations(
+            tuple(planned), effective_architecture, deployment_registry
+        )
 
-        try:
-            endpoint = (
-                replace(
-                    allocation_free_endpoint,
-                    effects=tuple(planned),
+    def _preview_lifetime(
+        self,
+        request: ProcessExecutionRequest,
+        selection: SelectedProcessEffects,
+        endpoint: PreparedProcessEndpointEffectPlan | None,
+    ) -> ProcessLifetimePreview:
+        """Preview termination without advancing timing state, then validate close deadlines."""
+        lifetime_plan = self._plan_process_lifetime(request, selection.actor)
+        provisional_termination = self._plan_process_provisional_termination(
+            request,
+            selection.actor,
+            lifetime_plan,
+        )
+        endpoint_close_floor: datetime | None = None
+        if (
+            provisional_termination is not None
+            and endpoint is not None
+            and endpoint.latest_admitted_occurrence is not None
+        ):
+            endpoint_close_floor = endpoint.latest_admitted_occurrence + timedelta(milliseconds=25)
+            provisional_termination = max(provisional_termination, endpoint_close_floor)
+        if selection.actor.session_deadline is not None and provisional_termination is not None:
+            release_margin_ms = (
+                _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
+                if selection.os_category == "linux"
+                and _linux_foreground_lifetime(selection.actor.image, selection.actor.command_line)
+                is not None
+                else 25
+            )
+            close_ceiling = selection.actor.session_deadline - timedelta(
+                milliseconds=release_margin_ms
+            )
+            if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "prepared endpoint effects leave no interval for the process lifecycle close",
                 )
-                if allocation_free_endpoint is not None
-                else None
+            if provisional_termination > close_ceiling:
+                provisional_termination = close_ceiling
+            if provisional_termination <= selection.actor.started_at:
+                raise ExecutionEffectPlanError(
+                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    "prepared process actor leaves no interval for its lifecycle close: "
+                    f"host={request.system.hostname!r} image={selection.actor.image!r} "
+                    f"started_at={selection.actor.started_at.isoformat()} "
+                    f"session_deadline={selection.actor.session_deadline.isoformat()} "
+                    f"planned_close={provisional_termination.isoformat()}",
+                )
+        return ProcessLifetimePreview(lifetime_plan, provisional_termination)
+
+    def _reserve_root_binary(
+        self,
+        request: ProcessExecutionRequest,
+        anchor: ActionAnchor,
+        selection: SelectedProcessEffects,
+        endpoint: PreparedProcessEndpointEffectPlan | None,
+        reservations: EndpointArtifactReservations,
+        newly_reserved: list[LocalArtifactPublishToken],
+    ) -> LocalArtifactPublishToken | None:
+        """Reserve an unresolved executable only after endpoint and lifetime admission."""
+        runtime_content_manager = self._runtime_content_manager
+        root_binary_publication: LocalArtifactPublishToken | None = None
+        if runtime_content_manager is not None:
+            platform = cast(Platform, selection.os_category)
+            endpoint_has_binary = bool(
+                endpoint is not None
+                and any(
+                    isinstance(effect.payload, PreparedFileEffectPayload)
+                    and effect.payload.artifact_publication is not None
+                    and effect.payload.artifact_publication.record.binary is not None
+                    and canonical_native_path(
+                        effect.payload.artifact_publication.record.artifact.native_path,
+                        platform,
+                    )
+                    == canonical_native_path(selection.actor.image, platform)
+                    for effect in endpoint.admitted_effects
+                )
             )
-            lifetime_plan = self._plan_process_lifetime(request, actor)
-            provisional_termination = self._plan_process_provisional_termination(
-                request,
-                actor,
-                lifetime_plan,
+            resolved_binary = self.dispatcher.resolve_process_binary_identity(
+                request.system.hostname,
+                selection.actor.username,
+                selection.actor.image,
+                platform,
             )
-            endpoint_close_floor: datetime | None = None
-            if (
-                provisional_termination is not None
-                and endpoint is not None
-                and endpoint.latest_admitted_occurrence is not None
+            if not endpoint_has_binary and isinstance(
+                resolved_binary,
+                UnresolvedBinaryIdentity,
             ):
-                endpoint_close_floor = endpoint.latest_admitted_occurrence + timedelta(
-                    milliseconds=25
-                )
-                provisional_termination = max(provisional_termination, endpoint_close_floor)
-            if actor.session_deadline is not None and provisional_termination is not None:
-                release_margin_ms = (
-                    _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
-                    if os_category == "linux"
-                    and _linux_foreground_lifetime(actor.image, actor.command_line) is not None
-                    else 25
-                )
-                close_ceiling = actor.session_deadline - timedelta(milliseconds=release_margin_ms)
-                if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
+                if reservations.architecture is None:
                     raise ExecutionEffectPlanError(
                         ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared endpoint effects leave no interval for the process lifecycle close",
+                        "unresolved process executable requires exact host architecture",
                     )
-                if provisional_termination > close_ceiling:
-                    provisional_termination = close_ceiling
-                if provisional_termination <= actor.started_at:
+                root_binary_publication = runtime_content_manager.prepare_effect_publication(
+                    root_action_id=anchor.action_id,
+                    stable_source_id=f"{anchor.action_id}:root-process-image",
+                    hostname=request.system.hostname,
+                    principal=selection.actor.username,
+                    platform=platform,
+                    architecture=reservations.architecture,
+                    native_path=selection.actor.image,
+                    action="create",
+                    observed_at=selection.actor.started_at,
+                    owner_kind=_runtime_artifact_owner_kind(
+                        platform,
+                        selection.actor.username,
+                        selection.actor.logon_id,
+                    ),
+                    deployment_registry=reservations.deployment_registry,
+                    actor_image=selection.actor.image,
+                    executable=True,
+                )
+                if root_binary_publication is None:
                     raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared process actor leaves no interval for its lifecycle close: "
-                        f"host={request.system.hostname!r} image={actor.image!r} "
-                        f"started_at={actor.started_at.isoformat()} "
-                        f"session_deadline={actor.session_deadline.isoformat()} "
-                        f"planned_close={provisional_termination.isoformat()}",
+                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                        "unresolved process executable did not prepare a binary publication",
                     )
-
-            root_binary_publication: LocalArtifactPublishToken | None = None
-            if runtime_content_manager is not None:
-                platform = cast(Platform, os_category)
-                endpoint_has_binary = bool(
-                    endpoint is not None
-                    and any(
-                        isinstance(effect.payload, PreparedFileEffectPayload)
-                        and effect.payload.artifact_publication is not None
-                        and effect.payload.artifact_publication.record.binary is not None
-                        and canonical_native_path(
-                            effect.payload.artifact_publication.record.artifact.native_path,
-                            platform,
-                        )
-                        == canonical_native_path(actor.image, platform)
-                        for effect in endpoint.admitted_effects
-                    )
-                )
-                resolved_binary = self.dispatcher.resolve_process_binary_identity(
-                    request.system.hostname,
-                    actor.username,
-                    actor.image,
-                    platform,
-                )
-                if not endpoint_has_binary and isinstance(
-                    resolved_binary,
-                    UnresolvedBinaryIdentity,
-                ):
-                    if effective_architecture is None:
-                        raise ExecutionEffectPlanError(
-                            ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                            "unresolved process executable requires exact host architecture",
-                        )
-                    root_binary_publication = runtime_content_manager.prepare_effect_publication(
-                        root_action_id=anchor.action_id,
-                        stable_source_id=f"{anchor.action_id}:root-process-image",
-                        hostname=request.system.hostname,
-                        principal=actor.username,
-                        platform=platform,
-                        architecture=effective_architecture,
-                        native_path=actor.image,
-                        action="create",
-                        observed_at=actor.started_at,
-                        owner_kind=_runtime_artifact_owner_kind(
-                            platform,
-                            actor.username,
-                            actor.logon_id,
-                        ),
-                        deployment_registry=deployment_registry,
-                        actor_image=actor.image,
-                        executable=True,
-                    )
-                    if root_binary_publication is None:
-                        raise ExecutionEffectPlanError(
-                            ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                            "unresolved process executable did not prepare a binary publication",
-                        )
-                    newly_reserved.append(root_binary_publication)
-
-            return ProcessExecutionPreparedEffects(
-                root_anchor=anchor,
-                actor=actor,
-                endpoint=endpoint,
-                runtime_image_load=runtime_image_load,
-                lifetime_plan=lifetime_plan,
-                provisional_termination=provisional_termination,
-                root_binary_publication=root_binary_publication,
-            )
-        except RuntimeContentOwnerError as exc:
-            if runtime_content_manager is not None:
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process runtime-content owner is inadmissible: "
-                f"host={request.system.hostname!r} principal={actor.username!r} "
-                f"image={actor.image!r}: {exc}",
-            ) from exc
-        except (ExecutionEffectPlanError, StateError, ValueError):
-            if runtime_content_manager is not None:
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-            raise
+                newly_reserved.append(root_binary_publication)
+        return root_binary_publication
 
     @staticmethod
     def _process_endpoint_effect_rng(
