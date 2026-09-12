@@ -402,3 +402,28 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   and revision-53 manifest validation against `233bbf7a` pass. Six typed and six periodic cases
   match both item 3 and the corrected reference; all-format/default/42 matches the corrected
   reference too. Digest: `a37351d86be543418deebf730b4ba6b746d7c5032db6df1bb07840b6f343d2d6`.
+
+### Item 5 — composed network stage interfaces
+
+- Item 4 committed as `5858a0a8` and preserved in a detached comparison checkout. Stable request
+  facts, endpoint identity, protocol inputs, existing application intents, canonical publication
+  inputs, and prepared source work now travel as composed records. Changed fields remain explicit
+  local variables until their phase returns revised records; unchanged groups travel by reference.
+- Field declarations fall from 240 to 129, top-level input unpacks from 240 to 39, and locals
+  used only for forwarding from 78 to **zero**. The remaining unpacks name actual phase work or
+  shared groups. All five downstream stages retain their exact branch and return counts.
+  AST comparison confirms every non-stage planner method and the transaction boundary are unchanged.
+- New integration tests observe the actual six-stage path, one shared boundary, shared facts and
+  publication objects, and the authenticated final receipt. Failures injected immediately before
+  commit and immediately after commit preserve the distinct cancellation and committed recovery
+  outcomes. Existing fault coverage runs against the new grouped inputs too.
+- Initial extraction tooling expected an absolute import where the planner used a relative import;
+  corrected before tests. Three unused group aliases were removed after lint inspection.
+- Focused **46 passed**, 83 deselected; targeted slow network/timing **86 passed**, 46 deselected.
+  Ruff checks and revision-54 manifest validation pass. Standard and expanded byte gates pending.
+- **Item 5 acceptance:** standard **8,455 passed, 27 existing skips, 2,009 deselected**
+  (308.45 s); focused **46 passed** and targeted slow **86 passed**. All **44 existing matrix
+  cases** match both the preserved item-4 checkout and accepted corrected reference byte for
+  byte. File sets, ground truth and manifest-listed hashes are unchanged. Both Ruff checks and
+  revision-54 validation pass; digest
+  `fbd9b98cf01a5e94bc0bffe752e547ee80a891afc9bbaabf2e81a814b16ba7e7`.

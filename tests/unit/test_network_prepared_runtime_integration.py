@@ -24,9 +24,11 @@
 
 import ast
 import copy
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -321,6 +323,93 @@ def test_normal_network_root_commits_one_authenticated_prepared_receipt() -> Non
     assert state.get_connection_by_transaction_id(transaction.stable_id) is not None
     assert generator._network_transaction_runtime.census().has_last_result
     emitter.emit.assert_called_once()
+
+
+def test_network_stages_share_facts_and_exact_publication_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator, _, emitter = _generator()
+    capture = NetworkConnectionIdentityCapture()
+    outputs: dict[str, Any] = {}
+    boundaries: list[object] = []
+    phase_names = (
+        "_resolve_network_request",
+        "_plan_network_transport",
+        "_plan_network_protocol_evidence",
+        "_prepare_network_publication",
+        "_commit_prepared_network",
+        "_publish_committed_network",
+    )
+
+    def observe(name: str, original: Callable[..., Any]) -> Callable[..., Any]:
+        def execute(self: object, request: object, boundary: object, *args: object) -> Any:
+            boundaries.append(boundary)
+            result = original(self, request, boundary, *args)
+            outputs[name] = result
+            return result
+
+        return execute
+
+    planner = planner_module.NetworkTransactionPlanner
+    for name in phase_names:
+        monkeypatch.setattr(planner, name, observe(name, getattr(planner, name)))
+
+    uid = _generate(generator, capture)
+
+    assert tuple(outputs) == phase_names
+    assert all(boundary is boundaries[0] for boundary in boundaries)
+    resolved, transport, evidence, prepared, committed, published = outputs.values()
+    assert resolved.facts is transport.facts is evidence.publication.facts
+    assert resolved.applications is transport.applications is evidence.applications
+    assert evidence.applications is prepared.applications
+    assert transport.endpoints is evidence.publication.endpoints
+    assert evidence.publication is prepared.publication is committed.publication
+    assert prepared.sources is committed.sources
+    assert prepared.sources.prepared_dispatch is not None
+    assert published == uid == capture.require().zeek_uid
+    assert prepared.root is capture.require_prepared_root()
+    assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+        prepared.root, capture.require_receipt()
+    )
+    emitter.emit.assert_called_once()
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_network_stage_failure_keeps_commit_and_cancellation_distinct(
+    monkeypatch: pytest.MonkeyPatch, after_commit: bool
+) -> None:
+    generator, state, emitter = _generator()
+    capture = NetworkConnectionIdentityCapture()
+    before = state.materialization_digest()
+    rng = generator_module._get_rng()
+    rng_before = rng.getstate()
+    timing_before = generator._source_timing_planner.state_digest()
+
+    def reject(*args: object) -> None:
+        raise StateError("injected composed-stage failure")
+
+    monkeypatch.setattr(
+        planner_module.NetworkTransactionPlanner,
+        "_publish_committed_network" if after_commit else "_commit_prepared_network",
+        reject,
+    )
+    with pytest.raises(StateError, match="injected composed-stage failure"):
+        _generate(generator, capture)
+
+    emitter.emit.assert_not_called()
+    if after_commit:
+        transaction = capture.require()
+        assert state.get_connection_by_transaction_id(transaction.stable_id) is not None
+        assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+            capture.require_prepared_root(), capture.require_receipt()
+        )
+        assert capture.require_outcome() is NetworkConnectionPublicationOutcome.PUBLISHED
+    else:
+        assert state.materialization_digest() == before
+        assert rng.getstate() == rng_before
+        assert generator._source_timing_planner.state_digest() == timing_before
+        assert capture.transaction is capture.receipt is capture.outcome is None
+        assert capture._claim is None
 
 
 def test_failed_transport_keeps_internal_close_but_source_native_duration_missing() -> None:

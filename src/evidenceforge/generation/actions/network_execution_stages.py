@@ -85,8 +85,8 @@ class PreparedNetworkResponder(Protocol):
 
 
 @dataclass(frozen=True)
-class ResolvedNetworkRequest:
-    """Resolve the request and existing owners before opening transaction preparation."""
+class NetworkRequestFacts:
+    """Stable caller policy and resolved request facts, shared through publication."""
 
     automatic_source_port: bool
     caller_owned_pid: int | None
@@ -94,261 +94,186 @@ class ResolvedNetworkRequest:
     caller_provided_duration: bool
     caller_provided_payload: bool
     command_http_needs_response_size: bool
-    conn_state: str | None
-    deferred_authority: DeferredSessionNetworkAuthority | None
-    deferred_kerberos_duration_proto: str | None
-    dns: DnsContext | None
-    dns_server_ips: set[str]
-    dst_ip: str
-    dst_ip_is_local: bool
-    dst_port: int
-    duration: float | None
-    email: EmailContext | None
     explicit_orig_bytes: int | None
-    explicit_proxy_request_preparation: ExplicitProxyRequestPreparation | None
     explicit_resp_bytes: int | None
-    file_transfer: FileTransferContext | None
-    file_transfers: tuple[FileTransferContext, ...]
-    firewall: FirewallContext | None
-    hostname: str | None
-    hostname_was_explicit: bool
-    http: HttpContext | None
-    http_application_layer_only: bool
-    http_channel_affinity: HttpChannelAffinity | None
-    ids_alerts: list[IdsAlertPlan]
-    is_fw_deny: bool
-    is_tcp_probe: bool
-    kerberos_dc_hostname: str | None
-    kerberos_prerequisite_success: bool
-    local_only: bool
-    ntp_timing: tuple[float, float, float, timedelta] | None
-    ocsp: OcspContext | None
-    orig_bytes: int | None
-    packet_overhead_bytes: int | None
     parent_action_group_id: str | None
-    pe: PeContext | None
-    persistent_smb_application_intent: PersistentSmbApplicationIntent | None
-    persistent_smb_file_journal: SmbFileMutationJournal | None
-    persistent_smb_intent: PersistentSmbRootIntent | None
-    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None
-    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None
-    pid: int
     preserve_explicit_payload: bool
     preserve_start_time: bool
-    process_image: str | None
-    proto: str
-    proxy: ProxyContext | None
-    resolved_process: RunningProcess | None
+    suppress_application_side_effects: bool
+    ssh_attempted_username: str | None
+    kerberos_prerequisite_success: bool
+    stable_id: str
+    local_only: bool
+    http_application_layer_only: bool
+    is_fw_deny: bool
+    is_tcp_probe: bool
+    dns_server_ips: set[str]
+    packet_overhead_bytes: int | None
+    deferred_kerberos_duration_proto: str | None
+    kerberos_dc_hostname: str | None
+
+
+@dataclass(frozen=True)
+class ResolvedNetworkEndpoints:
+    """Resolved endpoint identity; transport returns revised tuple facts when allocated."""
+
+    dst_ip: str
+    dst_port: int
+    hostname: str | None
+    hostname_was_explicit: bool
     resolved_source_system: System | None
-    resp_bytes: int | None
-    responding_pid: int
-    reused_http_conn_id: str
-    reused_http_uid: str
-    service: str | None
-    smtp: SmtpContext | None
     source_os_category: str
     source_system: System | None
     src_ip: str
-    src_ip_is_local: bool
     src_port: int | None
-    ssh_attempted_username: str | None
-    stable_id: str
     state_source_hostname: str
     state_source_system: str
-    suppress_application_side_effects: bool
-    time: datetime
+    src_ip_is_local: bool
+    dst_ip_is_local: bool
     tls_hostname: str | None
+    target_system: System | None = None
+    dst_host_ctx: HostContext | None = None
+
+
+@dataclass(frozen=True)
+class NetworkProtocolEvidence:
+    """Protocol inputs and accounting before canonical evidence assembly."""
+
+    dns: DnsContext | None
+    email: EmailContext | None
+    file_transfer: FileTransferContext | None
+    file_transfers: tuple[FileTransferContext, ...]
+    firewall: FirewallContext | None
+    http: HttpContext | None
+    ntp_timing: tuple[float, float, float, timedelta] | None
+    ocsp: OcspContext | None
+    pe: PeContext | None
+    proxy: ProxyContext | None
+    smtp: SmtpContext | None
     x509: X509Context | None
     x509_chain: tuple[X509Context, ...]
+    orig_bytes: int | None
+    resp_bytes: int | None
+    duration: float | None
+    conn_state: str | None
+    proto: str
+    service: str | None
+    ids_alerts: list[IdsAlertPlan]
+
+
+@dataclass(frozen=True)
+class NetworkApplicationIntents:
+    """Existing application and deferred-session authorities, without new ownership."""
+
+    persistent_smb_application_intent: PersistentSmbApplicationIntent | None
+    persistent_smb_intent: PersistentSmbRootIntent | None
+    persistent_smb_file_journal: SmbFileMutationJournal | None
+    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None
+    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None
+    deferred_authority: DeferredSessionNetworkAuthority | None
+    http_channel_affinity: HttpChannelAffinity | None
+
+
+@dataclass(frozen=True)
+class NetworkPublicationInputs:
+    """Canonical evidence and endpoint attribution shared by preparation, commit and publication."""
+
+    facts: NetworkRequestFacts
+    endpoints: ResolvedNetworkEndpoints
+    event: OccurrenceBuilder
+    generic_ssh_preauth_pid: int | None
+    prepared_responder: PreparedNetworkResponder | None
+    process_ctx: ProcessContext | None
+    pid: int
+    time: datetime
+    uid: str
+    committed_suppressed: bool
+
+
+@dataclass(frozen=True)
+class PreparedNetworkSources:
+    """Prepared source work retained unchanged across the canonical commit boundary."""
+
+    prepared_dispatch: PreparedDispatch | None
+    prepared_multipart_batch: PreparedNetworkDependentBatch | None
+    materialization_mode: ConnectionMaterializationMode
+
+
+@dataclass(frozen=True)
+class ResolvedNetworkRequest:
+    """Resolve the request and existing owners before opening transaction preparation."""
+
+    facts: NetworkRequestFacts
+    endpoints: ResolvedNetworkEndpoints
+    protocol: NetworkProtocolEvidence
+    applications: NetworkApplicationIntents
+    explicit_proxy_request_preparation: ExplicitProxyRequestPreparation | None
+    pid: int
+    process_image: str | None
+    resolved_process: RunningProcess | None
+    responding_pid: int
+    reused_http_conn_id: str
+    reused_http_uid: str
+    time: datetime
 
 
 @dataclass(frozen=True)
 class PlannedNetworkTransport:
     """Plan transport identity, accounting, and the occurrence draft under one boundary."""
 
-    automatic_source_port: bool
-    caller_owned_pid: int | None
-    caller_provided_conn_state: bool
+    facts: NetworkRequestFacts
+    endpoints: ResolvedNetworkEndpoints
+    protocol: NetworkProtocolEvidence
+    applications: NetworkApplicationIntents
     canonical_terminal_duration: float | None
     committed_suppressed: bool
-    conn_state: str | None
-    deferred_authority: DeferredSessionNetworkAuthority | None
-    dns: DnsContext | None
-    dns_server_ips: set[str]
-    dst_host_ctx: HostContext | None
-    dst_ip: str
-    dst_port: int
-    duration: float | None
-    email: EmailContext | None
     event: _NetworkOccurrenceDraft
-    explicit_orig_bytes: int | None
-    explicit_resp_bytes: int | None
-    file_transfer: FileTransferContext | None
-    file_transfers: tuple[FileTransferContext, ...]
-    firewall: FirewallContext | None
     generic_ssh_preauth_pid: int | None
-    hostname: str | None
-    hostname_was_explicit: bool
-    http: HttpContext | None
-    http_application_layer_only: bool
-    http_channel_affinity: HttpChannelAffinity | None
-    ids_alerts: list[IdsAlertPlan]
-    is_fw_deny: bool
-    kerberos_prerequisite_success: bool
-    local_only: bool
     network_preparation: NetworkTransactionPreparation
-    ntp_timing: tuple[float, float, float, timedelta] | None
-    ocsp: OcspContext | None
-    orig_bytes: int | None
     overhead: int
     owner_rng: random.Random
-    parent_action_group_id: str | None
-    pe: PeContext | None
-    persistent_smb_application_intent: PersistentSmbApplicationIntent | None
-    persistent_smb_file_journal: SmbFileMutationJournal | None
-    persistent_smb_intent: PersistentSmbRootIntent | None
-    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None
-    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None
     prepare_generic_smb_responder: bool
     prepare_generic_ssh_responder: bool
     prepared_responder: PreparedNetworkResponder | None
-    preserve_explicit_payload: bool
-    preserve_start_time: bool
-    proto: str
-    proxy: ProxyContext | None
-    resolved_source_system: System | None
-    resp_bytes: int | None
     responding_pid: int
     rng: random.Random
-    service: str | None
-    smtp: SmtpContext | None
-    source_os_category: str
-    source_system: System | None
-    src_ip: str
-    src_port: int | None
-    ssh_attempted_username: str | None
-    stable_id: str
-    state_source_hostname: str
-    state_source_system: str
-    suppress_application_side_effects: bool
-    target_system: System | None
     time: datetime
-    tls_hostname: str | None
     uid: str
-    x509: X509Context | None
-    x509_chain: tuple[X509Context, ...]
 
 
 @dataclass(frozen=True)
 class PlannedNetworkEvidence:
     """Plan protocol evidence and canonical timing before preparing publication."""
 
-    caller_owned_pid: int | None
-    committed_suppressed: bool
-    deferred_authority: DeferredSessionNetworkAuthority | None
-    dst_host_ctx: HostContext | None
-    dst_ip: str
-    dst_port: int
-    event: OccurrenceBuilder
-    generic_ssh_preauth_pid: int | None
-    hostname: str | None
-    http_channel_affinity: HttpChannelAffinity | None
-    kerberos_prerequisite_success: bool
+    publication: NetworkPublicationInputs
+    applications: NetworkApplicationIntents
     network_preparation: NetworkTransactionPreparation
     owner_rng: random.Random
-    parent_action_group_id: str | None
-    persistent_smb_application_intent: PersistentSmbApplicationIntent | None
-    persistent_smb_batch: MaterializationBatchPlan | None
-    persistent_smb_file_journal: SmbFileMutationJournal | None
-    persistent_smb_intent: PersistentSmbRootIntent | None
-    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None
-    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None
-    pid: int
-    prepared_responder: PreparedNetworkResponder | None
-    process_ctx: ProcessContext | None
-    resolved_source_system: System | None
     rng: random.Random
-    source_system: System | None
-    src_ip: str
-    src_port: int | None
-    ssh_attempted_username: str | None
-    state_source_hostname: str
-    state_source_system: str
-    suppress_application_side_effects: bool
-    target_system: System | None
-    time: datetime
-    uid: str
+    persistent_smb_batch: MaterializationBatchPlan | None
 
 
 @dataclass(frozen=True)
 class PreparedNetworkPublication:
     """Assemble and validate state, lifecycle, and source publication capabilities."""
 
+    publication: NetworkPublicationInputs
+    sources: PreparedNetworkSources
+    applications: NetworkApplicationIntents
+    owner_rng: random.Random
     application_token: SmbChannelAdmissionToken | None
-    caller_owned_pid: int | None
-    committed_suppressed: bool
-    deferred_authority: DeferredSessionNetworkAuthority | None
     deferred_composition: DeferredSessionComposition | None
     deferred_publication_batch: PreparedDeferredSessionPublicationBatch | None
-    dst_host_ctx: HostContext | None
-    dst_ip: str
-    dst_port: int
-    event: OccurrenceBuilder
-    generic_ssh_preauth_pid: int | None
-    kerberos_prerequisite_success: bool
     lifecycle_token: LifecycleClosedTransportAdmissionToken | None
-    materialization_mode: ConnectionMaterializationMode
-    owner_rng: random.Random
-    parent_action_group_id: str | None
-    persistent_smb_file_journal: SmbFileMutationJournal | None
-    persistent_smb_intent: PersistentSmbRootIntent | None
     persistent_smb_observations: tuple[NetworkSensorObservation, ...]
-    persistent_smb_terminal_authority: PersistentSmbTerminalContinuationAuthority | None
-    persistent_smb_terminal_continuation: PersistentSmbTerminalContinuation | None
-    pid: int
-    prepared_dispatch: PreparedDispatch | None
-    prepared_multipart_batch: PreparedNetworkDependentBatch | None
-    prepared_responder: PreparedNetworkResponder | None
-    process_ctx: ProcessContext | None
-    resolved_source_system: System | None
     root: PreparedNetworkTransactionRoot
-    source_system: System | None
-    src_ip: str
-    src_port: int | None
-    ssh_attempted_username: str | None
-    suppress_application_side_effects: bool
-    target_system: System | None
-    time: datetime
-    uid: str
 
 
 @dataclass(frozen=True)
 class CommittedNetworkPublication:
     """Commit through the existing authority and preserve exact receipt recovery."""
 
-    caller_owned_pid: int | None
-    committed_suppressed: bool
+    publication: NetworkPublicationInputs
+    sources: PreparedNetworkSources
     deferred_published: DeferredSessionPublishedNetworkResult | None
-    dst_host_ctx: HostContext | None
-    dst_ip: str
-    dst_port: int
-    event: OccurrenceBuilder
-    generic_ssh_preauth_pid: int | None
-    kerberos_prerequisite_success: bool
-    materialization_mode: ConnectionMaterializationMode
     materialized: LifecyclePreparedNetworkResult
-    parent_action_group_id: str | None
-    pid: int
-    prepared_dispatch: PreparedDispatch | None
-    prepared_multipart_batch: PreparedNetworkDependentBatch | None
-    prepared_responder: PreparedNetworkResponder | None
-    process_ctx: ProcessContext | None
-    resolved_source_system: System | None
-    source_system: System | None
-    src_ip: str
-    src_port: int | None
-    ssh_attempted_username: str | None
-    suppress_application_side_effects: bool
-    target_system: System | None
-    time: datetime
-    uid: str

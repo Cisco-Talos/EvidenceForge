@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 53
+current_revision: 54
 history_start_revision: 1
-behavior_surface_sha256: "a37351d86be543418deebf730b4ba6b746d7c5032db6df1bb07840b6f343d2d6"
+behavior_surface_sha256: "fbd9b98cf01a5e94bc0bffe752e547ee80a891afc9bbaabf2e81a814b16ba7e7"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -543,3 +543,9 @@ changes:
     domains: [storyline-dispatch, process-normalization, protocol-evidence, periodic-timing]
     formats: []
     summary: Moves shared IDS, HTTP sizing, process parsing and periodic timing helpers to focused owners imported directly by handlers and coordination, retaining compatibility aliases and random-number consumption.
+  - revision: 54
+    id: composed-network-stage-inputs
+    impact: none
+    domains: [network-transaction, protocol-evidence, lifecycle-publication]
+    formats: []
+    summary: Carries stable request facts, endpoint identity, protocol inputs and publication groups by reference through the same six phases, retaining phase-local drafts and all existing commit and recovery boundaries.
