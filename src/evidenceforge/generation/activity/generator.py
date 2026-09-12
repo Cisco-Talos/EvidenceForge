@@ -7807,7 +7807,7 @@ class ActivityGenerator:
 
         if profiled_worker is not None:
             family_name, worker_name, _family = profiled_worker
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=source_system,
                 worker_time=process_time,
                 activity_time=time,
@@ -7824,9 +7824,13 @@ class ActivityGenerator:
                 return pid, image
 
         if _get_os_category(source_system.os) == "windows":
-            parent_pid = self._windows_system_parent_fallback(source_system, process_time)
+            parent_pid = self._process_parents()._windows_system_parent_fallback(
+                source_system, process_time
+            )
         else:
-            parent_pid = self._linux_system_parent_fallback(source_system, process_time)
+            parent_pid = self._process_parents()._linux_system_parent_fallback(
+                source_system, process_time
+            )
             if image.lower().startswith("/usr/lib/apt/methods/"):
                 parent_pid = self._ensure_linux_apt_frontend_process(
                     source_system=source_system,
@@ -8073,7 +8077,9 @@ class ActivityGenerator:
             return existing_pid
 
         frontend_time = helper_time - timedelta(milliseconds=rng.randint(80, 650))
-        systemd_pid = self._linux_system_parent_fallback(source_system, frontend_time)
+        systemd_pid = self._process_parents()._linux_system_parent_fallback(
+            source_system, frontend_time
+        )
         frontend_pid = self.generate_system_process(
             source_system,
             frontend_time,
@@ -8621,7 +8627,7 @@ class ActivityGenerator:
         parent_pid = (
             0
             if windows_cli_owner
-            else self._select_parent_pid(
+            else self._process_parents()._select_parent_pid(
                 source_system,
                 user,
                 image,
@@ -8682,7 +8688,7 @@ class ActivityGenerator:
             if singleton_claim is not None:
                 self._cancel_singleton_application_interval(*singleton_claim)
             return -1, None
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(source_system.hostname, pid)
@@ -8833,13 +8839,13 @@ class ActivityGenerator:
                 )
                 if child_source_bound > ensure_utc(source_visible_by):
                     return 0
-        explorer_pid = self._ensure_session_explorer_pid(
+        explorer_pid = self._process_parents()._ensure_session_explorer_pid(
             system,
             user,
             time=shell_time,
             logon_id=session.logon_id,
         )
-        parent_pid = explorer_pid or self._windows_explorer_parent_pid(
+        parent_pid = explorer_pid or self._process_parents()._windows_explorer_parent_pid(
             system,
             user,
             shell_time,
@@ -8860,7 +8866,7 @@ class ActivityGenerator:
         )
         if shell_pid <= 0:
             return 0
-        self._record_user_process(system, user, shell_pid, shell_image)
+        self._process_parents()._record_user_process(system, user, shell_pid, shell_image)
         return shell_pid
 
     def _windows_user_cli_parent_source_bound(
@@ -8876,7 +8882,7 @@ class ActivityGenerator:
         """Return the allocation-free source frontier for Explorer plus one CLI shell."""
 
         session_source_time = _session_source_ready_time(session)
-        explorer_pid = self._get_session_explorer_pid(
+        explorer_pid = self._process_parents()._get_session_explorer_pid(
             system,
             user,
             time=shell_time,
@@ -10217,7 +10223,7 @@ class ActivityGenerator:
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             source_system,
             user,
             image,
@@ -10244,7 +10250,7 @@ class ActivityGenerator:
             suppress_command_file_effect=True,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         return pid, image
@@ -10536,7 +10542,7 @@ class ActivityGenerator:
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             source_system,
             user,
             image,
@@ -10555,7 +10561,7 @@ class ActivityGenerator:
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(source_system.hostname, pid)
@@ -16600,7 +16606,7 @@ class ActivityGenerator:
             return request
         parent_pid = request.parent_pid
         if not request.require_exact_parent:
-            parent_pid = self._resolve_existing_prepared_process_parent(
+            parent_pid = self._process_parents()._resolve_existing_prepared_process_parent(
                 system=request.system,
                 user=request.user,
                 time=actor.started_at,
@@ -18988,7 +18994,7 @@ class ActivityGenerator:
         )
         if pid <= 0:
             return None
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self._emit_bash_command_event(user, source_system, process_time, command_line)
         self._remember_linux_bash_session_activity(
             user,
@@ -20764,7 +20770,7 @@ class ActivityGenerator:
             process_time = min_process_time
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             system,
             user,
             image,
@@ -20783,7 +20789,7 @@ class ActivityGenerator:
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(system, user, pid, image)
+        self._process_parents()._record_user_process(system, user, pid, image)
         self.state_manager.update_process_activity_time(system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(system.hostname, pid)
@@ -20932,7 +20938,7 @@ class ActivityGenerator:
             )
             if process_time >= time:
                 process_time = time - timedelta(milliseconds=100)
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=system,
                 worker_time=process_time,
                 activity_time=time,
@@ -21036,12 +21042,12 @@ class ActivityGenerator:
         """Return the exact active Postfix SMTP worker without sampling timing."""
 
         family = service_process_family("postfix")
-        manager_parent = self._profiled_service_manager_parent_pid(
+        manager_parent = self._process_parents()._profiled_service_manager_parent_pid(
             system=system,
             time=time,
             family=family,
         )
-        manager_pid = self._active_profiled_service_process(
+        manager_pid = self._process_parents()._active_profiled_service_process(
             system=system,
             time=time,
             spec=family.manager,
@@ -21049,7 +21055,7 @@ class ActivityGenerator:
         )
         if manager_pid is None:
             return None
-        return self._active_profiled_service_process(
+        return self._process_parents()._active_profiled_service_process(
             system=system,
             time=time,
             spec=family.workers["smtp"],
@@ -21082,7 +21088,7 @@ class ActivityGenerator:
             )
             if process_time >= time:
                 process_time = time - timedelta(milliseconds=50)
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=system,
                 worker_time=process_time,
                 activity_time=time,
@@ -25309,7 +25315,7 @@ class ActivityGenerator:
             anchor_time = activity_time
             if scenario_start is not None and logon_time < scenario_start:
                 anchor_time = logon_time
-            parent_pid = self._linux_anchor_pid(target_system, anchor_time)
+            parent_pid = self._process_parents()._linux_anchor_pid(target_system, anchor_time)
 
         shell_seed = _stable_seed(
             "linux_session_shell:"
@@ -25609,7 +25615,7 @@ class ActivityGenerator:
         ):
             if source_visible_by is not None:
                 return None
-            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+            parent_pid = self._process_parents()._linux_anchor_pid(target_system, activity_time)
 
         shell_seed = _stable_seed(
             "linux_visible_shell_parent:"
@@ -26000,7 +26006,7 @@ class ActivityGenerator:
                 actual_process_start = (
                     running_proc.start_time if running_proc is not None else process_time
                 )
-                self._record_user_process(system, user, pid, image)
+                self._process_parents()._record_user_process(system, user, pid, image)
                 lifetime = _linux_foreground_lifetime(image, process_command_line)
                 if lifetime is not None:
                     termination_time = self._generate_bounded_foreground_process_termination(
@@ -26225,7 +26231,7 @@ class ActivityGenerator:
 
         parent_pid = session.session_shell_pid
         if parent_pid is None or not self._is_pid_active_at(system, parent_pid, activity_time):
-            parent_pid = self._active_session_shell_pid(
+            parent_pid = self._process_parents()._active_session_shell_pid(
                 system,
                 user,
                 activity_time,
@@ -28393,7 +28399,7 @@ class ActivityGenerator:
                             username=user.username,
                         )
                         process_name, command_line = source_process_groups[0][0]
-                    parent_pid = self._resolve_parent(
+                    parent_pid = self._process_parents()._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
                     bash_history_group_id = (
@@ -28473,7 +28479,9 @@ class ActivityGenerator:
                                     source_process_time,
                                 )
                             )
-                            self._record_user_process(system, user, source_pid, source_process_name)
+                            self._process_parents()._record_user_process(
+                                system, user, source_pid, source_process_name
+                            )
                             if os_category == "linux":
                                 lifetime = _linux_foreground_lifetime(
                                     source_process_name, source_command_line
@@ -28648,7 +28656,9 @@ class ActivityGenerator:
                         username=user.username,
                         system=system,
                     )
-                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    parent_pid = self._process_parents()._resolve_parent(
+                        system, user, time, logon_id, process_name
+                    )
                     pid = self.generate_process(
                         user,
                         system,
@@ -28658,7 +28668,7 @@ class ActivityGenerator:
                         command_line,
                         parent_pid=parent_pid,
                     )
-                    self._record_user_process(system, user, pid, process_name)
+                    self._process_parents()._record_user_process(system, user, pid, process_name)
                     lifetime = _windows_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
                         self._generate_bounded_foreground_process_termination(
@@ -28694,7 +28704,7 @@ class ActivityGenerator:
                     if active_session is None:
                         raise StateError("Scheduled Linux system process lost its session owner")
                     logon_id = active_session.logon_id
-                    parent_pid = self._resolve_parent(
+                    parent_pid = self._process_parents()._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
                     process_time = self._reserve_foreground_shell_time(
@@ -28722,7 +28732,7 @@ class ActivityGenerator:
                             command_line,
                         ),
                     )
-                    self._record_user_process(system, user, pid, process_name)
+                    self._process_parents()._record_user_process(system, user, pid, process_name)
                     if active_session:
                         active_session.last_activity_time = process_time
                     self._emit_bash_command_event(user, system, process_time, command_line)
@@ -30201,7 +30211,7 @@ class ActivityGenerator:
                 command_line=f"mstsc.exe /v:{target_system.hostname}",
                 parent_pid=parent_pid,
             )
-            self._record_user_process(
+            self._process_parents()._record_user_process(
                 source_system,
                 user,
                 pid,
@@ -35535,7 +35545,7 @@ class ActivityGenerator:
         if candidate_pids:
             ordered_pids = sorted(set(candidate_pids))
             return ordered_pids[seed % len(ordered_pids)]
-        return self._linux_anchor_pid(system, time)
+        return self._process_parents()._linux_anchor_pid(system, time)
 
     def _active_session_shell_pid(
         self, system: System, user: User, time: datetime | None, logon_id: str = ""

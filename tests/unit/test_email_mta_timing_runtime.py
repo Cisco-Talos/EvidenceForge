@@ -224,7 +224,9 @@ def test_email_mta_worker_creation_samples_once_and_reuse_is_audit_neutral() -> 
     assert generator.timing_runtime.audit.snapshot() == first_audit
 
 
-def test_email_mta_prepared_worker_failure_leaves_no_timing_or_process_residue() -> None:
+def test_email_mta_prepared_worker_failure_leaves_no_timing_or_process_residue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A rejected worker materialization cannot publish its staged timing sample."""
 
     runtime = TimingRuntime(reference_time=_START, namespace="email-mta-worker-fault")
@@ -233,8 +235,12 @@ def test_email_mta_prepared_worker_failure_leaves_no_timing_or_process_residue()
     system = _linux_mail_system()
     _register_systemd(generator, system)
     before_audit = runtime.audit.snapshot()
-    generator._ensure_profiled_service_worker = Mock(
-        side_effect=RuntimeError("reject outbound MTA worker")
+    from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
+
+    monkeypatch.setattr(
+        ProcessParentResolver,
+        "_ensure_profiled_service_worker",
+        Mock(side_effect=RuntimeError("reject outbound MTA worker")),
     )
 
     with pytest.raises(RuntimeError, match="reject outbound MTA worker"):

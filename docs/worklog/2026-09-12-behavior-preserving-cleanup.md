@@ -71,6 +71,42 @@ Report: `2026-09-12-process-parent-evidence.json`, SHA-256
 Logs: `/private/tmp/eforge-cleanup-pass3-item1-final-{standard,slow,core,native,supplements}.log`
 and `/private/tmp/eforge-cleanup-pass3-parent-final-focused.log`.
 
+### Item 2 acceptance — internal parent calls
+
+Item 1 is committed as `788c3680`. Item 2 migrates exactly the frozen 35 calls across
+20 generator methods, preserving every argument expression (none contains a nested call)
+and binding a fresh parent owner at the existing operation point. All old forwarders remain.
+Revision 60 uses digest `d8e9447c3fb1787a6c3dc137b84b05a763d09dae6406df0b3a38f633f8646de1`.
+The complete 194-case matrix matches both `010ae90f` and the preceding parent commit.
+The measured remaining frozen forwarding-call count is zero.
+
+The first standard run passed 8,482 tests and failed four fixture interceptions: two bounded
+application-catalog cases, the outbound mail worker fault, and a minimal Linux pipeline fixture
+still mocked the generator forwarders. Their stubs now target the parent owner; assertions,
+expected timing, error and residue behavior are unchanged. All 44 affected caller tests pass.
+The standard suite is being repeated before committing; 63 other focused tests and both Ruff
+checks already pass. First-run and repeat logs are retained separately.
+
+Before preflight extraction, two additional reservation characterizations were exercised against
+the current implementation: repeated cleanup and failure after new reservations while preserving
+a caller-supplied token. The first draft tried to patch a read-only slotted manager method and
+failed one test; class-level fault injection corrected the fixture. Both tests now pass, with no
+production change. Drafts/logs remain under `/private/tmp/eforge-cleanup-pass3-preflight-extra-*`.
+
+### Item 2 accepted — direct internal parent ownership
+
+The standard repeat passed **8,486 tests**, with 27 existing skips and 2,010 deselected
+(286.63 seconds). Together with 63 focused tests, 44 caller tests, both Ruff checks,
+revision-60 validation against `788c3680`, and 194 raw-byte comparisons against both references,
+all item-2 gates pass. No targeted slow run was required for this forwarding-only migration.
+The first failed standard attempt remains recorded above; no production regression or changed
+expected evidence was accepted.
+
+Report: `2026-09-12-process-parent-callers-evidence.json`, SHA-256
+`ed5ec27cc872b7627bd6a6107beaf1f128a53644a56b994252e46c43197daa0a`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item2-{focused,caller-tests,standard,standard-repeat,
+core,native,supplements}.log`. Existing adapters and all public family action interfaces remain.
+
 ## Second-pass final status
 
 The first-pass preservation claim below is limited to its exercised matrix. Review found a

@@ -383,6 +383,10 @@ def _activity_harness(
     generator.generate_process = generate_process  # type: ignore[method-assign]
     generator._resolve_parent = lambda *_args, **_kwargs: 0  # type: ignore[method-assign]
     generator._record_user_process = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    generator._process_parents = lambda: SimpleNamespace(  # type: ignore[method-assign]
+        _resolve_parent=generator._resolve_parent,
+        _record_user_process=generator._record_user_process,
+    )
     generator._process_effect_context = (  # type: ignore[method-assign]
         lambda _system, _pid, image, command: (image, command)
     )

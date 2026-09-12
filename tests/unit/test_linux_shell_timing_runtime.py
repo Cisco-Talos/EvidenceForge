@@ -174,6 +174,9 @@ def _public_pipeline_signature(runtime: TimingRuntime) -> tuple[object, ...]:
         side_effect=lambda **kwargs: kwargs["requested_time"]
     )
     generator._record_user_process = Mock()
+    generator._process_parents = Mock(
+        return_value=SimpleNamespace(_record_user_process=generator._record_user_process)
+    )
     generator._generate_bounded_foreground_process_termination = Mock(
         side_effect=lambda **kwargs: kwargs["start_time"] + timedelta(milliseconds=250)
     )
