@@ -451,3 +451,23 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   (300.39 s), focused **155 passed**, all **79 selected byte cases** passed (72 native plus
   all-format/default/42 and six typed), and both Ruff checks pass. Revision-55 digest:
   `a4005912398a4efceca4c1cce7f1513d1aa62e7f7baf2d90015381924e8e9345`.
+
+### Item 6b — shared process reuse decisions
+
+- Item 6a committed as `2ebd6d09`. Eight precedence/visibility characterization tests passed
+  before this extraction. Bounded preflight and ordinary execution now share one selection
+  implementation, preserving singleton, service, persistent-application and browser precedence.
+  Explorer bootstrap remains unavailable to preflight. Bounded reuse token revalidation moved
+  into the process service; generator entrypoints remain adapters.
+- Completion bookkeeping is shared: source checks, optional-effect auditing, and the deliberately
+  different activity-update rules retain their existing order. Authenticated bounded reuse skips
+  redundant visibility checks only after its original full token/actor/precedence revalidation.
+- The first focused run failed 68 cases because the moved reuse token was imported from a package
+  that does not re-export it. Importing its defining module fixed the error; the repeat passed
+  **163 tests**, 60 deselected. Targeted slow process/lifecycle tests: **60 passed**, 155 deselected.
+  Standard and byte gates are running against frozen production sources.
+- **Item 6b acceptance:** standard **8,463 passed, 27 existing skips, 2,009 deselected**
+  (294.66 s); focused **163 passed**, targeted slow **60 passed**; both Ruff checks and
+  revision-56 validation pass. All **79 selected byte cases** match both item 6a and frozen
+  corrected references. Digest:
+  `5027a78fa82410da461c82599a38ee488ef1b3d583e5c7182bd5d99285cdb611`.

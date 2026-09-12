@@ -17895,88 +17895,13 @@ class ActivityGenerator:
         request: ProcessExecutionRequest,
         actor: PreparedProcessEffectActor,
     ) -> tuple[bool, ProcessExecutionReuseIntent | None]:
-        """Find and authenticate an exact bounded reuse without mutating its process."""
-
-        if request.source_visible_by is None:
-            return False, None
-        if request.ensure_file_event or any(
-            effect.spec.requirement != EffectRequirement.OPTIONAL
-            for effect in request.requested_endpoint_effects
-        ):
-            return False, None
-        if not request.suppress_command_file_effect:
-            from evidenceforge.generation.activity.edr_pools import (
-                select_command_file_side_effect,
-            )
-
-            if select_command_file_side_effect(actor.image, actor.command_line) is not None:
-                return False, None
-        if self._runtime_content_manager is not None:
-            resolved_binary = self.dispatcher.resolve_process_binary_identity(
-                request.system.hostname,
-                actor.username,
-                actor.image,
-                cast(Platform, _get_os_category(request.system.os)),
-            )
-            if isinstance(resolved_binary, UnresolvedBinaryIdentity):
-                return False, None
-
-        candidate_pid = self._existing_windows_singleton_pid(
-            request.system,
-            actor.image,
-            actor.started_at,
+        """Forward bounded reuse intent to the process service."""
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
         )
-        parent = self.state_manager.get_process(request.system.hostname, request.parent_pid)
-        if (
-            candidate_pid is None
-            and _get_os_category(request.system.os) == "windows"
-            and parent is not None
-            and ntpath.basename(parent.image).lower() == "services.exe"
-        ):
-            candidate_pid = self._existing_windows_singleton_service_pid(
-                system=request.system,
-                process_name=actor.image,
-                time=actor.started_at,
-                username=actor.username,
-                command_line=actor.command_line,
-            )
-        if candidate_pid is None and not request.from_storyline:
-            candidate_pid = self._existing_persistent_user_app_pid(
-                system=request.system,
-                username=actor.username,
-                logon_id=actor.logon_id,
-                process_name=actor.image,
-                command_line=actor.command_line,
-                time=actor.started_at,
-                source_visible_by=request.source_visible_by,
-                update_activity=False,
-            )
-        if candidate_pid is None:
-            return False, None
-        if candidate_pid <= 0:
-            return True, None
 
-        running = self.state_manager.get_process(request.system.hostname, candidate_pid)
-        identity = self.state_manager.get_process_identity(
-            request.system.hostname,
-            candidate_pid,
-        )
-        source_frontier = self.process_source_create_bound(request.system, candidate_pid)
-        if running is None or identity is None or source_frontier is None:
-            return True, None
-        if source_frontier > ensure_utc(request.source_visible_by):
-            return True, None
-        return True, ProcessExecutionReuseIntent(
-            hostname=request.system.hostname,
-            process_object_id=identity.object_id,
-            pid=candidate_pid,
-            parent_pid=running.parent_pid,
-            image=running.image,
-            command_line=running.command_line,
-            username=running.username,
-            logon_id=running.logon_id,
-            started_at=running.start_time,
-            source_frontier=source_frontier,
+        return ProcessExecutionService.from_runtime(self).bounded_reuse_intent(
+            request=request, actor=actor
         )
 
     def _finalize_due_process_lifetimes(
@@ -19267,47 +19192,14 @@ class ActivityGenerator:
         request: ProcessExecutionRequest,
         actor: PreparedProcessEffectActor,
     ) -> int:
-        """Revalidate one immutable bounded reuse token before activity mutation."""
+        """Forward execute bounded reuse to the process service."""
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
+        )
 
-        intent = request.reuse_intent
-        deadline = request.source_visible_by
-        if intent is None or deadline is None:
-            return 0
-        identity = self.state_manager.get_process_identity(intent.hostname, intent.pid)
-        running = self.state_manager.get_process(intent.hostname, intent.pid)
-        source_frontier = self.process_source_create_bound(request.system, intent.pid)
-        if (
-            identity is None
-            or running is None
-            or identity.object_id != intent.process_object_id
-            or running.parent_pid != intent.parent_pid
-            or running.image != intent.image
-            or running.command_line != intent.command_line
-            or running.username != intent.username
-            or running.logon_id != intent.logon_id
-            or ensure_utc(running.start_time) != intent.started_at
-            or source_frontier != intent.source_frontier
-            or source_frontier > ensure_utc(deadline)
-            or actor.hostname != intent.hostname
-            or actor.image != intent.image
-            or actor.username != intent.username
-            or actor.logon_id != intent.logon_id
-            or not self._is_pid_active_at(request.system, intent.pid, actor.started_at)
-        ):
-            return 0
-        reuse_found, authenticated = self._bounded_process_reuse_intent(
-            request=replace(request, reuse_intent=None),
-            actor=actor,
+        return ProcessExecutionService.from_runtime(self).execute_bounded_reuse(
+            request=request, actor=actor
         )
-        if not reuse_found or authenticated != intent:
-            return 0
-        self._record_reused_process_optional_effects(request.prepared_effects)
-        self.state_manager.update_process_activity_time(
-            intent.hostname,
-            intent.pid,
-            actor.started_at,
-        )
-        return intent.pid
 
     def _execute_process_create_bundle(self, request: ProcessExecutionRequest) -> int:
         """Expand a process-execution bundle through the compatibility adapter."""

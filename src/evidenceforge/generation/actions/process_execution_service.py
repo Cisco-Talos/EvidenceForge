@@ -11,9 +11,11 @@ import random
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from enum import StrEnum
+from typing import TYPE_CHECKING, cast
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import Platform, UnresolvedBinaryIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     ProcessContext,
@@ -36,6 +38,8 @@ from evidenceforge.generation.actions import (
     ProcessExecutionRequest,
     ProcessTerminationRequest,
 )
+from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
+from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
     _get_rng,
@@ -70,6 +74,7 @@ from evidenceforge.generation.windows_tokens import (
     windows_process_token_profile as _windows_token_profile,
 )
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -77,6 +82,25 @@ if TYPE_CHECKING:
     from evidenceforge.generation.activity.generator import ActivityGenerator
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessReuseKind(StrEnum):
+    """Existing reuse paths with distinct visibility and activity bookkeeping."""
+
+    EXPLORER = "explorer"
+    SINGLETON = "singleton"
+    SERVICE = "service"
+    APPLICATION = "application"
+    BROWSER = "browser"
+    BOUNDED = "bounded"
+
+
+@dataclass(frozen=True)
+class ProcessReuseCandidate:
+    """Selected process and the existing bookkeeping contract for that path."""
+
+    pid: int
+    kind: ProcessReuseKind
 
 
 @dataclass(frozen=True)
@@ -99,6 +123,243 @@ class ProcessExecutionService:
             runtime._lifecycle_authority,
             runtime._runtime_content_manager,
         )
+
+    def bounded_reuse_intent(
+        self,
+        *,
+        request: ProcessExecutionRequest,
+        actor: PreparedProcessEffectActor,
+    ) -> tuple[bool, ProcessExecutionReuseIntent | None]:
+        """Find and authenticate an exact bounded reuse without mutating its process."""
+
+        if request.source_visible_by is None:
+            return False, None
+        if request.ensure_file_event or any(
+            effect.spec.requirement != EffectRequirement.OPTIONAL
+            for effect in request.requested_endpoint_effects
+        ):
+            return False, None
+        if not request.suppress_command_file_effect:
+            from evidenceforge.generation.activity.edr_pools import (
+                select_command_file_side_effect,
+            )
+
+            if select_command_file_side_effect(actor.image, actor.command_line) is not None:
+                return False, None
+        if self.runtime_content_manager is not None:
+            resolved_binary = self.dispatcher.resolve_process_binary_identity(
+                request.system.hostname,
+                actor.username,
+                actor.image,
+                cast(Platform, _get_os_category(request.system.os)),
+            )
+            if isinstance(resolved_binary, UnresolvedBinaryIdentity):
+                return False, None
+
+        candidate = self.select_existing_process(
+            request,
+            process_name=actor.image,
+            command_line=actor.command_line,
+            username=actor.username,
+            logon_id=actor.logon_id,
+            time=actor.started_at,
+            preflight=True,
+        )
+        candidate_pid = candidate.pid if candidate is not None else None
+        if candidate_pid is None:
+            return False, None
+        if candidate_pid <= 0:
+            return True, None
+
+        running = self.state_manager.get_process(request.system.hostname, candidate_pid)
+        identity = self.state_manager.get_process_identity(
+            request.system.hostname,
+            candidate_pid,
+        )
+        source_frontier = self.runtime.process_source_create_bound(request.system, candidate_pid)
+        if running is None or identity is None or source_frontier is None:
+            return True, None
+        if source_frontier > ensure_utc(request.source_visible_by):
+            return True, None
+        return True, ProcessExecutionReuseIntent(
+            hostname=request.system.hostname,
+            process_object_id=identity.object_id,
+            pid=candidate_pid,
+            parent_pid=running.parent_pid,
+            image=running.image,
+            command_line=running.command_line,
+            username=running.username,
+            logon_id=running.logon_id,
+            started_at=running.start_time,
+            source_frontier=source_frontier,
+        )
+
+    def execute_bounded_reuse(
+        self,
+        *,
+        request: ProcessExecutionRequest,
+        actor: PreparedProcessEffectActor,
+    ) -> int:
+        """Revalidate one immutable bounded reuse token before activity mutation."""
+
+        runtime = self.runtime
+
+        intent = request.reuse_intent
+        deadline = request.source_visible_by
+        if intent is None or deadline is None:
+            return 0
+        identity = self.state_manager.get_process_identity(intent.hostname, intent.pid)
+        running = self.state_manager.get_process(intent.hostname, intent.pid)
+        source_frontier = runtime.process_source_create_bound(request.system, intent.pid)
+        if (
+            identity is None
+            or running is None
+            or identity.object_id != intent.process_object_id
+            or running.parent_pid != intent.parent_pid
+            or running.image != intent.image
+            or running.command_line != intent.command_line
+            or running.username != intent.username
+            or running.logon_id != intent.logon_id
+            or ensure_utc(running.start_time) != intent.started_at
+            or source_frontier != intent.source_frontier
+            or source_frontier > ensure_utc(deadline)
+            or actor.hostname != intent.hostname
+            or actor.image != intent.image
+            or actor.username != intent.username
+            or actor.logon_id != intent.logon_id
+            or not runtime._is_pid_active_at(request.system, intent.pid, actor.started_at)
+        ):
+            return 0
+        reuse_found, authenticated = self.bounded_reuse_intent(
+            request=replace(request, reuse_intent=None),
+            actor=actor,
+        )
+        if not reuse_found or authenticated != intent:
+            return 0
+        return self.complete_process_reuse(
+            request,
+            ProcessReuseCandidate(intent.pid, ProcessReuseKind.BOUNDED),
+            time=actor.started_at,
+        )
+
+    def select_existing_process(
+        self,
+        request: ProcessExecutionRequest,
+        *,
+        process_name: str,
+        command_line: str,
+        username: str,
+        logon_id: str,
+        time: datetime,
+        explicit_parent: RunningProcess | None = None,
+        prepared_requires_new_root: bool = False,
+        preflight: bool = False,
+    ) -> ProcessReuseCandidate | None:
+        """Select in the existing precedence order, keeping preflight allocation-free."""
+        runtime = self.runtime
+        system = request.system
+        if (
+            not preflight
+            and not prepared_requires_new_root
+            and not request.from_storyline
+            and request.source_visible_by is None
+            and _get_os_category(system.os) == "windows"
+            and process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == "explorer.exe"
+            and _is_bare_windows_explorer_launch(process_name, command_line)
+            and logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+        ):
+            pid = runtime._ensure_session_explorer_pid(
+                system, runtime._user_model_for_username(username), time, logon_id
+            )
+            if pid is not None:
+                return ProcessReuseCandidate(pid, ProcessReuseKind.EXPLORER)
+
+        candidate_pid = (
+            runtime._existing_windows_singleton_pid(system, process_name, time)
+            if preflight or (not prepared_requires_new_root and not request.require_exact_parent)
+            else None
+        )
+        if preflight:
+            # Preserve the bounded path's parent lookup after singleton selection.
+            explicit_parent = self.state_manager.get_process(system.hostname, request.parent_pid)
+        if candidate_pid is not None:
+            return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.SINGLETON)
+        if (
+            not prepared_requires_new_root
+            and _get_os_category(system.os) == "windows"
+            and explicit_parent is not None
+            and ntpath.basename(explicit_parent.image).lower() == "services.exe"
+        ):
+            candidate_pid = runtime._existing_windows_singleton_service_pid(
+                system=system,
+                process_name=process_name,
+                time=time,
+                username=username,
+                command_line=command_line,
+            )
+            if candidate_pid is not None:
+                return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.SERVICE)
+        if not prepared_requires_new_root and not request.from_storyline:
+            candidate_pid = runtime._existing_persistent_user_app_pid(
+                system=system,
+                username=username,
+                logon_id=logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+                source_visible_by=request.source_visible_by,
+                update_activity=not preflight,
+            )
+            if candidate_pid is not None:
+                return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.APPLICATION)
+        if (
+            not preflight
+            and not prepared_requires_new_root
+            and not request.from_storyline
+            and request.allow_existing_browser_reuse
+            and request.source_visible_by is None
+        ):
+            candidate_pid = runtime._existing_user_browser_pid(
+                system=system,
+                username=username,
+                logon_id=logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+                source_visible_by=request.source_visible_by,
+            )
+            if candidate_pid is not None:
+                return ProcessReuseCandidate(candidate_pid, ProcessReuseKind.BROWSER)
+        return None
+
+    def complete_process_reuse(
+        self,
+        request: ProcessExecutionRequest,
+        candidate: ProcessReuseCandidate,
+        *,
+        time: datetime,
+    ) -> int:
+        """Apply the selected path's source check, optional audit and activity update."""
+        if candidate.kind not in {
+            ProcessReuseKind.EXPLORER,
+            ProcessReuseKind.BOUNDED,
+        } and not self.runtime._process_source_visible_by(
+            system=request.system, pid=candidate.pid, deadline=request.source_visible_by
+        ):
+            return 0
+        self.runtime._record_reused_process_optional_effects(request.prepared_effects)
+        if candidate.kind in {
+            ProcessReuseKind.EXPLORER,
+            ProcessReuseKind.SINGLETON,
+            ProcessReuseKind.BOUNDED,
+        } or (
+            candidate.kind is ProcessReuseKind.SERVICE
+            and self.state_manager.get_process(request.system.hostname, candidate.pid) is not None
+        ):
+            self.state_manager.update_process_activity_time(
+                request.system.hostname, candidate.pid, time
+            )
+        return candidate.pid
 
     def create(self, request: ProcessExecutionRequest) -> int:
         """Execute the canonical process create path."""
@@ -166,13 +427,12 @@ class ProcessExecutionService:
         )
         parent_pid = request.parent_pid
         from_storyline = request.from_storyline
-        allow_existing_browser_reuse = request.allow_existing_browser_reuse
         allow_browser_launch_spacing = request.allow_browser_launch_spacing
         concurrency_group_id = request.concurrency_group_id
         source_visible_by = request.source_visible_by
 
         if request.reuse_intent is not None:
-            return runtime._execute_bounded_process_reuse(
+            return self.execute_bounded_reuse(
                 request=request,
                 actor=(
                     prepared_actor
@@ -409,126 +669,18 @@ class ProcessExecutionService:
             _token_elevation = "%%1938"
             _mandatory_label = "S-1-16-8192"
 
-        if (
-            not prepared_requires_new_root
-            and not from_storyline
-            and source_visible_by is None
-            and _get_os_category(system.os) == "windows"
-            and _exe_lower == "explorer.exe"
-            and _is_bare_windows_explorer_launch(process_name, command_line)
-            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
-        ):
-            explorer_pid = runtime._ensure_session_explorer_pid(
-                system,
-                runtime._user_model_for_username(process_username),
-                time,
-                process_logon_id,
-            )
-            if explorer_pid is not None:
-                runtime._record_reused_process_optional_effects(prepared_effects)
-                self.state_manager.update_process_activity_time(
-                    system.hostname,
-                    explorer_pid,
-                    time,
-                )
-                return explorer_pid
-
-        singleton_pid = (
-            runtime._existing_windows_singleton_pid(system, process_name, time)
-            if not prepared_requires_new_root and not request.require_exact_parent
-            else None
+        reused = self.select_existing_process(
+            request,
+            process_name=process_name,
+            command_line=command_line,
+            username=process_username,
+            logon_id=process_logon_id,
+            time=time,
+            explicit_parent=explicit_parent,
+            prepared_requires_new_root=prepared_requires_new_root,
         )
-        if singleton_pid is not None:
-            if not runtime._process_source_visible_by(
-                system=system,
-                pid=singleton_pid,
-                deadline=source_visible_by,
-            ):
-                return 0
-            runtime._record_reused_process_optional_effects(prepared_effects)
-            self.state_manager.update_process_activity_time(
-                system.hostname,
-                singleton_pid,
-                time,
-            )
-            return singleton_pid
-
-        if (
-            not prepared_requires_new_root
-            and _get_os_category(system.os) == "windows"
-            and explicit_parent is not None
-            and ntpath.basename(explicit_parent.image).lower() == "services.exe"
-        ):
-            singleton_service_pid = runtime._existing_windows_singleton_service_pid(
-                system=system,
-                process_name=process_name,
-                time=time,
-                username=process_username,
-                command_line=command_line,
-            )
-            if singleton_service_pid is not None:
-                if not runtime._process_source_visible_by(
-                    system=system,
-                    pid=singleton_service_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                runtime._record_reused_process_optional_effects(prepared_effects)
-                running_proc = self.state_manager.get_process(
-                    system.hostname, singleton_service_pid
-                )
-                if running_proc is not None:
-                    self.state_manager.update_process_activity_time(
-                        system.hostname,
-                        singleton_service_pid,
-                        time,
-                    )
-                return singleton_service_pid
-
-        if not prepared_requires_new_root and not from_storyline:
-            persistent_app_pid = runtime._existing_persistent_user_app_pid(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-                source_visible_by=source_visible_by,
-            )
-            if persistent_app_pid is not None:
-                if not runtime._process_source_visible_by(
-                    system=system,
-                    pid=persistent_app_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                runtime._record_reused_process_optional_effects(prepared_effects)
-                return persistent_app_pid
-
-        if (
-            not prepared_requires_new_root
-            and not from_storyline
-            and allow_existing_browser_reuse
-            and source_visible_by is None
-        ):
-            browser_pid = runtime._existing_user_browser_pid(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-                source_visible_by=source_visible_by,
-            )
-            if browser_pid is not None:
-                if not runtime._process_source_visible_by(
-                    system=system,
-                    pid=browser_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                runtime._record_reused_process_optional_effects(prepared_effects)
-                return browser_pid
+        if reused is not None:
+            return self.complete_process_reuse(request, reused, time=time)
 
         if request.require_exact_parent:
             if not runtime._is_valid_process_parent_at(

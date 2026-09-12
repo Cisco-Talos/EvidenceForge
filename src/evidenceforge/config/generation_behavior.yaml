@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 55
+current_revision: 56
 history_start_revision: 1
-behavior_surface_sha256: "a4005912398a4efceca4c1cce7f1513d1aa62e7f7baf2d90015381924e8e9345"
+behavior_surface_sha256: "5027a78fa82410da461c82599a38ee488ef1b3d583e5c7182bd5d99285cdb611"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -555,3 +555,9 @@ changes:
     domains: [process-execution, process-preflight]
     formats: []
     summary: Uses one pure image, command and executable normalization function for process preflight and execution, preserving actor revalidation, timing differences and all random draws.
+  - revision: 56
+    id: shared-process-reuse-selection
+    impact: none
+    domains: [process-execution, process-preflight, endpoint-effects]
+    formats: []
+    summary: Shares process-reuse precedence between bounded preflight and execution and centralizes completion bookkeeping while retaining visibility rejection, optional-effect auditing and existing activity-update order.
