@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 58
+current_revision: 59
 history_start_revision: 1
-behavior_surface_sha256: "d9cafeb7c0b89b37c6868472fb1a685235dc57f008b5b0e825033a6b7bf37c9c"
+behavior_surface_sha256: "bdde3219a09aa938f04c826e517b64c070cf24f1b4229e3c6cae0650c458e2f7"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -573,3 +573,9 @@ changes:
     domains: [process-execution, process-preflight, process-lifecycle, endpoint-effects, source-timing]
     formats: []
     summary: Moves process identity, parent, reuse, timing, lifecycle and evidence operations behind explicit owner bindings. Generator entrypoints forward to ephemeral services bound to current State, caches, timing and publication authorities.
+  - revision: 59
+    id: composed-platform-process-parents
+    impact: none
+    domains: [process-parent-selection, process-preflight]
+    formats: []
+    summary: Separates Windows and Linux parent operations and shared history/query helpers while preserving selection order, ancestry materialization, RNG draws and current runtime ownership.

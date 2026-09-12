@@ -13,7 +13,7 @@ from typing import Any
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS as _SYSTEM_ACCOUNTS
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.time import ensure_utc
 
 from . import policy
@@ -261,3 +261,36 @@ class ProcessStateQueries:
         if proc:
             return proc.image
         return "-"
+
+    def _active_session_shell_pid(
+        self,
+        system: System,
+        user: User,
+        time: datetime | None,
+        logon_id: str = "",
+    ) -> int | None:
+        """Return the actor's live per-session shell when one owns the command."""
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(user.username, time)
+            if time is not None
+            else self.state_manager.get_sessions_for_user(user.username)
+        )
+        if logon_id:
+            sessions = [sess for sess in sessions if sess.logon_id == logon_id]
+        for sess in sessions:
+            if sess.system != system.hostname or sess.session_shell_pid is None:
+                continue
+            if time is not None and not policy._session_active_for_activity(
+                sess,
+                time,
+                margin_seconds=1.5,
+            ):
+                continue
+            is_active = (
+                self._is_pid_active_at(system, sess.session_shell_pid, time)
+                if time is not None
+                else self._is_pid_alive(system, sess.session_shell_pid)
+            )
+            if is_active:
+                return sess.session_shell_pid
+        return None

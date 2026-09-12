@@ -33,6 +33,9 @@ def main() -> None:
         help="Uninterrupted reference build; defaults to baseline-source. Use the accepted correction for semantic fixes.",
     )
     parser.add_argument("--original-checkpoints", type=Path, required=True)
+    parser.add_argument(
+        "--intermediate-checkpoints", type=Path, help="Additional revision-58 checkpoint controls"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -84,6 +87,28 @@ def main() -> None:
                 f"PASS original checkpoint / exact rejection / compatible resume: {name}",
                 flush=True,
             )
+            if args.intermediate_checkpoints is not None:
+                run(
+                    [
+                        sys.executable,
+                        str(scripts / "verify_cleanup_resume.py"),
+                        "--source",
+                        str(args.source),
+                        "--checkpoint",
+                        str(args.intermediate_checkpoints / name),
+                        "--control",
+                        str(control),
+                        "--output",
+                        str(args.output / f"compatible-baseline-{name}"),
+                        "--origin-revision",
+                        "58",
+                    ],
+                    args.output / f"compatible-baseline-{name}.log",
+                )
+                print(
+                    f"PASS revision-58 checkpoint / exact rejection / compatible resume: {name}",
+                    flush=True,
+                )
             checkpoint = args.output / f"same-build-checkpoint-{name}"
             run(
                 [

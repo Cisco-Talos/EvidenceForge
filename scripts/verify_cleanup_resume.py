@@ -99,6 +99,7 @@ def main() -> None:
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--same-build", action="store_true")
+    parser.add_argument("--origin-revision", type=int, default=42)
     args = parser.parse_args()
     shutil.copytree(args.checkpoint, args.output)
     environment = os.environ.copy()
@@ -162,7 +163,11 @@ def main() -> None:
     expected_changes = (
         []
         if args.same_build
-        else [change["id"] for change in behavior["changes"] if change["revision"] > 42]
+        else [
+            change["id"]
+            for change in behavior["changes"]
+            if change["revision"] > args.origin_revision
+        ]
     )
     compare_resumed(
         args.control, args.output, same_build=args.same_build, expected_change_ids=expected_changes

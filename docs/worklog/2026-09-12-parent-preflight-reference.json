@@ -1,0 +1,282 @@
+{
+  "baseline_commit": "010ae90ff3dc345d5f05224345c4d529b87fe37a",
+  "cases": {
+    "linux_missing_anchor-137-serial": {
+      "GROUND_TRUTH.json": "262c7f254cabb034705796562ee8790ff7d38546c279e4a31a6d2a75ed013bd5",
+      "LNX/ecar.json": "668cc2a562051e5abec8e3730470d678ae7b65b60d4861610d0ba5f05ed150a5"
+    },
+    "linux_missing_anchor-137-threaded": {
+      "GROUND_TRUTH.json": "262c7f254cabb034705796562ee8790ff7d38546c279e4a31a6d2a75ed013bd5",
+      "LNX/ecar.json": "668cc2a562051e5abec8e3730470d678ae7b65b60d4861610d0ba5f05ed150a5"
+    },
+    "linux_missing_anchor-42-serial": {
+      "GROUND_TRUTH.json": "869ace42c0ae6f247e6aacf5a603ffda424739f603ce52d461db52c5b1bb63d3",
+      "LNX/ecar.json": "af40f571f70648c267035d6526569d6cadd01f782146a6de44ad0dfb42156199"
+    },
+    "linux_missing_anchor-42-threaded": {
+      "GROUND_TRUTH.json": "869ace42c0ae6f247e6aacf5a603ffda424739f603ce52d461db52c5b1bb63d3",
+      "LNX/ecar.json": "af40f571f70648c267035d6526569d6cadd01f782146a6de44ad0dfb42156199"
+    },
+    "linux_second_shell-137-serial": {
+      "GROUND_TRUTH.json": "d34c20cd7735540fd62422e190e83841fb6578c403091e0c3dbc34794c7855ae",
+      "LNX/ecar.json": "51c1936a00dd1c3345285e99cfa0f440ec227da4ff1480a24b02675e7681ddc2"
+    },
+    "linux_second_shell-137-threaded": {
+      "GROUND_TRUTH.json": "d34c20cd7735540fd62422e190e83841fb6578c403091e0c3dbc34794c7855ae",
+      "LNX/ecar.json": "51c1936a00dd1c3345285e99cfa0f440ec227da4ff1480a24b02675e7681ddc2"
+    },
+    "linux_second_shell-42-serial": {
+      "GROUND_TRUTH.json": "b87e82ff34d3649e0a3f0097f55a46bbfaf994ac67d4995091824cd9194ffad4",
+      "LNX/ecar.json": "3b2924aac6c5a32de2c7cc32756ad77e5ed2ca2c8c409a94454adb3e87cd3255"
+    },
+    "linux_second_shell-42-threaded": {
+      "GROUND_TRUTH.json": "b87e82ff34d3649e0a3f0097f55a46bbfaf994ac67d4995091824cd9194ffad4",
+      "LNX/ecar.json": "3b2924aac6c5a32de2c7cc32756ad77e5ed2ca2c8c409a94454adb3e87cd3255"
+    },
+    "linux_service-137-serial": {
+      "GROUND_TRUTH.json": "bae9e893df6de4cb6f2ad12e7cdf2be567ab9bd0b9f3dedba3d46e3ac55cf327",
+      "LNX/ecar.json": "0024ae909051b456306b04231d55e386365818ccf057af73e0fb72d0a1743dcc"
+    },
+    "linux_service-137-threaded": {
+      "GROUND_TRUTH.json": "bae9e893df6de4cb6f2ad12e7cdf2be567ab9bd0b9f3dedba3d46e3ac55cf327",
+      "LNX/ecar.json": "0024ae909051b456306b04231d55e386365818ccf057af73e0fb72d0a1743dcc"
+    },
+    "linux_service-42-serial": {
+      "GROUND_TRUTH.json": "08d27bc0f8053c18b09db9ac27bd0280bcddd019addd7dd5d8f5d29c4195501d",
+      "LNX/ecar.json": "eac3318aae39a6d1db11b5e247b2f03205fd129811b14f7ed1aa1ca5dd45a4d0"
+    },
+    "linux_service-42-threaded": {
+      "GROUND_TRUTH.json": "08d27bc0f8053c18b09db9ac27bd0280bcddd019addd7dd5d8f5d29c4195501d",
+      "LNX/ecar.json": "eac3318aae39a6d1db11b5e247b2f03205fd129811b14f7ed1aa1ca5dd45a4d0"
+    },
+    "linux_shell-137-serial": {
+      "GROUND_TRUTH.json": "c256b173d1c34f559c41862839c996a6976482ef8130511ed6d89a1166b5c86c",
+      "LNX/ecar.json": "c74006e377f19c83ba95d43bef3e8b19eb6b5cffa9ac515ae2ce9f2d99dfd265"
+    },
+    "linux_shell-137-threaded": {
+      "GROUND_TRUTH.json": "c256b173d1c34f559c41862839c996a6976482ef8130511ed6d89a1166b5c86c",
+      "LNX/ecar.json": "c74006e377f19c83ba95d43bef3e8b19eb6b5cffa9ac515ae2ce9f2d99dfd265"
+    },
+    "linux_shell-42-serial": {
+      "GROUND_TRUTH.json": "43adbfcaeb08aeb560923ea36c2344429e351ab52d8860b6167c6f9f352d31a6",
+      "LNX/ecar.json": "3cc108e638f207561b2d12488021eec77be9551bdaba54b3d8acc6b98cd8cacf"
+    },
+    "linux_shell-42-threaded": {
+      "GROUND_TRUTH.json": "43adbfcaeb08aeb560923ea36c2344429e351ab52d8860b6167c6f9f352d31a6",
+      "LNX/ecar.json": "3cc108e638f207561b2d12488021eec77be9551bdaba54b3d8acc6b98cd8cacf"
+    },
+    "module_effects-137-serial": {
+      "GROUND_TRUTH.json": "bf6745a3d327e9cfd8a0a95e43be8a553ff9edc2a3277347d11f3d2acd0e3c87",
+      "WIN/ecar.json": "c1085a38346d3a4e327d4824b0f1bdd950ce9931dcbfda80f074280bdd903ca0"
+    },
+    "module_effects-137-threaded": {
+      "GROUND_TRUTH.json": "bf6745a3d327e9cfd8a0a95e43be8a553ff9edc2a3277347d11f3d2acd0e3c87",
+      "WIN/ecar.json": "c1085a38346d3a4e327d4824b0f1bdd950ce9931dcbfda80f074280bdd903ca0"
+    },
+    "module_effects-42-serial": {
+      "GROUND_TRUTH.json": "ff191bbf52d57cd80d28cca1a56e42c3f3bdbdcb653e6cd1361c44469c0fac8b",
+      "WIN/ecar.json": "7b2bbb2c706cf1e75ddaa03e49f1d8bce264ba64c531fe8b75f854d37c034df5"
+    },
+    "module_effects-42-threaded": {
+      "GROUND_TRUTH.json": "ff191bbf52d57cd80d28cca1a56e42c3f3bdbdcb653e6cd1361c44469c0fac8b",
+      "WIN/ecar.json": "7b2bbb2c706cf1e75ddaa03e49f1d8bce264ba64c531fe8b75f854d37c034df5"
+    },
+    "preflight_deadline-137-serial": {
+      "GROUND_TRUTH.json": "5d842fefeef04f38b4af55b5227e753263b141ad09ab55f4282a7b787fa56ea0"
+    },
+    "preflight_deadline-137-threaded": {
+      "GROUND_TRUTH.json": "5d842fefeef04f38b4af55b5227e753263b141ad09ab55f4282a7b787fa56ea0"
+    },
+    "preflight_deadline-42-serial": {
+      "GROUND_TRUTH.json": "9cd47118978ddfd1e7776cae48574742c18c91886af98888d0b81e16ac294f8c"
+    },
+    "preflight_deadline-42-threaded": {
+      "GROUND_TRUTH.json": "9cd47118978ddfd1e7776cae48574742c18c91886af98888d0b81e16ac294f8c"
+    },
+    "preflight_reuse-137-serial": {
+      "GROUND_TRUTH.json": "513954ba881263b4977076abe3da1dfaf3cbe7bd75db7a81e3afbf668f85c47d"
+    },
+    "preflight_reuse-137-threaded": {
+      "GROUND_TRUTH.json": "513954ba881263b4977076abe3da1dfaf3cbe7bd75db7a81e3afbf668f85c47d"
+    },
+    "preflight_reuse-42-serial": {
+      "GROUND_TRUTH.json": "00125e953bf400778a2b05df8fc499307bd69596cd34d70c2b62f2d739baca8a"
+    },
+    "preflight_reuse-42-threaded": {
+      "GROUND_TRUTH.json": "00125e953bf400778a2b05df8fc499307bd69596cd34d70c2b62f2d739baca8a"
+    },
+    "registry_effects-137-serial": {
+      "GROUND_TRUTH.json": "969327326bdd52f1802fc3028a5f7307661ef44739e936a9dc8a07326edce8f2",
+      "WIN/ecar.json": "88911cce5190ae0400dceb6f9aee4162d8a8407ed9c980810a67647577867e5e"
+    },
+    "registry_effects-137-threaded": {
+      "GROUND_TRUTH.json": "969327326bdd52f1802fc3028a5f7307661ef44739e936a9dc8a07326edce8f2",
+      "WIN/ecar.json": "88911cce5190ae0400dceb6f9aee4162d8a8407ed9c980810a67647577867e5e"
+    },
+    "registry_effects-42-serial": {
+      "GROUND_TRUTH.json": "7424366a317f2796fc13e8d539b3dbc628af756014532edec3289852da0e86bc",
+      "WIN/ecar.json": "d099ed6c1fc0a655ffcc3d7ec10938a3e2bdc34910c09751aac59241b13b3e3a"
+    },
+    "registry_effects-42-threaded": {
+      "GROUND_TRUTH.json": "7424366a317f2796fc13e8d539b3dbc628af756014532edec3289852da0e86bc",
+      "WIN/ecar.json": "d099ed6c1fc0a655ffcc3d7ec10938a3e2bdc34910c09751aac59241b13b3e3a"
+    },
+    "required_file-137-serial": {
+      "GROUND_TRUTH.json": "d6a9e7483b8d10e88653c92acf39a18c90281b89463af2d3be1b1733b454d94a",
+      "WIN/ecar.json": "eedbcf1e2482b8245c99592ae020b53e600fccf32774a020e257e0e96819129d"
+    },
+    "required_file-137-threaded": {
+      "GROUND_TRUTH.json": "d6a9e7483b8d10e88653c92acf39a18c90281b89463af2d3be1b1733b454d94a",
+      "WIN/ecar.json": "eedbcf1e2482b8245c99592ae020b53e600fccf32774a020e257e0e96819129d"
+    },
+    "required_file-42-serial": {
+      "GROUND_TRUTH.json": "4ed96202728bfb9905139a5dd1f4cab1d39a75e90133e3ab798c76f7e73b7407",
+      "WIN/ecar.json": "35a6dc55621ce0523141e8dc53caf023a4c393140b53c4cdf1fb60709a904259"
+    },
+    "required_file-42-threaded": {
+      "GROUND_TRUTH.json": "4ed96202728bfb9905139a5dd1f4cab1d39a75e90133e3ab798c76f7e73b7407",
+      "WIN/ecar.json": "35a6dc55621ce0523141e8dc53caf023a4c393140b53c4cdf1fb60709a904259"
+    },
+    "scanner_plan-137-serial": {
+      "GROUND_TRUTH.json": "5acf569a9d4087163a732accd6463f003eecc140f15b468d95373d6217e170be"
+    },
+    "scanner_plan-137-threaded": {
+      "GROUND_TRUTH.json": "5acf569a9d4087163a732accd6463f003eecc140f15b468d95373d6217e170be"
+    },
+    "scanner_plan-42-serial": {
+      "GROUND_TRUTH.json": "65e1f461b749f627572b997bd7417d42d464e6011c3f62c4231c8b1c0e1b9c6e"
+    },
+    "scanner_plan-42-threaded": {
+      "GROUND_TRUTH.json": "65e1f461b749f627572b997bd7417d42d464e6011c3f62c4231c8b1c0e1b9c6e"
+    },
+    "windows_future_parent-137-serial": {
+      "GROUND_TRUTH.json": "22216eafcea0664acd089636b51be2e53d6124c06ce98164721260f27854aa3b",
+      "WIN/ecar.json": "0708f0ced7b629db9aeddf9548f40a8a4463133671bc0e5760ada055cd2e649e"
+    },
+    "windows_future_parent-137-threaded": {
+      "GROUND_TRUTH.json": "22216eafcea0664acd089636b51be2e53d6124c06ce98164721260f27854aa3b",
+      "WIN/ecar.json": "0708f0ced7b629db9aeddf9548f40a8a4463133671bc0e5760ada055cd2e649e"
+    },
+    "windows_future_parent-42-serial": {
+      "GROUND_TRUTH.json": "afde0bf2a8c9453ad8292fb02df83b85e686c30cf0026f498cc8232ff176d6db",
+      "WIN/ecar.json": "745811ed92556c57dd9774abaf356f0a83bb3b981c64446bb5c6dc3004dea258"
+    },
+    "windows_future_parent-42-threaded": {
+      "GROUND_TRUTH.json": "afde0bf2a8c9453ad8292fb02df83b85e686c30cf0026f498cc8232ff176d6db",
+      "WIN/ecar.json": "745811ed92556c57dd9774abaf356f0a83bb3b981c64446bb5c6dc3004dea258"
+    },
+    "windows_gui-137-serial": {
+      "GROUND_TRUTH.json": "da3dd41574713c5449771b6d65207603fea54e2b43a774c70780b6e49b715ee6",
+      "WIN/ecar.json": "1c33b5e61094b0d0f820d5be82768425ac3976ec877d2eb98d825e8119e5f78d"
+    },
+    "windows_gui-137-threaded": {
+      "GROUND_TRUTH.json": "da3dd41574713c5449771b6d65207603fea54e2b43a774c70780b6e49b715ee6",
+      "WIN/ecar.json": "1c33b5e61094b0d0f820d5be82768425ac3976ec877d2eb98d825e8119e5f78d"
+    },
+    "windows_gui-42-serial": {
+      "GROUND_TRUTH.json": "8c5fc4ccb505ce13296445e8e5812f731e6fa69404cb35a3b2877e2f7b2d765a",
+      "WIN/ecar.json": "fdad7b38db3523dc18f20c6d55a12d9a4d3695e88fcccf8a818bdbfdae989fb2"
+    },
+    "windows_gui-42-threaded": {
+      "GROUND_TRUTH.json": "8c5fc4ccb505ce13296445e8e5812f731e6fa69404cb35a3b2877e2f7b2d765a",
+      "WIN/ecar.json": "fdad7b38db3523dc18f20c6d55a12d9a4d3695e88fcccf8a818bdbfdae989fb2"
+    },
+    "windows_missing_parent-137-serial": {
+      "GROUND_TRUTH.json": "5785a84a01bb489cae7f129c85c2fefcd391e9fa95ed47366fe99d7c2f51ed7e",
+      "WIN/ecar.json": "cee3aabba8f51c6ca59d38b03eec1f6e6bc0e9d13f019dac9d5008dbb4f3f3bf"
+    },
+    "windows_missing_parent-137-threaded": {
+      "GROUND_TRUTH.json": "5785a84a01bb489cae7f129c85c2fefcd391e9fa95ed47366fe99d7c2f51ed7e",
+      "WIN/ecar.json": "cee3aabba8f51c6ca59d38b03eec1f6e6bc0e9d13f019dac9d5008dbb4f3f3bf"
+    },
+    "windows_missing_parent-42-serial": {
+      "GROUND_TRUTH.json": "e1c8012af0a93b226c71fe7c31cd85775e543b4d1c818a8e82f678ace5646c8a",
+      "WIN/ecar.json": "ec73106ab19111a897d31455b29fd619f01e3fe496395937bbbf7c36f22e05e6"
+    },
+    "windows_missing_parent-42-threaded": {
+      "GROUND_TRUTH.json": "e1c8012af0a93b226c71fe7c31cd85775e543b4d1c818a8e82f678ace5646c8a",
+      "WIN/ecar.json": "ec73106ab19111a897d31455b29fd619f01e3fe496395937bbbf7c36f22e05e6"
+    },
+    "windows_network-137-serial": {
+      "GROUND_TRUTH.json": "34d8c2194649978a5440687143cb5b35cdbc3d0ba37c82303538adcd4113cd40",
+      "WIN/ecar.json": "9f1d82899b0d588c652d27c31d29ecbd797943238ab6c9201fc40bf06d4e6710"
+    },
+    "windows_network-137-threaded": {
+      "GROUND_TRUTH.json": "34d8c2194649978a5440687143cb5b35cdbc3d0ba37c82303538adcd4113cd40",
+      "WIN/ecar.json": "9f1d82899b0d588c652d27c31d29ecbd797943238ab6c9201fc40bf06d4e6710"
+    },
+    "windows_network-42-serial": {
+      "GROUND_TRUTH.json": "1db12b53c29f907072d9624fac93dc602b803a136a8fc1e6048c27d88b8edccd",
+      "WIN/ecar.json": "7de131a044aba1af0d2caced8718c9eac29a87471337bb7c957d91649bf2251d"
+    },
+    "windows_network-42-threaded": {
+      "GROUND_TRUTH.json": "1db12b53c29f907072d9624fac93dc602b803a136a8fc1e6048c27d88b8edccd",
+      "WIN/ecar.json": "7de131a044aba1af0d2caced8718c9eac29a87471337bb7c957d91649bf2251d"
+    },
+    "windows_remote_wrapper-137-serial": {
+      "GROUND_TRUTH.json": "9791cef331da8d5f3007a7828ef67b1f755d6166f0f1ea21323a69ea3f1300bf",
+      "WIN/ecar.json": "0599b2d42cb9ccfddafd920b34dd3df00c9e23a8176f2e20c22f1ab300cee787"
+    },
+    "windows_remote_wrapper-137-threaded": {
+      "GROUND_TRUTH.json": "9791cef331da8d5f3007a7828ef67b1f755d6166f0f1ea21323a69ea3f1300bf",
+      "WIN/ecar.json": "0599b2d42cb9ccfddafd920b34dd3df00c9e23a8176f2e20c22f1ab300cee787"
+    },
+    "windows_remote_wrapper-42-serial": {
+      "GROUND_TRUTH.json": "eaa5663889d495dcd086acc9f96f24e571c056a1ecf2bec92a7af7432f69a9d1",
+      "WIN/ecar.json": "d0ac6c8f6db079c34e1cd347772a361e2c9398c8e001f3cc6df14f4452393949"
+    },
+    "windows_remote_wrapper-42-threaded": {
+      "GROUND_TRUTH.json": "eaa5663889d495dcd086acc9f96f24e571c056a1ecf2bec92a7af7432f69a9d1",
+      "WIN/ecar.json": "d0ac6c8f6db079c34e1cd347772a361e2c9398c8e001f3cc6df14f4452393949"
+    },
+    "windows_same_exe-137-serial": {
+      "GROUND_TRUTH.json": "4f8ba6dce26b3724ec2244a3ebc08eed5c5c33901a859bed35551243b9437369",
+      "WIN/ecar.json": "e116fe7cc713d760f1de4cc3ac60f780af700987d8cd39bcba762d131e892d31"
+    },
+    "windows_same_exe-137-threaded": {
+      "GROUND_TRUTH.json": "4f8ba6dce26b3724ec2244a3ebc08eed5c5c33901a859bed35551243b9437369",
+      "WIN/ecar.json": "e116fe7cc713d760f1de4cc3ac60f780af700987d8cd39bcba762d131e892d31"
+    },
+    "windows_same_exe-42-serial": {
+      "GROUND_TRUTH.json": "cf17e305a1dd1586a703bb7ea1ef430d577d178e8fffc193f5181c976ba4558e",
+      "WIN/ecar.json": "e97efe348b197533cde01d49e4b7c8812d0b66f0bc7955ea01e9b4e3d8291d55"
+    },
+    "windows_same_exe-42-threaded": {
+      "GROUND_TRUTH.json": "cf17e305a1dd1586a703bb7ea1ef430d577d178e8fffc193f5181c976ba4558e",
+      "WIN/ecar.json": "e97efe348b197533cde01d49e4b7c8812d0b66f0bc7955ea01e9b4e3d8291d55"
+    },
+    "windows_service-137-serial": {
+      "GROUND_TRUTH.json": "ea339d1da3a27195eaec121790378df1eb3fd260c78aee7131ec8da0da30ddce",
+      "WIN/ecar.json": "d200d072b59ac095e02961cecc71d41da5f39a25c4947d0fac824ae8933c5bc2"
+    },
+    "windows_service-137-threaded": {
+      "GROUND_TRUTH.json": "ea339d1da3a27195eaec121790378df1eb3fd260c78aee7131ec8da0da30ddce",
+      "WIN/ecar.json": "d200d072b59ac095e02961cecc71d41da5f39a25c4947d0fac824ae8933c5bc2"
+    },
+    "windows_service-42-serial": {
+      "GROUND_TRUTH.json": "03b93307afdf63aa439b68293c279148e8e1b9be853601cc95d4e33f75d3006d",
+      "WIN/ecar.json": "3877f1bca8ed85079325f019a0e7597671b48ee5317631b92579f7110449e972"
+    },
+    "windows_service-42-threaded": {
+      "GROUND_TRUTH.json": "03b93307afdf63aa439b68293c279148e8e1b9be853601cc95d4e33f75d3006d",
+      "WIN/ecar.json": "3877f1bca8ed85079325f019a0e7597671b48ee5317631b92579f7110449e972"
+    },
+    "windows_wrong_principal-137-serial": {
+      "GROUND_TRUTH.json": "c8719348599bf3b0e7f14a1d0bb7656b96774dd2d30c8a8e7c3834b25b8a30b7",
+      "WIN/ecar.json": "d660a0bd9c16373a8d0c4bea45bfe36a7aa8ba89ee94e5d5df97a4cb1ad4b776"
+    },
+    "windows_wrong_principal-137-threaded": {
+      "GROUND_TRUTH.json": "c8719348599bf3b0e7f14a1d0bb7656b96774dd2d30c8a8e7c3834b25b8a30b7",
+      "WIN/ecar.json": "d660a0bd9c16373a8d0c4bea45bfe36a7aa8ba89ee94e5d5df97a4cb1ad4b776"
+    },
+    "windows_wrong_principal-42-serial": {
+      "GROUND_TRUTH.json": "da91eb446d03090bfa01cf3688d9be14cbeb2c56ad5af4eba1aa5b7c79733461",
+      "WIN/ecar.json": "5b6fbb0e79527d9bfb6b815d86dde95f3eebe9dda4574e64e53d92f0a9c47777"
+    },
+    "windows_wrong_principal-42-threaded": {
+      "GROUND_TRUTH.json": "da91eb446d03090bfa01cf3688d9be14cbeb2c56ad5af4eba1aa5b7c79733461",
+      "WIN/ecar.json": "5b6fbb0e79527d9bfb6b815d86dde95f3eebe9dda4574e64e53d92f0a9c47777"
+    }
+  },
+  "driver_sha256": "c4db985a7e1728b4c12bc95fe060eadd27c598fbe19165fe7fb31f9b90deeb92"
+}

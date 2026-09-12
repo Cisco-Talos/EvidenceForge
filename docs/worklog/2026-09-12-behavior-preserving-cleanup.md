@@ -1,5 +1,76 @@
 # Behavior-preserving 2.0.0 cleanup
 
+## Final process-ownership pass — in progress
+
+The approved follow-up starts from clean `010ae90ff3dc345d5f05224345c4d529b87fe37a`
+on `codex/2.0.0-code-cleanup`. Its four gated commits will separate platform parent policy,
+remove the frozen internal forwarding hops, establish a process preflight owner, and divide
+preflight planning from reservations. This pass admits no new evidence differences.
+
+The starting checkout is preserved at `/private/tmp/eforge-cleanup-process-baseline`.
+The existing 122 byte controls and 12 resumes re-verify, with a fresh verification report at
+`/private/tmp/eforge-cleanup-pass3-existing-controls.json`. The frozen source hashes, parent
+method inventory and 35 call sites across 20 generator methods are recorded in
+`2026-09-12-process-cleanup-baseline.json`.
+
+New native controls cover 18 parent/preflight paths × two seeds × serial/threaded emission.
+The first driver draft incorrectly treated `RunningProcess` as a Pydantic model; the first
+matrix draft omitted Linux PID 1. These setup errors were fixed before freezing accepted controls.
+The first 15-test characterization run also had setup errors (the state map name and Linux
+bootstrap parent); its repeat passed 13 and failed two because assigning `end_time` bypassed
+canonical termination indexes. The fixtures now call the existing `StateManager.end_process`.
+All these attempts occurred before production edits; no expected production behavior was changed.
+
+### Parent extraction acceptance attempts
+
+The frozen additional reference contains 72 repeatable cases (18 paths, two seeds,
+serial/threaded), expanding 122 controls to 194. A draft module-plan serializer also failed;
+its concurrent repeat was stopped (exit 130) before correcting and freezing the driver.
+All draft captures and logs remain available; accepted reference hashes are in
+`2026-09-12-parent-preflight-reference.json`.
+
+The initial parent split passed 516 focused tests, 15 timing slow tests and 60 parent/publication
+slow tests. All 162 native/supplement byte cases passed. The standard run passed 8,483 tests
+and failed one documentation first-reference trademark check, with 27 existing skips.
+The core matrix stopped at Linux SMB seed 42: a missing scenario-start binding skipped visible
+Linux shell materialization and changed parent IDs and dependent evidence. Acceptance was blocked.
+The helper now explicitly receives the current scenario start; two bounded tests cover the
+materialization guard, and the failing SMB case again matches all 25 artifacts byte for byte.
+The documentation first reference was corrected. No baseline or expected evidence changed.
+
+Platform policy also owns the remaining Windows account/session fallback operations, invoked
+at the existing shared branch points. Shared history and active-shell querying have dedicated
+owners so platform helpers never call back into the parent coordinator. Final parent gates
+are being rerun after these changes.
+
+### Item 1 accepted — platform parent policies
+
+Final parent gates: 57 focused tests, **8,486 standard tests passed**, 27 existing skips,
+2,010 deselected (301.33 seconds); **75 targeted slow tests passed**, two deselected
+(15.73 seconds); both Ruff checks, whitespace and revision-59 manifest validation against
+`010ae90f` pass. All **194 raw-byte controls** match their frozen corrected baseline, with
+manifest hashes verified. No checkpoint resume is claimed at this boundary; six fresh revision-58
+checkpoints have been preserved for the final 18-resume gate.
+
+The shared coordinator is 1,400 lines (previously 2,074), retaining 26 existing signatures plus
+three ephemeral helper bindings. Windows policy is 826 lines with six explicit dependencies;
+Linux policy is 249 lines with seven; shared history is 76 lines with three. Shared active-shell
+querying moved into the existing query owner. Total lines increase because the compatibility
+adapters and explicit bindings remain; the improvement is single policy ownership, not fewer
+lines. Helpers contain no generator reference or callback into the parent coordinator.
+The 35 internal forwarding calls remain intentionally unchanged until item 2.
+
+Representative paths: shared explicit-parent validation → platform existing fallback; shared
+account/session classification → Windows role policy; shared spawn rules → Linux shell/service
+selection → shared recursive chain materialization. The Linux observation-start binding now
+covers both warmup-parent reuse and visible-shell materialization.
+
+Final source digest: `bdde3219a09aa938f04c826e517b64c070cf24f1b4229e3c6cae0650c458e2f7`.
+Report: `2026-09-12-process-parent-evidence.json`, SHA-256
+`daf6ece96b2e953206b94a0d5a3b39d8ff07c7b4c51ce23e5cb5c4beeffdcd53`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item1-final-{standard,slow,core,native,supplements}.log`
+and `/private/tmp/eforge-cleanup-pass3-parent-final-focused.log`.
+
 ## Second-pass final status
 
 The first-pass preservation claim below is limited to its exercised matrix. Review found a
@@ -626,7 +697,7 @@ accepted source. All final captures use the new, separately preserved `pass2-fin
 - Final structural inventory was recomputed and matches the source. Version, dependency,
   checkpoint-schema and fingerprint-algorithm files are unchanged from the first-pass endpoint.
 - **All final acceptance gates pass.** The full soak tier was excluded as agreed; the six
-  relevant retention soak cases ran. The 27 standard skips remain the existing three SOF-ELK
+  relevant retention soak cases ran. The 27 standard skips remain the existing three SOF-ELK®
   parser integrations, one Splunk integration, one full-engine web-access case and 22 external
   sample-data checks. No new skips or changed golden expectations were introduced.
 
