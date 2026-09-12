@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 45
+current_revision: 46
 history_start_revision: 1
-behavior_surface_sha256: "cb01c8c07fb6cb61a0de5f32f8a673404a00f1d033317cb1c3ce8d69e1f56ba3"
+behavior_surface_sha256: "a115334efbae1a1eecdd5c54f1b94be255baab0f4a86e0bb02e8c94e49672751"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -486,3 +486,10 @@ changes:
       - checkpoint-verification-cleanup
     formats: []
     summary: Discards checkpoint scratch workers and declared resource slots without inspecting arbitrary object graphs or finalizing sources.
+  - revision: 46
+    id: typed-storyline-family-handlers
+    impact: none
+    domains:
+      - storyline-dispatch
+    formats: []
+    summary: Extracts unchanged typed event execution bodies into explicit family handlers sharing the existing per-event context and runtime owners.

@@ -88,3 +88,26 @@
   baseline and item 3. Original-build checkpoint verification and compatible resume also passed
   with byte-identical evidence and validated provenance.
 - Items 5–7 and final comprehensive acceptance remain outstanding.
+
+### Item 5 — typed storyline dispatch
+
+- Extracted all 32 typed branches into six family modules with explicit selection and a
+  shared ephemeral context. The coordinator retains RNG acquisition, future specs, ground-truth
+  initialization, and visibility lookup. All extracted execution bodies have identical ASTs to
+  original dev; no action-bundle routing or branch ordering changed.
+- Shared storyline helper imports resolve during execution, preserving existing instrumentation
+  seams without retaining a mocked helper at first module import. The initial standard run exposed
+  13 helper-binding failures and one source-location assertion; these were corrected, retaining
+  DHCP's exact ownership-wiring assertions at the moved handler location.
+- A draft supplemental fixture also caused one initial standard failure (invalid 20-minute warmup).
+  Its construction errors were resolved against original dev: use a one-hour warmup and a distinct
+  DHCP server. The frozen fixture lives under scripts/fixtures, separate from authored examples.
+- Gates: initial focused 154 passed; expanded repeat 360 passed; final standard 8,416 passed,
+  27 skipped, 2,009 deselected (303.53 seconds). Ruff, format, manifest revision 46, and harness
+  tests passed. All 32 original matrix cases passed during extraction; a final all-format/42
+  capture after the helper-binding correction matches both original dev and item 4.
+- Added six bounded supplemental cases covering remote sessions, admin/task/service actions,
+  DHCP/DNS, locking, process lifecycle, and proxy output across seeds 42/137 and all three targets.
+  All six original-build repeats and all six item-5 comparisons passed (28–29 artifacts each).
+  Input SHA-256 values are locked in scripts/fixtures/cleanup-inputs.json and checked before capture.
+- Items 6–7 and final standard/slow/checkpoint acceptance remain outstanding.

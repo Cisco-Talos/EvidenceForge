@@ -61,6 +61,13 @@ def capture(arguments: argparse.Namespace) -> None:
 
         LogEmitter.__init__ = initialize_serial
 
+    frozen_inputs = json.loads(
+        (Path(__file__).parent / "fixtures" / "cleanup-inputs.json").read_text()
+    )
+    expected = frozen_inputs.get(arguments.fixture.name)
+    actual = hashlib.sha256(arguments.fixture.read_bytes()).hexdigest()
+    if expected is None or actual != expected:
+        raise ValueError(f"Fixture is not the frozen cleanup input: {arguments.fixture}")
     document = load_yaml(arguments.fixture.resolve())
     scenario = Scenario(**document)
     if arguments.filtered:
