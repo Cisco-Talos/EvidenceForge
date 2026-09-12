@@ -111,3 +111,18 @@
   All six original-build repeats and all six item-5 comparisons passed (28–29 artifacts each).
   Input SHA-256 values are locked in scripts/fixtures/cleanup-inputs.json and checked before capture.
 - Items 6–7 and final standard/slow/checkpoint acceptance remain outstanding.
+
+### Item 6 — composed Windows/Sysmon journal infrastructure
+
+- Shared 26 identical spool, journal, owner-fencing, and terminal-cleanup operations through
+  source_journal.py. Existing emitter methods forward to the helpers; provider rendering, record
+  IDs, causal adjustments, mutable state, lock order, and checkpoint adapters remain in place.
+  Provider names are explicit parameters so existing error strings remain exact.
+- Gates: 163 focused tests and 181 targeted slow finalization/publication tests passed; standard
+  suite 8,416 passed, 27 skipped, 2,009 deselected (291.48 seconds). Ruff/format/whitespace passed.
+  Behavior revision 47 validated against item 5.
+- All-format/default/42 evidence matches original dev and item 5. All six supplemental cases
+  match the frozen original outputs. Original-default/42 checkpoint verification and compatible
+  resume reproduce byte-identical evidence with validated provenance.
+- No runtime owner or retention policy was added, so no additional scalability soak was warranted.
+  Item 7 and final comprehensive gates remain outstanding.

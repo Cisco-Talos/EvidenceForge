@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 46
+current_revision: 47
 history_start_revision: 1
-behavior_surface_sha256: "a115334efbae1a1eecdd5c54f1b94be255baab0f4a86e0bb02e8c94e49672751"
+behavior_surface_sha256: "93c87a9dc15dd527b2dc41d4a9cbde5e5cbb9971cea06ac1e6bd8961a95807d5"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -493,3 +493,11 @@ changes:
       - storyline-dispatch
     formats: []
     summary: Extracts unchanged typed event execution bodies into explicit family handlers sharing the existing per-event context and runtime owners.
+  - revision: 47
+    id: shared-windows-provider-source-journal
+    impact: none
+    domains:
+      - source-finalization
+      - emitter-spool
+    formats: [windows, sysmon]
+    summary: Composes identical protected spool and finalization operations over existing Windows and Sysmon owner state while retaining provider entrypoints and checkpoint representations.
