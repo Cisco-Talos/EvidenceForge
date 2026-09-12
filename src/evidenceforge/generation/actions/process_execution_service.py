@@ -36,7 +36,6 @@ from evidenceforge.generation.actions import (
     ProcessExecutionRequest,
     ProcessTerminationRequest,
 )
-from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
     _get_rng,
@@ -49,8 +48,8 @@ from evidenceforge.generation.activity.process_helpers import (
     _linux_foreground_lifetime,
     _linux_shell_process_reserves_foreground,
     _process_termination_delay_after_activity_seconds,
-    _windows_script_host_process,
     _windows_service_process_account,
+    normalize_process_command,
 )
 from evidenceforge.generation.activity.service_process_profiles import (
     matching_service_worker,
@@ -209,11 +208,12 @@ class ProcessExecutionService:
                 "Process activity cannot begin at or after its authoritative session end: "
                 f"{system.hostname} logon_id={logon_id} time={ensure_utc(time).isoformat()}"
             )
-        if _get_os_category(system.os) == "windows":
-            process_name, command_line = _windows_script_host_process(
-                process_name,
-                command_line,
-            )
+        process_name, command_line, _exe_lower = normalize_process_command(
+            process_name,
+            command_line,
+            os_category=_get_os_category(system.os),
+            hostname=system.hostname,
+        )
 
         # Determine integrity level per UAC model:
         # - SYSTEM processes: "System" (handled in generate_system_process)
@@ -233,13 +233,7 @@ class ProcessExecutionService:
             "psexec.exe",
             "psexesvc.exe",
         }
-        _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _get_os_category(system.os) == "windows" and _exe_lower == "psexesvc.exe":
-            process_name = r"C:\Windows\PSEXESVC.exe"
-            command_line = (
-                r"C:\Windows\PSEXESVC.exe" if "accepteula" in command_line.lower() else command_line
-            )
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
+
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
         elif _get_os_category(system.os) == "windows" and any(
@@ -656,7 +650,6 @@ class ProcessExecutionService:
         runtime._finalize_due_process_lifetimes(time, exhaust=False)
 
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
         process_session_id = runtime._session_id_for_logon(process_logon_id)
         process_session_identity = self.state_manager.get_session_identity(process_logon_id)
         action_cohort_builder = (

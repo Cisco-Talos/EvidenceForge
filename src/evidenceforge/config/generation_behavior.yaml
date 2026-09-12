@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 54
+current_revision: 55
 history_start_revision: 1
-behavior_surface_sha256: "fbd9b98cf01a5e94bc0bffe752e547ee80a891afc9bbaabf2e81a814b16ba7e7"
+behavior_surface_sha256: "a4005912398a4efceca4c1cce7f1513d1aa62e7f7baf2d90015381924e8e9345"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -549,3 +549,9 @@ changes:
     domains: [network-transaction, protocol-evidence, lifecycle-publication]
     formats: []
     summary: Carries stable request facts, endpoint identity, protocol inputs and publication groups by reference through the same six phases, retaining phase-local drafts and all existing commit and recovery boundaries.
+  - revision: 55
+    id: shared-process-command-normalization
+    impact: none
+    domains: [process-execution, process-preflight]
+    formats: []
+    summary: Uses one pure image, command and executable normalization function for process preflight and execution, preserving actor revalidation, timing differences and all random draws.

@@ -427,3 +427,27 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   byte. File sets, ground truth and manifest-listed hashes are unchanged. Both Ruff checks and
   revision-54 validation pass; digest
   `fbd9b98cf01a5e94bc0bffe752e547ee80a891afc9bbaabf2e81a814b16ba7e7`.
+
+### Item 6a — shared process command normalization
+
+- Item 5 committed as `5bcad92d`. Preflight and execution share one pure image/command/executable
+  normalizer. The later duplicate Defender-path rewrite was removed after verifying no intervening
+  assignment can change the image. Actor revalidation and deliberately different timing paths remain.
+- Nine native Windows process cases × seeds 42/137 × serial/threaded emission add **36 controls**
+  for batch scripts, unchanged non-batch scripts, PSEXESVC and Defender paths, persistent/browser
+  reuse, preferred-browser precedence, exact parents, and source-deadline rejection. All match
+  original dev and the accepted pre-process source (`5858a0a8`); the pre-process control repeats
+  exactly. The initial eight-case draft is retained separately; the added batch case was frozen
+  before process production edits. Native drivers are hash-locked, and both native matrices now
+  use one shared runner. The durable process-reference JSON records every file hash.
+- Focused normalization/process tests: **155 passed**, 60 deselected. Candidate process **36/36**
+  and foreground **36/36** raw comparisons pass; all-format/default/42 and six typed cases also
+  match item 5. The expanded final evidence matrix is now **122 cases** (44 original, six shell
+  scenarios, 36 foreground native and 36 process native).
+- Initial preparation lint caught a now-redundant normalizer call and import order; corrected.
+  The first focused invocation named a nonexistent test file and ran no tests; correct paths pass.
+  Both Ruff checks and revision-55 manifest validation pass; standard suite pending.
+- **Item 6a acceptance:** standard **8,455 passed, 27 existing skips, 2,009 deselected**
+  (300.39 s), focused **155 passed**, all **79 selected byte cases** passed (72 native plus
+  all-format/default/42 and six typed), and both Ruff checks pass. Revision-55 digest:
+  `a4005912398a4efceca4c1cce7f1513d1aa62e7f7baf2d90015381924e8e9345`.

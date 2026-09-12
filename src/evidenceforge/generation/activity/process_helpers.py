@@ -13,6 +13,7 @@ import shlex
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,24 @@ _SYSTEM_ACCOUNT_LOGON_IDS = {
 }
 
 _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT = 256
+
+
+def normalize_process_command(
+    process_name: str,
+    command_line: str,
+    *,
+    os_category: str,
+    hostname: str,
+) -> tuple[str, str, str]:
+    """Return the normalized image, command and executable classification without sampling."""
+    if os_category == "windows":
+        process_name, command_line = _windows_script_host_process(process_name, command_line)
+    executable = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    if os_category == "windows" and executable == "psexesvc.exe":
+        process_name = r"C:\Windows\PSEXESVC.exe"
+        if "accepteula" in command_line.lower():
+            command_line = r"C:\Windows\PSEXESVC.exe"
+    return normalize_defender_platform_path(process_name, hostname), command_line, executable
 
 
 def _windows_script_host_process(

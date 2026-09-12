@@ -683,6 +683,7 @@ from .process_helpers import (
 from .process_helpers import (
     _windows_service_process_account as _windows_service_process_account,
 )
+from .process_helpers import normalize_process_command
 
 logger = logging.getLogger(__name__)
 
@@ -18918,19 +18919,12 @@ class ActivityGenerator:
         """Resolve the root actor and start fence without mutating runtime state."""
 
         system = request.system
-        process_name = request.process_name
-        command_line = request.command_line
-        if _get_os_category(system.os) == "windows":
-            process_name, command_line = _windows_script_host_process(
-                process_name,
-                command_line,
-            )
-        exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _get_os_category(system.os) == "windows" and exe_lower == "psexesvc.exe":
-            process_name = r"C:\Windows\PSEXESVC.exe"
-            if "accepteula" in command_line.lower():
-                command_line = r"C:\Windows\PSEXESVC.exe"
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
+        process_name, command_line, exe_lower = normalize_process_command(
+            request.process_name,
+            request.command_line,
+            os_category=_get_os_category(system.os),
+            hostname=system.hostname,
+        )
 
         started_at = ensure_utc(request.time)
         process_username, process_logon_id = self._resolve_process_identity(
