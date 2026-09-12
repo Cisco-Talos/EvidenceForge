@@ -53,77 +53,7 @@ def handle_process(
     rng = context.rng
     malicious_event = context.malicious_event
     os_category = _get_os_category(system.os)
-    if hasattr(self, "world_planner"):
-        # Built-in/service accounts (SYSTEM, LOCAL SERVICE, etc.) run
-        # locally — don't fabricate remote logon evidence for them.
-        from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
-
-        service_accounts = set(self.scenario.environment.service_accounts)
-        is_local_account = actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
-        is_interactive_linux_root = os_category == "linux" and actor.username == "root"
-        if is_local_account and not is_interactive_linux_root:
-            linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}
-            if os_category == "linux" and actor.username.lower() in linux_daemon_users:
-                logon_id = ""
-            else:
-                # Use existing system session or create a service logon.
-                sessions = self.state_manager.get_sessions_for_user_at(
-                    actor.username,
-                    time,
-                )
-                target_session = max(
-                    (s for s in sessions if s.system == system.hostname),
-                    key=lambda session: session.start_time,
-                    default=None,
-                )
-                if target_session:
-                    logon_id = target_session.logon_id
-                else:
-                    logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
-                    logon_id = self.activity_generator.generate_service_logon(
-                        system=system,
-                        time=logon_time,
-                        service_account=actor.username,
-                    )
-        else:
-            logon_id = self._last_storyline_logon_for_actor_system(
-                actor,
-                system,
-                at_time=time,
-            )
-            if logon_id is None:
-                required_until = self._next_storyline_logoff_time_for_actor_system(
-                    actor,
-                    system,
-                    time,
-                )
-                session_kind = self._storyline_non_session_kind(actor, system, rng)
-                target_session = self.world_planner.ensure_user_session(
-                    actor,
-                    system,
-                    time,
-                    rng,
-                    session_kind=session_kind,
-                    storyline_protected=True,
-                    required_until=required_until,
-                )
-                logon_id = target_session.logon_id
-                self._record_storyline_logon(actor, system, logon_id)
-    else:
-        sessions = self.state_manager.get_sessions_for_user(actor.username)
-        target_session = max(
-            (s for s in sessions if s.system == system.hostname),
-            key=lambda session: session.start_time,
-            default=None,
-        )
-        if not target_session:
-            logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
-            logon_id = self.activity_generator.generate_logon(
-                actor, system, logon_time, logon_type=3
-            )
-            self._record_storyline_logon(actor, system, logon_id)
-        else:
-            logon_id = target_session.logon_id
+    logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
 
     process_actor = self._linux_native_service_user_for_storyline_actor(
         actor,

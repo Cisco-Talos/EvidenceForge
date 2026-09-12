@@ -2526,14 +2526,30 @@ class StorylineMixin:
             return None
         return logon_id, plan
 
-    def _resolve_storyline_process_spill_logon_id(
+    def _resolve_storyline_process_logon_id(
         self,
         actor: User,
         system: System,
         time: datetime,
         rng: random.Random,
     ) -> str:
-        """Resolve canonical session ownership for a standalone process-command spill."""
+        """Resolve process session ownership for typed events and command spills."""
+        if not hasattr(self, "world_planner"):
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            target_session = max(
+                (s for s in sessions if s.system == system.hostname),
+                key=lambda session: session.start_time,
+                default=None,
+            )
+            if target_session is not None:
+                return target_session.logon_id
+            logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+            logon_id = self.activity_generator.generate_logon(
+                actor, system, logon_time, logon_type=3
+            )
+            self._record_storyline_logon(actor, system, logon_id)
+            return logon_id
+
         from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
         os_category = _get_os_category(system.os)
@@ -2576,6 +2592,16 @@ class StorylineMixin:
         )
         self._record_storyline_logon(actor, system, target_session.logon_id)
         return target_session.logon_id
+
+    def _resolve_storyline_process_spill_logon_id(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        rng: random.Random,
+    ) -> str:
+        """Forward the existing spill entrypoint to shared session resolution."""
+        return self._resolve_storyline_process_logon_id(actor, system, time, rng)
 
     def _storyline_non_session_kind(
         self,

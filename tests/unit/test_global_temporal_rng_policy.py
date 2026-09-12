@@ -189,7 +189,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|engine/storyline.py|_iter_dns_tunnel_ticks|uniform
 1|engine/storyline.py|_iter_periodic_ticks|uniform
 4|engine/storyline.py|_port_scan_connection_profile|uniform
-1|engine/storyline.py|_resolve_storyline_process_spill_logon_id|uniform
+2|engine/storyline.py|_resolve_storyline_process_logon_id|uniform
 2|engine/storyline.py|_storyline_event_offsets|uniform
 1|engine/storyline.py|_web_scan_connection_profile|lognormvariate
 5|engine/storyline.py|_web_scan_connection_profile|uniform
@@ -199,7 +199,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|engine/typed_handlers/periodic.py|handle_dns_query|uniform
 1|engine/typed_handlers/periodic.py|handle_dns_tunnel|triangular
 3|engine/typed_handlers/periodic.py|handle_dns_tunnel|uniform
-10|engine/typed_handlers/process.py|handle_process|uniform
+8|engine/typed_handlers/process.py|handle_process|uniform
 1|network_observation.py|_lose_direction|uniform
 1|state_manager.py|_allocate_linux_pid|lognormvariate
 1|state_manager.py|_allocate_windows_pid|lognormvariate
@@ -292,13 +292,13 @@ def test_generation_has_no_remaining_legacy_timing_helper_calls() -> None:
 
 
 def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
-    """The exact 359-call compatibility census cannot gain selectors or calls."""
+    """The exact 358-call compatibility census cannot gain selectors or calls."""
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
     assert len(caps) == 171
-    assert sum(caps.values()) == 359
+    assert sum(caps.values()) == 358
     assert not observed - caps
     assert len(observed) <= len(caps)
     assert sum(observed.values()) <= sum(caps.values())

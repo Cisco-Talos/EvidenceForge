@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 51
+current_revision: 52
 history_start_revision: 1
-behavior_surface_sha256: "98710feccb126f39e59257e823d199cf0bfc375109ced87fdad4464906803c18"
+behavior_surface_sha256: "baf280f1c716f03d4e47edafcf3cc35bdee73626dd9d6ade146b5dfb63ec161d"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -531,3 +531,9 @@ changes:
       - shell-history-policy
     formats: [ecar, bash_history]
     summary: Uses the shared case-insensitive noninteractive-account predicate for EDR shell-history file artifacts, preserving surrounding selection and random-number consumption.
+  - revision: 52
+    id: shared-storyline-process-session-resolution
+    impact: none
+    domains: [process-session-lifecycle, storyline-dispatch]
+    formats: []
+    summary: Shares session classification, reuse, creation and recording between typed processes and command spills, retaining the typed no-planner fallback and exact random-number consumption.

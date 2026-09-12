@@ -365,3 +365,24 @@ Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
   reference. The isolated five-account EDR duplicate is removed; validation and both generation
   paths now consume the one shared predicate. Digest:
   `98710feccb126f39e59257e823d199cf0bfc375109ced87fdad4464906803c18`.
+
+### Item 3 — shared storyline process-session resolution
+
+- Item 2 committed as `bd20077e`. Typed process events and command spills now use one
+  resolver for account classification, host-scoped reuse, required lifetime, creation, and
+  recording. The spill entrypoint remains a forwarding adapter. The typed no-planner path
+  retains its unfiltered user-session lookup, newest-host selection, Type 3 creation, and recording.
+- Eighteen characterization cases passed before extraction and after it, asserting concrete
+  call order and exact RNG state for ordinary users, interactive Linux root, local daemons,
+  case-sensitive account classification, built-in/declared services, existing sessions, and fallback.
+- Focused session/spill suites: **292 passed**, 29 deselected. All six typed and six periodic
+  captures are byte-identical to the corrected reference; the typed six also match item 2.
+  The timing inventory now has 358 continuous draw sites (one duplicate removed); its three
+  targeted slow tests pass. No executed draw is added or removed on an existing path.
+- The first focused invocation named a nonexistent test file and collected nothing; corrected
+  paths passed. Ruff initially rejected the sentinel exception's missing Error suffix; fixed.
+  Revision 52 and Ruff gates pass; standard suite pending.
+- **Item 3 acceptance:** standard suite **8,450 passed, 27 existing skips, 2,009 deselected**
+  (292.56 s). Both Ruff checks, revision-52 manifest validation against `bd20077e`, 292 focused
+  cases, three targeted slow inventory cases, and the 12 evidence cases pass. Digest:
+  `baf280f1c716f03d4e47edafcf3cc35bdee73626dd9d6ade146b5dfb63ec161d`.
