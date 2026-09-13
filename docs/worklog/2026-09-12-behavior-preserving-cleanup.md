@@ -1,6 +1,99 @@
 # Behavior-preserving 2.0.0 cleanup
 
-## Nine-item simplification pass — in progress
+## Nine-item simplification pass — complete
+
+### Final acceptance — all nine items complete
+
+Implementation commit `e9d174a81dd9af0101688fbc7a4b404d673595c5`; behavior revisions 63–78 preserve
+all earlier history and declare `impact: none`. The complete range validates against both
+`26a150ac` and original dev. This pass adds no evidence exception and does not update existing
+golden evidence to accommodate differences.
+All four requested contract comments are present, with representative regression links.
+
+- Standard suite: **8550 passed, 27 skipped, 2011 deselected in 300.54s (0:05:00)**.
+- Full slow suite: **1780 passed, 8808 deselected in 1113.75s (0:18:33)**.
+- Targeted final process/network/registry retention soak: **7 passed, 2 deselected in 58.87s**.
+  The final SMB boundary separately passed all 37 selected recovery/timing/soak controls.
+- Both Ruff checks passed. The 27 existing skips are audited: optional external parsers,
+  license-gated Splunk, one full-engine-only case and unavailable gitignored sample data.
+  The full repository soak tier remains excluded.
+- **250/250 raw-byte cases** match `26a150ac`; evidence and ground-truth file sets and bytes
+  were compared without normalization. Recorded artifact hashes are verified. Each implementation
+  boundary also compared relevant cases against its predecessor.
+- **24/24 successful resumes** and **18/18 exact-policy rejections** across both seeds and
+  all three targets. Preserved original-dev, `010ae90f` and `26a150ac` checkpoint bundles remain
+  unchanged. Final-build exact resumes also reproduce the accepted reference evidence.
+
+Structural results (lines include signatures and contract comments):
+
+| Coordinator | Baseline | Final |
+|---|---:|---:|
+| Baseline system traffic | 2,314 | 299 |
+| Process storyline | 745 | 432 |
+| CLI generation | 940 | 544 |
+| Raw overlay validation | 659 | 384 |
+| Merged configuration validation | 834 | 317 |
+| Network request resolution | 1,030 | 853 |
+| Network transport planning | 957 | 801 |
+| Network protocol evidence | 1,138 | 527 |
+| Persistent SMB execution | 1,298 | 436 |
+| Retained SMB source execution | 215 | 152 |
+
+Fingerprint combined operations build/scan once instead of twice. Wander interpolation and knot
+sampling each have one implementation; eight independent registries share one gate implementation,
+and three lock-acquisition copies share one helper. Identical SMB State-finalization, member-commit
+recovery and source-publication retries each have one owner. The six network stages, composed
+records, their 133 fields and transaction ownership are unchanged. Shared owner/cache/RNG/state
+relationships remain authoritative. Additional calls and short-lived return tuples are documented
+in each item report; static overlay definitions now retain 124 containers instead of allocating
+them per check. No broad persistent context or generic retry framework was introduced.
+The source diff adds 1,212 net lines, including explicit helper signatures/calls, contract
+documentation and append-only behavior history. The measured improvements are smaller coordinators,
+fewer duplicated implementations and clearer ownership; the report includes increases in helper
+call counts and direct-owner attribute counts as well as reductions.
+
+Final isolated performance observations used 44 fresh benchmark processes, two warmups each and
+**308 timed samples**, alternating baseline/candidate with a separate allocation sample per run.
+Each row reports the average of its two run medians, in seconds; throughput, RSS, traced memory,
+retained allocations and exact result checks are in the final JSON. A ratio above 1 is slower;
+there is no performance rejection threshold.
+
+| Workload | Baseline seconds | Final seconds | Ratio |
+|---|---:|---:|---:|
+| cli-failure | 2.680487 | 2.342548 | 0.874x |
+| clocks | 0.051387 | 0.052362 | 1.019x |
+| configuration | 0.783926 | 0.777862 | 0.992x |
+| fingerprint | 0.198143 | 0.109607 | 0.553x |
+| gates | 0.005305 | 0.005316 | 1.002x |
+| gates-context | 0.010153 | 0.010426 | 1.027x |
+| generation | 5.220562 | 5.222379 | 1.000x |
+| generation-cli | 7.430479 | 7.322194 | 0.985x |
+| network | 0.123122 | 0.123214 | 1.001x |
+| prepared-clocks | 0.054925 | 0.055120 | 1.004x |
+| smb | 2.546184 | 2.533490 | 0.995x |
+
+Interpretation: one payload build/installed-build scan replaces two, explaining the approximately
+45% fingerprint improvement. The four-branch CLI failure workload improves about 13%, consistent
+with avoiding that repeated work in each invocation. Full CLI generation improves about 1.5%;
+direct generation is effectively unchanged. The live-clock and context-gate microbenchmarks are
+about 1.9% and 2.7% slower, consistent with the additional direct helper/method calls documented
+in their item reports. Centralized math/admission policy retains its correctness and maintenance
+benefit. Traced generation/network/SMB peaks remain close; gate peaks decrease from 2,600 to 2,432
+bytes, with the same 360 retained bytes. State census and retention tests supply the leak gate;
+single RSS samples are informational. No workload was weakened to change these observations.
+
+Fingerprint values differ only through truthful build/behavior provenance; diagnostic components
+outside that explicit field allowlist match. Every other benchmark result matches exactly.
+Resource retention checks pass; no slowdown was hidden by weakening workload or output checks.
+
+The pre-existing ambient Linux resolver-pool defect is now a durable TODO item. It remains unchanged
+here and requires a separate realism correction. Large family-specific functions still offer future
+bounded decomposition opportunities; lower-priority evaluator/external-parser work remains excluded.
+
+The final report `2026-09-12-nine-item-final.json` retains the full comparison hashes, checkpoint
+verification records, performance samples, structural measurements, gate log hashes and links to
+all per-item reports, including failed drafts and corrected tests. Earlier baselines/reports remain
+preserved. No merge, release, version bump, dependency change or authored schema change occurred.
 
 ### Item 9c accepted — SMB publication and exact recovery
 
