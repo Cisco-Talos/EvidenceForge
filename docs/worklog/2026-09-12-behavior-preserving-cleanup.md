@@ -2,6 +2,28 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 7 accepted — ordered configuration family checks
+
+Item 6b committed as `2fe26cb8`. Static overlay shape definitions now have a dependency-neutral
+module; all 48 definitions are AST-identical to the previous literals. Their 124 containers are
+allocated once and retained, rather than recreated for every raw phase. This is a small static-memory
+tradeoff, not a new runtime state owner. Raw validation falls from 659 to 384 lines. The merged
+coordinator falls from 834 to 317 lines and 127 to 44 branches, calling focused system-process,
+process-access, syslog and network families in their original order. DNS tunnel, external scanner,
+response weights and proxy status checks have named owners. Three identical weight sums share one
+implementation, retaining iteration, floating-point addition and malformed-entry behavior.
+
+Three frozen controls verify exact diagnostics, deduplication, deferred schema issue order and
+provider activation on original `26a150ac` and the candidate. Acceptance: **24 focused tests**,
+**28 targeted family controls**, **8,548 standard tests** (27 existing skips, 2,011 deselected,
+294.89 seconds), both Ruff checks, revision-72 validation against `2fe26cb8`, and **12 raw-byte
+comparisons against both references**. No output or correctness gate failed. A draft test import
+ordering issue was fixed before production extraction.
+
+Isolated alternating configuration medians were 0.768/0.785/0.779/0.777 seconds, with identical results
+(92 files, no issues) throughout. The report `2026-09-12-nine-item-configuration.json` records all
+samples, allocations, structural measurements, fixture/log hashes and the static retention tradeoff.
+
 ### Item 6b accepted — shared temporary cleanup and recovery reporting
 
 Item 6a committed as `1cf35c5c`. Three identical temporary-staging cleanup sequences and three

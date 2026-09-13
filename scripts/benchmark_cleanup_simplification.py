@@ -27,6 +27,13 @@ from typing import Any
 
 def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
     """Bind one fixed workload to the selected checkout's existing owners."""
+    if name == "configuration":
+        from evidenceforge.validation.configuration import validate_config
+
+        def configuration() -> object:
+            return asdict(validate_config())
+
+        return configuration, 1
     if name == "cli-failure":
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -278,6 +285,7 @@ def main() -> None:
             "generation",
             "generation-cli",
             "cli-failure",
+            "configuration",
         ),
         required=True,
     )

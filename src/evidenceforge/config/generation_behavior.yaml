@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 71
+current_revision: 72
 history_start_revision: 1
 behavior_surface_sha256: "6dc431e08bee730aeaca83342a4ca059340ea0b6dec15dadad4857116624e3f5"
 changes:
@@ -666,3 +666,10 @@ changes:
       - cli-generation
     formats: []
     summary: Share only identical temporary staging disposal and recovery guidance while retaining migration restoration persistent workspace ownership distinct suspension interruption and failure exits and publication boundaries.
+  - revision: 72
+    id: separate-configuration-shapes-and-ordered-family-validation
+    impact: none
+    domains:
+      - configuration-validation
+    formats: []
+    summary: Separate static overlay shapes and focused system process access syslog and network validators while preserving provider phases deferred schema ordering diagnostics malformed-input handling and weight accumulation order.

@@ -28,14 +28,14 @@ formats, evaluation) and reports errors, warnings, and info items.
 
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from evidenceforge.config import (
     get_activity_directory,
@@ -45,6 +45,8 @@ from evidenceforge.config import (
 )
 from evidenceforge.config.schemas import IdsSignaturePredicateSpec
 from evidenceforge.models.ids import IdsAlertPolicySpec
+
+type SchemaCheck = tuple[object, type[BaseModel], str]
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
 VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
@@ -679,282 +681,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
     for relative_path, message in retired_overlay_errors(overlay_dir):
         result.issues.append(Issue("ERROR", f"overlay/{relative_path}", message))
 
-    # File-scoped overlay structure schemas.
-    # Maps overlay file path → expected field types.
-    # "list_fields": {field_name: key_field_or_None} — must be list of dicts
-    # "dict_fields": {field_names} — must be dicts
-    # "string_list_fields": {field_names} — must be lists of strings
-    # "value_list_fields": {field_names} — must be lists; merged validation owns item shape
-    # "fixed_string_sequence_fields": {field_name: length} — list of fixed-length string sequences
-    # "string_dict_fields": mappings whose keys and values must be non-empty strings
-    # "string_fields" / "number_fields": scalar root fields with explicit primitive types
-    _OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
-        "activity/dns_registry.yaml": {
-            "list_fields": {"domains": "domain"},
-            "dict_fields": {"valid_tags", "long_tail", "ipv6_map", "ipv6_prefixes"},
-            "value_list_fields": {"cdn_ranges"},
-        },
-        "activity/application_catalog.yaml": {
-            "list_fields": {"applications": "id"},
-            "dict_fields": {"default_deployment"},
-            "scalar_fields": {"schema_version": int},
-        },
-        "activity/traffic_profiles.yaml": {
-            "dict_fields": {"role_traffic", "persona_traffic"},
-        },
-        "activity/spawn_rules.yaml": {
-            "dict_fields": {"windows", "linux"},
-        },
-        "activity/proxy_uri_templates.yaml": {
-            "dict_fields": {"domains", "tags", "generic"},
-            "string_list_fields": {"search_terms"},
-            "string_fields": {"default_http_policy"},
-        },
-        "activity/proxy_user_agents.yaml": {
-            "dict_fields": {"domain_overrides", "workstation", "server"},
-        },
-        "activity/beacon_profiles.yaml": {
-            "dict_fields": {"profiles"},
-        },
-        "activity/site_maps.yaml": {
-            "dict_fields": {"domains", "tags", "generic"},
-            "string_list_fields": {"search_terms"},
-        },
-        "activity/process_network_map.yaml": {
-            "list_fields": {"mappings": None},
-        },
-        "activity/email_background.yaml": {
-            "list_fields": {
-                "external_domains": "domain",
-                "inbound_local_parts": "local_part",
-                "outbound_local_parts": "local_part",
-            },
-        },
-        "activity/mail_public_identities.yaml": {
-            "list_fields": {"providers": "name"},
-            "string_list_fields": {"reserved_replacement_domains"},
-        },
-        "activity/external_actor_profiles.yaml": {
-            "list_fields": {
-                "logon_source_ips": "ip",
-                "failed_logon_source_ips": "ip",
-                "connection_c2_ips": "ip",
-            },
-        },
-        "activity/public_identity_profiles.yaml": {
-            "list_fields": {"providers": "id", "roles": "id"},
-            "string_list_fields": {"reserved_replacement_domains"},
-            "scalar_fields": {"schema_version": str},
-        },
-        "activity/suspicious_benign.yaml": {
-            "list_fields": {"dns_hosts": "hostname", "unusual_connections": "hostname"},
-        },
-        "activity/command_parameter_pools.yaml": {
-            "dict_fields": {"general", "query", "linux_query"},
-        },
-        "activity/process_access_patterns.yaml": {
-            "list_fields": {"baseline_pairs": None},
-        },
-        "activity/auth_noise.yaml": {
-            "dict_fields": {"scheduled_stale_credentials", "service_account_delegation"},
-        },
-        "activity/create_remote_thread_patterns.yaml": {
-            "list_fields": {"baseline_pairs": None},
-            "dict_fields": {"baseline_noise", "start_locations", "target_overrides"},
-        },
-        "activity/system_processes.yaml": {
-            "dict_fields": {
-                "system_services",
-                "system_binaries",
-                "common_loaded_modules",
-                "process_loaded_modules",
-            },
-            "list_fields": {"scheduled_tasks": None},
-        },
-        "activity/systemd_schedules.yaml": {
-            "list_fields": {"schedules": "service"},
-        },
-        "activity/extra_syslog_messages.yaml": {
-            "list_fields": {"programs": None},
-        },
-        "activity/secret_families.yaml": {
-            "list_fields": {"families": "name"},
-            "dict_fields": {"network_allowlist"},
-            "string_list_fields": {"poison_markers", "vendor_fakes"},
-        },
-        "activity/payload_families.yaml": {
-            "list_fields": {"families": "name"},
-            "dict_fields": {"network_allowlist"},
-            "string_list_fields": {"markers"},
-            "string_fields": {"default_marker", "canary_host"},
-        },
-        "activity/tls_issuers.yaml": {
-            "list_fields": {"issuers": "name"},
-            "dict_fields": {"domain_ca_overrides"},
-        },
-        "activity/tls_realism.yaml": {
-            "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
-        },
-        "activity/public_dns_profiles.yaml": {
-            "list_fields": {
-                "nameserver_profiles": "name",
-                "mail_profiles": "name",
-                "aaaa_profiles": "name",
-            },
-            "number_fields": {"generic_aaaa_probability"},
-        },
-        "activity/network_params.yaml": {
-            "list_fields": {
-                "oui_prefixes": None,
-                "public_dns_resolvers": "name",
-                "public_ntp_servers": "name",
-                "external_scanner_port_profiles": "name",
-                "linux_smb_connection_owners": "role",
-            },
-            "dict_fields": {
-                "dns_tunnel_rtt",
-                "dns_tunnel_rcode_weights",
-                "nmap_command_probe",
-                "proxy_connect_status_messages",
-            },
-            "string_list_fields": {
-                "dns_tunnel_response_templates",
-                "external_client_excluded_cidrs",
-            },
-            "value_list_fields": {"dns_tunnel_ttl_choices"},
-        },
-        "activity/windows_auth_realism.yaml": {
-            "dict_fields": {
-                "workstation_lock",
-                "group_policy_refresh",
-                "remote_auth_transport",
-                "anonymous_smb_baseline",
-                "failed_logon",
-                "special_privileges",
-            },
-        },
-        "activity/bash_commands.yaml": {
-            # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
-            # No structural constraints — skip unexpected-key check
-        },
-        "activity/sysmon_filters.yaml": {
-            "dict_fields": {
-                "network_connect",
-                "image_loaded",
-                "file_create",
-                "registry_event",
-                "dns_query",
-            },
-        },
-        "activity/calltrace_patterns.yaml": {
-            "list_fields": {"patterns": None},
-            "dict_fields": {"source_families"},
-        },
-        "activity/edr_pools.yaml": {
-            "list_fields": {
-                "file_side_effect_profiles": None,
-                "file_ownership_rules": None,
-                "registry_ownership_rules": None,
-                "installed_software_products": None,
-            },
-            "string_list_fields": {
-                "linux_service_users",
-                "group_policy_extension_guids",
-                "file_paths_windows",
-                "file_paths_linux",
-                "dll_pool",
-                "runmru_commands",
-            },
-            "fixed_string_sequence_fields": {
-                "registry_keys_hkcu": 3,
-                "registry_keys_hklm": 3,
-            },
-        },
-        "activity/endpoint_noise.yaml": {
-            "dict_fields": {
-                "windows_scheduled_processes",
-                "registry_noise",
-                "ecar_flow_identity",
-                "ecar_file_churn",
-            },
-        },
-        "activity/host_activity_profiles.yaml": {
-            "dict_fields": {
-                "rate_families",
-                "host_types",
-                "role_profiles",
-                "persona_profiles",
-                "artifact_variants",
-                "firewall_deny",
-            },
-        },
-        "activity/http_file_profiles.yaml": {
-            "dict_fields": {"extension_mime_types", "request_profiles", "multipart"},
-        },
-        "activity/ids_signatures.yaml": {
-            "list_fields": {"signatures": None},
-        },
-        "activity/web_scan_presets.yaml": {
-            "dict_fields": {"presets"},
-        },
-        "activity/web_session_profiles.yaml": {
-            "dict_fields": {"visitor_classes", "user_agent_pools"},
-        },
-        "activity/traffic_rates.yaml": {
-            "dict_fields": {"low", "medium", "high"},
-        },
-        "activity/timing_profiles.yaml": {
-            "dict_fields": {
-                "relationships",
-                "ssh_authentication",
-                "endpoint_clock",
-                "windows_startup_modules",
-                "windows_event_time",
-                "network_sensor_observation",
-                "firewall_observation",
-                "sysmon_event_envelope",
-            },
-        },
-        "activity/smb_profiles.yaml": {
-            "dict_fields": {
-                "advertised_filesystem_defaults",
-                "client_defaults",
-                "client_profiles",
-                "samba_audit",
-                "server_defaults",
-                "server_profiles",
-            },
-            "scalar_fields": {"schema_version": int},
-        },
-        "activity/service_process_profiles.yaml": {
-            "dict_fields": {"families"},
-        },
-        "activity/kerberos_realism.yaml": {
-            "dict_fields": {
-                "tgt_success",
-                "tgt_failure",
-                "certificate_profiles",
-                "transport_profiles",
-            },
-        },
-        "activity/observation_profiles.yaml": {
-            "dict_fields": {"profiles"},
-            "scalar_fields": {"schema_version": int},
-        },
-        "activity/proxy_phase_profiles.yaml": {
-            "list_fields": {"resolver_mixture": "name"},
-            "dict_fields": {"phase_timing"},
-        },
-        "activity/rsat_tools.yaml": {
-            "list_fields": {"tools": "id"},
-        },
-        "activity/snort_classifications.yaml": {
-            "string_dict_fields": {"classifications"},
-        },
-        "activity/storage_catalog.yaml": {
-            "dict_fields": {"population_counts", "profiles"},
-        },
-    }
+    from .configuration_overlay_shapes import OVERLAY_FILE_SCHEMAS
 
     overlay_errors = False
     from evidenceforge.config.overlay_registry import CONFIG_OVERLAY_FAMILIES
@@ -962,7 +689,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
     registered_activity_paths = {
         path for path in CONFIG_OVERLAY_FAMILIES if path.startswith("activity/")
     }
-    schema_paths = set(_OVERLAY_FILE_SCHEMAS)
+    schema_paths = set(OVERLAY_FILE_SCHEMAS)
     if schema_paths != registered_activity_paths:
         missing_schemas = sorted(registered_activity_paths - schema_paths)
         missing_registry = sorted(schema_paths - registered_activity_paths)
@@ -996,7 +723,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
             overlay_errors = True
         else:
             # Look up file-specific schema
-            file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path)
+            file_schema = OVERLAY_FILE_SCHEMAS.get(rel_path)
 
             # Reject unknown overlay files (personas/ handled separately below)
             if file_schema is None and not rel_path.startswith("personas/"):
@@ -3617,58 +3344,45 @@ def _validate_merged_schemas(
     traffic_data: dict[str, Any],
     windows_auth_data: dict[str, Any],
 ) -> None:
-    """Validate merged schemas in the established diagnostic order."""
+    """Collect family checks, then validate their entries in diagnostic order.
+
+    Family-specific issues deliberately precede deferred entry-schema issues.
+    Keep collectors in order and deduplicate only in the outer validation owner;
+    test_merged_family_diagnostics_precede_deferred_schemas_and_deduplicate pins this contract.
+    """
     # --- Schema validation: validate merged entries against Pydantic models ---
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         AuthNoiseConfig,
         BeaconProfilesConfig,
-        CallTracePatternEntry,
-        CallTraceSourceFamilyEntry,
         CommandParameterPoolsConfig,
         ConnectionEntry,
-        CreateRemoteThreadNoiseConfig,
-        CreateRemoteThreadPatternEntry,
         DnsEntry,
-        DnsTunnelRttConfig,
-        DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         EdrInstalledSoftwareProduct,
         EmailBackgroundConfig,
         EndpointNoiseConfig,
         ExternalActorProfilesConfig,
-        ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         HttpFileProfilesConfig,
         KerberosRealismConfig,
-        LoadedModuleEntry,
         MailPublicIdentitiesConfig,
-        NmapCommandProbeConfig,
         ObservationProfilesConfig,
-        OuiEntry,
         PersonaEntry,
-        ProcessAccessPatternEntry,
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
         PublicDnsProfilesConfig,
-        PublicDnsResolverEntry,
         PublicIdentityProfilesConfig,
-        PublicNtpServerEntry,
-        RemoteThreadStartLocationEntry,
-        ScheduledTaskEntry,
         SpawnRuleEntry,
         SuspiciousBenignConfig,
-        SyslogProgramEntry,
-        SystemBinaryEntry,
         SystemdScheduleEntry,
-        SystemServiceEntry,
         TlsIssuerEntry,
         TlsRealismConfig,
         WindowsAuthRealismConfig,
         validate_entry,
     )
 
-    _SCHEMA_CHECKS: list[tuple[list, type, str]] = [
+    schema_checks: list[SchemaCheck] = [
         (domains, DnsEntry, "dns_registry.yaml"),
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
@@ -3692,9 +3406,253 @@ def _validate_merged_schemas(
         ),
     ]
 
+    _collect_system_process_schema_checks(
+        result=result,
+        schema_checks=schema_checks,
+        sys_proc_data=sys_proc_data,
+    )
+
+    # process_network_map.yaml
+    if isinstance(process_net_data, list):
+        schema_checks.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
+
+    _collect_process_access_schema_checks(
+        result=result,
+        schema_checks=schema_checks,
+        process_access_data=process_access_data,
+        calltrace_config=calltrace_config,
+        create_remote_thread_data=create_remote_thread_data,
+        create_remote_thread_config=create_remote_thread_config,
+    )
+
+    from evidenceforge.generation.activity.edr_pools import load_edr_pools
+
+    edr_pools_data = load_edr_pools()
+    if edr_pools_data:
+        _validate_edr_file_path_pools(result, edr_pools_data)
+        _validate_registry_mru_filenames(result, edr_pools_data)
+        schema_checks.append(
+            (
+                edr_pools_data.get("file_side_effect_profiles", []),
+                EdrFileSideEffectProfile,
+                "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+        schema_checks.append(
+            (
+                edr_pools_data.get("installed_software_products", []),
+                EdrInstalledSoftwareProduct,
+                "edr_pools.yaml (installed_software_products)",
+            )
+        )
+    if endpoint_noise_data:
+        schema_checks.append(([endpoint_noise_data], EndpointNoiseConfig, "endpoint_noise.yaml"))
+    if observation_profiles_data:
+        schema_checks.append(
+            ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
+        )
+    if host_activity_profiles_data:
+        schema_checks.append(
+            (
+                [host_activity_profiles_data],
+                HostActivityProfilesConfig,
+                "host_activity_profiles.yaml",
+            )
+        )
+
+    # traffic_profiles.yaml: connection entries
+    all_traffic_connection_entries = []
+    for _rn, role_data in traffic_data.get("role_traffic", {}).items():
+        if isinstance(role_data, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(role_data.get(direction, []))
+    for _pn, persona_entries in traffic_data.get("persona_traffic", {}).items():
+        if isinstance(persona_entries, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(persona_entries.get(direction, []))
+        elif isinstance(persona_entries, list):
+            all_traffic_connection_entries.extend(persona_entries)
+    schema_checks.append((all_traffic_connection_entries, ConnectionEntry, "traffic_profiles.yaml"))
+
+    # spawn_rules.yaml: spawn rule entries
+    all_spawn_entries = []
+    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+        for _parent, parent_data in os_rules.items():
+            if isinstance(parent_data, dict):
+                all_spawn_entries.append(parent_data)
+    schema_checks.append((all_spawn_entries, SpawnRuleEntry, "spawn_rules.yaml"))
+
+    # tls_issuers.yaml
+    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
+
+    tls_data = load_tls_issuers()
+    if tls_data:
+        schema_checks.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
+        _validate_tls_issuer_overrides(result, tls_data)
+
+    # tls_realism.yaml
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
+
+    tls_realism_data = load_tls_realism()
+    if tls_realism_data:
+        schema_checks.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # public_dns_profiles.yaml
+    if public_dns_profiles_data:
+        schema_checks.append(
+            ([public_dns_profiles_data], PublicDnsProfilesConfig, "public_dns_profiles.yaml")
+        )
+
+    # kerberos_realism.yaml
+    from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism
+
+    kerberos_realism_data = load_kerberos_realism()
+    if kerberos_realism_data:
+        schema_checks.append(
+            ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
+        )
+
+    # http_file_profiles.yaml
+    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
+
+    http_file_profile_data = load_http_file_profiles()
+    if http_file_profile_data:
+        schema_checks.append(
+            ([http_file_profile_data], HttpFileProfilesConfig, "http_file_profiles.yaml")
+        )
+
+    _collect_syslog_schema_checks(
+        result=result,
+        schema_checks=schema_checks,
+    )
+
+    # systemd_schedules.yaml
+    from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+    schedules = _load_systemd_schedules()
+    if schedules:
+        schema_checks.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
+
+    _collect_network_parameter_schema_checks(
+        result=result,
+        schema_checks=schema_checks,
+    )
+
+    err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
+
+    err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
+
+    configured_parent_symbols: list[tuple[str, str]] = []
+    for task in sys_proc_data.get("scheduled_tasks", []):
+        if isinstance(task, dict):
+            configured_parent_symbols.append(
+                ("system_processes.yaml (scheduled_tasks)", str(task.get("parent") or ""))
+            )
+    for role, entries in sys_proc_data.get("system_services", {}).items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict):
+                configured_parent_symbols.append(
+                    (
+                        f"system_processes.yaml (system_services.{role})",
+                        str(entry.get("parent") or ""),
+                    )
+                )
+    delegation = auth_noise_data.get("service_account_delegation", {})
+    for profile in delegation.get("caller_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        for process in profile.get("processes", []):
+            if isinstance(process, dict):
+                configured_parent_symbols.append(
+                    (
+                        "auth_noise.yaml (service_account_delegation)",
+                        str(process.get("parent_key") or "services"),
+                    )
+                )
+    for source, parent_symbol in configured_parent_symbols:
+        if parent_symbol not in WINDOWS_SEEDED_PARENT_SYMBOLS:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    source,
+                    f"unknown seeded Windows parent symbol {parent_symbol!r}",
+                )
+            )
+
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        schema_checks.append(
+            (
+                list(proxy_ua_data.get("domain_overrides", {}).values()),
+                ProxyUserAgentOverrideEntry,
+                "proxy_user_agents.yaml (domain_overrides)",
+            )
+        )
+    for proxy_scope in ("workstation", "server"):
+        package_managers = proxy_ua_data.get(proxy_scope, {}).get("package_managers", {})
+        if isinstance(package_managers, dict):
+            schema_checks.append(
+                (
+                    list(package_managers.values()),
+                    ProxyUserAgentOverrideEntry,
+                    f"proxy_user_agents.yaml ({proxy_scope}.package_managers)",
+                )
+            )
+
+    # Run all schema validations
+    for entries, schema, file_name in schema_checks:
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            err = validate_entry(entry, schema, file_name)
+            if err:
+                entry_id = (
+                    entry.get("domain")
+                    or entry.get("id")
+                    or entry.get("name")
+                    or entry.get("service")
+                    or entry.get("app")
+                    or entry.get("exe")
+                    or "?"
+                )
+                result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
+
+    from evidenceforge.config.beacon_profiles import load_beacon_profiles
+
+    beacon_profiles_err = validate_entry(
+        load_beacon_profiles(),
+        BeaconProfilesConfig,
+        "beacon_profiles.yaml",
+    )
+    if beacon_profiles_err:
+        result.issues.append(Issue("ERROR", "beacon_profiles.yaml", beacon_profiles_err))
+
+    # Deduplicate issues (some checks may flag the same thing multiple times)
+
+
+def _collect_system_process_schema_checks(
+    result: ValidationResult,
+    schema_checks: list[SchemaCheck],
+    sys_proc_data: dict[str, Any],
+) -> None:
+    """Check platform policy now and append entry schemas for the later ordered validation pass."""
+    from evidenceforge.config.schemas import (
+        LoadedModuleEntry,
+        ScheduledTaskEntry,
+        SystemBinaryEntry,
+        SystemServiceEntry,
+    )
+
     # system_processes.yaml: scheduled_tasks, system_services, system_binaries
     if sys_proc_data:
-        _SCHEMA_CHECKS.append(
+        schema_checks.append(
             (
                 sys_proc_data.get("scheduled_tasks", []),
                 ScheduledTaskEntry,
@@ -3703,7 +3661,7 @@ def _validate_merged_schemas(
         )
         common_modules = (sys_proc_data.get("common_loaded_modules") or {}).get("windows", [])
         if isinstance(common_modules, list):
-            _SCHEMA_CHECKS.append(
+            schema_checks.append(
                 (
                     common_modules,
                     LoadedModuleEntry,
@@ -3712,7 +3670,7 @@ def _validate_merged_schemas(
             )
         for exe_name, modules in (sys_proc_data.get("process_loaded_modules") or {}).items():
             if isinstance(modules, list):
-                _SCHEMA_CHECKS.append(
+                schema_checks.append(
                     (
                         modules,
                         LoadedModuleEntry,
@@ -3721,7 +3679,7 @@ def _validate_merged_schemas(
                 )
         for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
             if isinstance(role_entries, list):
-                _SCHEMA_CHECKS.append(
+                schema_checks.append(
                     (
                         role_entries,
                         SystemServiceEntry,
@@ -3730,7 +3688,7 @@ def _validate_merged_schemas(
                 )
         for os_name, os_binaries in sys_proc_data.get("system_binaries", {}).items():
             if isinstance(os_binaries, list):
-                _SCHEMA_CHECKS.append(
+                schema_checks.append(
                     (
                         os_binaries,
                         SystemBinaryEntry,
@@ -3773,27 +3731,42 @@ def _validate_merged_schemas(
                             )
                         )
 
-    # process_network_map.yaml
-    if isinstance(process_net_data, list):
-        _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
+
+def _collect_process_access_schema_checks(
+    result: ValidationResult,
+    schema_checks: list[SchemaCheck],
+    process_access_data: dict[str, Any],
+    calltrace_config: dict[str, Any],
+    create_remote_thread_data: dict[str, Any],
+    create_remote_thread_config: dict[str, Any],
+) -> None:
+    """Validate process-access cross-references while retaining deferred entry-schema order."""
+    from evidenceforge.config.schemas import (
+        CallTracePatternEntry,
+        CallTraceSourceFamilyEntry,
+        CreateRemoteThreadNoiseConfig,
+        CreateRemoteThreadPatternEntry,
+        ProcessAccessPatternEntry,
+        RemoteThreadStartLocationEntry,
+    )
 
     # process_access_patterns.yaml
     if isinstance(process_access_data, list):
-        _SCHEMA_CHECKS.append(
+        schema_checks.append(
             (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
         )
     if isinstance(calltrace_config, dict):
         calltrace_patterns = calltrace_config.get("patterns", [])
         calltrace_families = calltrace_config.get("source_families", {})
         if isinstance(calltrace_patterns, list):
-            _SCHEMA_CHECKS.append(
+            schema_checks.append(
                 (calltrace_patterns, CallTracePatternEntry, "calltrace_patterns.yaml patterns")
             )
         if isinstance(calltrace_families, dict):
             family_entries = [
                 family for family in calltrace_families.values() if isinstance(family, dict)
             ]
-            _SCHEMA_CHECKS.append(
+            schema_checks.append(
                 (
                     family_entries,
                     CallTraceSourceFamilyEntry,
@@ -3821,7 +3794,7 @@ def _validate_merged_schemas(
                             )
                         )
     if isinstance(create_remote_thread_data, list):
-        _SCHEMA_CHECKS.append(
+        schema_checks.append(
             (
                 create_remote_thread_data,
                 CreateRemoteThreadPatternEntry,
@@ -3835,7 +3808,7 @@ def _validate_merged_schemas(
     for override in (create_remote_thread_config.get("target_overrides") or {}).values():
         if isinstance(override, dict) and isinstance(override.get("start_locations"), list):
             remote_thread_locations.extend(override["start_locations"])
-    _SCHEMA_CHECKS.append(
+    schema_checks.append(
         (
             remote_thread_locations,
             RemoteThreadStartLocationEntry,
@@ -3855,110 +3828,22 @@ def _validate_merged_schemas(
             )
         )
 
-    from evidenceforge.generation.activity.edr_pools import load_edr_pools
 
-    edr_pools_data = load_edr_pools()
-    if edr_pools_data:
-        _validate_edr_file_path_pools(result, edr_pools_data)
-        _validate_registry_mru_filenames(result, edr_pools_data)
-        _SCHEMA_CHECKS.append(
-            (
-                edr_pools_data.get("file_side_effect_profiles", []),
-                EdrFileSideEffectProfile,
-                "edr_pools.yaml (file_side_effect_profiles)",
-            )
-        )
-        _SCHEMA_CHECKS.append(
-            (
-                edr_pools_data.get("installed_software_products", []),
-                EdrInstalledSoftwareProduct,
-                "edr_pools.yaml (installed_software_products)",
-            )
-        )
-    if endpoint_noise_data:
-        _SCHEMA_CHECKS.append(([endpoint_noise_data], EndpointNoiseConfig, "endpoint_noise.yaml"))
-    if observation_profiles_data:
-        _SCHEMA_CHECKS.append(
-            ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
-        )
-    if host_activity_profiles_data:
-        _SCHEMA_CHECKS.append(
-            (
-                [host_activity_profiles_data],
-                HostActivityProfilesConfig,
-                "host_activity_profiles.yaml",
-            )
-        )
-
-    # traffic_profiles.yaml: connection entries
-    all_traffic_connection_entries = []
-    for _rn, role_data in traffic_data.get("role_traffic", {}).items():
-        if isinstance(role_data, dict):
-            for direction in ["outbound", "inbound"]:
-                all_traffic_connection_entries.extend(role_data.get(direction, []))
-    for _pn, persona_entries in traffic_data.get("persona_traffic", {}).items():
-        if isinstance(persona_entries, dict):
-            for direction in ["outbound", "inbound"]:
-                all_traffic_connection_entries.extend(persona_entries.get(direction, []))
-        elif isinstance(persona_entries, list):
-            all_traffic_connection_entries.extend(persona_entries)
-    _SCHEMA_CHECKS.append(
-        (all_traffic_connection_entries, ConnectionEntry, "traffic_profiles.yaml")
+def _collect_syslog_schema_checks(
+    result: ValidationResult,
+    schema_checks: list[SchemaCheck],
+) -> None:
+    """Report syslog lifecycle and schedule diagnostics before deferred Pydantic checks."""
+    from evidenceforge.config.schemas import (
+        SyslogProgramEntry,
     )
-
-    # spawn_rules.yaml: spawn rule entries
-    all_spawn_entries = []
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
-        for _parent, parent_data in os_rules.items():
-            if isinstance(parent_data, dict):
-                all_spawn_entries.append(parent_data)
-    _SCHEMA_CHECKS.append((all_spawn_entries, SpawnRuleEntry, "spawn_rules.yaml"))
-
-    # tls_issuers.yaml
-    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
-
-    tls_data = load_tls_issuers()
-    if tls_data:
-        _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
-        _validate_tls_issuer_overrides(result, tls_data)
-
-    # tls_realism.yaml
-    from evidenceforge.generation.activity.tls_realism import load_tls_realism
-
-    tls_realism_data = load_tls_realism()
-    if tls_realism_data:
-        _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
-
-    # public_dns_profiles.yaml
-    if public_dns_profiles_data:
-        _SCHEMA_CHECKS.append(
-            ([public_dns_profiles_data], PublicDnsProfilesConfig, "public_dns_profiles.yaml")
-        )
-
-    # kerberos_realism.yaml
-    from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism
-
-    kerberos_realism_data = load_kerberos_realism()
-    if kerberos_realism_data:
-        _SCHEMA_CHECKS.append(
-            ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
-        )
-
-    # http_file_profiles.yaml
-    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
-
-    http_file_profile_data = load_http_file_profiles()
-    if http_file_profile_data:
-        _SCHEMA_CHECKS.append(
-            ([http_file_profile_data], HttpFileProfilesConfig, "http_file_profiles.yaml")
-        )
 
     # extra_syslog_messages.yaml
     from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
 
     syslog_data = load_extra_syslog_messages()
     if syslog_data:
-        _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
+        schema_checks.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
         for entry in syslog_data:
             if not isinstance(entry, dict):
                 continue
@@ -4051,27 +3936,35 @@ def _validate_merged_schemas(
                                 )
                             )
 
-    # systemd_schedules.yaml
-    from evidenceforge.generation.engine.baseline import _load_systemd_schedules
 
-    schedules = _load_systemd_schedules()
-    if schedules:
-        _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
+def _collect_network_parameter_schema_checks(
+    result: ValidationResult,
+    schema_checks: list[SchemaCheck],
+) -> None:
+    """Validate network parameter families at the original loader and diagnostic boundary."""
+    from evidenceforge.config.schemas import (
+        DnsTunnelRttConfig,
+        NmapCommandProbeConfig,
+        OuiEntry,
+        PublicDnsResolverEntry,
+        PublicNtpServerEntry,
+        validate_entry,
+    )
 
     # network_params.yaml
     from evidenceforge.generation.activity.network_params import load_network_params
 
     net_params = load_network_params()
     if net_params:
-        _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
-        _SCHEMA_CHECKS.append(
+        schema_checks.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        schema_checks.append(
             (
                 net_params.get("public_dns_resolvers", []),
                 PublicDnsResolverEntry,
                 "network_params.yaml (public_dns_resolvers)",
             )
         )
-        _SCHEMA_CHECKS.append(
+        schema_checks.append(
             (
                 net_params.get("public_ntp_servers", []),
                 PublicNtpServerEntry,
@@ -4092,339 +3985,289 @@ def _validate_merged_schemas(
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (nmap_command_probe)", err))
-        templates = net_params.get("dns_tunnel_response_templates", [])
-        if not isinstance(templates, list) or not templates:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    "network_params.yaml (dns_tunnel_response_templates)",
-                    "dns_tunnel_response_templates must be a non-empty list",
-                )
+        _validate_dns_tunnel_parameters(
+            result=result,
+            net_params=net_params,
+            schema_checks=schema_checks,
+        )
+        _validate_external_scanner_parameters(
+            result=result,
+            net_params=net_params,
+            schema_checks=schema_checks,
+        )
+        _validate_dns_response_code_weights(
+            result=result,
+            net_params=net_params,
+        )
+        _validate_proxy_connect_status_messages(
+            result=result,
+            net_params=net_params,
+        )
+
+
+def _configured_entry_weight_total(entries: Iterable[object]) -> float:
+    """Sum admitted numeric weights in input order; family validators own diagnostics."""
+    total = 0.0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        weight = entry.get("weight", 1.0)
+        if not isinstance(weight, int | float):
+            continue
+        total += float(weight)
+    return total
+
+
+def _validate_dns_tunnel_parameters(
+    result: ValidationResult,
+    net_params: dict[str, Any],
+    schema_checks: list[SchemaCheck],
+) -> None:
+    """Check tunnel templates and TTL weights without reordering their deferred schema entries."""
+    from evidenceforge.config.schemas import (
+        DnsTunnelTtlEntry,
+    )
+
+    templates = net_params.get("dns_tunnel_response_templates", [])
+    if not isinstance(templates, list) or not templates:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "network_params.yaml (dns_tunnel_response_templates)",
+                "dns_tunnel_response_templates must be a non-empty list",
             )
-        else:
-            allowed_template_fields = {"token", "seq", "seq_hex", "edge"}
-            for idx, template in enumerate(templates):
-                if not isinstance(template, str) or "{token}" not in template:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (dns_tunnel_response_templates)",
-                            f"entry {idx} must be a string containing '{{token}}'",
-                        )
-                    )
-                    continue
-                unknown_fields = {
-                    field
-                    for field in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", template)
-                    if field not in allowed_template_fields
-                }
-                if unknown_fields:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (dns_tunnel_response_templates)",
-                            (
-                                f"entry {idx} uses unsupported placeholder(s): "
-                                f"{', '.join(sorted(unknown_fields))}"
-                            ),
-                        )
-                    )
-                    continue
-                literal_text = re.sub(
-                    r"\{[A-Za-z_][A-Za-z0-9_]*\}",
-                    "",
-                    template,
-                ).lower()
-                if re.search(r"[a-z]{3,}", literal_text):
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (dns_tunnel_response_templates)",
-                            (
-                                f"entry {idx} contains readable literal text; "
-                                "DNS tunnel response templates should stay opaque"
-                            ),
-                        )
-                    )
-        ttl_choices = net_params.get("dns_tunnel_ttl_choices", [])
-        if not isinstance(ttl_choices, list) or not ttl_choices:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    "network_params.yaml (dns_tunnel_ttl_choices)",
-                    "dns_tunnel_ttl_choices must be a non-empty list",
-                )
-            )
-        else:
-            _SCHEMA_CHECKS.append(
-                (
-                    ttl_choices,
-                    DnsTunnelTtlEntry,
-                    "network_params.yaml (dns_tunnel_ttl_choices)",
-                )
-            )
-            total_ttl_weight = 0.0
-            for entry in ttl_choices:
-                if not isinstance(entry, dict):
-                    continue
-                weight = entry.get("weight", 1.0)
-                if not isinstance(weight, int | float):
-                    continue
-                total_ttl_weight += float(weight)
-            if not math.isfinite(total_ttl_weight):
+        )
+    else:
+        allowed_template_fields = {"token", "seq", "seq_hex", "edge"}
+        for idx, template in enumerate(templates):
+            if not isinstance(template, str) or "{token}" not in template:
                 result.issues.append(
                     Issue(
                         "ERROR",
-                        "network_params.yaml (dns_tunnel_ttl_choices)",
-                        "total dns_tunnel_ttl_choices weight must be finite",
+                        "network_params.yaml (dns_tunnel_response_templates)",
+                        f"entry {idx} must be a string containing '{{token}}'",
                     )
                 )
-        scanner_profiles = net_params.get("external_scanner_port_profiles", [])
-        if scanner_profiles:
-            _SCHEMA_CHECKS.append(
-                (
-                    scanner_profiles,
-                    ExternalScannerPortProfile,
-                    "network_params.yaml (external_scanner_port_profiles)",
+                continue
+            unknown_fields = {
+                field
+                for field in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", template)
+                if field not in allowed_template_fields
+            }
+            if unknown_fields:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_response_templates)",
+                        (
+                            f"entry {idx} uses unsupported placeholder(s): "
+                            f"{', '.join(sorted(unknown_fields))}"
+                        ),
+                    )
+                )
+                continue
+            literal_text = re.sub(
+                r"\{[A-Za-z_][A-Za-z0-9_]*\}",
+                "",
+                template,
+            ).lower()
+            if re.search(r"[a-z]{3,}", literal_text):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_response_templates)",
+                        (
+                            f"entry {idx} contains readable literal text; "
+                            "DNS tunnel response templates should stay opaque"
+                        ),
+                    )
+                )
+    ttl_choices = net_params.get("dns_tunnel_ttl_choices", [])
+    if not isinstance(ttl_choices, list) or not ttl_choices:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "network_params.yaml (dns_tunnel_ttl_choices)",
+                "dns_tunnel_ttl_choices must be a non-empty list",
+            )
+        )
+    else:
+        schema_checks.append(
+            (
+                ttl_choices,
+                DnsTunnelTtlEntry,
+                "network_params.yaml (dns_tunnel_ttl_choices)",
+            )
+        )
+        total_ttl_weight = _configured_entry_weight_total(ttl_choices)
+        if not math.isfinite(total_ttl_weight):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_ttl_choices)",
+                    "total dns_tunnel_ttl_choices weight must be finite",
                 )
             )
-            total_profile_weight = 0.0
-            for profile in scanner_profiles:
-                if not isinstance(profile, dict):
-                    continue
-                weight = profile.get("weight", 1.0)
-                if not isinstance(weight, int | float):
-                    continue
-                total_profile_weight += float(weight)
-            if not math.isfinite(total_profile_weight):
+
+
+def _validate_external_scanner_parameters(
+    result: ValidationResult,
+    net_params: dict[str, Any],
+    schema_checks: list[SchemaCheck],
+) -> None:
+    """Check scanner and port weight totals while retaining malformed-entry handling."""
+    from evidenceforge.config.schemas import (
+        ExternalScannerPortProfile,
+    )
+
+    scanner_profiles = net_params.get("external_scanner_port_profiles", [])
+    if scanner_profiles:
+        schema_checks.append(
+            (
+                scanner_profiles,
+                ExternalScannerPortProfile,
+                "network_params.yaml (external_scanner_port_profiles)",
+            )
+        )
+        total_profile_weight = _configured_entry_weight_total(scanner_profiles)
+        if not math.isfinite(total_profile_weight):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (external_scanner_port_profiles)",
+                    "total external_scanner_port_profiles weight must be finite",
+                )
+            )
+        for idx, profile in enumerate(scanner_profiles):
+            if not isinstance(profile, dict):
+                continue
+            ports = profile.get("ports", [])
+            if not isinstance(ports, list):
+                continue
+            total_port_weight = _configured_entry_weight_total(ports)
+            if not math.isfinite(total_port_weight):
                 result.issues.append(
                     Issue(
                         "ERROR",
                         "network_params.yaml (external_scanner_port_profiles)",
-                        "total external_scanner_port_profiles weight must be finite",
+                        (
+                            f"entry {idx} has non-finite cumulative port weight; "
+                            "total per-profile port weight must be finite"
+                        ),
                     )
                 )
-            for idx, profile in enumerate(scanner_profiles):
-                if not isinstance(profile, dict):
-                    continue
-                ports = profile.get("ports", [])
-                if not isinstance(ports, list):
-                    continue
-                total_port_weight = 0.0
-                for port_entry in ports:
-                    if not isinstance(port_entry, dict):
-                        continue
-                    weight = port_entry.get("weight", 1.0)
-                    if not isinstance(weight, int | float):
-                        continue
-                    total_port_weight += float(weight)
-                if not math.isfinite(total_port_weight):
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (external_scanner_port_profiles)",
-                            (
-                                f"entry {idx} has non-finite cumulative port weight; "
-                                "total per-profile port weight must be finite"
-                            ),
-                        )
-                    )
-        rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
-        allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
-        if not isinstance(rcode_weights, dict) or not rcode_weights:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    "network_params.yaml (dns_tunnel_rcode_weights)",
-                    "dns_tunnel_rcode_weights must be a non-empty mapping",
-                )
+
+
+def _validate_dns_response_code_weights(
+    result: ValidationResult,
+    net_params: dict[str, Any],
+) -> None:
+    """Preserve response-code admission and ordered positive-total diagnostics."""
+    rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
+    allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+    if not isinstance(rcode_weights, dict) or not rcode_weights:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "network_params.yaml (dns_tunnel_rcode_weights)",
+                "dns_tunnel_rcode_weights must be a non-empty mapping",
             )
-        else:
-            total_weight = 0.0
-            for rcode, weight in rcode_weights.items():
-                if str(rcode).upper() not in allowed_rcodes:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (dns_tunnel_rcode_weights)",
-                            f"unsupported rcode '{rcode}'",
-                        )
-                    )
-                    continue
-                if (
-                    not isinstance(weight, int | float)
-                    or weight <= 0
-                    or not math.isfinite(float(weight))
-                ):
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (dns_tunnel_rcode_weights)",
-                            f"weight for '{rcode}' must be a positive finite number",
-                        )
-                    )
-                    continue
-                total_weight += float(weight)
-            if total_weight <= 0 or not math.isfinite(total_weight):
+        )
+    else:
+        total_weight = 0.0
+        for rcode, weight in rcode_weights.items():
+            if str(rcode).upper() not in allowed_rcodes:
                 result.issues.append(
                     Issue(
                         "ERROR",
                         "network_params.yaml (dns_tunnel_rcode_weights)",
-                        "response-code weights must have a positive finite total",
+                        f"unsupported rcode '{rcode}'",
                     )
                 )
-        proxy_status_messages = net_params.get("proxy_connect_status_messages", {})
-        if not isinstance(proxy_status_messages, dict) or not proxy_status_messages:
+                continue
+            if (
+                not isinstance(weight, int | float)
+                or weight <= 0
+                or not math.isfinite(float(weight))
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_rcode_weights)",
+                        f"weight for '{rcode}' must be a positive finite number",
+                    )
+                )
+                continue
+            total_weight += float(weight)
+        if total_weight <= 0 or not math.isfinite(total_weight):
             result.issues.append(
                 Issue(
                     "ERROR",
-                    "network_params.yaml (proxy_connect_status_messages)",
-                    "proxy_connect_status_messages must be a non-empty mapping",
-                )
-            )
-        else:
-            for status_code, messages in proxy_status_messages.items():
-                try:
-                    numeric_status = int(status_code)
-                except (TypeError, ValueError):
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (proxy_connect_status_messages)",
-                            f"status code '{status_code}' must be an integer",
-                        )
-                    )
-                    continue
-                if numeric_status < 100 or numeric_status > 599:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (proxy_connect_status_messages)",
-                            f"status code '{status_code}' must be between 100 and 599",
-                        )
-                    )
-                    continue
-                if isinstance(messages, str):
-                    message_list = [messages]
-                elif isinstance(messages, list):
-                    message_list = messages
-                else:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (proxy_connect_status_messages)",
-                            f"messages for status {numeric_status} must be a string or list",
-                        )
-                    )
-                    continue
-                if not message_list or not all(
-                    isinstance(message, str) and message.strip() for message in message_list
-                ):
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "network_params.yaml (proxy_connect_status_messages)",
-                            f"messages for status {numeric_status} must be non-empty strings",
-                        )
-                    )
-
-    err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
-    if err:
-        result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
-
-    err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
-    if err:
-        result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
-
-    configured_parent_symbols: list[tuple[str, str]] = []
-    for task in sys_proc_data.get("scheduled_tasks", []):
-        if isinstance(task, dict):
-            configured_parent_symbols.append(
-                ("system_processes.yaml (scheduled_tasks)", str(task.get("parent") or ""))
-            )
-    for role, entries in sys_proc_data.get("system_services", {}).items():
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if isinstance(entry, dict):
-                configured_parent_symbols.append(
-                    (
-                        f"system_processes.yaml (system_services.{role})",
-                        str(entry.get("parent") or ""),
-                    )
-                )
-    delegation = auth_noise_data.get("service_account_delegation", {})
-    for profile in delegation.get("caller_profiles", []):
-        if not isinstance(profile, dict):
-            continue
-        for process in profile.get("processes", []):
-            if isinstance(process, dict):
-                configured_parent_symbols.append(
-                    (
-                        "auth_noise.yaml (service_account_delegation)",
-                        str(process.get("parent_key") or "services"),
-                    )
-                )
-    for source, parent_symbol in configured_parent_symbols:
-        if parent_symbol not in WINDOWS_SEEDED_PARENT_SYMBOLS:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    source,
-                    f"unknown seeded Windows parent symbol {parent_symbol!r}",
+                    "network_params.yaml (dns_tunnel_rcode_weights)",
+                    "response-code weights must have a positive finite total",
                 )
             )
 
-    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
-        _SCHEMA_CHECKS.append(
-            (
-                list(proxy_ua_data.get("domain_overrides", {}).values()),
-                ProxyUserAgentOverrideEntry,
-                "proxy_user_agents.yaml (domain_overrides)",
+
+def _validate_proxy_connect_status_messages(
+    result: ValidationResult,
+    net_params: dict[str, Any],
+) -> None:
+    """Check status codes and source-native message pools in authored mapping order."""
+    proxy_status_messages = net_params.get("proxy_connect_status_messages", {})
+    if not isinstance(proxy_status_messages, dict) or not proxy_status_messages:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "network_params.yaml (proxy_connect_status_messages)",
+                "proxy_connect_status_messages must be a non-empty mapping",
             )
         )
-    for proxy_scope in ("workstation", "server"):
-        package_managers = proxy_ua_data.get(proxy_scope, {}).get("package_managers", {})
-        if isinstance(package_managers, dict):
-            _SCHEMA_CHECKS.append(
-                (
-                    list(package_managers.values()),
-                    ProxyUserAgentOverrideEntry,
-                    f"proxy_user_agents.yaml ({proxy_scope}.package_managers)",
+    else:
+        for status_code, messages in proxy_status_messages.items():
+            try:
+                numeric_status = int(status_code)
+            except (TypeError, ValueError):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (proxy_connect_status_messages)",
+                        f"status code '{status_code}' must be an integer",
+                    )
                 )
-            )
-
-    # Run all schema validations
-    for entries, schema, file_name in _SCHEMA_CHECKS:
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict):
                 continue
-            err = validate_entry(entry, schema, file_name)
-            if err:
-                entry_id = (
-                    entry.get("domain")
-                    or entry.get("id")
-                    or entry.get("name")
-                    or entry.get("service")
-                    or entry.get("app")
-                    or entry.get("exe")
-                    or "?"
+            if numeric_status < 100 or numeric_status > 599:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (proxy_connect_status_messages)",
+                        f"status code '{status_code}' must be between 100 and 599",
+                    )
                 )
-                result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
-
-    from evidenceforge.config.beacon_profiles import load_beacon_profiles
-
-    beacon_profiles_err = validate_entry(
-        load_beacon_profiles(),
-        BeaconProfilesConfig,
-        "beacon_profiles.yaml",
-    )
-    if beacon_profiles_err:
-        result.issues.append(Issue("ERROR", "beacon_profiles.yaml", beacon_profiles_err))
-
-    # Deduplicate issues (some checks may flag the same thing multiple times)
+                continue
+            if isinstance(messages, str):
+                message_list = [messages]
+            elif isinstance(messages, list):
+                message_list = messages
+            else:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (proxy_connect_status_messages)",
+                        f"messages for status {numeric_status} must be a string or list",
+                    )
+                )
+                continue
+            if not message_list or not all(
+                isinstance(message, str) and message.strip() for message in message_list
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (proxy_connect_status_messages)",
+                        f"messages for status {numeric_status} must be non-empty strings",
+                    )
+                )
 
 
 def _validate_web_scan_ids(
