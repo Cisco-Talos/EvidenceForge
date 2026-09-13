@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 72
+current_revision: 73
 history_start_revision: 1
-behavior_surface_sha256: "6dc431e08bee730aeaca83342a4ca059340ea0b6dec15dadad4857116624e3f5"
+behavior_surface_sha256: "d813d59d96a42bb480f366713e44a0062b8d2587f32547e512df1e5efb242295"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -673,3 +673,10 @@ changes:
       - configuration-validation
     formats: []
     summary: Separate static overlay shapes and focused system process access syslog and network validators while preserving provider phases deferred schema ordering diagnostics malformed-input handling and weight accumulation order.
+  - revision: 73
+    id: cleanup-network-request-resolution
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Extract endpoint protocol and command discovery decisions without moving prerequisite execution or root ownership

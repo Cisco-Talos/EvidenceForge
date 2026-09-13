@@ -22,11 +22,15 @@ GROUPS = {
     "parent-preflight": ("cleanup_parent_preflight_matrix.py", None, 72),
     "system": ("cleanup_supplement_matrix.py", "cleanup-system-families.yaml", 6),
     "cli": ("cleanup_cli_matrix.py", None, 6),
+    "network": ("cleanup_network_matrix.py", None, 32),
+    "smb": ("cleanup_supplement_matrix.py", "cleanup-smb-phases.yaml", 6),
     "companions": ("cleanup_supplement_matrix.py", "cleanup-process-companions.yaml", 6),
 }
 
 ADDITIONAL_BASELINES = {
     "system": "pass4-baseline-system",
+    "network": "pass4-baseline-network",
+    "smb": "pass4-baseline-smb-v2",
     "cli": "pass4-baseline-cli",
     "companions": "pass4-baseline-companions-v2",
 }

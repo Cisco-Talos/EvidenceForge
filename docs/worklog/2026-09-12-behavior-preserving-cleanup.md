@@ -2,6 +2,22 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 8a accepted — network request decisions
+
+Predecessor `4a41709a`. The request coordinator falls from 1,030 lines/85 branches to 853 lines/69 branches. Five direct helpers own scoped Kerberos discovery (44 lines), ownerless Linux-server attribution policy (35), explicit endpoint lookup (35), process lifetime attribution (106), and command HTTP discovery (50). Proxy delegation, invalid-request exits, application-channel admission and independently committed process/DNS prerequisites stay visible at their original execution points. Stage docstrings explain cancellation and committed-prerequisite semantics and link production regression contracts. Existing composed stage records and all six stages remain unchanged.
+
+Acceptance: 48 passed, 8 deselected in 2.08s,
+8550 passed, 27 skipped, 2011 deselected in 294.46s (0:04:54). Targeted slow controls:
+3 passed, 33 deselected in 11.33s. Both Ruff checks, revision-73 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.121/0.123/0.123/0.121 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-resolution.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The draft SMB control used a 30-minute warmup, which the existing schema rejected. The failed capture is preserved; accepted v2 uses the required one-hour warmup and repeats exactly. Inspection caught an extraction hazard: response-sizing discovery precedes unknown-internal endpoint rejection. The candidate preserves that flag; two new tests pass against original 26a150ac and the candidate. Ruff corrected import ordering before gates. No evidence exception or golden update was introduced.
+
 ### Item 7 accepted — ordered configuration family checks
 
 Item 6b committed as `2fe26cb8`. Static overlay shape definitions now have a dependency-neutral

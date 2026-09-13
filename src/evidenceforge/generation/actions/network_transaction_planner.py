@@ -198,6 +198,8 @@ if TYPE_CHECKING:
         NetworkConnectionExecutor,
         NetworkConnectionRequest,
     )
+    from evidenceforge.models.scenario import System
+    from evidenceforge.models.state import RunningProcess
 
 
 _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
@@ -2439,7 +2441,24 @@ class NetworkTransactionPlanner:
     def _execute(
         self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
     ) -> str:
-        """Run explicit planning and publication phases under the original boundary."""
+        """Run six ordered stages without transferring transaction ownership to helpers.
+
+        Resolution may independently commit DNS/client-process prerequisites or
+        delegate a proxy/retained-SMB operation. A string ends this root: a UID
+        reports delegation/recovery; an empty string reports rejection or source
+        suppression. It does not prove that prerequisites were rolled back.
+
+        Transport opens the prepared RNG/timing/state scope. Evidence mutates
+        only its occurrence draft; publication preparation authenticates those
+        exact facts. Commit precedes source publication. Only the outer boundary
+        owns claims, cancellation, timing seals and uncertain-commit recovery.
+        Stage helpers must not acquire another transaction authority.
+
+        Contracts: test_network_stages_share_facts_and_exact_publication_inputs,
+        test_network_stage_failure_keeps_commit_and_cancellation_distinct, and
+        test_committed_dns_prerequisite_survives_later_root_rejection_without_orphan_claim
+        in tests/unit/test_network_prepared_runtime_integration.py.
+        """
         resolved = self._resolve_network_request(request, boundary)
         if isinstance(resolved, str):
             return resolved
@@ -2456,6 +2475,282 @@ class NetworkTransactionPlanner:
         if isinstance(committed, str):
             return committed
         return self._publish_committed_network(request, boundary, committed)
+
+    def _resolve_kerberos_transport(
+        self, request: NetworkConnectionRequest, conn_state: str | None
+    ) -> tuple[str, int | None, int | None, str | None, str | None]:
+        """Shape discovery from request-scoped seeds; defer duration to root preparation."""
+        proto, service, dst_port = request.proto, request.service, request.dst_port
+        src_ip, dst_ip, time = request.src_ip, request.dst_ip, request.time
+        src_port, pid = request.src_port, request.pid
+        orig_bytes, resp_bytes = request.orig_bytes, request.resp_bytes
+        deferred_kerberos_duration_proto = None
+        if service == "kerberos" and dst_port == 88 and proto == "tcp":
+            from evidenceforge.generation.activity.kerberos_realism import (
+                pick_kerberos_transport,
+            )
+
+            proto = pick_kerberos_transport(
+                random.Random(
+                    _stable_seed(
+                        "kerberos_transport:"
+                        f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                    )
+                )
+            )
+        if service == "kerberos" and dst_port == 88 and proto == "tcp":
+            deferred_kerberos_duration_proto = "tcp"
+        if service == "kerberos" and dst_port == 88 and proto == "udp":
+            udp_kerberos_rng = random.Random(
+                _stable_seed(
+                    "kerberos_udp_shape:"
+                    f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                )
+            )
+            deferred_kerberos_duration_proto = "udp"
+            orig_bytes = min(
+                max(orig_bytes or udp_kerberos_rng.randint(180, 900), 160),
+                udp_kerberos_rng.randint(700, 1300),
+            )
+            resp_bytes = min(
+                max(resp_bytes or udp_kerberos_rng.randint(120, 1200), 80),
+                udp_kerberos_rng.randint(600, 1400),
+            )
+            if conn_state not in {None, "SF", "S0", "REJ", "OTH"}:
+                conn_state = "SF" if resp_bytes else "S0"
+
+        return proto, orig_bytes, resp_bytes, conn_state, deferred_kerberos_duration_proto
+
+    @staticmethod
+    def _is_ownerless_linux_server_request(
+        source_system: System | None, pid: int, proto: str, dst_port: int
+    ) -> bool:
+        """Keep role-level server traffic unattributed when no process owner is known."""
+        source_roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
+        source_type = (
+            str(getattr(source_system, "type", "") or "").lower()
+            if source_system is not None
+            else ""
+        )
+        linux_server_without_owner = (
+            pid <= 0
+            and source_system is not None
+            and _get_os_category(source_system.os) == "linux"
+            and (
+                source_type in {"server", "domain_controller"}
+                or bool(
+                    source_roles
+                    & {
+                        "app_server",
+                        "database",
+                        "dns_server",
+                        "file_server",
+                        "forward_proxy",
+                        "log_server",
+                        "mail_server",
+                        "monitoring",
+                        "web_server",
+                    }
+                )
+            )
+            and proto == "tcp"
+            and dst_port in {80, 443}
+        )
+        return linux_server_without_owner
+
+    def _resolve_explicit_network_endpoint(
+        self,
+        *,
+        hostname: str,
+        dst_ip: str,
+        src_ip: str,
+        source_system: System | None,
+        emit_dns: bool,
+    ) -> str:
+        """Honor scenario identity and stable fallback before registry destination lookup."""
+        executor = self._executor
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        src_host = source_system.hostname if source_system else src_ip
+        resolver = getattr(executor, "_network_resolver", None)
+        resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
+        if (
+            resolved is not None
+            and resolved.source == "scenario_identity"
+            and resolved.ip
+            and dst_ip != resolved.ip
+        ):
+            dst_ip = resolved.ip
+        elif resolved is not None and resolved.source == "stable_fallback":
+            pass
+        else:
+            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+            domain_ips = get_domain_ips(hostname)
+            if domain_ips and dst_ip not in domain_ips:
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
+        return dst_ip
+
+    def _resolve_network_source_process(
+        self,
+        *,
+        resolved_source_system: System,
+        pid: int,
+        time: datetime,
+        dst_ip: str,
+        dst_port: int,
+        caller_supplied_pid: bool,
+        suppress_source_pid_inference: bool,
+    ) -> tuple[int, RunningProcess | None, bool]:
+        """Reject stale attribution without replacing an invalid explicit caller PID.
+
+        Session and foreground lifetimes are queried from their existing owners;
+        this decision neither creates nor releases a process reservation.
+        """
+        executor = self._executor
+        resolved_process = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+        drop_explicit_pid_without_inference = False
+        if resolved_process and resolved_process.start_time and time < resolved_process.start_time:
+            logger.debug(
+                "Dropping future connection PID attribution: "
+                "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.start_time,
+                time,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif executor._process_termination_recorded(
+            resolved_source_system.hostname,
+            pid,
+            resolved_process.start_time if resolved_process is not None else None,
+        ):
+            logger.debug(
+                "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif (
+            (
+                owning_end_plan := executor.state_manager.process_session_end_plan(
+                    resolved_source_system.hostname, pid
+                )
+            )
+            is not None
+            and owning_end_plan.is_authoritative
+            and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
+        ):
+            logger.debug(
+                "Dropping connection PID after its owning session ended: "
+                "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                owning_end_plan.canonical_end,
+                time,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif (
+            resolved_process
+            and resolved_process.start_time
+            and executor._foreground_process_expired_for_attribution(
+                resolved_source_system,
+                resolved_process,
+                time,
+            )
+        ):
+            logger.debug(
+                "Dropping expired foreground process attribution: "
+                "host=%s pid=%s image=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.image,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif resolved_process is None and pid != 4:
+            logger.debug(
+                "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        if drop_explicit_pid_without_inference:
+            suppress_source_pid_inference = True
+
+        return pid, resolved_process, suppress_source_pid_inference
+
+    def _resolve_command_http_request(
+        self, source_system: System, pid: int, resp_bytes: int | None
+    ) -> tuple[tuple[HttpContext, str, int, str, System | None] | None, bool]:
+        """Parse an existing command without owner RNG draws or endpoint allocation."""
+        executor = self._executor
+        proc = executor.state_manager.get_process(source_system.hostname, pid)
+        if proc is not None:
+            command_http = _http_context_from_process_command(
+                proc.image,
+                proc.command_line,
+                # Response sizing belongs to the prepared root. Parse the
+                # command without consuming the owner RNG, then fill an
+                # ordinary non-stable entity after boundary.begin().
+                response_body_len=resp_bytes or 0,
+            )
+            if command_http is not None:
+                command_http_context, command_host, command_port, command_service = command_http
+                command_http_needs_response_size = bool(
+                    not resp_bytes
+                    and command_http_context.method != "HEAD"
+                    and command_http_context.response_body_len <= 0
+                )
+                command_target = executor._system_for_hostname(command_host)
+                host_lower = command_host.lower().rstrip(".")
+                ad_domain_for_command = (
+                    str(
+                        getattr(executor, "_ad_domain", "") or "",
+                    )
+                    .lower()
+                    .rstrip(".")
+                )
+                command_is_unknown_internal = command_target is None and (
+                    host_lower.endswith(".local")
+                    or (ad_domain_for_command and host_lower.endswith(f".{ad_domain_for_command}"))
+                )
+                resolved = (
+                    (
+                        command_http_context,
+                        command_host,
+                        command_port,
+                        command_service,
+                        command_target,
+                    )
+                    if not command_is_unknown_internal
+                    else None
+                )
+                # The sizing flag was discovered before endpoint admission and
+                # remains true even when an unknown internal target is rejected.
+                return resolved, command_http_needs_response_size
+        return None, False
 
     def _resolve_network_request(
         self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
@@ -2623,39 +2918,9 @@ class NetworkTransactionPlanner:
         is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
         if source_system is None and hasattr(executor, "_ip_to_system"):
             source_system = executor._ip_to_system.get(src_ip)
-        if service == "kerberos" and dst_port == 88 and proto == "tcp":
-            from evidenceforge.generation.activity.kerberos_realism import (
-                pick_kerberos_transport,
-            )
-
-            proto = pick_kerberos_transport(
-                random.Random(
-                    _stable_seed(
-                        "kerberos_transport:"
-                        f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
-                    )
-                )
-            )
-        if service == "kerberos" and dst_port == 88 and proto == "tcp":
-            deferred_kerberos_duration_proto = "tcp"
-        if service == "kerberos" and dst_port == 88 and proto == "udp":
-            udp_kerberos_rng = random.Random(
-                _stable_seed(
-                    "kerberos_udp_shape:"
-                    f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
-                )
-            )
-            deferred_kerberos_duration_proto = "udp"
-            orig_bytes = min(
-                max(orig_bytes or udp_kerberos_rng.randint(180, 900), 160),
-                udp_kerberos_rng.randint(700, 1300),
-            )
-            resp_bytes = min(
-                max(resp_bytes or udp_kerberos_rng.randint(120, 1200), 80),
-                udp_kerberos_rng.randint(600, 1400),
-            )
-            if conn_state not in {None, "SF", "S0", "REJ", "OTH"}:
-                conn_state = "SF" if resp_bytes else "S0"
+        proto, orig_bytes, resp_bytes, conn_state, deferred_kerberos_duration_proto = (
+            self._resolve_kerberos_transport(request, conn_state)
+        )
 
         if (
             http is None
@@ -2664,47 +2929,24 @@ class NetworkTransactionPlanner:
             and proto == "tcp"
             and (dst_port in {80, 443, 8080} or service is None or service in {"http", "ssl"})
         ):
-            proc = executor.state_manager.get_process(source_system.hostname, pid)
-            if proc is not None:
-                command_http = _http_context_from_process_command(
-                    proc.image,
-                    proc.command_line,
-                    # Response sizing belongs to the prepared root. Parse the
-                    # command without consuming the owner RNG, then fill an
-                    # ordinary non-stable entity after boundary.begin().
-                    response_body_len=resp_bytes or 0,
-                )
-                if command_http is not None:
-                    command_http_context, command_host, command_port, command_service = command_http
-                    command_http_needs_response_size = bool(
-                        not resp_bytes
-                        and command_http_context.method != "HEAD"
-                        and command_http_context.response_body_len <= 0
-                    )
-                    command_target = executor._system_for_hostname(command_host)
-                    host_lower = command_host.lower().rstrip(".")
-                    ad_domain_for_command = (
-                        str(
-                            getattr(executor, "_ad_domain", "") or "",
-                        )
-                        .lower()
-                        .rstrip(".")
-                    )
-                    command_is_unknown_internal = command_target is None and (
-                        host_lower.endswith(".local")
-                        or (
-                            ad_domain_for_command
-                            and host_lower.endswith(f".{ad_domain_for_command}")
-                        )
-                    )
-                    if not command_is_unknown_internal:
-                        http = command_http_context
-                        hostname = command_host
-                        dst_port = command_port
-                        service = command_service
-                        if command_target is not None:
-                            dst_ip = command_target.ip
-                            emit_dns = True
+            command_http, command_http_needs_response_size = self._resolve_command_http_request(
+                source_system, pid, resp_bytes
+            )
+            if command_http is not None:
+                (
+                    command_http_context,
+                    command_host,
+                    command_port,
+                    command_service,
+                    command_target,
+                ) = command_http
+                http = command_http_context
+                hostname = command_host
+                dst_port = command_port
+                service = command_service
+                if command_target is not None:
+                    dst_ip = command_target.ip
+                    emit_dns = True
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -2754,28 +2996,13 @@ class NetworkTransactionPlanner:
             and not preserve_explicit_proxy_dst_ip
             and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
         ):
-            from evidenceforge.generation.activity.dns_registry import get_domain_ips
-
-            src_host = source_system.hostname if source_system else src_ip
-            resolver = getattr(executor, "_network_resolver", None)
-            resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
-            if (
-                resolved is not None
-                and resolved.source == "scenario_identity"
-                and resolved.ip
-                and dst_ip != resolved.ip
-            ):
-                dst_ip = resolved.ip
-            elif resolved is not None and resolved.source == "stable_fallback":
-                pass
-            else:
-                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-
-                domain_ips = get_domain_ips(hostname)
-                if domain_ips and dst_ip not in domain_ips:
-                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
-                elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
-                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            dst_ip = self._resolve_explicit_network_endpoint(
+                hostname=hostname,
+                dst_ip=dst_ip,
+                src_ip=src_ip,
+                source_system=source_system,
+                emit_dns=emit_dns,
+            )
 
         ad_domain = getattr(executor, "_ad_domain", "corp.local")
         hostname_is_external = (
@@ -2790,35 +3017,8 @@ class NetworkTransactionPlanner:
         # than turning a sampled HTTP User-Agent into a fabricated PID-1 child.
         # Explicit caller PIDs remain authoritative, and interactive workstation
         # traffic can still materialize a source-native browser/client process.
-        source_roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
-        source_type = (
-            str(getattr(source_system, "type", "") or "").lower()
-            if source_system is not None
-            else ""
-        )
-        linux_server_without_owner = (
-            pid <= 0
-            and source_system is not None
-            and _get_os_category(source_system.os) == "linux"
-            and (
-                source_type in {"server", "domain_controller"}
-                or bool(
-                    source_roles
-                    & {
-                        "app_server",
-                        "database",
-                        "dns_server",
-                        "file_server",
-                        "forward_proxy",
-                        "log_server",
-                        "mail_server",
-                        "monitoring",
-                        "web_server",
-                    }
-                )
-            )
-            and proto == "tcp"
-            and dst_port in {80, 443}
+        linux_server_without_owner = self._is_ownerless_linux_server_request(
+            source_system, pid, proto, dst_port
         )
         if linux_server_without_owner:
             suppress_source_pid_inference = True
@@ -3160,99 +3360,17 @@ class NetworkTransactionPlanner:
                 duration = max(duration or 0.001, dns.rtt)
 
         if pid > 0 and resolved_source_system:
-            resolved_process = executor.state_manager.get_process(
-                resolved_source_system.hostname, pid
+            pid, resolved_process, suppress_source_pid_inference = (
+                self._resolve_network_source_process(
+                    resolved_source_system=resolved_source_system,
+                    pid=pid,
+                    time=time,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    caller_supplied_pid=caller_supplied_pid,
+                    suppress_source_pid_inference=suppress_source_pid_inference,
+                )
             )
-            drop_explicit_pid_without_inference = False
-            if (
-                resolved_process
-                and resolved_process.start_time
-                and time < resolved_process.start_time
-            ):
-                logger.debug(
-                    "Dropping future connection PID attribution: "
-                    "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    resolved_process.start_time,
-                    time,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif executor._process_termination_recorded(
-                resolved_source_system.hostname,
-                pid,
-                resolved_process.start_time if resolved_process is not None else None,
-            ):
-                logger.debug(
-                    "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif (
-                (
-                    owning_end_plan := executor.state_manager.process_session_end_plan(
-                        resolved_source_system.hostname, pid
-                    )
-                )
-                is not None
-                and owning_end_plan.is_authoritative
-                and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
-            ):
-                logger.debug(
-                    "Dropping connection PID after its owning session ended: "
-                    "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    owning_end_plan.canonical_end,
-                    time,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif (
-                resolved_process
-                and resolved_process.start_time
-                and executor._foreground_process_expired_for_attribution(
-                    resolved_source_system,
-                    resolved_process,
-                    time,
-                )
-            ):
-                logger.debug(
-                    "Dropping expired foreground process attribution: "
-                    "host=%s pid=%s image=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    resolved_process.image,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif resolved_process is None and pid != 4:
-                logger.debug(
-                    "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            if drop_explicit_pid_without_inference:
-                suppress_source_pid_inference = True
 
         if (
             resolved_source_system is not None
@@ -3494,7 +3612,12 @@ class NetworkTransactionPlanner:
         boundary: _PreparedNetworkBoundary,
         stage_input: ResolvedNetworkRequest,
     ) -> PlannedNetworkTransport | str:
-        """Plan transport identity, accounting, and the occurrence draft under one boundary."""
+        """Open preparation after resolution, then allocate identity and transport facts.
+
+        Prerequisites are already committed. All new root reservations and RNG
+        draws belong to the supplied boundary; protocol helpers may revise local
+        accounting but must not publish, cancel, or allocate a second root.
+        """
         executor = self._executor
         facts = stage_input.facts
         endpoints = stage_input.endpoints

@@ -1789,3 +1789,62 @@ def test_committed_dns_prerequisite_survives_later_root_rejection_without_orphan
     assert census.preparation_fences == 0
     assert census.reserved_deadlines == 0
     assert emitter.emit.call_count == 1
+
+
+@pytest.mark.parametrize("destination", ["missing.local", "downloads.example.test"])
+def test_command_response_sizing_discovery_survives_endpoint_admission(
+    monkeypatch: pytest.MonkeyPatch, destination: str
+) -> None:
+    state = StateManager()
+    state.set_current_time(_START)
+    source = System(hostname="CLIENT", ip="10.0.0.10", os="Ubuntu 24.04", type="workstation")
+    process = state.plan_process_materialization(
+        system=source.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line=f"curl https://{destination}/payload.bin",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id="0x1001",
+        start_time=_START - timedelta(seconds=1),
+        auth_session_id=0x1001,
+        auth_logon_type=2,
+    )
+    state.materialize_process(process)
+    generator = ActivityGenerator(
+        state,
+        {},
+        generation_window_start=_START - timedelta(hours=1),
+        generation_window_end=_START + timedelta(hours=1),
+    )
+    generator._ip_to_system = {source.ip: source}
+    observed: dict[str, object] = {}
+
+    def stop_before_preparation(
+        self: object, request: object, boundary: object, resolved: Any
+    ) -> str:
+        observed["needs_size"] = resolved.facts.command_http_needs_response_size
+        observed["http"] = resolved.protocol.http
+        return ""
+
+    monkeypatch.setattr(
+        planner_module.NetworkTransactionPlanner, "_plan_network_transport", stop_before_preparation
+    )
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="203.0.113.20",
+        time=_START,
+        dst_port=443,
+        proto="tcp",
+        service=None,
+        pid=process.identity.pid,
+        source_system=source,
+        hostname="",
+        conn_state="SF",
+        preserve_dst_ip=True,
+        suppress_prereq_dns=True,
+        suppress_source_pid_inference=True,
+    )
+    assert observed["needs_size"] is True
+    assert (observed["http"] is None) is (destination == "missing.local")

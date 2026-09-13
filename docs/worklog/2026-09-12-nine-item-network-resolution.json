@@ -1,0 +1,330 @@
+{
+  "after": {
+    "_resolve_network_request": {
+      "branches": 69,
+      "calls": 129,
+      "lines": 853
+    }
+  },
+  "allocation_changes": "One five-value result tuple for protocol discovery; conditional process-attribution and command-resolution tuples. No additional retained objects or context owners. Existing RNG scopes moved unchanged.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_resolve_network_request": {
+      "branches": 85,
+      "calls": 176,
+      "lines": 1030
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item8a-combined-report.json",
+    "sha256": "14480942dcb60e152eaf571f2e473023925374fb08fc317deb581fb4de8149ba"
+  },
+  "byte_report_path": "/private/tmp/eforge-cleanup-evidence/pass4-item8a-combined-report.json",
+  "controls": {
+    "baseline_network": "pass4-baseline-network",
+    "baseline_smb": "pass4-baseline-smb-v2",
+    "new_network_cases": 32,
+    "new_smb_cases": 6,
+    "predecessor_core_and_typed_cases": 38,
+    "predecessor_network_cases": 32,
+    "predecessor_smb_cases": 6,
+    "predecessor_source": "/private/tmp/eforge-cleanup-network-baseline",
+    "repeat_network": "pass4-repeat-network",
+    "repeat_smb": "pass4-repeat-smb",
+    "total_complete_matrix_cases": 250
+  },
+  "coordinators": [
+    "_resolve_network_request"
+  ],
+  "description": "The request coordinator falls from 1,030 lines/85 branches to 853 lines/69 branches. Five direct helpers own scoped Kerberos discovery (44 lines), ownerless Linux-server attribution policy (35), explicit endpoint lookup (35), process lifetime attribution (106), and command HTTP discovery (50). Proxy delegation, invalid-request exits, application-channel admission and independently committed process/DNS prerequisites stay visible at their original execution points. Stage docstrings explain cancellation and committed-prerequisite semantics and link production regression contracts. Existing composed stage records and all six stages remain unchanged.",
+  "failures": [
+    "The draft SMB control used a 30-minute warmup, which the existing schema rejected. The failed capture is preserved; accepted v2 uses the required one-hour warmup and repeats exactly.",
+    "Inspection caught an extraction hazard: response-sizing discovery precedes unknown-internal endpoint rejection. The candidate preserves that flag; two new tests pass against original 26a150ac and the candidate.",
+    "Ruff corrected import ordering before gates. No evidence exception or golden update was introduced."
+  ],
+  "forwarded_stage_fields": "Unchanged composed records; no new flatten/repack step between stages.",
+  "gates": {
+    "before-focused": {
+      "log": "/private/tmp/eforge-pass4-item8a-before-focused.log",
+      "sha256": "6ab489cc98f9da041b69b5483ad21905d0d454f64a3bcbf70b4f9b9189592dae",
+      "summary": "============================== 46 passed in 1.99s =============================="
+    },
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item8a-focused.log",
+      "sha256": "ce4eb8edf9cb996760a82061922af65d1f46b16c71f69bcbcefd300ac97051fe",
+      "summary": "======================= 48 passed, 8 deselected in 2.08s ======================="
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item8a-matrix.log",
+      "sha256": "a7a5c50b9c09cae5a7666248eda4f65db1b254ee94100f95d9afdb6658a65a60",
+      "summary": ""
+    },
+    "original-characterization": {
+      "log": "/private/tmp/eforge-pass4-item8a-original-characterization.log",
+      "sha256": "8bab173e67d0829677fbac153768e01412a6906df7bd5b8399972667b303811f",
+      "summary": "======================= 2 passed, 27 deselected in 0.87s ======================="
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item8a-slow.log",
+      "sha256": "e67789c44fac4cd016c83ccda5cb3b2406ade214302b27a86e281b240fe8a054",
+      "summary": "====================== 3 passed, 33 deselected in 11.33s ======================="
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item8a-standard.log",
+      "sha256": "a3b9b636e69d553860e79d2a08876009b7f0067ddd3826238c6ded981d759f33",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 294.46s (0:04:54) ========="
+    }
+  },
+  "item": "8a",
+  "logs": [
+    "focused",
+    "slow",
+    "standard",
+    "matrix",
+    "original-characterization",
+    "before-focused"
+  ],
+  "manifest": "passed vs 4a41709a",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 3384663,
+      "allocation_sample_retained_blocks": 3547,
+      "allocation_sample_retained_bytes": 291017,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12108658300712705,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.06842642119257,
+      "process_max_rss": 141213696,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.13458162499591708,
+        0.1207270419690758,
+        0.14216624991968274,
+        0.12064458301756531,
+        0.14145062502939254,
+        0.12037550006061792,
+        0.12108658300712705
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3388418,
+      "allocation_sample_retained_blocks": 3643,
+      "allocation_sample_retained_bytes": 296094,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12272899993695319,
+      "operations_per_sample": 8,
+      "operations_per_second": 65.18426781045768,
+      "process_max_rss": 141082624,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.12987412500660866,
+        0.12214062502607703,
+        0.14267758396454155,
+        0.12080629204865545,
+        0.14185033296234906,
+        0.12195733399130404,
+        0.12272899993695319
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3389525,
+      "allocation_sample_retained_blocks": 3637,
+      "allocation_sample_retained_bytes": 295920,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.1228157919831574,
+      "operations_per_sample": 8,
+      "operations_per_second": 65.13820308301311,
+      "process_max_rss": 140296192,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11877058306708932,
+        0.12220687500666827,
+        0.14344520901795477,
+        0.11980929202400148,
+        0.14017687493469566,
+        0.1228157919831574,
+        0.12303458293899894
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3386540,
+      "allocation_sample_retained_blocks": 3618,
+      "allocation_sample_retained_bytes": 294842,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12097795796580613,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.12774867849203,
+      "process_max_rss": 140165120,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.12014366593211889,
+        0.12097795796580613,
+        0.14293095900211483,
+        0.12180887500289828,
+        0.14131358405575156,
+        0.12070229207165539,
+        0.12039483396802098
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    }
+  ],
+  "performance_runs": [
+    "baseline-network-a",
+    "network-a",
+    "baseline-network-b",
+    "network-b"
+  ],
+  "previous": "4a41709a",
+  "retained_state": "No new durable state; existing executor references are used transiently by methods of the existing planner.",
+  "revision": 73,
+  "ruff": "both passed",
+  "slug": "network-resolution",
+  "source": "src/evidenceforge/generation/actions/network_transaction_planner.py",
+  "title": "network request decisions"
+}

@@ -27,6 +27,24 @@ from typing import Any
 
 def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
     """Bind one fixed workload to the selected checkout's existing owners."""
+    if name == "network":
+        from cleanup_network_contract import CASES, capture
+        from compare_cleanup_output import snapshot
+
+        def network() -> object:
+            results: dict[str, object] = {}
+            with tempfile.TemporaryDirectory(prefix="eforge-cleanup-network-measure-") as temporary:
+                for case in CASES:
+                    output = Path(temporary) / case
+                    capture(
+                        argparse.Namespace(
+                            source=source, output=output, seed=42, case=case, threaded=False
+                        )
+                    )
+                    results[case] = snapshot(output)
+            return results
+
+        return network, len(CASES)
     if name == "configuration":
         from evidenceforge.validation.configuration import validate_config
 
@@ -286,6 +304,7 @@ def main() -> None:
             "generation-cli",
             "cli-failure",
             "configuration",
+            "network",
         ),
         required=True,
     )
