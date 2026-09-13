@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 74
+current_revision: 75
 history_start_revision: 1
-behavior_surface_sha256: "b4224a77fde09ff2a1d9d3a6c7758d2ae2c4cdccdf5e6eb1816f62beb33313ee"
+behavior_surface_sha256: "d9f211f1e55ec6f42503095d18c910325c1c4caa3792ae5f916244472c6c3d1a"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -687,3 +687,10 @@ changes:
       - network
     formats: []
     summary: Extract ICMP explicit and sampled transport accounting while preserving tuple timing and prepared RNG ownership
+  - revision: 75
+    id: cleanup-network-protocol-evidence
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Extract DNS proxy HTTP and NTP evidence preparation and preserve final interval reconciliation before tuple reservation

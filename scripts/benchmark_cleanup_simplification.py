@@ -27,6 +27,54 @@ from typing import Any
 
 def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
     """Bind one fixed workload to the selected checkout's existing owners."""
+    if name == "smb":
+        from compare_cleanup_output import snapshot
+
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import Scenario
+        from evidenceforge.utils.files import load_yaml
+        from evidenceforge.utils.rng import _get_rng, generation_seed_scope, reset_thread_rng
+
+        fixture = Path(__file__).parent / "fixtures/cleanup-smb-performance.yaml"
+        document = load_yaml(fixture)
+
+        def smb() -> object:
+            with tempfile.TemporaryDirectory(prefix="eforge-cleanup-smb-measure-") as temporary:
+                output = Path(temporary)
+                scenario = Scenario(**document)
+                engine = GenerationEngine(scenario, output, generation_seed=42)
+                try:
+                    engine._initialize()
+                    with generation_seed_scope(42):
+                        reset_thread_rng()
+                        result = engine.activity_generator.generate_smb_activity(
+                            spec=scenario.storyline[0].events[0],
+                            actor=scenario.environment.users[0],
+                            parent_system=scenario.environment.systems[0],
+                            time=engine.start_time + timedelta(minutes=10),
+                            activity_source="storyline",
+                        )
+                        rng_digest = hashlib.sha256(
+                            repr(_get_rng().getstate()).encode()
+                        ).hexdigest()
+                    state = engine.activity_generator.state_manager.get_state_summary()
+                    retained = {
+                        key: value
+                        for key, value in state.items()
+                        if key.startswith(("smb_file_mutation_", "smb_connection_"))
+                    }
+                    assert retained and all(value == 0 for value in retained.values())
+                finally:
+                    engine._close_emitters()
+                return {
+                    "files": snapshot(output),
+                    "operations": result.operations,
+                    "completed_at": result.completed_at.isoformat(),
+                    "rng_sha256": rng_digest,
+                    "retained": retained,
+                }
+
+        return smb, 3
     if name == "network":
         from cleanup_network_contract import CASES, capture
         from compare_cleanup_output import snapshot
@@ -305,6 +353,7 @@ def main() -> None:
             "cli-failure",
             "configuration",
             "network",
+            "smb",
         ),
         required=True,
     )

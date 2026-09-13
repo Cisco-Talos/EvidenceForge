@@ -3,6 +3,7 @@
   "cleanup-foreground-ownership.yaml": "be68d39a8a34b56774c4444162595ba56d5e060b3ed960c66b722b478aa275f4",
   "cleanup-periodic-content.yaml": "65d9dc6fb69f400aa59780baad0396162b6e93ddcb51d2bfb6c9474554515602",
   "cleanup-process-companions.yaml": "374842812ddd590f7d1586a1b3b972ef96c5b1b181be57fb54878eab503eddfa",
+  "cleanup-smb-performance.yaml": "924cfceeb743ed851de481d4dc4d8e66847a5c7cbcc6e068d6188de38f464ac1",
   "cleanup-smb-phases.yaml": "6b38bf34961b0b0e91d751e7e6281fa5b7e92aa54d7d1f19b7f22fbae3af3ef2",
   "cleanup-system-families.yaml": "4c098756abc68069c1341443716c1435e529dac111a3852ad51b9e92714b1347",
   "cleanup-typed-handlers.yaml": "ddf9f9002a1f383219bccd07aea3e69c5f5cbaab51800f73dc306a1f9abab8be",

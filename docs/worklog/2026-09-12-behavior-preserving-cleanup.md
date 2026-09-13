@@ -2,6 +2,22 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 8c accepted — protocol evidence and interval reconciliation
+
+Predecessor `6556fe20`. The protocol-evidence coordinator falls from 1,138 to 527 lines. Focused operations own DNS normalization/cache staging (127 lines), proxy request presentation (68), proxy source context (160), automatic HTTP evidence (135), NTP parser/clock evidence (115), and HTTP transport accounting (99). The duplicated legacy HTTP/HTTPS URI/referrer branches now share one parameterized operation. All helpers use the existing phase-local event draft and preparation. Protocol/body adjustments still precede process visibility, session bounds and exact tuple reservation; responder preparation and independently committed prerequisites retain their boundaries. Existing composed records are unchanged.
+
+Acceptance: 64 passed in 2.15s,
+8550 passed, 27 skipped, 2011 deselected in 297.95s (0:04:57). Targeted slow controls:
+14 passed, 33 deselected in 23.14s. Both Ruff checks, revision-75 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.119/0.121/0.121/0.121 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-evidence.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: An initial focused command named a nonexistent test_zeek_ntp.py and collected no tests. The log is preserved as item8c-focused-initial.log. Corrected verified paths passed 64 focused tests; the additional NTP/proxy selection passed 33 tests with one existing skip because gitignored sample_data/Zeek-JSON is unavailable (44 deselected). No production correctness or byte comparison failed.
+
 ### Item 8b accepted — protocol-specific transport accounting
 
 Predecessor `9db12667`. ICMP echo payload/duration, explicit TCP/UDP states, sampled UDP states, sampled TCP states and ICMP observation spacing now have five focused operations. Identity allocation, preparation entry, packet accounting, process/session caps and tuple ownership remain at their original execution points. The ICMP spacing helper receives the exact existing preparation and window bound; it acquires no independent state or cancellation authority. The static prepared-region regression now follows direct helper calls transitively, preventing extracted code from hiding publication, owner RNG or unstaged timing operations.

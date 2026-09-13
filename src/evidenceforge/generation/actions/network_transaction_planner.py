@@ -4679,76 +4679,22 @@ class NetworkTransactionPlanner:
             uid=uid,
         )
 
-    def _plan_network_protocol_evidence(
+    def _prepare_dns_protocol_evidence(
         self,
         request: NetworkConnectionRequest,
-        boundary: _PreparedNetworkBoundary,
-        stage_input: PlannedNetworkTransport,
-    ) -> PlannedNetworkEvidence | str:
-        """Plan protocol evidence and canonical timing before preparing publication."""
+        *,
+        event: _NetworkOccurrenceDraft,
+        facts: NetworkRequestFacts,
+        endpoints: ResolvedNetworkEndpoints,
+        protocol_evidence: NetworkProtocolEvidence,
+        network_preparation: NetworkTransactionPreparation,
+        rng: random.Random,
+        time: datetime,
+        overhead: int,
+        committed_suppressed: bool,
+    ) -> bool:
+        """Normalize the root-local DNS copy and stage cache observation, never publish it."""
         executor = self._executor
-        facts = stage_input.facts
-        endpoints = stage_input.endpoints
-        protocol_evidence = stage_input.protocol
-        applications = stage_input.applications
-        committed_suppressed = stage_input.committed_suppressed
-        event = stage_input.event
-        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
-        network_preparation = stage_input.network_preparation
-        ntp_timing = protocol_evidence.ntp_timing
-        overhead = stage_input.overhead
-        prepared_responder = stage_input.prepared_responder
-        responding_pid = stage_input.responding_pid
-        rng = stage_input.rng
-        time = stage_input.time
-
-        if protocol_evidence.ids_alerts:
-            event.ids_alerts = list(protocol_evidence.ids_alerts)
-        if protocol_evidence.email is not None:
-            event.email = protocol_evidence.email
-        if protocol_evidence.smtp is not None:
-            event.smtp = protocol_evidence.smtp
-        if request.ssl is not None and not facts.http_application_layer_only:
-            event.ssl = request.ssl
-        if protocol_evidence.x509 is not None and not facts.http_application_layer_only:
-            event.x509 = protocol_evidence.x509
-        if protocol_evidence.x509_chain and not facts.http_application_layer_only:
-            event.x509_chain = list(protocol_evidence.x509_chain)
-        if request.tls_presentation is not None and not facts.http_application_layer_only:
-            event.tls_presentation = request.tls_presentation
-            if not event.x509_chain:
-                event.x509_chain = executor._tls_certificate_planner.x509_contexts(
-                    request.tls_presentation
-                )
-            executor._tls_certificate_planner.validate_projection(
-                request.tls_presentation,
-                event.x509_chain,
-            )
-            event.x509 = event.x509_chain[0]
-            if event.ssl is not None:
-                event.ssl = replace(
-                    event.ssl,
-                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
-                )
-        if protocol_evidence.http is not None:
-            event.http = protocol_evidence.http
-        if protocol_evidence.file_transfer is not None:
-            event.file_transfer = protocol_evidence.file_transfer
-        if protocol_evidence.file_transfers:
-            event.file_transfers = list(protocol_evidence.file_transfers)
-        if protocol_evidence.pe is not None:
-            event.pe = protocol_evidence.pe
-        if request.pe_analyses:
-            event.pe_analyses = list(request.pe_analyses)
-        if protocol_evidence.ocsp is not None:
-            event.ocsp = protocol_evidence.ocsp
-        if request.ocsp_transaction is not None:
-            event.ocsp_transaction = request.ocsp_transaction
-        if protocol_evidence.proxy is not None:
-            event.proxy = protocol_evidence.proxy
-        if protocol_evidence.firewall is not None:
-            event.firewall = protocol_evidence.firewall
-
         # DNS context for Zeek dns.log fan-out
         if protocol_evidence.dns is not None:
             event.dns = protocol_evidence.dns
@@ -4859,533 +4805,500 @@ class NetworkTransactionPlanner:
                 synthesized_rtt,
             )
 
-        # Proxy context: attach only for established outbound internet traffic.
-        # Forward proxies only see egress that completes (not blocked/denied flows).
-        if (
-            not facts.local_only
-            and protocol_evidence.service in ("ssl", "http")
-            and endpoints.dst_port in (80, 443)
-            and event.proxy is None
-            and not _is_private_ip(endpoints.dst_ip)
-            and protocol_evidence.conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
-        ):
-            proxy_routes = getattr(executor, "_proxy_routes", {})
-            chain = proxy_routes.get(endpoints.src_ip)
-            if chain:
-                from evidenceforge.events.contexts import ProxyContext
+        return committed_suppressed
 
-                proxy_sys = chain[0]
-                proxy_fqdn = getattr(proxy_sys, "hostname", "")
-                # Build proxy FQDN from hostname + domain
-                ad_domain = getattr(executor, "_ad_domain", "")
-                if ad_domain and "." not in proxy_fqdn:
-                    proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                # Hostname was resolved once at the top of generate_connection().
-                proxy_hostname = endpoints.hostname
-                if (
-                    proxy_hostname is None
-                    and protocol_evidence.dns is not None
-                    and protocol_evidence.dns.query
-                ):
-                    proxy_hostname = protocol_evidence.dns.query
-                if proxy_hostname is None:
-                    proxy_hostname = REVERSE_DNS.get(endpoints.dst_ip)
-                if proxy_hostname is None:
-                    proxy_hostname = _generate_random_hostname(rng, endpoints.dst_ip)
-                # Suppressed hostname → use raw IP for proxy logging
-                if proxy_hostname == "":
-                    proxy_hostname = endpoints.dst_ip
-                from evidenceforge.generation.activity.dns_registry import get_domain_tags
-                from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+    @staticmethod
+    def _proxy_request_presentation(
+        http: HttpContext | None,
+        *,
+        endpoints: ResolvedNetworkEndpoints,
+        proxy_hostname: str,
+        domain_tags: list[str],
+        rng: random.Random,
+    ) -> tuple[str, str, str, str | None, str, str]:
+        """Use supplied HTTP metadata or the same scheme-specific URI/referrer draws."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-                domain_tags = get_domain_tags(proxy_hostname)
-                user_agent = ""
+        user_agent = ""
 
-                # When a pre-built HttpContext exists (from browsing session
-                # generator), derive proxy fields from it.  The proxy emitter
-                # handles CONNECT tunnel deduplication automatically.
-                if event.http is not None:
-                    from evidenceforge.generation.activity.http_content import (
-                        normalize_mime_type_for_path,
-                    )
-
-                    scheme = "https" if endpoints.dst_port == 443 else "http"
-                    proxy_method = event.http.method
-                    url = f"{scheme}://{proxy_hostname}{event.http.uri}"
-                    if event.http.resp_mime_types or event.http.status_code == 304:
-                        proxy_content_type = normalize_mime_type_for_path(
-                            event.http.uri,
-                            (
-                                event.http.resp_mime_types[0]
-                                if event.http.resp_mime_types
-                                else "text/html"
-                            ),
-                        )
-                    else:
-                        proxy_content_type = "text/html"
-                    proxy_ua_override = None  # session UA is already on HttpContext
-                    user_agent = event.http.user_agent
-                    proxy_referrer = event.http.referrer
-                elif endpoints.dst_port == 443:
-                    # Legacy single-connection HTTPS path
-                    _src_os = (
-                        _get_os_category(endpoints.source_system.os)
-                        if endpoints.source_system
-                        else None
-                    )
-                    (
-                        path,
-                        proxy_content_type,
-                        proxy_method,
-                        proxy_ua_override,
-                        referrer_policy,
-                    ) = pick_proxy_uri(
-                        rng,
-                        proxy_hostname,
-                        domain_tags,
-                        source_os=_src_os,
-                        source_system_type=getattr(endpoints.source_system, "type", None),
-                        allow_canonical_protocol_templates=False,
-                    )
-                    url = f"https://{proxy_hostname}{path}"
-                    from evidenceforge.generation.activity.referrer import pick_referrer
-
-                    proxy_referrer = (
-                        ""
-                        if referrer_policy == "none"
-                        else pick_referrer(rng, proxy_hostname, context="general", port=443)
-                    )
-                else:
-                    _src_os = (
-                        _get_os_category(endpoints.source_system.os)
-                        if endpoints.source_system
-                        else None
-                    )
-                    (
-                        path,
-                        proxy_content_type,
-                        proxy_method,
-                        proxy_ua_override,
-                        referrer_policy,
-                    ) = pick_proxy_uri(
-                        rng,
-                        proxy_hostname,
-                        domain_tags,
-                        source_os=_src_os,
-                        source_system_type=getattr(endpoints.source_system, "type", None),
-                        allow_canonical_protocol_templates=False,
-                    )
-                    url = f"http://{proxy_hostname}{path}"
-                    from evidenceforge.generation.activity.referrer import pick_referrer
-
-                    proxy_referrer = (
-                        ""
-                        if referrer_policy == "none"
-                        else pick_referrer(rng, proxy_hostname, context="general", port=80)
-                    )
-                from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
-
-                apply_domain_user_agent = event.http is None or (
-                    not _is_tool_http_user_agent(event.http.user_agent)
-                    and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
-                )
-                user_agent = executor._proxy_user_agent_for_context(
-                    rng,
-                    endpoints.source_system,
-                    hostname=proxy_hostname,
-                    domain_tags=domain_tags,
-                    existing_user_agent=user_agent,
-                    override_user_agent=proxy_ua_override,
-                    apply_domain_override=apply_domain_user_agent,
-                    source_identity=endpoints.src_ip,
-                )
-                proxy_referrer = _source_native_http_referrer(
-                    user_agent,
-                    proxy_referrer,
-                    request_scheme="https" if endpoints.dst_port == 443 else "http",
-                    request_port=endpoints.dst_port,
-                )
-                cache_roll = rng.random()
-                proxy_cacheable = _proxy_request_allows_cache_hit(
-                    method=proxy_method,
-                    url=url,
-                    content_type=proxy_content_type,
-                    domain_tags=domain_tags,
-                )
-                if event.http is not None:
-                    if event.http.status_code == 304:
-                        cache_result = "REVALIDATED"
-                    elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
-                        cache_result = "HIT"
-                    else:
-                        cache_result = "MISS"
-                elif proxy_cacheable and cache_roll < 0.30:
-                    cache_result = "HIT"
-                elif cache_roll < 0.91:
-                    cache_result = "MISS"
-                elif cache_roll < 0.945:
-                    cache_result = "DENIED"
-                elif cache_roll < 0.975:
-                    cache_result = "AUTH_REQUIRED"
-                else:
-                    cache_result = "GATEWAY_ERROR"
-                # Proxy sc_bytes/cs_bytes are source-side accounting fields:
-                # payload plus HTTP/proxy headers for allowed responses,
-                # or proxy-generated error pages for failures.
-                _cs = (protocol_evidence.orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
-                _response_bytes = (
-                    event.http.response_body_len
-                    if event.http is not None
-                    else (protocol_evidence.resp_bytes or 0)
-                )
-                if cache_result == "DENIED":
-                    _sc = rng.randint(500, 2000)  # proxy error page
-                elif cache_result == "AUTH_REQUIRED":
-                    _sc = rng.randint(300, 1200)
-                elif cache_result == "GATEWAY_ERROR":
-                    _sc = rng.randint(250, 1800)
-                elif cache_result == "HIT":
-                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
-                else:
-                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
-                proxy_status_code = (
-                    event.http.status_code
-                    if event.http is not None
-                    else {
-                        "DENIED": 403,
-                        "AUTH_REQUIRED": 407,
-                        "GATEWAY_ERROR": rng.choice([502, 503, 504]),
-                    }.get(cache_result, 200)
-                )
-                event.proxy = ProxyContext(
-                    client_ip=endpoints.src_ip,
-                    username=executor._proxy_username_for_source(
-                        source_system=endpoints.source_system,
-                        user_agent=user_agent,
-                        cache_result=cache_result,
-                        hostname=proxy_hostname,
-                        time=event.timestamp,
-                    ),
-                    method=proxy_method,
-                    url=url,
-                    host=proxy_hostname,
-                    status_code=proxy_status_code,
-                    sc_bytes=_sc,
-                    cs_bytes=_cs,
-                    time_taken=_proxy_time_taken_ms(
-                        protocol_evidence.duration,
-                        rng,
-                        method=proxy_method,
-                        status_code=proxy_status_code,
-                        cache_result=cache_result,
-                        timing_runtime=self._timing_runtime,
-                        stable_id=f"{facts.stable_id}:proxy-context",
-                    ),
-                    user_agent=user_agent,
-                    content_type=proxy_content_type,
-                    cache_result=cache_result,
-                    referrer=proxy_referrer,
-                    proxy_fqdn=proxy_fqdn,
-                    proxy_action=_proxy_action_for_context(
-                        method=proxy_method,
-                        url=url,
-                        status_code=proxy_status_code,
-                        cache_result=cache_result,
-                        dst_port=endpoints.dst_port,
-                    ),
-                )
-
-        # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
-        # Skip for local-only events (no network sensor will see them)
-        rng = network_preparation.rng
-        if (
-            not facts.suppress_application_side_effects
-            and not facts.http_application_layer_only
-            and not facts.local_only
-            and protocol_evidence.service == "ssl"
-            and protocol_evidence.proto == "tcp"
-            and protocol_evidence.conn_state == "SF"
-        ):
-            executor._attach_ssl_context(
-                event,
-                hostname=endpoints.tls_hostname,
-                dns=protocol_evidence.dns,
-                dst_ip=endpoints.dst_ip,
-                rng=rng,
-                allow_failure=not facts.caller_provided_conn_state,
-                timing_stable_id=facts.stable_id,
-                network_preparation=network_preparation,
-                timing_runtime=self._timing_runtime,
-                network_point_expires_at=boundary.network_runtime.window_end,
-            )
-        if (
-            protocol_evidence.proto == "tcp"
-            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
-            and event.network.service in {"http", "ssl"}
-            and event.http is None
-            and event.ssl is None
-        ):
-            event.network.service = ""
-
-        elif (
-            not facts.local_only
-            and not facts.suppress_application_side_effects
-            and protocol_evidence.service == "http"
-            and protocol_evidence.proto == "tcp"
-            and protocol_evidence.conn_state == "SF"
-            and event.http is None  # Skip auto-generation if caller provided HttpContext
-        ):
-            # Use the already-resolved hostname for HTTP Host header and URI templates.
-            # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
-            host = (
-                endpoints.hostname
-                if endpoints.hostname is not None
-                else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
-            )
-            if host == "":
-                host = endpoints.dst_ip
-            if endpoints.dst_port not in (80, 443):
-                host = f"{host}:{endpoints.dst_port}"
-            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        # When a pre-built HttpContext exists (from browsing session
+        # generator), derive proxy fields from it.  The proxy emitter
+        # handles CONNECT tunnel deduplication automatically.
+        if http is not None:
             from evidenceforge.generation.activity.http_content import (
-                apply_transfer_size_variance,
-                coerce_response_size_for_mime,
-                http_status_message,
-                is_stable_resource_path,
-                response_mime_types_for_status,
-                response_size_for_status,
-            )
-            from evidenceforge.generation.activity.proxy_uri import (
-                pick_proxy_uri,
-                plaintext_http_redirect_status,
+                normalize_mime_type_for_path,
             )
 
-            web_host = (
-                endpoints.hostname
-                if endpoints.hostname is not None
-                else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
-            )
-            if web_host == "":
-                web_host = endpoints.dst_ip
-            web_domain_tags = get_domain_tags(web_host)
-            _src_os_http = (
+            scheme = "https" if endpoints.dst_port == 443 else "http"
+            proxy_method = http.method
+            url = f"{scheme}://{proxy_hostname}{http.uri}"
+            if http.resp_mime_types or http.status_code == 304:
+                proxy_content_type = normalize_mime_type_for_path(
+                    http.uri,
+                    (http.resp_mime_types[0] if http.resp_mime_types else "text/html"),
+                )
+            else:
+                proxy_content_type = "text/html"
+            proxy_ua_override = None  # session UA is already on HttpContext
+            user_agent = http.user_agent
+            proxy_referrer = http.referrer
+        else:
+            # Legacy single-connection HTTPS path
+            _src_os = (
                 _get_os_category(endpoints.source_system.os) if endpoints.source_system else None
             )
-            uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
+            (
+                path,
+                proxy_content_type,
+                proxy_method,
+                proxy_ua_override,
+                referrer_policy,
+            ) = pick_proxy_uri(
                 rng,
-                web_host,
-                web_domain_tags,
-                source_os=_src_os_http,
+                proxy_hostname,
+                domain_tags,
+                source_os=_src_os,
                 source_system_type=getattr(endpoints.source_system, "type", None),
                 allow_canonical_protocol_templates=False,
             )
-            ua = executor._proxy_user_agent_for_context(
-                rng,
-                endpoints.source_system,
-                hostname=web_host,
-                domain_tags=web_domain_tags,
-                existing_user_agent="",
-                override_user_agent=http_ua_override,
-                apply_domain_override=True,
-                source_identity=endpoints.src_ip,
-            )
-            redirect_status = plaintext_http_redirect_status(
-                web_host,
-                port=endpoints.dst_port,
-                path=uri,
-                dst_ip=endpoints.dst_ip,
-            )
-            if redirect_status is not None:
-                status_code = redirect_status
-                status_msg = http_status_message(status_code)
-            else:
-                status_code, status_msg = _get_http_status(
-                    endpoints.dst_ip,
-                    uri,
-                    publish_cache=False,
-                )
-
-            if status_code in {204, 304}:
-                resp_body_len = 0
-            else:
-                if status_code >= 300 or is_stable_resource_path(uri):
-                    resp_body_len = apply_transfer_size_variance(
-                        response_size_for_status(status_code, host, uri),
-                        status_code=status_code,
-                        host=host,
-                        uri=uri,
-                        content_type=mime_type,
-                        variant_key=f"{endpoints.src_ip}:{ua}",
-                    )
-                else:
-                    resp_body_len = coerce_response_size_for_mime(
-                        rng, mime_type, protocol_evidence.resp_bytes
-                    )
-            if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
-                event.network.resp_bytes = resp_body_len
-                min_resp_pkts = max(1, math.ceil(resp_body_len / 1460))
-                event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
-                min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
-                event.network.resp_ip_bytes = max(
-                    event.network.resp_ip_bytes or 0,
-                    min_resp_ip_bytes,
-                )
+            scheme = "https" if endpoints.dst_port == 443 else "http"
+            url = f"{scheme}://{proxy_hostname}{path}"
             from evidenceforge.generation.activity.referrer import pick_referrer
 
-            _http_referer = (
+            proxy_referrer = (
                 ""
-                if http_referrer_policy == "none"
-                else pick_referrer(rng, host, context="general", port=endpoints.dst_port)
+                if referrer_policy == "none"
+                else pick_referrer(
+                    rng,
+                    proxy_hostname,
+                    context="general",
+                    port=443 if endpoints.dst_port == 443 else 80,
+                )
             )
-            _http_referer = _source_native_http_referrer(
-                ua,
-                _http_referer,
+        return proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer
+
+    def _prepare_transparent_proxy_evidence(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        protocol_evidence: NetworkProtocolEvidence,
+        rng: random.Random,
+        stable_id: str,
+    ) -> None:
+        """Populate one source-native proxy context after established-egress admission."""
+        executor = self._executor
+        proxy_routes = getattr(executor, "_proxy_routes", {})
+        chain = proxy_routes.get(endpoints.src_ip)
+        if chain:
+            from evidenceforge.events.contexts import ProxyContext
+
+            proxy_sys = chain[0]
+            proxy_fqdn = getattr(proxy_sys, "hostname", "")
+            # Build proxy FQDN from hostname + domain
+            ad_domain = getattr(executor, "_ad_domain", "")
+            if ad_domain and "." not in proxy_fqdn:
+                proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
+            # Hostname was resolved once at the top of generate_connection().
+            proxy_hostname = endpoints.hostname
+            if (
+                proxy_hostname is None
+                and protocol_evidence.dns is not None
+                and protocol_evidence.dns.query
+            ):
+                proxy_hostname = protocol_evidence.dns.query
+            if proxy_hostname is None:
+                proxy_hostname = REVERSE_DNS.get(endpoints.dst_ip)
+            if proxy_hostname is None:
+                proxy_hostname = _generate_random_hostname(rng, endpoints.dst_ip)
+            # Suppressed hostname → use raw IP for proxy logging
+            if proxy_hostname == "":
+                proxy_hostname = endpoints.dst_ip
+            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+            domain_tags = get_domain_tags(proxy_hostname)
+            proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
+                self._proxy_request_presentation(
+                    event.http,
+                    endpoints=endpoints,
+                    proxy_hostname=proxy_hostname,
+                    domain_tags=domain_tags,
+                    rng=rng,
+                )
+            )
+            from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+            apply_domain_user_agent = event.http is None or (
+                not _is_tool_http_user_agent(event.http.user_agent)
+                and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
+            )
+            user_agent = executor._proxy_user_agent_for_context(
+                rng,
+                endpoints.source_system,
+                hostname=proxy_hostname,
+                domain_tags=domain_tags,
+                existing_user_agent=user_agent,
+                override_user_agent=proxy_ua_override,
+                apply_domain_override=apply_domain_user_agent,
+                source_identity=endpoints.src_ip,
+            )
+            proxy_referrer = _source_native_http_referrer(
+                user_agent,
+                proxy_referrer,
                 request_scheme="https" if endpoints.dst_port == 443 else "http",
                 request_port=endpoints.dst_port,
             )
-            event.http = HttpContext(
-                method=http_method,
-                host=host,
-                uri=uri,
-                version="1.1",
-                user_agent=ua,
-                request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
-                response_body_len=resp_body_len,
-                status_code=status_code,
-                status_msg=status_msg,
-                referrer=_http_referer,
-                resp_mime_types=response_mime_types_for_status(
-                    status_code,
-                    mime_type,
-                    resp_body_len,
-                    method=http_method,
+            cache_roll = rng.random()
+            proxy_cacheable = _proxy_request_allows_cache_hit(
+                method=proxy_method,
+                url=url,
+                content_type=proxy_content_type,
+                domain_tags=domain_tags,
+            )
+            if event.http is not None:
+                if event.http.status_code == 304:
+                    cache_result = "REVALIDATED"
+                elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
+                    cache_result = "HIT"
+                else:
+                    cache_result = "MISS"
+            elif proxy_cacheable and cache_roll < 0.30:
+                cache_result = "HIT"
+            elif cache_roll < 0.91:
+                cache_result = "MISS"
+            elif cache_roll < 0.945:
+                cache_result = "DENIED"
+            elif cache_roll < 0.975:
+                cache_result = "AUTH_REQUIRED"
+            else:
+                cache_result = "GATEWAY_ERROR"
+            # Proxy sc_bytes/cs_bytes are source-side accounting fields:
+            # payload plus HTTP/proxy headers for allowed responses,
+            # or proxy-generated error pages for failures.
+            _cs = (protocol_evidence.orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+            _response_bytes = (
+                event.http.response_body_len
+                if event.http is not None
+                else (protocol_evidence.resp_bytes or 0)
+            )
+            if cache_result == "DENIED":
+                _sc = rng.randint(500, 2000)  # proxy error page
+            elif cache_result == "AUTH_REQUIRED":
+                _sc = rng.randint(300, 1200)
+            elif cache_result == "GATEWAY_ERROR":
+                _sc = rng.randint(250, 1800)
+            elif cache_result == "HIT":
+                _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+            else:
+                _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+            proxy_status_code = (
+                event.http.status_code
+                if event.http is not None
+                else {
+                    "DENIED": 403,
+                    "AUTH_REQUIRED": 407,
+                    "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+                }.get(cache_result, 200)
+            )
+            event.proxy = ProxyContext(
+                client_ip=endpoints.src_ip,
+                username=executor._proxy_username_for_source(
+                    source_system=endpoints.source_system,
+                    user_agent=user_agent,
+                    cache_result=cache_result,
+                    hostname=proxy_hostname,
+                    time=event.timestamp,
                 ),
-                tags=[],
+                method=proxy_method,
+                url=url,
+                host=proxy_hostname,
+                status_code=proxy_status_code,
+                sc_bytes=_sc,
+                cs_bytes=_cs,
+                time_taken=_proxy_time_taken_ms(
+                    protocol_evidence.duration,
+                    rng,
+                    method=proxy_method,
+                    status_code=proxy_status_code,
+                    cache_result=cache_result,
+                    timing_runtime=self._timing_runtime,
+                    stable_id=f"{stable_id}:proxy-context",
+                ),
+                user_agent=user_agent,
+                content_type=proxy_content_type,
+                cache_result=cache_result,
+                referrer=proxy_referrer,
+                proxy_fqdn=proxy_fqdn,
+                proxy_action=_proxy_action_for_context(
+                    method=proxy_method,
+                    url=url,
+                    status_code=proxy_status_code,
+                    cache_result=cache_result,
+                    dst_port=endpoints.dst_port,
+                ),
             )
 
-        if not facts.suppress_application_side_effects:
-            _attach_http_file_transfers(
-                event,
-                dst_ip=endpoints.dst_ip,
-                rng=rng,
-                timing_runtime=self._timing_runtime,
-                timing_scope=self._timing_scope(request),
-                deployment_registry=getattr(executor.dispatcher, "deployment_registry", None),
-            )
+    def _prepare_automatic_http_evidence(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        response_bytes: int | None,
+        rng: random.Random,
+    ) -> None:
+        """Choose HTTP request/response evidence and raise only its local payload floor."""
+        executor = self._executor
+        # Use the already-resolved hostname for HTTP Host header and URI templates.
+        # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
+        host = (
+            endpoints.hostname
+            if endpoints.hostname is not None
+            else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
+        )
+        if host == "":
+            host = endpoints.dst_ip
+        if endpoints.dst_port not in (80, 443):
+            host = f"{host}:{endpoints.dst_port}"
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
+            coerce_response_size_for_mime,
+            http_status_message,
+            is_stable_resource_path,
+            response_mime_types_for_status,
+            response_size_for_status,
+        )
+        from evidenceforge.generation.activity.proxy_uri import (
+            pick_proxy_uri,
+            plaintext_http_redirect_status,
+        )
 
-        # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
-        # fields, so only attach the context when the matching conn.log row has a
-        # responder payload.
-        if (
-            not facts.local_only
-            and protocol_evidence.service == "ntp"
-            and protocol_evidence.proto == "udp"
-            and event.network.conn_state == "SF"
-            and (event.network.resp_pkts or 0) > 0
-            and (event.network.resp_bytes or 0) > 0
-        ):
-            from evidenceforge.events.contexts import NtpContext
-
-            stratum, ref_id = _ntp_stratum_and_ref_id(endpoints.dst_ip)
-            association = executor._ntp_association_profile(
-                event.network.src_ip,
+        web_host = (
+            endpoints.hostname
+            if endpoints.hostname is not None
+            else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
+        )
+        if web_host == "":
+            web_host = endpoints.dst_ip
+        web_domain_tags = get_domain_tags(web_host)
+        _src_os_http = (
+            _get_os_category(endpoints.source_system.os) if endpoints.source_system else None
+        )
+        uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
+            rng,
+            web_host,
+            web_domain_tags,
+            source_os=_src_os_http,
+            source_system_type=getattr(endpoints.source_system, "type", None),
+            allow_canonical_protocol_templates=False,
+        )
+        ua = executor._proxy_user_agent_for_context(
+            rng,
+            endpoints.source_system,
+            hostname=web_host,
+            domain_tags=web_domain_tags,
+            existing_user_agent="",
+            override_user_agent=http_ua_override,
+            apply_domain_override=True,
+            source_identity=endpoints.src_ip,
+        )
+        redirect_status = plaintext_http_redirect_status(
+            web_host,
+            port=endpoints.dst_port,
+            path=uri,
+            dst_ip=endpoints.dst_ip,
+        )
+        if redirect_status is not None:
+            status_code = redirect_status
+            status_msg = http_status_message(status_code)
+        else:
+            status_code, status_msg = _get_http_status(
                 endpoints.dst_ip,
-                network_preparation=network_preparation,
-                expires_at=boundary.network_runtime.window_end,
+                uri,
+                publish_cache=False,
             )
-            poll_seconds = float(association["poll"])
-            parser_key = (event.network.src_ip, endpoints.dst_ip)
-            last_parser_time = network_preparation.read_point(
-                NetworkRuntimePointFamily.NTP_PARSER,
-                parser_key,
-                None,
-                at=ensure_utc(event.timestamp),
-            )
-            parser_gap = (
-                None
-                if last_parser_time is None
-                else (event.timestamp - last_parser_time).total_seconds()
-            )
-            if parser_gap is None or parser_gap >= _ntp_parser_min_gap_seconds(poll_seconds):
-                network_preparation.stage_point(
-                    NetworkRuntimePointFamily.NTP_PARSER,
-                    parser_key,
-                    event.timestamp,
-                    expires_at=min(
-                        boundary.network_runtime.window_end,
-                        ensure_utc(event.timestamp)
-                        + timedelta(seconds=_ntp_parser_min_gap_seconds(poll_seconds)),
-                    ),
-                )
-                server_response = executor._ntp_server_response_profile(
-                    endpoints.dst_ip,
-                    network_preparation=network_preparation,
-                    timing_runtime=self._timing_runtime,
-                    expires_at=boundary.network_runtime.window_end,
-                )
-                observed_response = _ntp_observed_response_fields(
-                    server_response,
-                    dst_ip=endpoints.dst_ip,
-                    event_time=event.timestamp,
-                    timing_runtime=self._timing_runtime,
-                )
-                if ntp_timing is None:
-                    median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
-                        stratum,
-                        (10.0, 0.7),
-                    )
-                    ntp_timing = self._ntp_timing_components(
-                        request,
-                        median_rtt_ms=median_rtt_ms,
-                        rtt_sigma=rtt_sigma,
-                    )
-                rtt_sec, proc_sec, close_slack_sec, reference_age = ntp_timing
-                ntp_duration = rtt_sec + proc_sec + close_slack_sec
-                if event.network.duration is None or event.network.duration < ntp_duration:
-                    event.network.duration = ntp_duration
-                canonical_server_receive = event.timestamp + timedelta(seconds=rtt_sec / 2)
-                canonical_server_transmit = canonical_server_receive + timedelta(seconds=proc_sec)
-                reference_time = self._ntp_clock_time(
-                    request,
-                    event.timestamp - reference_age,
-                    role="server",
-                    identity=endpoints.dst_ip,
-                )
-                origin_time = self._ntp_clock_time(
-                    request,
-                    event.timestamp,
-                    role="client",
-                    identity=event.network.src_ip,
-                )
-                receive_time = self._ntp_clock_time(
-                    request,
-                    canonical_server_receive,
-                    role="server",
-                    identity=endpoints.dst_ip,
-                )
-                transmit_time = self._ntp_clock_time(
-                    request,
-                    canonical_server_transmit,
-                    role="server",
-                    identity=endpoints.dst_ip,
-                )
-                event.ntp = NtpContext(
-                    version=int(association["version"]),
-                    mode=4,  # server response
-                    stratum=stratum,
-                    poll=poll_seconds,
-                    precision=observed_response["precision"],
-                    root_delay=observed_response["root_delay"],
-                    root_disp=observed_response["root_disp"],
-                    ref_id=ref_id,
-                    ref_ts=round(reference_time.timestamp(), 6),
-                    org_ts=round(origin_time.timestamp(), 6),
-                    rec_ts=round(receive_time.timestamp(), 6),
-                    xmt_ts=round(transmit_time.timestamp(), 6),
+
+        if status_code in {204, 304}:
+            resp_body_len = 0
+        else:
+            if status_code >= 300 or is_stable_resource_path(uri):
+                resp_body_len = apply_transfer_size_variance(
+                    response_size_for_status(status_code, host, uri),
+                    status_code=status_code,
+                    host=host,
+                    uri=uri,
+                    content_type=mime_type,
+                    variant_key=f"{endpoints.src_ip}:{ua}",
                 )
             else:
-                event.network.service = ""
+                resp_body_len = coerce_response_size_for_mime(rng, mime_type, response_bytes)
+        if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
+            event.network.resp_bytes = resp_body_len
+            min_resp_pkts = max(1, math.ceil(resp_body_len / 1460))
+            event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
+            min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
+            event.network.resp_ip_bytes = max(
+                event.network.resp_ip_bytes or 0,
+                min_resp_ip_bytes,
+            )
+        from evidenceforge.generation.activity.referrer import pick_referrer
 
+        _http_referer = (
+            ""
+            if http_referrer_policy == "none"
+            else pick_referrer(rng, host, context="general", port=endpoints.dst_port)
+        )
+        _http_referer = _source_native_http_referrer(
+            ua,
+            _http_referer,
+            request_scheme="https" if endpoints.dst_port == 443 else "http",
+            request_port=endpoints.dst_port,
+        )
+        event.http = HttpContext(
+            method=http_method,
+            host=host,
+            uri=uri,
+            version="1.1",
+            user_agent=ua,
+            request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
+            response_body_len=resp_body_len,
+            status_code=status_code,
+            status_msg=status_msg,
+            referrer=_http_referer,
+            resp_mime_types=response_mime_types_for_status(
+                status_code,
+                mime_type,
+                resp_body_len,
+                method=http_method,
+            ),
+            tags=[],
+        )
+
+    def _prepare_ntp_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        network_preparation: NetworkTransactionPreparation,
+        window_end: datetime,
+        ntp_timing: tuple[float, float, float, timedelta] | None,
+    ) -> tuple[float, float, float, timedelta] | None:
+        """Stage parser spacing and response-clock evidence inside the supplied runtime window."""
+        executor = self._executor
+        from evidenceforge.events.contexts import NtpContext
+
+        stratum, ref_id = _ntp_stratum_and_ref_id(endpoints.dst_ip)
+        association = executor._ntp_association_profile(
+            event.network.src_ip,
+            endpoints.dst_ip,
+            network_preparation=network_preparation,
+            expires_at=window_end,
+        )
+        poll_seconds = float(association["poll"])
+        parser_key = (event.network.src_ip, endpoints.dst_ip)
+        last_parser_time = network_preparation.read_point(
+            NetworkRuntimePointFamily.NTP_PARSER,
+            parser_key,
+            None,
+            at=ensure_utc(event.timestamp),
+        )
+        parser_gap = (
+            None
+            if last_parser_time is None
+            else (event.timestamp - last_parser_time).total_seconds()
+        )
+        if parser_gap is None or parser_gap >= _ntp_parser_min_gap_seconds(poll_seconds):
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.NTP_PARSER,
+                parser_key,
+                event.timestamp,
+                expires_at=min(
+                    window_end,
+                    ensure_utc(event.timestamp)
+                    + timedelta(seconds=_ntp_parser_min_gap_seconds(poll_seconds)),
+                ),
+            )
+            server_response = executor._ntp_server_response_profile(
+                endpoints.dst_ip,
+                network_preparation=network_preparation,
+                timing_runtime=self._timing_runtime,
+                expires_at=window_end,
+            )
+            observed_response = _ntp_observed_response_fields(
+                server_response,
+                dst_ip=endpoints.dst_ip,
+                event_time=event.timestamp,
+                timing_runtime=self._timing_runtime,
+            )
+            if ntp_timing is None:
+                median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
+                    stratum,
+                    (10.0, 0.7),
+                )
+                ntp_timing = self._ntp_timing_components(
+                    request,
+                    median_rtt_ms=median_rtt_ms,
+                    rtt_sigma=rtt_sigma,
+                )
+            rtt_sec, proc_sec, close_slack_sec, reference_age = ntp_timing
+            ntp_duration = rtt_sec + proc_sec + close_slack_sec
+            if event.network.duration is None or event.network.duration < ntp_duration:
+                event.network.duration = ntp_duration
+            canonical_server_receive = event.timestamp + timedelta(seconds=rtt_sec / 2)
+            canonical_server_transmit = canonical_server_receive + timedelta(seconds=proc_sec)
+            reference_time = self._ntp_clock_time(
+                request,
+                event.timestamp - reference_age,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            origin_time = self._ntp_clock_time(
+                request,
+                event.timestamp,
+                role="client",
+                identity=event.network.src_ip,
+            )
+            receive_time = self._ntp_clock_time(
+                request,
+                canonical_server_receive,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            transmit_time = self._ntp_clock_time(
+                request,
+                canonical_server_transmit,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            event.ntp = NtpContext(
+                version=int(association["version"]),
+                mode=4,  # server response
+                stratum=stratum,
+                poll=poll_seconds,
+                precision=observed_response["precision"],
+                root_delay=observed_response["root_delay"],
+                root_disp=observed_response["root_disp"],
+                ref_id=ref_id,
+                ref_ts=round(reference_time.timestamp(), 6),
+                org_ts=round(origin_time.timestamp(), 6),
+                rec_ts=round(receive_time.timestamp(), 6),
+                xmt_ts=round(transmit_time.timestamp(), 6),
+            )
+        else:
+            event.network.service = ""
+
+        return ntp_timing
+
+    def _reconcile_http_transport_accounting(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        event: _NetworkOccurrenceDraft,
+        facts: NetworkRequestFacts,
+        rng: random.Random,
+    ) -> None:
+        """Reconcile body, packet and duration facts before source visibility fixes the interval."""
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
         # with a handshake-only, reset, or half-close state cannot have served
@@ -5476,6 +5389,193 @@ class NetworkTransactionPlanner:
                 event.network.resp_pkts,
                 rng,
             )
+
+    def _plan_network_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PlannedNetworkTransport,
+    ) -> PlannedNetworkEvidence | str:
+        """Enrich the root-local draft, then settle its interval before tuple reservation.
+
+        Input identity and accounting come from transport preparation. Helpers
+        mutate this draft or stage points through that same preparation; they
+        neither publish sources nor commit/cancel another owner. Protocol body
+        sizes settle before process visibility and session-end bounds. Only then
+        can the coordinator reserve the exact physical tuple and build responders.
+        """
+        executor = self._executor
+        facts = stage_input.facts
+        endpoints = stage_input.endpoints
+        protocol_evidence = stage_input.protocol
+        applications = stage_input.applications
+        committed_suppressed = stage_input.committed_suppressed
+        event = stage_input.event
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        network_preparation = stage_input.network_preparation
+        ntp_timing = protocol_evidence.ntp_timing
+        overhead = stage_input.overhead
+        prepared_responder = stage_input.prepared_responder
+        responding_pid = stage_input.responding_pid
+        rng = stage_input.rng
+        time = stage_input.time
+
+        if protocol_evidence.ids_alerts:
+            event.ids_alerts = list(protocol_evidence.ids_alerts)
+        if protocol_evidence.email is not None:
+            event.email = protocol_evidence.email
+        if protocol_evidence.smtp is not None:
+            event.smtp = protocol_evidence.smtp
+        if request.ssl is not None and not facts.http_application_layer_only:
+            event.ssl = request.ssl
+        if protocol_evidence.x509 is not None and not facts.http_application_layer_only:
+            event.x509 = protocol_evidence.x509
+        if protocol_evidence.x509_chain and not facts.http_application_layer_only:
+            event.x509_chain = list(protocol_evidence.x509_chain)
+        if request.tls_presentation is not None and not facts.http_application_layer_only:
+            event.tls_presentation = request.tls_presentation
+            if not event.x509_chain:
+                event.x509_chain = executor._tls_certificate_planner.x509_contexts(
+                    request.tls_presentation
+                )
+            executor._tls_certificate_planner.validate_projection(
+                request.tls_presentation,
+                event.x509_chain,
+            )
+            event.x509 = event.x509_chain[0]
+            if event.ssl is not None:
+                event.ssl = replace(
+                    event.ssl,
+                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
+                )
+        if protocol_evidence.http is not None:
+            event.http = protocol_evidence.http
+        if protocol_evidence.file_transfer is not None:
+            event.file_transfer = protocol_evidence.file_transfer
+        if protocol_evidence.file_transfers:
+            event.file_transfers = list(protocol_evidence.file_transfers)
+        if protocol_evidence.pe is not None:
+            event.pe = protocol_evidence.pe
+        if request.pe_analyses:
+            event.pe_analyses = list(request.pe_analyses)
+        if protocol_evidence.ocsp is not None:
+            event.ocsp = protocol_evidence.ocsp
+        if request.ocsp_transaction is not None:
+            event.ocsp_transaction = request.ocsp_transaction
+        if protocol_evidence.proxy is not None:
+            event.proxy = protocol_evidence.proxy
+        if protocol_evidence.firewall is not None:
+            event.firewall = protocol_evidence.firewall
+
+        committed_suppressed = self._prepare_dns_protocol_evidence(
+            request,
+            event=event,
+            facts=facts,
+            endpoints=endpoints,
+            protocol_evidence=protocol_evidence,
+            network_preparation=network_preparation,
+            rng=rng,
+            time=time,
+            overhead=overhead,
+            committed_suppressed=committed_suppressed,
+        )
+
+        # Proxy context: attach only for established outbound internet traffic.
+        # Forward proxies only see egress that completes (not blocked/denied flows).
+        if (
+            not facts.local_only
+            and protocol_evidence.service in ("ssl", "http")
+            and endpoints.dst_port in (80, 443)
+            and event.proxy is None
+            and not _is_private_ip(endpoints.dst_ip)
+            and protocol_evidence.conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+        ):
+            self._prepare_transparent_proxy_evidence(
+                event=event,
+                endpoints=endpoints,
+                protocol_evidence=protocol_evidence,
+                rng=rng,
+                stable_id=facts.stable_id,
+            )
+
+        # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
+        # Skip for local-only events (no network sensor will see them)
+        rng = network_preparation.rng
+        if (
+            not facts.suppress_application_side_effects
+            and not facts.http_application_layer_only
+            and not facts.local_only
+            and protocol_evidence.service == "ssl"
+            and protocol_evidence.proto == "tcp"
+            and protocol_evidence.conn_state == "SF"
+        ):
+            executor._attach_ssl_context(
+                event,
+                hostname=endpoints.tls_hostname,
+                dns=protocol_evidence.dns,
+                dst_ip=endpoints.dst_ip,
+                rng=rng,
+                allow_failure=not facts.caller_provided_conn_state,
+                timing_stable_id=facts.stable_id,
+                network_preparation=network_preparation,
+                timing_runtime=self._timing_runtime,
+                network_point_expires_at=boundary.network_runtime.window_end,
+            )
+        if (
+            protocol_evidence.proto == "tcp"
+            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
+            and event.network.service in {"http", "ssl"}
+            and event.http is None
+            and event.ssl is None
+        ):
+            event.network.service = ""
+
+        elif (
+            not facts.local_only
+            and not facts.suppress_application_side_effects
+            and protocol_evidence.service == "http"
+            and protocol_evidence.proto == "tcp"
+            and protocol_evidence.conn_state == "SF"
+            and event.http is None  # Skip auto-generation if caller provided HttpContext
+        ):
+            self._prepare_automatic_http_evidence(
+                event=event,
+                endpoints=endpoints,
+                response_bytes=protocol_evidence.resp_bytes,
+                rng=rng,
+            )
+
+        if not facts.suppress_application_side_effects:
+            _attach_http_file_transfers(
+                event,
+                dst_ip=endpoints.dst_ip,
+                rng=rng,
+                timing_runtime=self._timing_runtime,
+                timing_scope=self._timing_scope(request),
+                deployment_registry=getattr(executor.dispatcher, "deployment_registry", None),
+            )
+
+        # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
+        # fields, so only attach the context when the matching conn.log row has a
+        # responder payload.
+        if (
+            not facts.local_only
+            and protocol_evidence.service == "ntp"
+            and protocol_evidence.proto == "udp"
+            and event.network.conn_state == "SF"
+            and (event.network.resp_pkts or 0) > 0
+            and (event.network.resp_bytes or 0) > 0
+        ):
+            ntp_timing = self._prepare_ntp_protocol_evidence(
+                request,
+                event=event,
+                endpoints=endpoints,
+                network_preparation=network_preparation,
+                window_end=boundary.network_runtime.window_end,
+                ntp_timing=ntp_timing,
+            )
+
+        self._reconcile_http_transport_accounting(request, event=event, facts=facts, rng=rng)
 
         if (
             not facts.suppress_application_side_effects
