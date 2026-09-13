@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from json.encoder import encode_basestring
-from threading import Condition, Lock, RLock
+from threading import Lock, RLock
 from typing import Literal, Self
 from weakref import WeakValueDictionary
 
@@ -47,6 +47,7 @@ from evidenceforge.generation.application_channels import (
     ApplicationChannelRegistry,
 )
 from evidenceforge.generation.indexes import CompactIndexedStore, PackedHandleExpiryIndex
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _SmbMutationGate
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.time import ensure_utc
@@ -945,61 +946,6 @@ class SmbChannelCensus:
     prepared_admissions: int = 0
     claimed_admissions: int = 0
     estimated_prepared_bytes: int = 0
-
-
-class _SmbMutationGate:
-    """Allow disjoint owners to mutate while fencing canonical watermarks."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    def enter_mutation(self) -> None:
-        """Enter one shared mutation lane without allocating a context wrapper."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-
-    def exit_mutation(self) -> None:
-        """Leave one shared mutation lane entered by :meth:`enter_mutation`."""
-
-        with self._condition:
-            self._readers -= 1
-            if self._readers == 0:
-                self._condition.notify_all()
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter one shared mutation lane."""
-
-        self.enter_mutation()
-        try:
-            yield
-        finally:
-            self.exit_mutation()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Fence mutations while one canonical cutoff commits."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)

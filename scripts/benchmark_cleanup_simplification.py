@@ -131,6 +131,21 @@ def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
             return {"values_sha256": digest.hexdigest(), "census": asdict(registry.census())}
 
         return clocks, len(times)
+    if name == "gates-context":
+        from evidenceforge.generation.lifecycle_registry import _MutationGate
+
+        def context_gates() -> object:
+            gate = _MutationGate()
+            for i in range(10_000):
+                if i % 100 == 0:
+                    with gate.watermark():
+                        pass
+                else:
+                    with gate.mutation():
+                        pass
+            return {"readers": gate._readers, "writer": gate._writer}
+
+        return context_gates, 10_000
     if name == "gates":
         from evidenceforge.generation.application_channels import _MutationGate
 
@@ -155,7 +170,14 @@ def main() -> None:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument(
         "--workload",
-        choices=("fingerprint", "clocks", "prepared-clocks", "gates", "generation"),
+        choices=(
+            "fingerprint",
+            "clocks",
+            "prepared-clocks",
+            "gates",
+            "gates-context",
+            "generation",
+        ),
         required=True,
     )
     parser.add_argument("--output", type=Path, required=True)

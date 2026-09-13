@@ -2,6 +2,43 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 4 accepted — shared registry admission and lock mechanics
+
+Item 3 committed as `bdbc8f93`. Eight gate implementations now share `MutationWatermarkGate`;
+three identical stable-lock helpers share `acquire_stable_locks`. Compatibility aliases keep the
+existing importing names. All eight registry constructors still create independent gates, and
+registry-specific lock selection/ranks stay with the original callers. The common gate uses the
+existing artifact gate's slotted four-field layout. Checkpoint owner inventories classify `_gate`
+as rebuilt state, so synchronization layout is not a serialized checkpoint change.
+
+The frozen AST inventory proves that all eight watermark bodies and all three stable-lock bodies
+were identical; the shared bodies still match those hashes. The two old mutation entry forms now
+use one admission/release implementation, retaining both manual and context-managed interfaces.
+No new scheduler, durable owner or cross-registry lock is introduced.
+
+Acceptance passes: **31 characterizations**, **482 focused registry/checkpoint tests** (11 deselected,
+17.07 seconds), **10 slow registry controls** (113 deselected, 6.88 seconds), **9 slow SSH/RDP
+watermark controls** (201 deselected, 2.08 seconds), and **8,534 standard tests** (27 unchanged skips,
+2,011 deselected, 297.57 seconds). Both Ruff checks, revision-68 validation against `bdbc8f93` and
+**38 raw-byte comparisons** against both `26a150ac` and the preceding commit pass.
+
+The initial slow keyword selection matched no tests and exited 5; it is not counted as passing.
+Collecting the actual slow owners and adding explicit production watermark cases resolved that
+selection error. A new test's import ordering also failed the first full Ruff check; the corrected
+check passes. Complete records, AST hashes and performance samples are in `2026-09-12-nine-item-gates.json`.
+
+Isolated manual-entry medians were 0.005152/0.005314/0.005199/0.005158 seconds for 10,000 operations
+(baseline/candidate/baseline/candidate). Context-managed entry medians were
+0.010067/0.010362/0.010075/0.010460 seconds. Context entry now calls the shared admission/release
+methods; its small measured cost removes independent copies of the policy. Peak traced memory
+decreased from 2,600 to 2,432 bytes in these workloads. State results remain identical; no speed cap
+or slowdown-based rejection applies.
+
+Preparation for item 5 produced a draft mixed companion fixture outside the tracked input set.
+The comparison harness correctly refused that unfrozen input, before generation. A separate draft
+generation succeeded for coverage inspection; it is not an accepted baseline and will be frozen,
+repeated and compared before changing process companions.
+
 ### Item 3 accepted — one clock calculation implementation
 
 Item 2b committed as `211446d7`. Live and prepared clock registries now delegate wander interpolation

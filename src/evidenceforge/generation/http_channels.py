@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from threading import Condition, Lock, RLock
+from threading import Lock, RLock
 from typing import Literal
 from weakref import WeakValueDictionary
 
@@ -45,6 +45,7 @@ from evidenceforge.generation.indexes import (
     PackedHandleExpiryIndex,
     PackedUniqueDigestMap,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _HttpMutationGate
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -450,51 +451,6 @@ class HttpChannelCensus:
     transport_primary_compaction_work: int
     transport_primary_compaction_seconds: float
     application: ApplicationChannelCensus
-
-
-class _HttpMutationGate:
-    """Admit disjoint mutations concurrently and fence canonical watermarks."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter one shared protocol mutation lane."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._readers -= 1
-                if self._readers == 0:
-                    self._condition.notify_all()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Fence new mutations while one canonical cutoff commits."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 def _transport_estimated_bytes(transport: HttpChannelTransport) -> int:

@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
-from threading import Condition, Lock, RLock
+from threading import Lock, RLock
 from typing import Literal, cast
 from weakref import WeakValueDictionary
 
@@ -41,6 +41,8 @@ from evidenceforge.generation.indexes import (
     PackedHandleExpiryIndex,
     PackedUniqueDigestMap,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _MutationGate
+from evidenceforge.generation.synchronization import acquire_stable_locks as _acquire_stable_locks
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -2796,61 +2798,6 @@ class ApplicationChannelPageCursor:
         self._after_handle = after_handle
 
 
-class _MutationGate:
-    """Allow concurrent mutations while giving watermarks exclusive admission."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    def enter_mutation(self) -> None:
-        """Enter the shared mutation lane without allocating a context wrapper."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-
-    def exit_mutation(self) -> None:
-        """Leave one shared mutation lane entered by :meth:`enter_mutation`."""
-
-        with self._condition:
-            self._readers -= 1
-            if self._readers == 0:
-                self._condition.notify_all()
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter the shared mutation lane without serializing other owners."""
-
-        self.enter_mutation()
-        try:
-            yield
-        finally:
-            self.exit_mutation()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Enter the exclusive watermark lane after active mutations finish."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
-
-
 @dataclass(frozen=True, slots=True)
 class _ApplicationChannelShardAccounting:
     """Atomically replaceable shard counters plus prepared-commit markers."""
@@ -3121,23 +3068,6 @@ def _used_id_estimated_bytes(key: tuple[int, str]) -> int:
     return _PACKED_USED_ID_INLINE_BYTES + (
         sys.getsizeof(b"") + row_bytes if row_bytes > _PACKED_USED_ID_INLINE_BYTES else 0
     )
-
-
-@contextmanager
-def _acquire_stable_locks(entries: list[tuple[tuple[int, int], RLock]]) -> Iterator[None]:
-    """Acquire distinct locks in stable route-before-owner shard order."""
-
-    unique: dict[int, tuple[tuple[int, int], RLock]] = {}
-    for token, lock in entries:
-        unique.setdefault(id(lock), (token, lock))
-    ordered = sorted(unique.values(), key=lambda item: item[0])
-    for _token, lock in ordered:
-        lock.acquire()
-    try:
-        yield
-    finally:
-        for _token, lock in reversed(ordered):
-            lock.release()
 
 
 class _OpenLockSet:

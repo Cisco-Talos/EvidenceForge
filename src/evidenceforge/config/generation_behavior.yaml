@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 67
+current_revision: 68
 history_start_revision: 1
-behavior_surface_sha256: "3ac6fb1b7987d8ae58f26acdd13d6cbcf1a9eaa1aecf4cdf190f85a40fd01aaf"
+behavior_surface_sha256: "8772b01665453bdeaa6a502beacde515044ff27436c4d34b7f3ffd96463821b8"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -638,3 +638,10 @@ changes:
       - source-timing
     formats: []
     summary: Share exact wander interpolation and knot sampling accounting while retaining live and prepared cache audit and transaction ownership.
+  - revision: 68
+    id: share-registry-admission-gates-and-stable-lock-acquisition
+    impact: none
+    domains:
+      - runtime-registries
+    formats: []
+    summary: Consolidate writer-preferred mutation watermark admission and identity-deduplicated stable lock acquisition while retaining independent registry gates and checkpoint reconstruction.
