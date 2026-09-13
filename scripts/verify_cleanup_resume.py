@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,41 @@ import sys
 from pathlib import Path
 
 from compare_cleanup_output import snapshot
+
+
+def bundle_hashes(root: Path) -> dict[str, str]:
+    """Hash the entire checkpoint bundle, including diagnostic and control files."""
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def checkpoint_identity(root: Path) -> dict[str, object]:
+    """Read the authenticated current manifest without recovering or mutating the bundle."""
+    workspace = root / ".eforge-generation"
+    pointer = json.loads((workspace / "CURRENT.json").read_text())
+    current = pointer["recoveries"][0]
+    sequence = current["sequence"]
+    if type(sequence) is not int or sequence < 0:
+        raise ValueError("Checkpoint sequence is malformed")
+    manifest_bytes = (workspace / "recovery" / f"{sequence:020d}" / "manifest.json").read_bytes()
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if digest != current["manifest_sha256"]:
+        raise ValueError("Checkpoint manifest hash disagrees with its current pointer")
+    manifest = json.loads(manifest_bytes)
+    components = manifest["metadata"]["fingerprint_components"]
+    revision = components["behavior_revision"]
+    build = components["evidenceforge_build_sha256"]
+    if type(revision) is not int or type(build) is not str:
+        raise ValueError("Checkpoint build identity is malformed")
+    return {
+        "behavior_revision": revision,
+        "evidenceforge_build_sha256": build,
+        "run_fingerprint": manifest["run_fingerprint"],
+        "manifest_sha256": digest,
+    }
 
 
 def compare_resumed(
@@ -99,16 +135,21 @@ def main() -> None:
     parser.add_argument("--control", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--same-build", action="store_true")
-    parser.add_argument("--origin-revision", type=int, default=42)
+    parser.add_argument("--origin-revision", type=int)
     args = parser.parse_args()
+    origin = checkpoint_identity(args.checkpoint)
+    if args.origin_revision is not None and args.origin_revision != origin["behavior_revision"]:
+        raise ValueError("Supplied origin revision does not identify the preserved checkpoint")
+    original_hashes = bundle_hashes(args.checkpoint)
     shutil.copytree(args.checkpoint, args.output)
+    if bundle_hashes(args.output) != original_hashes:
+        raise ValueError("Checkpoint copy did not preserve all file bytes")
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(args.source.resolve() / "src")
     # Resolve macOS /var aliases before protected scratch ancestry validation.
     environment["TMPDIR"] = str(args.output.parent.resolve())
     if not args.same_build:
-        current = args.output / ".eforge-generation" / "CURRENT.json"
-        before = current.read_bytes()
+        before = bundle_hashes(args.output)
         rejected = subprocess.run(
             [
                 sys.executable,
@@ -128,12 +169,12 @@ def main() -> None:
         )
         diagnostic = rejected.stdout + rejected.stderr
         args.output.with_suffix(".exact-rejection.log").write_text(diagnostic)
-        if rejected.returncode == 0 or "requires the complete original fingerprint" not in " ".join(
+        if rejected.returncode != 1 or "requires the complete original fingerprint" not in " ".join(
             diagnostic.split()
         ):
             raise ValueError("Exact-build policy did not reject the changed build as expected")
-        if current.read_bytes() != before:
-            raise ValueError("Rejected exact-build resume rewrote the checkpoint pointer")
+        if bundle_hashes(args.output) != before:
+            raise ValueError("Rejected exact-build resume changed the checkpoint bundle")
     commands = (
         ["checkpoint", "verify", str(args.output), "--json"],
         [
@@ -166,12 +207,27 @@ def main() -> None:
         else [
             change["id"]
             for change in behavior["changes"]
-            if change["revision"] > args.origin_revision
+            if change["revision"] > origin["behavior_revision"]
         ]
     )
     compare_resumed(
         args.control, args.output, same_build=args.same_build, expected_change_ids=expected_changes
     )
+    if bundle_hashes(args.checkpoint) != original_hashes:
+        raise ValueError("Preserved original checkpoint changed during verification")
+    report = {
+        "origin": origin,
+        "same_build": args.same_build,
+        "successful_resumes": 1,
+        "exact_policy_rejections": 0 if args.same_build else 1,
+        "original_bundle_hashes": original_hashes,
+        "original_bundle_unchanged": True,
+        "rejected_bundle_unchanged": None if args.same_build else True,
+        "resumed_evidence_hashes": snapshot(args.output),
+    }
+    with args.output.with_suffix(".verification.json").open("x") as stream:
+        json.dump(report, stream, indent=2, sort_keys=True)
+        stream.write("\n")
     print("PASS: checkpoint policy, hydration, provenance, and byte-identical resumed evidence")
 
 

@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 70
+current_revision: 71
 history_start_revision: 1
 behavior_surface_sha256: "6dc431e08bee730aeaca83342a4ca059340ea0b6dec15dadad4857116624e3f5"
 changes:
@@ -659,3 +659,10 @@ changes:
       - cli-generation
     formats: []
     summary: Separate option and input preparation scenario and format checks resume policy and published-output reporting while preserving prompt diagnostics lock ownership publication and error exits.
+  - revision: 71
+    id: share-cli-staging-cleanup-and-recovery-reporting
+    impact: none
+    domains:
+      - cli-generation
+    formats: []
+    summary: Share only identical temporary staging disposal and recovery guidance while retaining migration restoration persistent workspace ownership distinct suspension interruption and failure exits and publication boundaries.

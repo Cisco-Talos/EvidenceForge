@@ -2,6 +2,36 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 6b accepted — shared temporary cleanup and recovery reporting
+
+Item 6a committed as `1cf35c5c`. Three identical temporary-staging cleanup sequences and three
+identical recovery-guidance rendering sequences now each have one owner. AST inspection confirmed
+that each extracted statement matched all three original copies. The command is now **544 lines**.
+Migration restoration, persistent staging, publication cleanup, lock release, and distinct planned
+suspension/signal interruption/ordinary failure outcomes retain their original owners and order.
+No rollback boundary, retained state or public interface changed.
+
+Four new pre-extraction controls cover OSError and KeyboardInterrupt with checkpointing enabled and
+disabled: temporary staging is removed, persistent staging survives, and old evidence stays intact.
+Acceptance passes: **118 focused tests** (14 deselected, 65.92 seconds), **8,545 standard tests**
+(27 unchanged skips, 2,011 deselected, 296.91 seconds), **5 slow interruption/publication controls**
+(95 deselected, 77.20 seconds), both Ruff checks, revision-71 validation against `1cf35c5c`, and
+**six CLI raw-byte comparisons against both references**.
+
+The checkpoint harness now reads each authenticated manifest's actual revision/build and supports
+multiple preserved source/checkpoint pairs. It validates all checkpoint file sets and hashes on
+exact-policy rejection, rather than only CURRENT.json. All **18 preserved checkpoint identities**
+match their source checkouts. A real 26-build pilot passed exact rejection (exit 1), full hydration,
+compatible resume, provenance and byte comparisons; all **35 original/copied checkpoint files**
+remained unchanged at rejection. The final 24-resume/18-rejection matrix remains outstanding.
+
+The focused four-path CLI failure benchmark produced alternating medians 2.667/2.321/2.679/2.335 seconds
+(baseline/candidate/baseline/candidate), with identical exit, preservation and staging results.
+These cumulative timings include earlier fingerprint savings. Ruff caught a draft benchmark loop
+closure and matrix import ordering; both were corrected. The initial benchmark A report is preserved
+but excluded in favor of the corrected A2 baseline. `2026-09-12-nine-item-cli-cleanup.json` retains
+all accepted performance/allocation data, structural evidence, hashes and limitations.
+
 ### Item 6a accepted — CLI preparation and published-output reporting
 
 Item 5 committed as `7e86b07e`. Eight direct functions now own option admission, preliminary input

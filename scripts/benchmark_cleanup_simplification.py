@@ -27,6 +27,71 @@ from typing import Any
 
 def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
     """Bind one fixed workload to the selected checkout's existing owners."""
+    if name == "cli-failure":
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        from evidenceforge.cli import commands
+
+        fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/scenarios/minimal.yaml"
+
+        def failing_cli() -> object:
+            results: list[dict[str, object]] = []
+            for checkpoint_hours in (0, 24):
+                for interrupted in (False, True):
+                    with tempfile.TemporaryDirectory(prefix="eforge-cleanup-failure-") as temporary:
+                        output = Path(temporary)
+                        (output / "data").mkdir()
+                        (output / "data/old.log").write_bytes(b"original evidence\n")
+                        (output / "GROUND_TRUTH.md").write_bytes(b"original ground truth\n")
+
+                        def fail(was_interrupted: bool = interrupted) -> None:
+                            if was_interrupted:
+                                raise KeyboardInterrupt()
+                            raise OSError("cleanup benchmark fault")
+
+                        with patch.object(
+                            commands,
+                            "GenerationEngine",
+                            return_value=SimpleNamespace(generate=fail),
+                        ):
+                            result = CliRunner().invoke(
+                                commands.app,
+                                [
+                                    "generate",
+                                    str(fixture),
+                                    "--output",
+                                    str(output),
+                                    "--overwrite",
+                                    "--checkpoint-hours",
+                                    str(checkpoint_hours),
+                                ],
+                            )
+                        results.append(
+                            {
+                                "exit_code": result.exit_code,
+                                "old_evidence_sha256": hashlib.sha256(
+                                    (output / "data/old.log").read_bytes()
+                                ).hexdigest(),
+                                "old_truth_sha256": hashlib.sha256(
+                                    (output / "GROUND_TRUTH.md").read_bytes()
+                                ).hexdigest(),
+                                "temporary_staging_count": len(
+                                    list(output.glob(".eforge_staging_*"))
+                                ),
+                                "persistent_staging": (
+                                    output / ".eforge-generation/staged"
+                                ).exists(),
+                                "cleanup_message": "Cleaned up staging directory" in result.stdout,
+                                "preservation_message": "Previous output preserved"
+                                in result.stdout,
+                            }
+                        )
+            return results
+
+        return failing_cli, 4
     if name == "generation-cli":
         from compare_cleanup_output import snapshot
 
@@ -212,6 +277,7 @@ def main() -> None:
             "gates-context",
             "generation",
             "generation-cli",
+            "cli-failure",
         ),
         required=True,
     )

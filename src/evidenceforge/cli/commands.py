@@ -1714,6 +1714,29 @@ def _report_generation_output(ground_truth_dir: Path, data_dir: Path, artifacts_
                 console.print(f"    • {file.relative_to(artifacts_dir)} ({size_str})")
 
 
+def _cleanup_failed_generation_staging(
+    staging_dir: Path | None, persistent_staging: bool, has_existing: bool
+) -> None:
+    """Discard only temporary staging; the caller owns migration restoration and persistent state."""
+    if staging_dir and staging_dir.exists() and not persistent_staging:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        console.print("[dim]Cleaned up staging directory[/dim]")
+    if has_existing:
+        console.print("[dim]Previous output preserved[/dim]")
+
+
+def _report_generation_recovery(
+    checkpoint_controller: IncrementalCheckpointController | None, ground_truth_dir: Path
+) -> None:
+    """Render retained recovery guidance at the original outcome-specific point."""
+    recovery_guidance = _checkpoint_recovery_guidance(
+        checkpoint_controller,
+        ground_truth_dir,
+    )
+    if recovery_guidance is not None:
+        console.print(Text(recovery_guidance, style="yellow"))
+
+
 @app.command()
 def generate(
     scenario_file: Path | None = typer.Argument(
@@ -2212,22 +2235,13 @@ def generate(
         restore_pre_migration_staging()
         cursor = suspended.cursor
         if suspended.requested_by_signal:
-            if staging_dir and staging_dir.exists() and not persistent_staging:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                console.print("[dim]Cleaned up staging directory[/dim]")
-            if has_existing:
-                console.print("[dim]Previous output preserved[/dim]")
+            _cleanup_failed_generation_staging(staging_dir, persistent_staging, has_existing)
             console.print(
                 f"\n[bold yellow]Generation interrupted after creating a recovery "
                 f"checkpoint at simulated hour {cursor.completed_simulated_hours} "
                 f"({cursor.phase}).[/bold yellow]"
             )
-            recovery_guidance = _checkpoint_recovery_guidance(
-                checkpoint_controller,
-                ground_truth_dir,
-            )
-            if recovery_guidance is not None:
-                console.print(Text(recovery_guidance, style="yellow"))
+            _report_generation_recovery(checkpoint_controller, ground_truth_dir)
             logger.info(
                 "Generation interrupted safely at simulated hour %s (%s)",
                 cursor.completed_simulated_hours,
@@ -2248,35 +2262,17 @@ def generate(
 
     except KeyboardInterrupt:
         restore_pre_migration_staging()
-        if staging_dir and staging_dir.exists() and not persistent_staging:
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            console.print("[dim]Cleaned up staging directory[/dim]")
-        if has_existing:
-            console.print("[dim]Previous output preserved[/dim]")
+        _cleanup_failed_generation_staging(staging_dir, persistent_staging, has_existing)
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
-        recovery_guidance = _checkpoint_recovery_guidance(
-            checkpoint_controller,
-            ground_truth_dir,
-        )
-        if recovery_guidance is not None:
-            console.print(Text(recovery_guidance, style="yellow"))
+        _report_generation_recovery(checkpoint_controller, ground_truth_dir)
         logger.info("Generation interrupted by user")
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
         restore_pre_migration_staging()
-        if staging_dir and staging_dir.exists() and not persistent_staging:
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            console.print("[dim]Cleaned up staging directory[/dim]")
-        if has_existing:
-            console.print("[dim]Previous output preserved[/dim]")
+        _cleanup_failed_generation_staging(staging_dir, persistent_staging, has_existing)
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
-        recovery_guidance = _checkpoint_recovery_guidance(
-            checkpoint_controller,
-            ground_truth_dir,
-        )
-        if recovery_guidance is not None:
-            console.print(Text(recovery_guidance, style="yellow"))
+        _report_generation_recovery(checkpoint_controller, ground_truth_dir)
         if verbose or debug:
             console.print_exception()
         logger.exception("Generation failed")
