@@ -533,6 +533,7 @@ class TestGenerationEngine:
         GenerationEngineParticipant(restored).restore_checkpoint(seal.head.payload, ())
 
         assert restored._ambient_registry_state == engine._ambient_registry_state
+        assert restored._linux_resolved_feature_states == engine._linux_resolved_feature_states
         assert restored._baseline_rdp_last_session == engine._baseline_rdp_last_session
         assert restored._hawkes_states == engine._hawkes_states
         assert restored._linux_polkit_agents == engine._linux_polkit_agents
@@ -558,6 +559,26 @@ class TestGenerationEngine:
         assert restored_lease["system"] is restored.scenario.environment.systems[0]
         assert restored_lease["system"] is not system
         assert restored_lease["renewal_rng"].random() == expected_rng.random()
+
+        # Older evidence may already name a resolver outside the corrected pool.
+        # Finish that recorded pair, then start the next pair with current truth.
+        entry = {
+            "messages": ["Degraded {dns_server}", "Recovered {dns_server}"],
+        }
+        resolver_rng = random.Random(42)
+        assert (
+            restored._render_systemd_resolved_message(entry, "TEST-01", ["10.0.0.53"], resolver_rng)
+            == "Recovered 10.0.0.2"
+        )
+        assert (
+            restored._render_systemd_resolved_message(entry, "TEST-01", ["10.0.0.53"], resolver_rng)
+            == "Degraded 10.0.0.53"
+        )
+        assert (
+            restored._render_systemd_resolved_message(entry, "TEST-01", ["10.0.0.53"], resolver_rng)
+            == "Recovered 10.0.0.53"
+        )
+        assert engine._linux_resolved_feature_states == {"TEST-01": ("degraded", "10.0.0.2")}
 
     def test_warmup_boundary_checkpoint_contains_post_transition_state(self):
         """A cadence point at collection start should follow reset and sensor startup."""

@@ -119,29 +119,68 @@ def test_system_dhcp_authored_lease_skips_remaining_host_families(
     assert baseline._dhcp_lease_state[system.hostname]["next_renewal"] == authored_time.timestamp()
 
 
-def test_ambient_resolver_control_preserves_legacy_last_host_pool(
+@pytest.mark.parametrize(
+    "layout", ("two", "reversed", "windows-last", "single", "windows-only", "empty")
+)
+@pytest.mark.parametrize("shared_pool", (False, True))
+@pytest.mark.parametrize("emit_messages", (False, True))
+def test_ambient_resolver_messages_use_the_current_hosts_selected_pool(
     monkeypatch: pytest.MonkeyPatch,
+    layout: str,
+    shared_pool: bool,
+    emit_messages: bool,
 ) -> None:
-    """Characterize existing cross-pass resolver input; correcting it is separate work."""
     baseline, _activity, _state, first = _minimal_linux_system_traffic(
-        _WINDOW_START + timedelta(minutes=10)
+        _WINDOW_START + timedelta(hours=3)
     )
     second = first.model_copy(update={"hostname": "LINUX-SECOND", "ip": "10.0.0.22"})
-    baseline.scenario.environment.systems.append(second)
-    baseline._system_service_defaults[second.hostname] = []
-    baseline._system_pids[second.hostname] = {"logind": 556}
-    baseline._kernel_boot_uptimes[second.hostname] = 500000.0
-    pools = {first.ip: ["10.0.0.53"], second.ip: ["10.0.0.54"]}
-    monkeypatch.setattr(
-        baseline_module, "activity_dns_resolver_ips", lambda _activity, ip: pools[ip]
+    windows = first.model_copy(
+        update={"hostname": "WINDOWS-LAST", "ip": "10.0.0.23", "os": "Windows 10"}
     )
+    systems = {
+        "two": [first, second],
+        "reversed": [second, first],
+        "windows-last": [first, second, windows],
+        "single": [first],
+        "windows-only": [windows],
+        "empty": [],
+    }[layout]
+    baseline.scenario.environment.systems = systems
+    baseline.world_model = SimpleNamespace(hosts={})
+    for system in systems:
+        baseline._system_service_defaults[system.hostname] = []
+        baseline._system_pids[system.hostname] = {"logind": 556}
+        baseline._kernel_boot_uptimes[system.hostname] = 500000.0
+    # Keep the cross-host syslog pass real; unrelated Windows work needs no setup.
+    for family in (
+        "service_processes",
+        "registry_activity",
+        "scheduled_activity",
+        "delegation_activity",
+        "group_policy_activity",
+        "remote_thread_activity",
+        "process_access_activity",
+        "module_activity",
+    ):
+        monkeypatch.setattr(baseline, f"_generate_system_{family}", Mock())
+    monkeypatch.setattr(baseline, "_plan_system_rdp_requests", lambda **_kwargs: [])
+    pools = {
+        system.ip: ["10.0.0.53" if shared_pool else f"10.0.0.{53 + index}"]
+        for index, system in enumerate(systems)
+    }
+    select = Mock(side_effect=lambda _activity, ip: pools[ip])
+    monkeypatch.setattr(baseline_module, "activity_dns_resolver_ips", select)
 
     class GenericSyslogRandom(random.Random):
         def random(self) -> float:
             return 0.99
 
     monkeypatch.setattr(baseline_module, "_get_rng", lambda: GenericSyslogRandom(42))
-    monkeypatch.setattr(timing_module, "hawkes_timestamps", lambda **_kwargs: ([300.0], None))
+    monkeypatch.setattr(
+        timing_module,
+        "hawkes_timestamps",
+        lambda **_kwargs: ([300.0] if emit_messages else [], None),
+    )
     monkeypatch.setattr(baseline_module, "_linux_ambient_logind_session_budget", lambda *_args: 0)
     entry = {"app": "systemd-resolved", "weight": 1, "messages": ["DNS control"]}
     monkeypatch.setattr(extra_syslog_module, "load_extra_syslog_messages", lambda: [entry])
@@ -150,13 +189,37 @@ def test_ambient_resolver_control_preserves_legacy_last_host_pool(
     )
     render = Mock(return_value="DNS control")
     baseline._render_systemd_resolved_message = render
+    linux_hosts = [system for system in systems if system.os.startswith("Ubuntu")]
+    pass_mappings: list[dict[str, list[str]]] = []
+    syslog_pass = baseline._generate_system_linux_syslog
 
-    baseline._generate_system_traffic(_WINDOW_START)
+    def capture_pass(**kwargs: object) -> None:
+        mapping = kwargs["dns_ips_by_host"]
+        assert isinstance(mapping, dict)
+        assert set(mapping) == {system.hostname for system in linux_hosts}
+        for system in linux_hosts:
+            assert mapping[system.hostname] is pools[system.ip]
+        pass_mappings.append(mapping)
+        syslog_pass(**kwargs)
 
-    assert [(call.args[1], call.args[2]) for call in render.call_args_list] == [
-        (first.hostname, pools[second.ip]),
-        (second.hostname, pools[second.ip]),
-    ]
+    monkeypatch.setattr(baseline, "_generate_system_linux_syslog", capture_pass)
+    # An authored DHCP lease skips the rest of this host, but not its later syslog.
+    baseline._dhcp_lease_state = {first.hostname: {"lease_time": 3600}}
+    baseline._storyline_dhcp_lease_time_in_hour = lambda _hostname, hour: hour
+    for hour in range(2):
+        render.reset_mock()
+        select.reset_mock()
+        baseline._generate_system_traffic(_WINDOW_START + timedelta(hours=hour))
+        assert [call.args[1] for call in select.call_args_list] == [s.ip for s in systems]
+        expected = [(s.hostname, pools[s.ip]) for s in linux_hosts] if emit_messages else []
+        assert [(call.args[1], call.args[2]) for call in render.call_args_list] == expected
+        pools = {ip: [f"10.1.0.{53 + i}"] for i, ip in enumerate(pools)}
+    if systems:
+        assert len(pass_mappings) == 2
+        assert pass_mappings[0] is not pass_mappings[1]
+    else:
+        assert pass_mappings == []
+    assert "dns_ips_by_host" not in vars(baseline)
 
 
 def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owner() -> None:

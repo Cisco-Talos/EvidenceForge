@@ -157,12 +157,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
-- [ ] **P2** Bind ambient Linux `systemd-resolved` traffic to each host's configured DNS
-  resolvers. The baseline cross-host pass currently inherits the resolver pool from the last
-  per-host iteration. The simplification pass characterizes and preserves this existing behavior;
-  correct it separately with mixed-host evidence review. See the
-  [cleanup worklog](docs/worklog/2026-09-12-behavior-preserving-cleanup.md) and
-  `test_ambient_resolver_control_preserves_legacy_last_host_pool`.
+- [x] **P2** Bind ambient Linux `systemd-resolved` traffic to each host's selected DNS
+  resolvers. The cross-host syslog pass now reuses the correct pool, with address-only evidence
+  corrections and compatible checkpoint recovery verified. See the
+  [cleanup worklog](docs/worklog/2026-09-12-behavior-preserving-cleanup.md#host-specific-resolver-correction--complete).
 - [x] **P1** Make process-to-file and process-to-registry effects actor-native by construction.
   Data-driven executable eligibility and canonical process/session ownership now cover Defender,
   WER, CBS, Office MRU, UserAssist, and shell-state artifacts, with PID/ProcessGuid correlation

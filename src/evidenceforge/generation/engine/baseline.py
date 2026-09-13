@@ -38,7 +38,7 @@ import math
 import random
 import shlex
 import string
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10864,6 +10864,10 @@ class BaselineMixin:
         if not hasattr(self, "_ntp_schedule_state"):
             self._ntp_schedule_state: dict[tuple[str, str, int], dict[str, float | int]] = {}
 
+        # Reuse host-specific selections in the later syslog pass. This local map
+        # lasts only for this hourly call and must be populated before host skips.
+        # See test_ambient_resolver_messages_use_the_current_hosts_selected_pool.
+        dns_ips_by_host: dict[str, list[str]] = {}
         for system in self.scenario.environment.systems:
             services = self._system_service_defaults.get(system.hostname, [])
             os_cat = _get_os_category(system.os)
@@ -10882,6 +10886,8 @@ class BaselineMixin:
             hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
 
             system_dns_ips = activity_dns_resolver_ips(self.activity_generator, system.ip)
+            if os_cat == "linux":
+                dns_ips_by_host[system.hostname] = system_dns_ips
             self._generate_system_dns_traffic(
                 _svc_pid=_svc_pid,
                 current_hour=current_hour,
@@ -11090,15 +11096,12 @@ class BaselineMixin:
             rng=rng,
         )
 
-        # Preserve the last-host resolver dependency characterized by
-        # test_ambient_resolver_control_preserves_legacy_last_host_pool.
-        # Host-specific resolver truth needs a separate evidence-changing correction.
         if self.scenario.environment.systems:
             self._generate_system_linux_syslog(
                 current_hour=current_hour,
                 pass_end=pass_end,
                 rng=rng,
-                system_dns_ips=system_dns_ips,
+                dns_ips_by_host=dns_ips_by_host,
                 terminal_pass=terminal_pass,
             )
 
@@ -11485,7 +11488,7 @@ class BaselineMixin:
         current_hour: datetime,
         pass_end: datetime,
         rng: random.Random,
-        system_dns_ips: list[str],
+        dns_ips_by_host: Mapping[str, list[str]],
         terminal_pass: bool,
     ) -> None:
         """Run the linux syslog cross-host pass in host order."""
@@ -11813,7 +11816,7 @@ class BaselineMixin:
                         msg = self._render_systemd_resolved_message(
                             entry,
                             system.hostname,
-                            system_dns_ips,
+                            dns_ips_by_host[system.hostname],
                             rng,
                         )
                     elif app == "anacron":

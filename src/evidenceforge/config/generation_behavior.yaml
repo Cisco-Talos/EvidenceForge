@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 78
+current_revision: 79
 history_start_revision: 1
-behavior_surface_sha256: "948dd3bb2da421fc859e22d94200d0aa1b8c611d7cddf711a07d1fe8dd559da0"
+behavior_surface_sha256: "426dd9631e69a41328f1954cf35fb2a3b61158064c04b869cea66a720f12dfe4"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -715,3 +715,11 @@ changes:
       - network
     formats: []
     summary: Share exact SMB member commit and publication recovery while retaining distinct fresh and resumed certification paths
+  - revision: 79
+    id: baseline-host-specific-resolver-health
+    impact: localized
+    domains:
+      - linux-resolver-health
+      - baseline-generation
+    formats: []
+    summary: Bind ambient resolver health messages to each Linux host's selected DNS pool; retain recorded recovery pairs and allow downstream deterministic draws to reflect corrected pool sizes

@@ -1,5 +1,130 @@
 # Behavior-preserving 2.0.0 cleanup
 
+## Host-specific resolver correction — complete
+
+Approved follow-up to the nine-item pass, starting from clean
+`fd007c7b4732865821e152fad31f99a5efc4bd3b`. A complete source archive is preserved at
+`/private/tmp/eforge-resolver-baseline`; earlier source checkouts and evidence remain intact.
+All 250 prior final captures were rehashed successfully, including manifest-listed files.
+The [resolver correction report](2026-09-13-resolver-correction.json) records frozen controls,
+artifact and log hashes, checkpoint results, structural measurements, performance samples,
+reproduction scripts, failures and limitations. Captures remain under
+`/private/tmp/eforge-resolver-fix`.
+
+### Ownership and intentional evidence changes
+
+The correction reuses each Linux host's existing resolver selection through a function-local
+hostname-to-pool dictionary. It adds no resolver calls, durable cache, expiry index, RNG or
+checkpoint state. Population occurs immediately after the existing selection and before DHCP
+whole-host skips; the later Linux syslog pass consumes the same list by reference. Each map
+lasts for one hourly coordinator call, including terminal calls, and contains only Linux hosts.
+The traffic coordinator grows from 299 to 302 lines; the 463-line syslog pass and 34-line renderer
+retain their responsibilities. No custom cache/pool is needed for this temporary lookup.
+
+Revision **79**, `baseline-host-specific-resolver-health`, declares `impact: localized`.
+Its surface digest is
+`426dd9631e69a41328f1954cf35fb2a3b61158064c04b869cea66a720f12dfe4`;
+the corrected installed-build digest is
+`e22031a0df979c05e03ca713cf888c3fd508ef5d17497e318b15e28c59f2729c`.
+History, fingerprint algorithms, exact-policy rejection and compatible-resume classification
+are unchanged. The previous pass's byte-preservation claim remains true for that pass; this
+separate correction intentionally supersedes its resolver behavior.
+
+The complete **250-case corpus has 239 unchanged cases and 11 address-only corrections**:
+
+| Fixture family | Affected cases | Resolver-address substitutions |
+|---|---:|---:|
+| Linux SMB, seeds 42 and 137 | 2 | 6 |
+| Typed handlers, seed 42, all targets | 3 | 12 |
+| Periodic content, seed 42, all targets | 3 | 12 |
+| Process companions, seed 42, all targets | 3 | 6 |
+| Total | 11 | 36 |
+
+These are real resolver-ownership improvements in the fixtures' accompanying baseline activity.
+For Linux SMB, SAMBA-01 now reports its own resolver; in the other affected fixtures, LINUX-01
+reports its own resolver. Every changed byte is within a DNS-server address in syslog. Timestamps,
+row order, SMB execution, typed events, periodic timing, ground truth and all other evidence remain
+identical. No downstream RNG difference or broader output exception was needed.
+
+An independent checkout of the starting build changes only the old renderer argument to a direct
+call to the existing per-source resolver owner, plus truthful behavior provenance. It contains no
+mapping implementation. All 11 changed cases match that reference's raw evidence exactly, supplying
+independent attribution to the corrected resolver input. Original captures remain historical
+references; corrected captures under `corpus/<group>/<case>` are the accepted references for later
+behavior-preserving work. Existing group drivers can use `--baseline
+/private/tmp/eforge-resolver-fix/corpus/<group>` without replacing older evidence.
+
+### Correctness, output and checkpoint gates
+
+- Focused subsystem coverage: **174 passed**. The replacement regression includes **24 layouts**
+  covering reversed order, Windows last, single/shared pools, no messages, no Linux hosts, empty
+  systems, two successive hours, changed pools and DHCP host skips. Selection order/count and list
+  identity are checked; the mapping is fresh per call and is not stored on the runtime owner.
+- Standard suite: **8573 passed, 27 skipped, 2011 deselected in 311.08s**.
+- Full slow suite: **1780 passed, 8831 deselected in 1165.00s**.
+- Both Ruff checks and behavior-manifest validation against `fd007c7b` pass. The 27 existing skips
+  concern optional external parsers, licensed Splunk, unavailable sample data and one full-engine-only
+  case. Full soak remains excluded; this change adds no retained state or synchronization owner.
+- **30 additional bounded controls** cover seeds 42/137, all three targets, full/narrowed formats,
+  serial/threaded emission and configured/public resolvers. All 30 original and corrected runs repeat
+  exactly; all corrected cases match the independent reference. Renderer pools, before/after RNG
+  states and resolver call counts pass. **2,613 canonical DNS queries** agree with those per-host
+  pools. Artifact file sets and hashes are verified without normalizing evidence or ground truth.
+- Checkpoints: **26 successful candidate resumes**, **7 additional independent-reference resumes**
+  and **6 exact-policy rejections**. These include the six starting-build compatible/six corrected
+  exact cases, six affected mixed-host compatible/six exact cases, and one collected-history
+  compatible/exact pair. Both seeds and all targets are covered. Preserved checkpoint bundles
+  remain unchanged. The starting checkpoints have revision 78 and installed-build digest
+  `ecfc32a0d61dfed2fca3478488e93f135be6644935bd23bfec25291f4e38276a`.
+
+The approved historical-evidence policy leaves stored degradation/recovery pairs unchanged.
+A resumed old pair can recover on its recorded, potentially incorrect server; the next pair uses
+the correct pool. No broken selection branch was retained, and this policy is not required for
+checkpoint load compatibility. The codec regression explicitly verifies old recovery followed by
+a corrected new pair and confirms that the original state is unchanged.
+
+A real checkpoint taken after one collected hour also retains four previously emitted incorrect
+resolver rows and resumes identically to the independent reference. Its existing per-host message
+quota leaves no new resolver row after that cursor; it does not replace the codec test of the
+next recovery/new pair. Evidence is never rewritten to make old observations look corrected.
+
+### Performance observations and limitations
+
+Benchmarks ran separately from correctness tests in eight fresh processes, alternating starting
+and corrected builds within each workload. Each process ran one warmup, three timed generations,
+one separate allocation observation and one separate call-count audit: **24 timed samples** total.
+The same interpreter, dependencies, inputs and options were used. Each row is the median of six
+timed samples per build; the report retains every sample, throughput, RSS and traced allocation.
+
+| Mixed-host workload | Starting seconds | Corrected seconds | Ratio |
+|---|---:|---:|---:|
+| Public resolver selection | 7.805176 | 7.672347 | 0.983x |
+| Configured resolver selection | 9.865665 | 10.174704 | 1.031x |
+
+Public runs measured about 1.7% faster and configured runs about 3.1% slower. Both differences are
+smaller than the variation between the two baseline process medians; these measurements do not
+establish a causal speedup or slowdown from the mapping. Resolver selection counts remain exactly
+**65 public / 242 configured** in both builds. Corrected maps contain two entries during each of
+three hourly passes and are never retained on the engine. Traced peaks remain approximately
+28.7–28.9 MB public and 31.7–31.8 MB configured; retained traced bytes remain about 0.13/0.15 MB.
+The implementation adds one short-lived dictionary and reuses existing lists. Performance has no
+numerical rejection threshold; correctness and ownership checks pass.
+
+Failures were retained and resolved: the new mapping regression fails against the original code;
+eight initial corrected failures came from a synthetic Windows fixture missing `world_model`;
+an initial invocation omitted the existing checkpoint test's slow marker; Ruff corrected new
+control formatting. The first benchmark warmup used macOS's `/var` alias and failed the emitter's
+scratch-ancestry check; resolving the harness temporary path fixed it for both builds without a
+production change. Initial and final frozen harness hashes are preserved. A trial zero-hour
+warmup fixture was rejected before generation; the final history control instead delays suspension
+until after the required warmup checkpoint. Initial attribution stopped on additional affected
+groups and was extended to verify every group. An interim commentary count omitted the final
+companion group and was corrected to 239 unchanged/11 corrected after inspecting all 250 cases.
+A final ad hoc report audit initially misread separate old/new checkpoint entries as combined entries;
+the corrected audit verifies all six revision-79 origins against the final source digest.
+
+No merge, release, dependency, package-version, authored-schema or checkpoint-schema change.
+
 ## Nine-item simplification pass — complete
 
 ### Final acceptance — all nine items complete
