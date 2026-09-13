@@ -157,6 +157,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P2** Design and implement general authored entity availability/participation controls
+  across all evidence families. Support entities appearing during a scenario without generating
+  earlier activity merely because they are declared in the environment; the motivating case is
+  FOR668 `scenario-3_1`'s rogue device appearing before its intended arrival. Apply the mechanism
+  through canonical planning and lifecycle owners across warmup, baseline, storyline, causal
+  prerequisites, and source/destination selection, rather than DHCP-specific checks or filtering
+  rendered rows. Define physical presence separately from collection visibility, and preserve
+  realistic evidence from other entities (such as failed attempts to reach an absent host).
+  Cover exact activation boundaries, correlated evidence, lifecycle transitions, and checkpoint
+  resume; retain existing behavior when controls are omitted. Document supported authoring and
+  limitations in the scenario/configuration skills. Final schema and scope remain design work.
 - [x] **P2** Bind ambient Linux `systemd-resolved` traffic to each host's selected DNS
   resolvers. The cross-host syslog pass now reuses the correct pool, with address-only evidence
   corrections and compatible checkpoint recovery verified. See the
