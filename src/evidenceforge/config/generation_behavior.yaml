@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 77
+current_revision: 78
 history_start_revision: 1
-behavior_surface_sha256: "e7e63e873cd8360210cbbd2eb116cc6c3bb86ad9cc3a500d5ac5572efd100905"
+behavior_surface_sha256: "948dd3bb2da421fc859e22d94200d0aa1b8c611d7cddf711a07d1fe8dd559da0"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -708,3 +708,10 @@ changes:
       - network
     formats: []
     summary: Separate persistent SMB source construction timing certification and state finalization using existing exact preparation records
+  - revision: 78
+    id: cleanup-persistent-smb-publication
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Share exact SMB member commit and publication recovery while retaining distinct fresh and resumed certification paths

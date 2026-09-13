@@ -1,0 +1,488 @@
+{
+  "after": {
+    "_execute_persistent_windows": {
+      "branches": 22,
+      "calls": 81,
+      "lines": 436
+    },
+    "_resume_persistent_smb_source_prepared": {
+      "branches": 13,
+      "calls": 40,
+      "lines": 152
+    }
+  },
+  "allocation_changes": "The same certification/receipt tuples, source carrier and authenticated handoff pass by reference. No new buffer, context object, persistent state or RNG. Fresh and resumed paths use the same member recovery implementation but retain separate certification decisions and error notes.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_execute_persistent_windows": {
+      "branches": 35,
+      "calls": 110,
+      "lines": 539
+    },
+    "_resume_persistent_smb_source_prepared": {
+      "branches": 20,
+      "calls": 49,
+      "lines": 198
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item9c-report.json",
+    "sha256": "45a6c55353c1eaea2e873fabf7d7889527979bf61efbf117279ff76d1bce5894"
+  },
+  "coordinators": [
+    "_execute_persistent_windows",
+    "_resume_persistent_smb_source_prepared"
+  ],
+  "description": "The continuation coordinator explicitly selects reserved preparation, root execution, retained source building, retained source preparation and terminal acknowledgement at their original authenticated boundaries. A fresh-source publication operation finalizes State, authenticates/rebinds, certifies timing, commits members and publishes in order; its late file/State authentication stays distinct from resumed certification. Two identical member commit/recover/retry loops now share one 43-line operation, and two identical exact-publication retries share one 28-line operation. No generic retry policy was introduced. Across item 9, the main coordinator falls from 1,298 to 436 lines and the retained-source coordinator from 215 to 152.",
+  "duplication": {
+    "member_commit_recovery": {
+      "after": 1,
+      "before": 2
+    },
+    "source_publication_retry": {
+      "after": 1,
+      "before": 2
+    }
+  },
+  "failures": [
+    "The first full final slow run passed 1,779 tests and failed one source-inventory assertion naming the former SMB timing-claim location. Updated that one expected function to _certify_new_persistent_smb_sources; all claim counts, forbidden-call checks and lock-order assertions remain intact. The original failed log is preserved as final-slow-initial.log. No production output or runtime assertion failed."
+  ],
+  "gates": {
+    "claim-order": {
+      "log": "/private/tmp/eforge-pass4-item9c-claim-order.log",
+      "sha256": "0c2c7bf89b216ffae425dcf4fcea3d2d9ac3ba5499af91939271719184d6d1f1",
+      "summary": "============================== 12 passed in 6.13s =============================="
+    },
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item9c-focused.log",
+      "sha256": "2a805cb52c27922dd8782d503061006f0bb08a2f5bd37f91b4b08b8645d086c8",
+      "summary": "====================== 36 passed, 29 deselected in 17.84s ======================"
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item9c-matrix.log",
+      "sha256": "d11b8a32cc50b8e58039d06228f428ac53fdaa5c34a52522c65761ec541ebd0e",
+      "summary": ""
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item9c-slow.log",
+      "sha256": "f5c5dd02a104edc295e6b3b050aa00187b556932350b7aae02d6553c0180a0d6",
+      "summary": "================= 37 passed, 7 deselected in 74.69s (0:01:14) =================="
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item9c-standard.log",
+      "sha256": "00ad9ce9d473527a8f62f5968ee77638abc7e9a915012881cb72f73e64100895",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 312.55s (0:05:12) ========="
+    }
+  },
+  "initial_full_slow_failure": {
+    "correction": "Rename exactly one expected source-only claim site; all other assertions retained.",
+    "path": "/private/tmp/eforge-pass4-final-slow-initial.log",
+    "sha256": "507a7b95d516599871d3cce16cd26201f0225c67146fbb9ee484012570d02694",
+    "summary": "1 failed, 1779 passed, 8808 deselected in 1151.88s",
+    "test": "test_production_claim_site_enforces_global_timing_before_authority_lock_order"
+  },
+  "item": "9c",
+  "logs": [
+    "focused",
+    "slow",
+    "standard",
+    "matrix",
+    "claim-order"
+  ],
+  "manifest": "passed vs 304fc68e",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 11385037,
+      "allocation_sample_retained_blocks": 67756,
+      "allocation_sample_retained_bytes": 5811110,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5344570830930024,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1836854606900102,
+      "process_max_rss": 173277184,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.5344570830930024,
+        2.55000312498305,
+        2.562517917016521,
+        2.5329053750028834,
+        2.521290166070685,
+        2.5400570000056177,
+        2.5321373330662027
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11389146,
+      "allocation_sample_retained_blocks": 67735,
+      "allocation_sample_retained_bytes": 5809348,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.511374625028111,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1945649088361,
+      "process_max_rss": 175849472,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.4907039999961853,
+        2.5137077920371667,
+        2.546069582924247,
+        2.5082910830387846,
+        2.511374625028111,
+        2.515163416042924,
+        2.4996296670287848
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11396165,
+      "allocation_sample_retained_blocks": 67820,
+      "allocation_sample_retained_bytes": 5814305,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5174572920659557,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1916786074007415,
+      "process_max_rss": 173375488,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.507107291952707,
+        2.4842270829249173,
+        2.529442166094668,
+        2.5237906670663506,
+        2.496562874992378,
+        2.5174572920659557,
+        2.5190633749589324
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11379196,
+      "allocation_sample_retained_blocks": 67618,
+      "allocation_sample_retained_bytes": 5803334,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5157319579739124,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1924958819603744,
+      "process_max_rss": 173932544,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.537954750005156,
+        2.50284750002902,
+        2.560305624967441,
+        2.5157319579739124,
+        2.489000124973245,
+        2.493202457902953,
+        2.5345049580791965
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    }
+  ],
+  "performance_runs": [
+    "baseline-smb-a",
+    "smb-a",
+    "baseline-smb-b",
+    "smb-b"
+  ],
+  "previous": "304fc68e",
+  "representative_paths": [
+    "source_building -> existing member append recovery -> source_prepared",
+    "fresh source_prepared -> State materialization -> fresh certification -> member recovery/commit -> exact publication -> late receipt checks -> source_published",
+    "retained source_prepared -> owner validation -> retained certification/timing adoption -> shared member/publication operations -> source_published",
+    "source_published -> existing terminal cursor acknowledgement without a new root"
+  ],
+  "revision": 78,
+  "ruff": "both passed",
+  "slug": "smb-publication",
+  "source": "src/evidenceforge/generation/actions/smb_activity.py",
+  "title": "SMB publication and exact recovery"
+}

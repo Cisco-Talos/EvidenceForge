@@ -560,7 +560,7 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
     expected_source_only_sites = {
         (
             "src/evidenceforge/generation/actions/smb_activity.py",
-            "_execute_persistent_windows",
+            "_certify_new_persistent_smb_sources",
         ): 1,
         (
             "src/evidenceforge/generation/actions/smb_activity.py",

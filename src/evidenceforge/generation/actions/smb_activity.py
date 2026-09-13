@@ -3194,40 +3194,31 @@ class SmbActivityActionBundle:
             publication_binding_digest=publication_binding_digest,
         )
         self._acknowledge_persistent_smb_pin_install(pin_install)
-        file_mutation = handoff.file_mutation
-
-        finalization = self._materialize_persistent_smb_finalization(state_plan, pin_install.pin)
-        if (
-            finalization is None
-            or not self.executor.state_manager.authenticates_smb_connection_finalization_result(
-                finalization
-            )
-            or not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
-                file_mutation.receipt
-            )
-        ):
-            raise StateError("Persistent SMB terminal State result failed authentication")
-        rebound, rebound_observations = self.executor.dispatcher.rebind_persistent_smb_close(
-            traffic_authority=self.executor._persistent_smb_traffic_authority,
-            binding=traffic_binding,
-            opening_transport=opening,
-            opening_observations=handoff.observations,
-            final_traffic=final_traffic,
-            final_observation_traffic=final_observation_traffic,
-            state_result=finalization,
-        )
-        if rebound != final_transaction or len(rebound_observations) != len(handoff.observations):
-            raise StateError("Persistent SMB traffic close disagrees with terminal State")
-
-        retained_certifications = self._certify_new_persistent_smb_sources(
+        self._publish_new_persistent_smb_sources(
             terminal_continuation,
             source_preparation,
+            handoff,
+            source_publication=source_publication,
+            projection_group=projection_group,
             authority=authority,
             action_binding_digest=terminal_binding_digest,
             member_budget=member_budget,
         )
+        del lifecycle_binding
+        return self._resume_persistent_windows_terminal(terminal_continuation)
+
+    def _commit_persistent_smb_source_members(
+        self,
+        certifications: tuple[PersistentSmbProjectionMemberCertification, ...],
+        projection_group: PersistentSmbProjectionGroupToken,
+    ) -> tuple[PersistentSmbProjectionMemberCommitReceipt, ...]:
+        """Adopt a committed member before retrying its exact authenticated certification.
+
+        An unavailable recovery result permits the existing one retry; failure
+        still preserves the first exception and its member-specific context.
+        """
         commit_receipts: list[PersistentSmbProjectionMemberCommitReceipt] = []
-        for certification in retained_certifications:
+        for certification in certifications:
             try:
                 commit_receipt = self.executor.dispatcher.commit_persistent_smb_projection_member(
                     certification
@@ -3258,7 +3249,18 @@ class SmbActivityActionBundle:
                         )
                         raise primary from recovery_error
             commit_receipts.append(commit_receipt)
-        committed_members = tuple(commit_receipts)
+        return tuple(commit_receipts)
+
+    def _publish_persistent_smb_sources(
+        self,
+        source_publication: PreparedPersistentSmbSourcePublication,
+        committed_members: tuple[PersistentSmbProjectionMemberCommitReceipt, ...],
+    ) -> PersistentSmbSourcePublicationResult:
+        """Retry the exact publication once, preserving the original failure if both fail.
+
+        This dispatcher operation authenticates/adopts its own committed result;
+        callers must not rebuild members or redispatch rendered source records.
+        """
         try:
             source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
                 source_publication,
@@ -3276,8 +3278,71 @@ class SmbActivityActionBundle:
                     f"{type(recovery_error).__name__}: {recovery_error}"
                 )
                 raise primary from recovery_error
+        return source_result
+
+    def _publish_new_persistent_smb_sources(
+        self,
+        continuation: PersistentSmbTerminalContinuation,
+        preparation: _PersistentSmbPreparedSource,
+        handoff: PersistentSmbRootHandoff,
+        *,
+        source_publication: PreparedPersistentSmbSourcePublication,
+        projection_group: PersistentSmbProjectionGroupToken,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        action_binding_digest: str,
+        member_budget: int,
+    ) -> None:
+        """Finalize, certify and publish a fresh prepared source attempt in that order.
+
+        Entry authentication and source-carrier reservation remain with the
+        phase coordinator. Fresh attempts retain their late State/file receipt
+        checks; retained source_prepared attempts have their own certification
+        adoption and cleanup path in _resume_persistent_smb_source_prepared.
+        """
+        file_mutation = handoff.file_mutation
+
+        finalization = self._materialize_persistent_smb_finalization(
+            preparation.state_plan, handoff.pin_install_receipt.pin
+        )
         if (
-            self.executor._smb_channel_manager.session_view(application_batch.session.channel_id)
+            finalization is None
+            or not self.executor.state_manager.authenticates_smb_connection_finalization_result(
+                finalization
+            )
+            or not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
+                file_mutation.receipt
+            )
+        ):
+            raise StateError("Persistent SMB terminal State result failed authentication")
+        rebound, rebound_observations = self.executor.dispatcher.rebind_persistent_smb_close(
+            traffic_authority=self.executor._persistent_smb_traffic_authority,
+            binding=preparation.traffic_binding,
+            opening_transport=preparation.opening,
+            opening_observations=handoff.observations,
+            final_traffic=preparation.final_transaction.traffic,
+            final_observation_traffic=preparation.final_observation_traffic,
+            state_result=finalization,
+        )
+        if rebound != preparation.final_transaction or len(rebound_observations) != len(
+            handoff.observations
+        ):
+            raise StateError("Persistent SMB traffic close disagrees with terminal State")
+
+        retained_certifications = self._certify_new_persistent_smb_sources(
+            continuation,
+            preparation,
+            authority=authority,
+            action_binding_digest=action_binding_digest,
+            member_budget=member_budget,
+        )
+        committed_members = self._commit_persistent_smb_source_members(
+            retained_certifications, projection_group
+        )
+        source_result = self._publish_persistent_smb_sources(source_publication, committed_members)
+        if (
+            self.executor._smb_channel_manager.session_view(
+                handoff.application_result.result.session.channel_id
+            )
             is not None
         ):
             raise StateError("Persistent SMB application channel retained its exact session")
@@ -3288,7 +3353,7 @@ class SmbActivityActionBundle:
             raise StateError("Persistent SMB published source result failed authentication")
         external_transport_uids = self._persistent_source_transport_uids(
             source_result,
-            canonical_uid=application_batch.session.ground_truth_transport_uid,
+            canonical_uid=handoff.application_result.result.session.ground_truth_transport_uid,
         )
         if not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
             file_mutation.receipt
@@ -3301,14 +3366,12 @@ class SmbActivityActionBundle:
                 "Persistent SMB retained connection finalization failed authentication"
             )
         authority.bind_source_published(
-            terminal_continuation,
+            continuation,
             source_result=source_result,
             file_mutation=file_mutation,
             finalization=finalization,
             external_transport_uids=external_transport_uids,
         )
-        del lifecycle_binding
-        return self._resume_persistent_windows_terminal(terminal_continuation)
 
     def _complete_persistent_smb_source_building(
         self,
@@ -3519,56 +3582,10 @@ class SmbActivityActionBundle:
                     )
                 raise
 
-        commit_receipts: list[PersistentSmbProjectionMemberCommitReceipt] = []
-        for certification in certifications:
-            try:
-                commit_receipt = self.executor.dispatcher.commit_persistent_smb_projection_member(
-                    certification
-                )
-            except BaseException as primary:
-                try:
-                    recovery = (
-                        self.executor.dispatcher.recover_committed_persistent_smb_projection_member(
-                            projection_group,
-                            operation_id=certification.operation_id,
-                            operation_binding_digest=certification.operation_binding_digest,
-                        )
-                    )
-                except BaseException:
-                    recovery = None
-                commit_receipt = recovery.commit_receipt if recovery is not None else None
-                if commit_receipt is None:
-                    try:
-                        commit_receipt = (
-                            self.executor.dispatcher.commit_persistent_smb_projection_member(
-                                certification
-                            )
-                        )
-                    except BaseException as recovery_error:
-                        primary.add_note(
-                            "Persistent SMB member-commit retry also failed: "
-                            f"{type(recovery_error).__name__}: {recovery_error}"
-                        )
-                        raise primary from recovery_error
-            commit_receipts.append(commit_receipt)
-        committed_members = tuple(commit_receipts)
-        try:
-            source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
-                source_publication,
-                commit_receipts=committed_members,
-            )
-        except BaseException as primary:
-            try:
-                source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
-                    source_publication,
-                    commit_receipts=committed_members,
-                )
-            except BaseException as recovery_error:
-                primary.add_note(
-                    "Persistent SMB exact-publication retry also failed: "
-                    f"{type(recovery_error).__name__}: {recovery_error}"
-                )
-                raise primary from recovery_error
+        committed_members = self._commit_persistent_smb_source_members(
+            certifications, projection_group
+        )
+        source_result = self._publish_persistent_smb_sources(source_publication, committed_members)
         application_batch = handoff.application_result.result
         if (
             self.executor._smb_channel_manager.session_view(application_batch.session.channel_id)

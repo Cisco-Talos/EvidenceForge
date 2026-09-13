@@ -2,6 +2,22 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 9c accepted — SMB publication and exact recovery
+
+Predecessor `304fc68e`. The continuation coordinator explicitly selects reserved preparation, root execution, retained source building, retained source preparation and terminal acknowledgement at their original authenticated boundaries. A fresh-source publication operation finalizes State, authenticates/rebinds, certifies timing, commits members and publishes in order; its late file/State authentication stays distinct from resumed certification. Two identical member commit/recover/retry loops now share one 43-line operation, and two identical exact-publication retries share one 28-line operation. No generic retry policy was introduced. Across item 9, the main coordinator falls from 1,298 to 436 lines and the retained-source coordinator from 215 to 152.
+
+Acceptance: 36 passed, 29 deselected in 17.84s,
+8550 passed, 27 skipped, 2011 deselected in 312.55s (0:05:12). Targeted slow controls:
+37 passed, 7 deselected in 74.69s (0:01:14). Both Ruff checks, revision-78 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.534/2.511/2.517/2.516 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-publication.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The first full final slow run passed 1,779 tests and failed one source-inventory assertion naming the former SMB timing-claim location. Updated that one expected function to _certify_new_persistent_smb_sources; all claim counts, forbidden-call checks and lock-order assertions remain intact. The original failed log is preserved as final-slow-initial.log. No production output or runtime assertion failed.
+
 ### Item 9b accepted — SMB source construction and certification
 
 Predecessor `2b1b7e5e`. Operation events, session events, projection/timing preparation and fresh-attempt certification now have named operations consuming existing authenticated preparation records. The main coordinator falls from 1,060 to 539 lines. One 24-line finalization operation replaces the identical fresh/resumed materialize-recover-retry blocks; callers retain their original authentication and close-rebinding checks. Existing retry certification remains separate because it can adopt retained certifications or timing commits. Digest functions preserve their exact serialization. No authentication or mutation was moved across a phase boundary.
