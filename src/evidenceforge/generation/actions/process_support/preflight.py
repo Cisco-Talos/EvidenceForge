@@ -259,7 +259,15 @@ class ProcessPreflightPlanner:
         selection = self._select_endpoint_effects(request)
         allocation_free_endpoint = self._validate_endpoint_effects(request, anchor, selection)
         runtime_content_manager = self._runtime_content_manager
+        # This preparation owns only tokens it creates. Endpoint and root-binary
+        # reservations append to the same list; caller-supplied tokens never join
+        # it. See test_generator_endpoint_effect_integration.py's partial-failure
+        # and idempotent-cleanup contracts.
         newly_reserved: list[LocalArtifactPublishToken] = []
+        # Endpoint reservation handles its own failures, before this outer try.
+        # The outer scope cancels those tokens only if a later lifetime preview,
+        # root-binary reservation, or result assembly fails. Keep both scopes:
+        # neither may broaden bundle execution's separate publication rollback.
         reservations = self._reserve_endpoint_artifacts(request, anchor, selection, newly_reserved)
         try:
             endpoint = (

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 62
+current_revision: 63
 history_start_revision: 1
-behavior_surface_sha256: "52f9757f67793ce4771f6b93cc9aeeebe826d10f01553f7dfc1d4458774a8180"
+behavior_surface_sha256: "8afe360070be55822401ac7b47cb0f0b8d837ea84203221a123a043f4eb208d9"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -603,3 +603,10 @@ changes:
       - process-runtime-artifacts
     formats: []
     summary: Separates effect selection, allocation-free validation, endpoint reservations, lifetime admission and root-binary reservation while preserving order, one preparation-local reservation list, exception scopes and prepared results.
+  - revision: 63
+    id: document-process-reservation-cleanup-scopes
+    impact: none
+    domains:
+      - process-preflight
+    formats: []
+    summary: Explain preparation-local token ownership and distinct endpoint and later-failure cleanup scopes.

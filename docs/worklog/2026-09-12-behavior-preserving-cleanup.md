@@ -1,5 +1,48 @@
 # Behavior-preserving 2.0.0 cleanup
 
+## Nine-item simplification pass — in progress
+
+Starting commit: `26a150ac4d807b1b00e6d7c02019837132447dc1`, clean on
+`codex/2.0.0-code-cleanup`. Preserved checkout: `/private/tmp/eforge-cleanup-nine-baseline`.
+All nine approved items remain behavior-preserving; realism/correctness take priority over speed.
+Performance observations have no numerical rejection gate. No public/schema/version/dependency/
+checkpoint-policy change, merge or release is authorized by this cleanup.
+
+Order: fingerprint; baseline per-host then cross-host; clocks; gates/lock helper; process companions;
+CLI preparation then cleanup; validation; network request/transport/evidence; SMB root/source/recovery.
+Each named substep is independently committed after focused, standard, Ruff, manifest and relevant
+raw-byte gates. Final gates include full slow, expanded evidence, 24 resumes/18 older-build exact
+rejections and targeted retention soak. No incomplete gate is accepted.
+
+The existing 194 byte controls and 18 previous resumes reverified successfully. The verification
+report is `/private/tmp/eforge-cleanup-pass4-existing-controls.json`; structural baseline and hash
+are in `2026-09-12-nine-item-baseline.json`. Eighteen new fingerprint/gate characterization tests
+pass before extraction. A new bounded multi-host baseline fixture adds Windows DC and RHEL traffic,
+all targets, both seeds and a partial final hour; first capture and repeat are being frozen.
+Initial preflight comments explain token ownership and the two exception scopes.
+
+Initial fingerprint benchmark (0.206748 s median) overlapped the start of the generation control
+capture and is not accepted as an isolated performance measurement; retain it as a draft and repeat.
+Missing guessed test filenames in read-only searches were corrected using the actual test inventory.
+No production change or evidence difference resulted from these setup searches.
+
+
+### Initial controls accepted
+
+The six added baseline cases repeat byte-identically and the initial comment-only build also
+matches them (32 artifacts for seed 42, 34 for seed 137). Together with the existing reverified
+194 controls, the frozen matrix now has 200 cases. The initial standard suite passes **8,507 tests**,
+with 27 unchanged skips and 2,011 deselected (311.70 seconds). Eighteen focused characterizations,
+both Ruff checks and revision-63 manifest validation pass. A sandboxed uv attempt failed before
+running checks because its cache was inaccessible; the required checks succeeded with authorized
+cache access. No failed attempt is counted as passing.
+
+Isolated baseline performance (two warmups, seven samples plus separate traced-allocation sample)
+is recorded in `2026-09-12-nine-item-baseline.json`, alongside frozen input hashes. The earlier
+concurrently started fingerprint measurement remains excluded. Initial byte report:
+`/private/tmp/eforge-cleanup-evidence/pass4-initial-report.json`. All controls precede semantic
+implementation changes. Performance measurements are informational, without a speed cap.
+
 ## Final process-ownership pass — complete
 
 All three remaining opportunities are complete in four independently gated implementation commits
