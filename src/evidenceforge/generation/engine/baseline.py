@@ -10839,7 +10839,8 @@ class BaselineMixin:
         of that host's pass, not just renewal. RDP plans every placement before
         execution advances its global lifecycle frontier. Terminal admission
         keeps active lifecycles past the collection cutoff. See the baseline
-        terminal-family, DHCP timing and RDP baseline contract tests.
+        contracts in test_baseline_terminal_family_admission.py,
+        test_dhcp_timing_runtime.py and test_rdp_baseline_noise.py.
         """
         from evidenceforge.generation.activity import _get_os_category
 
@@ -11052,6 +11053,82 @@ class BaselineMixin:
                 terminal_pass=terminal_pass,
             )
 
+        # Placement must finish before execution advances the global RDP frontier.
+        rdp_requests = self._plan_system_rdp_requests(
+            current_hour=current_hour,
+            rng=rng,
+        )
+
+        self._execute_baseline_rdp_requests(rdp_requests, rng)
+
+        # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
+        self._generate_rsat_sessions(current_hour, rng, local_dt)
+
+        self._generate_system_service_logons(
+            current_hour=current_hour,
+            rng=rng,
+        )
+
+        # Machine account ($) authentication to DCs
+        dc_ips = self._infra_ips.get("dc", [])
+        dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+        if isinstance(dc_ips, str):
+            dc_ips = [dc_ips]
+        self._generate_system_machine_authentication(
+            current_hour=current_hour,
+            dc_hostnames=dc_hostnames,
+            dc_ips=dc_ips,
+            pass_end=pass_end,
+            rng=rng,
+            terminal_pass=terminal_pass,
+        )
+
+        self._generate_system_dc_authentication(
+            current_hour=current_hour,
+            dc_hostnames=dc_hostnames,
+            dc_ips=dc_ips,
+            rng=rng,
+        )
+
+        # Preserve the last-host resolver dependency characterized by
+        # test_ambient_resolver_control_preserves_legacy_last_host_pool.
+        # Host-specific resolver truth needs a separate evidence-changing correction.
+        if self.scenario.environment.systems:
+            self._generate_system_linux_syslog(
+                current_hour=current_hour,
+                pass_end=pass_end,
+                rng=rng,
+                system_dns_ips=system_dns_ips,
+                terminal_pass=terminal_pass,
+            )
+
+        # ICMP ping between systems on same subnet
+        systems = self.scenario.environment.systems
+        self._generate_system_icmp_traffic(
+            current_hour=current_hour,
+            rng=rng,
+            systems=systems,
+        )
+
+        self._generate_system_ids_noise(
+            current_hour=current_hour,
+            rng=rng,
+            systems=systems,
+        )
+
+        # Web access logs
+        for sys_obj in systems:
+            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
+
+    def _plan_system_rdp_requests(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+    ) -> tuple[_BaselineRdpIntent, ...]:
+        """Freeze all RDP placements before execution advances lifecycle state."""
+        from evidenceforge.generation.activity import _get_os_category
+
         # RDP: IT admin connections to Windows servers/DCs. Plan every target
         # first because the exact lifecycle journal owns one global frontier.
         # Bootstrap consumes the shared deterministic RNG, so completing all
@@ -11125,11 +11202,16 @@ class BaselineMixin:
                         session_end_plan=None,
                     )
                 )
+        return tuple(rdp_requests)
 
-        self._execute_baseline_rdp_requests(tuple(rdp_requests), rng)
-
-        # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
-        self._generate_rsat_sessions(current_hour, rng, local_dt)
+    def _generate_system_service_logons(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Run the service logons cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
@@ -11178,11 +11260,19 @@ class BaselineMixin:
                     time=ts,
                 )
 
-        # Machine account ($) authentication to DCs
-        dc_ips = self._infra_ips.get("dc", [])
-        dc_hostnames = self._infra_ips.get("dc_hostnames", [])
-        if isinstance(dc_ips, str):
-            dc_ips = [dc_ips]
+    def _generate_system_machine_authentication(
+        self,
+        *,
+        current_hour: datetime,
+        dc_hostnames: list[str] | str,
+        dc_ips: list[str],
+        pass_end: datetime,
+        rng: random.Random,
+        terminal_pass: bool,
+    ) -> None:
+        """Run the machine authentication cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
+
         if dc_ips and dc_hostnames:
             for system in self.scenario.environment.systems:
                 os_cat = _get_os_category(system.os)
@@ -11213,6 +11303,17 @@ class BaselineMixin:
                         time=ts,
                         exclusive_end=pass_end if terminal_pass else None,
                     )
+
+    def _generate_system_dc_authentication(
+        self,
+        *,
+        current_hour: datetime,
+        dc_hostnames: list[str] | str,
+        dc_ips: list[str],
+        rng: random.Random,
+    ) -> None:
+        """Run the dc authentication cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # DC-side Kerberos event generation
         if dc_ips and dc_hostnames:
@@ -11377,6 +11478,18 @@ class BaselineMixin:
                     self._last_tgt_time[username] = ts
                 elif last_tgt is None:
                     self._last_tgt_time[username] = current_hour
+
+    def _generate_system_linux_syslog(
+        self,
+        *,
+        current_hour: datetime,
+        pass_end: datetime,
+        rng: random.Random,
+        system_dns_ips: list[str],
+        terminal_pass: bool,
+    ) -> None:
+        """Run the linux syslog cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # Linux syslog diversity
         for system in self.scenario.environment.systems:
@@ -11830,8 +11943,14 @@ class BaselineMixin:
                             self._extra_syslog_entry_counts.get(limit_key, 0) + 1
                         )
 
-        # ICMP ping between systems on same subnet
-        systems = self.scenario.environment.systems
+    def _generate_system_icmp_traffic(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+        systems: list[System],
+    ) -> None:
+        """Run the icmp traffic cross-host pass in host order."""
         if len(systems) >= 2:
             avg_multiplier = sum(
                 self._activity_multiplier(system, "icmp_monitoring") for system in systems
@@ -11879,6 +11998,16 @@ class BaselineMixin:
                     orig_bytes=64,
                     resp_bytes=64,
                 )
+
+    def _generate_system_ids_noise(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+        systems: list[System],
+    ) -> None:
+        """Run the ids noise cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # IDS false-positive alerts
         if self.scenario.environment.network:
@@ -12171,10 +12300,6 @@ class BaselineMixin:
                         firewall=firewall,
                     )
 
-        # Web access logs
-        for sys_obj in systems:
-            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
-
     def _generate_system_dns_traffic(
         self,
         *,
@@ -12188,7 +12313,7 @@ class BaselineMixin:
         system: System,
         system_dns_ips: list[str],
     ) -> None:
-        """Generate dns traffic at its existing per-host phase."""
+        """Generate DNS lookups with the already selected host resolver pool."""
         # DNS lookups: truly periodic with small jitter, using global schedule
         if "dns-client" in services and system_dns_ips:
             _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
@@ -12258,7 +12383,7 @@ class BaselineMixin:
         services: list[str],
         system: System,
     ) -> None:
-        """Generate ntp traffic at its existing per-host phase."""
+        """Generate NTP traffic while advancing the existing per-host periodic schedule."""
         # NTP syncs follow a stable per-association poll schedule rather
         # than a fixed hourly tick.
         if "ntp-client" in services:
@@ -12342,7 +12467,7 @@ class BaselineMixin:
         sys_pids: dict[str, int],
         system: System,
     ) -> None:
-        """Generate dhcp renewal at its existing per-host phase."""
+        """Generate an admitted DHCP renewal; authored-lease whole-host skips stay with the caller."""
         lease_time = dhcp_state["lease_time"]
         renewal_sequence = int(dhcp_state.get("renewal_sequence", 0))
 
@@ -12435,7 +12560,7 @@ class BaselineMixin:
         services: list[str],
         system: System,
     ) -> None:
-        """Generate kerberos traffic at its existing per-host phase."""
+        """Generate Kerberos evidence using the host phase's selected directory targets."""
         # Kerberos
         if "kerberos-client" in services and os_cat == "windows" and dc_targets:
             _krb_lo, _krb_hi = self._resolve_traffic_rate("kerberos")
@@ -12518,7 +12643,7 @@ class BaselineMixin:
         services: list[str],
         system: System,
     ) -> None:
-        """Generate ldap traffic at its existing per-host phase."""
+        """Generate LDAP traffic with the existing client process and target selection."""
         # LDAP
         if "ldap-client" in services and os_cat == "windows" and dc_targets:
             _ldap_lo, _ldap_hi = self._resolve_traffic_rate("ldap")
@@ -12575,7 +12700,7 @@ class BaselineMixin:
         system: System,
         terminal_pass: bool,
     ) -> None:
-        """Generate service processes at its existing per-host phase."""
+        """Generate Windows service processes with their existing cutoff admission and lifetimes."""
         # Independent system service processes (not tied to user activity)
         # Windows hosts spawn 3-8 service processes per hour
         if os_cat == "windows":
@@ -12662,7 +12787,7 @@ class BaselineMixin:
         sys_pids: dict[str, int],
         system: System,
     ) -> None:
-        """Generate registry activity at its existing per-host phase."""
+        """Generate registry mutations through the occurrence-aware canonical materializer."""
         # Baseline registry activity from running services. Real Sysmon
         # generates hundreds-thousands of Event 12/13 per hour. We emit
         # 15-40 per host per hour to provide realistic background volume.
@@ -12823,7 +12948,7 @@ class BaselineMixin:
         system: System,
         terminal_pass: bool,
     ) -> None:
-        """Generate scheduled activity at its existing per-host phase."""
+        """Generate Windows task activity without closing processes at collection cutoff."""
         # Windows scheduled tasks — diverse per-hour selection from YAML.
         # Linux scheduled tasks are handled by _generate_scheduled_tasks()
         # which uses realistic daily/weekly frequencies instead of the
@@ -12934,7 +13059,7 @@ class BaselineMixin:
         system: System,
         terminal_pass: bool,
     ) -> None:
-        """Generate delegation activity at its existing per-host phase."""
+        """Generate delegation activity only within the owning service and session lifetimes."""
         # Service account delegation: svc accounts auth to remote servers
         if os_cat == "windows" and self.scenario.environment.service_accounts:
             delegation_config = service_account_delegation_config()
@@ -13005,7 +13130,7 @@ class BaselineMixin:
         system: System,
         terminal_pass: bool,
     ) -> None:
-        """Generate group policy activity at its existing per-host phase."""
+        """Generate GPO refreshes, scheduling termination only for an admitted process."""
         # Group Policy client refresh: host-scoped 90-minute-style schedule.
         # Automatic refreshes usually stay inside gpsvc; only a minority
         # materialize an observable gpupdate.exe invocation.
@@ -13104,7 +13229,7 @@ class BaselineMixin:
         sys_pids: dict[str, int],
         system: System,
     ) -> None:
-        """Generate remote thread activity at its existing per-host phase."""
+        """Generate remote-thread evidence from existing host process identities."""
         # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
         if os_cat == "windows":
             valid_crt = [
@@ -13152,7 +13277,7 @@ class BaselineMixin:
         sys_pids: dict[str, int],
         system: System,
     ) -> None:
-        """Generate process access activity at its existing per-host phase."""
+        """Generate process-access evidence using existing host actors and draw order."""
         # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
         if os_cat == "windows":
             valid_pa = [
@@ -13194,7 +13319,7 @@ class BaselineMixin:
         rng: random.Random,
         system: System,
     ) -> None:
-        """Generate module activity at its existing per-host phase."""
+        """Generate module evidence without creating an independent process lifecycle."""
         # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
         # Uses data-driven DLL profiles from system_processes.yaml and
         # application_catalog.yaml. Picks from processes actually running
@@ -13249,7 +13374,7 @@ class BaselineMixin:
         system: System,
         terminal_pass: bool,
     ) -> None:
-        """Generate linux shell activity at its existing per-host phase."""
+        """Generate Linux shell activity through the existing foreground and session owners."""
         # SSH: connections to Linux servers
         sys_type = (system.type or "workstation").lower()
         if os_cat == "linux" and sys_type == "server":

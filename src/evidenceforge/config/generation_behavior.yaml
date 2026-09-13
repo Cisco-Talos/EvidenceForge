@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 65
+current_revision: 66
 history_start_revision: 1
-behavior_surface_sha256: "06aec786e5a85cd9490e86db994f247c35842f11c70036d081d22ac4167dcc27"
+behavior_surface_sha256: "9db2e9d6a376d1eec980cc77b5d2bad169cc0a7be0e71b2ff5294e09f79f0c8c"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -624,3 +624,10 @@ changes:
       - baseline-system-traffic
     formats: []
     summary: Extract ordered per-host DNS NTP DHCP authentication process registry and shell activities while retaining host skips RNG order and shared runtime owners.
+  - revision: 66
+    id: separate-cross-host-baseline-passes
+    impact: none
+    domains:
+      - baseline-system-traffic
+    formats: []
+    summary: Separate RDP placement service and directory authentication Linux syslog ICMP and IDS passes while preserving host and RNG order renewal ownership and terminal admission.

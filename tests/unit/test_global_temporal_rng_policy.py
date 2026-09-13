@@ -149,21 +149,27 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|engine/baseline.py|_generate_scheduled_tasks|uniform
 3|engine/baseline.py|_generate_stale_account_noise|uniform
 3|engine/baseline.py|_generate_suspicious_noise|uniform
+1|engine/baseline.py|_generate_system_dc_authentication|gauss
+4|engine/baseline.py|_generate_system_dc_authentication|uniform
 1|engine/baseline.py|_generate_system_dns_traffic|uniform
 2|engine/baseline.py|_generate_system_group_policy_activity|uniform
+1|engine/baseline.py|_generate_system_icmp_traffic|gauss
+1|engine/baseline.py|_generate_system_icmp_traffic|uniform
+2|engine/baseline.py|_generate_system_ids_noise|uniform
 1|engine/baseline.py|_generate_system_kerberos_traffic|gauss
 1|engine/baseline.py|_generate_system_kerberos_traffic|uniform
 1|engine/baseline.py|_generate_system_ldap_traffic|gauss
 1|engine/baseline.py|_generate_system_ldap_traffic|uniform
 2|engine/baseline.py|_generate_system_linux_shell_activity|uniform
+1|engine/baseline.py|_generate_system_machine_authentication|gauss
 1|engine/baseline.py|_generate_system_module_activity|uniform
 2|engine/baseline.py|_generate_system_ntp_traffic|uniform
 1|engine/baseline.py|_generate_system_process_access_activity|uniform
 1|engine/baseline.py|_generate_system_registry_activity|uniform
 1|engine/baseline.py|_generate_system_remote_thread_activity|uniform
+1|engine/baseline.py|_generate_system_service_logons|uniform
 1|engine/baseline.py|_generate_system_service_processes|uniform
-3|engine/baseline.py|_generate_system_traffic|gauss
-9|engine/baseline.py|_generate_system_traffic|uniform
+1|engine/baseline.py|_plan_system_rdp_requests|uniform
 1|engine/baseline.py|_generate_user_traffic_affinity|uniform
 1|engine/baseline.py|_gpo_refresh_interval_seconds|uniform
 4|engine/baseline.py|_journald_housekeeping_schedule|uniform
@@ -310,7 +316,7 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 184
+    assert len(caps) == 190
     assert sum(caps.values()) == 358
     assert not observed - caps
     assert len(observed) <= len(caps)

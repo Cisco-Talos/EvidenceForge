@@ -220,7 +220,10 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_generate_profile_traffic": 4,
             "_generate_rsat_sessions": 1,
             "_generate_suspicious_noise": 2,
-            "_generate_system_traffic": 5,
+            "_generate_system_dc_authentication": 2,
+            "_generate_system_linux_syslog": 1,
+            "_generate_system_icmp_traffic": 1,
+            "_generate_system_ids_noise": 1,
             "_generate_system_dns_traffic": 1,
             "_generate_system_ntp_traffic": 1,
             "_generate_system_kerberos_traffic": 1,
@@ -258,13 +261,13 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         "_generate_system_ntp_traffic": ("direct-rendered-ntp",),
         "_generate_system_kerberos_traffic": ("direct-rendered-kerberos",),
         "_generate_system_ldap_traffic": ("direct-rendered-ldap",),
-        "_generate_system_traffic": (
+        "_generate_system_dc_authentication": (
             "direct-rendered-dc-kerberos",
             "direct-rendered-dc-tgs",
-            "direct-rendered-ufw",
-            "direct-rendered-icmp",
-            "ids-selected-outer",
         ),
+        "_generate_system_linux_syslog": ("direct-rendered-ufw",),
+        "_generate_system_icmp_traffic": ("direct-rendered-icmp",),
+        "_generate_system_ids_noise": ("ids-selected-outer",),
     }
     sinks_by_owner: dict[str, list[ast.Call]] = {}
     for owner, call in literal_sinks:
@@ -290,7 +293,9 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_generate_profile_traffic": 2,
             "_generate_rsat_sessions": 1,
             "_generate_suspicious_noise": 2,
-            "_generate_system_traffic": 4,
+            "_generate_system_dc_authentication": 2,
+            "_generate_system_linux_syslog": 1,
+            "_generate_system_icmp_traffic": 1,
             "_generate_system_dns_traffic": 1,
             "_generate_system_ntp_traffic": 1,
             "_generate_system_kerberos_traffic": 1,
@@ -320,7 +325,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
     )
     assert Counter(
         owner for owner, _call in _calls("_baseline_ids_connection_close_bound_seconds")
-    ) == Counter({"_generate_system_traffic": 1})
+    ) == Counter({"_generate_system_ids_noise": 1})
     assert Counter(
         owner for owner, _call in _calls("_baseline_persona_connection_close_bounds_seconds")
     ) == Counter(

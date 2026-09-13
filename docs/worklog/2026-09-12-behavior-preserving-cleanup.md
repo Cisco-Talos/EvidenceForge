@@ -2,6 +2,45 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 2b accepted — explicit cross-host passes
+
+Item 2a committed as `8230adf6`. Seven additional operations now own cross-host RDP placement,
+service logons, machine authentication, DC authentication/renewal, Linux syslog, ICMP and IDS noise.
+The coordinator directly calls the existing RDP executor, RSAT owner and web renderer in their
+original positions. The web pass was already a three-line loop over a cohesive renderer, so it
+remains explicit rather than acquiring another forwarding method.
+
+The complete system-traffic coordinator is now **299 lines and 15 statement branches**, versus
+2,314 lines and 233 branches at `26a150ac`. RDP placement returns the existing tuple of intents only
+after every placement draw; execution advances the global lifecycle frontier afterward. DC client
+selection and TGT renewal remain together, including unconditional initialization of the existing
+renewal dictionary. No durable state, scheduler, RNG or context object is added. The legacy Linux
+resolver dependency is explicit; the empty-host guard preserves the old empty-loop behavior without
+reading an unbound last-host local.
+
+The focused suite passes **267 tests**, one existing skip and 20 deselected (6.21 seconds); the
+targeted slow RDP/RNG suite passes **23 tests** (13.29 seconds). Both Ruff checks and revision-66
+validation against `8230adf6` pass. The standard suite passes **8,511 tests**, with 27 unchanged
+skips and 2,011 deselected (297.19 seconds). All **38 raw-byte cases** match both `26a150ac` and
+the preceding item, `8230adf6`. The report is
+`/private/tmp/eforge-cleanup-evidence/pass4-item2b-report.json`. No refactor or diagnostic-order
+regression appeared in this substep.
+
+Isolated generation medians were 5.212 s (preceding baseline observation), 5.224 s (candidate),
+5.209 s (repeated baseline), and 5.194 s (repeated candidate), with about 20.2 MB peak traced memory.
+Evidence hashes agree across all observations. The coordinator now has 57 calls and 38 direct owner
+attributes, versus 666 and 73 originally; the existing RDP intent list is still converted to exactly
+one tuple per pass. `2026-09-12-nine-item-baseline-cross-host.json` records the complete structural,
+performance and acceptance evidence. Performance remains informational, with no slowdown threshold.
+
+Six byte-for-byte copies of the already verified revision-62 checkpoints now live under
+`/private/tmp/eforge-cleanup-evidence/pass4-baseline-checkpoints`; `preserved-build.json` records
+the whole-bundle hashes and their exact `26a150ac` identity. Original files remain unchanged.
+A preliminary CLI characterization rejected exact resume from that older build while preserving
+the complete 35-file checkpoint bundle and file set, strengthening the existing pointer-only
+rejection check before the CLI refactor. The final matrix must repeat this across all 18 older-build
+cases and require all 24 successful resumes; this one pilot is not the final checkpoint gate.
+
 ### Item 2a accepted — per-host baseline operations
 
 Fourteen direct methods on the existing baseline owner now perform the per-host DNS, NTP, DHCP,
