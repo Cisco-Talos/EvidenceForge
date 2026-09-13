@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 79
+current_revision: 80
 history_start_revision: 1
-behavior_surface_sha256: "426dd9631e69a41328f1954cf35fb2a3b61158064c04b869cea66a720f12dfe4"
+behavior_surface_sha256: 701c1ef2bd7fbc5fd7ea357734b43102d6c43b6901bb67739db86c53a5174f9e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -723,3 +723,13 @@ changes:
       - baseline-generation
     formats: []
     summary: Bind ambient resolver health messages to each Linux host's selected DNS pool; retain recorded recovery pairs and allow downstream deterministic draws to reflect corrected pool sizes
+  - revision: 80
+    id: kerberos-packet-admission-processing-budget
+    impact: localized
+    domains:
+      - kerberos-authentication
+      - network-transport
+      - source-timing
+    formats:
+      - windows_event_security
+    summary: Reserve source-local processing space before responder Kerberos WFP admission and keep single and paired KDC audit ordering inside the unchanged canonical transport interval
