@@ -55,7 +55,7 @@ attribute already-detected differences. No golden file is replaced and no normal
 used to pass acceptance. Full soak remains excluded as requested.
 
 The standard skips are 22 tests requiring absent gitignored sample data, three unavailable
-SOF-ELK container-harness tests, one Splunk license-opt-in test, and one existing baseline test
+SOF-ELK® container-harness tests, one Splunk license-opt-in test, and one existing baseline test
 that requires a fuller engine fixture. Their names remain in `logs/standard.log`; they are not
 reported as passing. The bounded absent/mismatched-permit policy also passes four tests against
 the original source, establishing preservation independently of the new implementation.
