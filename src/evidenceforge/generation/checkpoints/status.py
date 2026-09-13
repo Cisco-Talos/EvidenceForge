@@ -29,8 +29,7 @@ from .errors import CheckpointError
 from .fingerprint import (
     ResumeCompatibility,
     classify_resume_compatibility,
-    run_fingerprint,
-    run_fingerprint_components,
+    run_fingerprint_details,
 )
 from .models import CheckpointRecovery
 from .store import IncrementalCheckpointStore
@@ -283,13 +282,7 @@ def _compatibility(
             for log in compiled.scenario.output.logs
             if isinstance(log, dict) and "format" in log
         ]
-        actual = run_fingerprint(
-            compiled,
-            output_target=target,
-            formats=formats,
-            oob_hosts=tuple(oob),
-        )
-        current_components = run_fingerprint_components(
+        actual, current_components = run_fingerprint_details(
             compiled,
             output_target=target,
             formats=formats,

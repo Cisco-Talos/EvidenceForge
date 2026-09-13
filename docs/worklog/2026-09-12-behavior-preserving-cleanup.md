@@ -43,6 +43,38 @@ concurrently started fingerprint measurement remains excluded. Initial byte repo
 `/private/tmp/eforge-cleanup-evidence/pass4-initial-report.json`. All controls precede semantic
 implementation changes. Performance measurements are informational, without a speed cap.
 
+### Item 1 — fingerprint acceptance in progress
+
+Initial controls committed as `ad8a4aa5`. One operation-local payload now produces both the exact
+fingerprint and its components in generation, checkpoint status and checkpoint verification.
+Existing standalone APIs remain. The diagnostic projection copies the top-level mapping rather
+than popping the shared resolved payload. New tests cover one discovery/build scan and freshness
+on the next operation; all 128 focused CLI/checkpoint/characterization tests pass (14 deselected,
+66.42 seconds). Six raw-byte cases match both the initial build and `26a150ac`. Standard acceptance
+and isolated performance comparison are pending. A formatting check caught one long test line;
+Ruff formatted it before the standard run, and both complete Ruff checks now pass.
+Revision 64 records the provenance-only refactor. Its covered generation surface digest is unchanged
+from revision 63 because the checkpoint controls are excluded by the existing surface algorithm.
+The build fingerprint still changes, as required; no fingerprint algorithm or compatibility policy
+was altered.
+
+A read-only baseline extraction inventory also found that ambient systemd-resolved message rendering
+receives `system_dns_ips` left by the preceding per-host pass. With host-specific resolver pools,
+this may describe another host's resolver. This is a pre-existing realism concern, separate from
+the approved refactor; preserve the current dependency and characterize it before extraction.
+
+### Item 1 accepted — operation-local fingerprints
+
+All gates pass: **8,509 standard tests**, 27 existing skips, 2,011 deselected (304.61 seconds);
+128 focused tests; both Ruff checks; manifest validation against `ad8a4aa5`; six raw-byte cases
+against both the initial control build and `26a150ac`. The three callers now make one payload
+build/installed-source scan instead of two. Serialization, standalone interfaces, freshness and
+compatible/exact policies are unchanged. Isolated alternating measurements: baseline medians
+0.209489/0.195718 seconds; candidate 0.104539/0.105476 seconds. Peak traced allocation remains
+about 5.49 MB. These are focused fingerprint measurements, not whole-generation speedup claims.
+Report: `2026-09-12-nine-item-fingerprint.json`. Logs:
+`/private/tmp/eforge-pass4-item1-{focused,standard,byte}.log`. No new evidence exception or skip.
+
 ## Final process-ownership pass — complete
 
 All three remaining opportunities are complete in four independently gated implementation commits

@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 63
+current_revision: 64
 history_start_revision: 1
 behavior_surface_sha256: "8afe360070be55822401ac7b47cb0f0b8d837ea84203221a123a043f4eb208d9"
 changes:
@@ -610,3 +610,10 @@ changes:
       - process-preflight
     formats: []
     summary: Explain preparation-local token ownership and distinct endpoint and later-failure cleanup scopes.
+  - revision: 64
+    id: share-operation-local-fingerprint-payload
+    impact: none
+    domains:
+      - checkpoint-provenance
+    formats: []
+    summary: Derive exact build identity and component diagnostics from one local payload without changing hashing or resume classification.

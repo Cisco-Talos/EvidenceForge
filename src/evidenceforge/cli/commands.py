@@ -85,8 +85,7 @@ from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.fingerprint import (
     ResumeCompatibility,
     classify_resume_compatibility,
-    run_fingerprint,
-    run_fingerprint_components,
+    run_fingerprint_details,
 )
 from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
 from evidenceforge.generation.checkpoints.test_sync import (
@@ -1760,13 +1759,7 @@ def generate(
         for log in scenario.output.logs
         if isinstance(log, dict) and "format" in log
     ]
-    fingerprint = run_fingerprint(
-        compiled,
-        output_target=output_target.value,
-        formats=checkpoint_formats,
-        oob_hosts=oob_hosts,
-    )
-    fingerprint_components = run_fingerprint_components(
+    fingerprint, fingerprint_components = run_fingerprint_details(
         compiled,
         output_target=output_target.value,
         formats=checkpoint_formats,
