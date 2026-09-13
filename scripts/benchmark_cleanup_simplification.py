@@ -58,6 +58,53 @@ def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
             )
 
         return fingerprints, 1
+    if name == "prepared-clocks":
+        from evidenceforge.generation.timing import (
+            ClockWanderSpec,
+            SourceClockKey,
+            SourceClockSpec,
+            TimingRuntime,
+            TriangularDistribution,
+        )
+
+        epoch = datetime(2024, 1, 15, tzinfo=UTC)
+        spec = SourceClockSpec(
+            wander=ClockWanderSpec(
+                knot_distribution_microseconds=TriangularDistribution(
+                    minimum=-10_000, mode=20, maximum=10_000
+                ),
+                knot_interval=timedelta(seconds=30),
+            )
+        )
+        keys = tuple(SourceClockKey(kind="endpoint", identity=f"HOST-{i}") for i in range(8))
+        times = tuple(epoch + timedelta(milliseconds=i * 137 - 500) for i in range(2048))
+
+        def prepared_clocks() -> object:
+            runtime = TimingRuntime(
+                reference_time=epoch,
+                namespace="cleanup-prepared-clock-control",
+                generation_seed=137,
+                max_clock_cache_entries=4,
+            )
+            digest = hashlib.sha256()
+            for batch in range(16):
+                preparation = runtime.prepared()
+                for index in range(batch * 128, (batch + 1) * 128):
+                    projected = preparation.clocks.project(
+                        times[index], key=keys[index % len(keys)], spec=spec
+                    )
+                    digest.update(projected.isoformat().encode())
+                if batch % 4 == 3:
+                    preparation.cancel()
+                else:
+                    preparation._acquire_claim()
+                    try:
+                        preparation._commit_no_fail()
+                    finally:
+                        preparation._release_claim()
+            return {"values_sha256": digest.hexdigest(), "census": asdict(runtime.census())}
+
+        return prepared_clocks, len(times)
     if name == "clocks":
         from evidenceforge.generation.timing import (
             SourceClockKey,
@@ -107,7 +154,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument(
-        "--workload", choices=("fingerprint", "clocks", "gates", "generation"), required=True
+        "--workload",
+        choices=("fingerprint", "clocks", "prepared-clocks", "gates", "generation"),
+        required=True,
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--samples", type=int, default=7)
@@ -126,6 +175,7 @@ def main() -> None:
     tracemalloc.start()
     operation()
     retained, peak = tracemalloc.get_traced_memory()
+    retained_blocks = sum(item.count for item in tracemalloc.take_snapshot().statistics("filename"))
     tracemalloc.stop()
     report = {
         "source": str(args.source.resolve()),
@@ -137,6 +187,7 @@ def main() -> None:
         "operations_per_second": count / statistics.median(seconds),
         "allocation_sample_retained_bytes": retained,
         "allocation_sample_peak_bytes": peak,
+        "allocation_sample_retained_blocks": retained_blocks,
         "process_max_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "result": result,
     }

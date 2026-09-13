@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 66
+current_revision: 67
 history_start_revision: 1
-behavior_surface_sha256: "9db2e9d6a376d1eec980cc77b5d2bad169cc0a7be0e71b2ff5294e09f79f0c8c"
+behavior_surface_sha256: "3ac6fb1b7987d8ae58f26acdd13d6cbcf1a9eaa1aecf4cdf190f85a40fd01aaf"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -631,3 +631,10 @@ changes:
       - baseline-system-traffic
     formats: []
     summary: Separate RDP placement service and directory authentication Linux syslog ICMP and IDS passes while preserving host and RNG order renewal ownership and terminal admission.
+  - revision: 67
+    id: share-live-and-prepared-clock-wander-calculations
+    impact: none
+    domains:
+      - source-timing
+    formats: []
+    summary: Share exact wander interpolation and knot sampling accounting while retaining live and prepared cache audit and transaction ownership.

@@ -2,6 +2,35 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 3 accepted — one clock calculation implementation
+
+Item 2b committed as `211446d7`. Live and prepared clock registries now delegate wander interpolation
+and knot sampling/accounting to two shared functions. Both pairs of old method entrypoints remain;
+cache operations, audit ownership, versioning and commit/cancel behavior stay with their original
+owners. Arithmetic order, floor-based negative ordinals and two logical knot samples even at an
+exact boundary remain explicit. Interpolation receives the existing knot callable so overrides of
+that entrypoint still apply; this introduces one transient bound-method argument per projection,
+without new persistent state or an independent RNG.
+
+The 12 additional clock controls passed against the preserved original checkout and again before
+production edits in the current checkout (0.78 seconds). After extraction, **52 focused tests**
+(4.64 seconds) and **12 slow source-timing preparation tests** (6.21 seconds) pass. Both Ruff checks
+and revision-67 validation against `211446d7` pass. The standard suite passes **8,523 tests**,
+with 27 unchanged skips and 2,011 deselected (298.41 seconds). All **38 raw-byte cases** match both
+`26a150ac` and the preceding commit. Report: `/private/tmp/eforge-cleanup-evidence/pass4-item3-report.json`.
+
+Before editing clock calculations, an additional nonzero-wander prepared-clock benchmark was frozen:
+2,048 projections across 16 preparations, with 12 commits and four cancellations. Its baseline median
+is 0.052667 seconds with 16,953 peak traced bytes. A fresh live-clock baseline is 0.049417 seconds
+with 8,078 peak traced bytes. The benchmark now also records retained traced allocation blocks;
+existing workload inputs and prior reports are preserved. Alternating live-clock medians were
+0.049417/0.050874/0.050947/0.051005 seconds (baseline/candidate/baseline/candidate); prepared-clock
+medians were 0.052667/0.053954/0.053621/0.054621 seconds. All value hashes and owner censuses match.
+The additional helper calls and transient callable binding have a small measured cost; they retain
+the existing callable seam while eliminating two independently maintained calculations. Peak traced
+memory remains under 9 KB for live and 17 KB for prepared workloads. No speed rejection gate applies.
+`2026-09-12-nine-item-clocks.json` contains all samples, allocation counts, structural and gate results.
+
 ### Item 2b accepted — explicit cross-host passes
 
 Item 2a committed as `8230adf6`. Seven additional operations now own cross-host RDP placement,
