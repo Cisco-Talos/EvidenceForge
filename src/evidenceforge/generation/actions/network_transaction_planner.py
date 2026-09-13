@@ -198,6 +198,7 @@ if TYPE_CHECKING:
         NetworkConnectionExecutor,
         NetworkConnectionRequest,
     )
+    from evidenceforge.generation.network_runtime import NetworkTransactionPreparation
     from evidenceforge.models.scenario import System
     from evidenceforge.models.state import RunningProcess
 
@@ -3606,6 +3607,276 @@ class NetworkTransactionPlanner:
             time=time,
         )
 
+    def _plan_icmp_payload(
+        self,
+        *,
+        rng: random.Random,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        duration: float | None,
+        stable_id: str,
+        conn_id: str,
+    ) -> tuple[int, int, float | None]:
+        """Sample one echo payload and its existing scoped duration without allocating identity."""
+        if resp_bytes and resp_bytes > 0:
+            request_size = _icmp_echo_payload_size(rng, orig_bytes)
+            response_size = request_size
+            orig_bytes = request_size
+            resp_bytes = response_size
+            duration = _icmp_echo_duration(
+                rng,
+                duration,
+                timing_runtime=self._timing_runtime,
+                stable_id=f"{stable_id}:{conn_id}:icmp-echo-duration",
+            )
+        else:
+            orig_bytes = _icmp_echo_payload_size(rng, orig_bytes)
+            resp_bytes = 0
+            duration = _icmp_echo_duration(
+                rng,
+                duration,
+                timing_runtime=self._timing_runtime,
+                stable_id=f"{stable_id}:{conn_id}:icmp-no-response-duration",
+            )
+        return orig_bytes, resp_bytes, duration
+
+    def _plan_explicit_transport_state(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        proto: str,
+        service: str | None,
+        dst_port: int,
+        conn_state: str,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        rng: random.Random,
+    ) -> tuple[str, float | None, int | None, int | None]:
+        """Apply caller-selected state accounting while retaining eager RNG argument evaluation."""
+        # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
+        if proto == "udp":
+            history = {
+                "SF": "Dd" if resp_bytes else "D",
+                "S0": "D",
+                "REJ": "D",
+                "OTH": "D",
+            }.get(conn_state, "Dd" if resp_bytes else "D")
+        else:
+            if conn_state == "SF":
+                history = _tcp_success_history(rng)
+            else:
+                history = {
+                    "REJ": "Sr",
+                    "S0": "S",
+                    "OTH": rng.choice(("DAd", "DdA", "ADad")),
+                    "S2": "ShADadF",
+                    "S3": "ShADadf",
+                    "RSTO": "ShADaR",
+                    "RSTR": "ShADadr",
+                    "S1": "Sh",
+                }.get(conn_state, _tcp_success_history(rng))
+        if conn_state in ("S0", "REJ"):
+            duration = None
+            resp_bytes = 0
+            if service == "dns" and proto == "udp" and dst_port == 53:
+                orig_bytes = max(orig_bytes or 0, 40)
+            else:
+                orig_bytes = 0
+        elif conn_state in ("S2", "S3"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="explicit_half_close",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+        elif conn_state in ("RSTO", "RSTR"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="explicit_reset",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+        elif conn_state in ("S1", "SH", "SHR"):
+            # Handshake-only observations still own a finite physical
+            # interval even when the caller omits a duration.  Without a
+            # close time the lifecycle authority cannot publish the root.
+            orig_bytes = 0
+            resp_bytes = 0
+            duration = self._failed_transport_duration_seconds(
+                request,
+                state=conn_state,
+                duration=duration or 0.5,
+                sample_key="explicit_handshake",
+            )
+        return history, duration, orig_bytes, resp_bytes
+
+    @staticmethod
+    def _plan_sampled_udp_state(
+        *,
+        service: str | None,
+        resp_bytes: int | None,
+        duration: float | None,
+        rng: random.Random,
+    ) -> tuple[str, str, float | None, int | None]:
+        """Select UDP observation state, retaining service-specific response precedence."""
+        # DNS connections with responses must not be S0 (no-response)
+        if service == "kerberos" and resp_bytes and resp_bytes > 0:
+            conn_state, history = "SF", "Dd"
+        elif service == "dns" and resp_bytes and resp_bytes > 0:
+            # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
+            dns_roll = rng.random()
+            if dns_roll < 0.05:
+                conn_state, history = "SF", "DDd"  # Retransmitted query
+            elif dns_roll < 0.07:
+                conn_state, history = "SF", "Ddd"  # Multi-packet response
+            else:
+                conn_state, history = "SF", "Dd"
+        elif service == "ntp" and resp_bytes and resp_bytes > 0:
+            conn_state, history = "SF", "Dd"
+        else:
+            entry = rng.choices(
+                _UDP_CONN_ENTRIES,
+                weights=_UDP_CONN_WEIGHTS,
+                k=1,
+            )[0]
+            conn_state, _, history = entry
+        if conn_state == "S0":
+            duration = None
+            resp_bytes = 0
+        return conn_state, history, duration, resp_bytes
+
+    def _plan_sampled_tcp_state(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        caller_provided_payload: bool,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        rng: random.Random,
+    ) -> tuple[str, str, float | None, int | None, int | None]:
+        """Choose an observation state and reconcile its payload and finite attempt interval."""
+        if duration is not None:
+            tcp_entries = _TCP_CONN_ENTRIES
+            tcp_weights = _TCP_CONN_WEIGHTS
+            if caller_provided_payload:
+                candidates = [
+                    entry
+                    for entry in _TCP_CONN_ENTRIES
+                    if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
+                ]
+                if candidates:
+                    tcp_entries = candidates
+                    tcp_weights = [entry[1] for entry in candidates]
+            entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
+            conn_state, _, history = entry
+            if conn_state == "OTH":
+                history = rng.choice(("DAd", "DdA", "ADad"))
+        else:
+            conn_state = "S0"
+            history = "S"
+        if conn_state in ("S0", "REJ"):
+            duration = None
+            resp_bytes = 0
+            # S0/REJ: Zeek orig_bytes/resp_bytes are payload (application
+            # data), not packet overhead.  No handshake completed → zero payload.
+            orig_bytes = 0
+        elif conn_state in ("S1", "SH", "SHR"):
+            # S1/SH/SHR = partial handshake, no application data transferred.
+            # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
+            # handshake-only states); IP-byte totals are computed from packet
+            # counts + header overhead downstream.
+            orig_bytes = 0
+            resp_bytes = 0
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_handshake",
+                )
+        elif conn_state in ("S2", "S3"):
+            # S2/S3 = half-closed: connection established, one side sent FIN
+            # but the other never replied. Some data transferred before close.
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_half_close",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+        elif conn_state in ("RSTO", "RSTR"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_reset",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+        elif conn_state == "OTH":
+            # OTH/Cc = midstream capture fragment — minimal data visible
+            orig_bytes = rng.randint(0, 200)
+            resp_bytes = rng.randint(0, 200)
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_midstream",
+                )
+        return conn_state, history, duration, orig_bytes, resp_bytes
+
+    @staticmethod
+    def _stage_icmp_observation_time(
+        *,
+        endpoints: ResolvedNetworkEndpoints,
+        src_port: int | None,
+        dst_port: int,
+        time: datetime,
+        duration: float | None,
+        network_preparation: NetworkTransactionPreparation,
+        window_end: datetime,
+    ) -> datetime:
+        """Stage tuple spacing on the supplied preparation; cancellation remains with its boundary."""
+        zeek_type = src_port if src_port else 8
+        zeek_code = dst_port if dst_port else 0
+        icmp_key = (endpoints.src_ip, zeek_type, endpoints.dst_ip, zeek_code)
+        requested_ts_us = int(round(time.timestamp() * 1_000_000))
+        next_ts_us = network_preparation.read_point(
+            NetworkRuntimePointFamily.ICMP_OBSERVATION,
+            icmp_key,
+            requested_ts_us,
+            at=ensure_utc(time),
+        )
+        adjusted_ts_us = max(requested_ts_us, int(next_ts_us))
+        gap_seed = _stable_seed(
+            f"icmp_observation_gap:{endpoints.src_ip}:{zeek_type}:{endpoints.dst_ip}:{zeek_code}:{adjusted_ts_us}"
+        )
+        interval_us = max(0, int(round((duration or 0.0) * 1_000_000)))
+        network_preparation.stage_point(
+            NetworkRuntimePointFamily.ICMP_OBSERVATION,
+            icmp_key,
+            adjusted_ts_us + interval_us + 7_000 + (gap_seed % 77_000),
+            expires_at=min(
+                window_end,
+                ensure_utc(time) + timedelta(days=1),
+            ),
+        )
+        if adjusted_ts_us != requested_ts_us:
+            time += timedelta(microseconds=adjusted_ts_us - requested_ts_us)
+        return time
+
     def _plan_network_transport(
         self,
         request: NetworkConnectionRequest,
@@ -3875,26 +4146,14 @@ class NetworkTransactionPlanner:
             history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
-            if resp_bytes and resp_bytes > 0:
-                request_size = _icmp_echo_payload_size(rng, orig_bytes)
-                response_size = request_size
-                orig_bytes = request_size
-                resp_bytes = response_size
-                duration = _icmp_echo_duration(
-                    rng,
-                    duration,
-                    timing_runtime=self._timing_runtime,
-                    stable_id=f"{facts.stable_id}:{conn_id}:icmp-echo-duration",
-                )
-            else:
-                orig_bytes = _icmp_echo_payload_size(rng, orig_bytes)
-                resp_bytes = 0
-                duration = _icmp_echo_duration(
-                    rng,
-                    duration,
-                    timing_runtime=self._timing_runtime,
-                    stable_id=f"{facts.stable_id}:{conn_id}:icmp-no-response-duration",
-                )
+            orig_bytes, resp_bytes, duration = self._plan_icmp_payload(
+                rng=rng,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                stable_id=facts.stable_id,
+                conn_id=conn_id,
+            )
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
@@ -3905,165 +4164,33 @@ class NetworkTransactionPlanner:
             ):
                 duration = protocol_evidence.dns.rtt
         elif conn_state is not None:
-            # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
-            if protocol_evidence.proto == "udp":
-                history = {
-                    "SF": "Dd" if resp_bytes else "D",
-                    "S0": "D",
-                    "REJ": "D",
-                    "OTH": "D",
-                }.get(conn_state, "Dd" if resp_bytes else "D")
-            else:
-                if conn_state == "SF":
-                    history = _tcp_success_history(rng)
-                else:
-                    history = {
-                        "REJ": "Sr",
-                        "S0": "S",
-                        "OTH": rng.choice(("DAd", "DdA", "ADad")),
-                        "S2": "ShADadF",
-                        "S3": "ShADadf",
-                        "RSTO": "ShADaR",
-                        "RSTR": "ShADadr",
-                        "S1": "Sh",
-                    }.get(conn_state, _tcp_success_history(rng))
-            if conn_state in ("S0", "REJ"):
-                duration = None
-                resp_bytes = 0
-                if service == "dns" and protocol_evidence.proto == "udp" and dst_port == 53:
-                    orig_bytes = max(orig_bytes or 0, 40)
-                else:
-                    orig_bytes = 0
-            elif conn_state in ("S2", "S3"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="explicit_half_close",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
-            elif conn_state in ("RSTO", "RSTR"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="explicit_reset",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
-            elif conn_state in ("S1", "SH", "SHR"):
-                # Handshake-only observations still own a finite physical
-                # interval even when the caller omits a duration.  Without a
-                # close time the lifecycle authority cannot publish the root.
-                orig_bytes = 0
-                resp_bytes = 0
-                duration = self._failed_transport_duration_seconds(
-                    request,
-                    state=conn_state,
-                    duration=duration or 0.5,
-                    sample_key="explicit_handshake",
-                )
+            history, duration, orig_bytes, resp_bytes = self._plan_explicit_transport_state(
+                request,
+                proto=protocol_evidence.proto,
+                service=service,
+                dst_port=dst_port,
+                conn_state=conn_state,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                rng=rng,
+            )
         elif protocol_evidence.proto == "udp":
-            # DNS connections with responses must not be S0 (no-response)
-            if service == "kerberos" and resp_bytes and resp_bytes > 0:
-                conn_state, history = "SF", "Dd"
-            elif service == "dns" and resp_bytes and resp_bytes > 0:
-                # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
-                dns_roll = rng.random()
-                if dns_roll < 0.05:
-                    conn_state, history = "SF", "DDd"  # Retransmitted query
-                elif dns_roll < 0.07:
-                    conn_state, history = "SF", "Ddd"  # Multi-packet response
-                else:
-                    conn_state, history = "SF", "Dd"
-            elif service == "ntp" and resp_bytes and resp_bytes > 0:
-                conn_state, history = "SF", "Dd"
-            else:
-                entry = rng.choices(
-                    _UDP_CONN_ENTRIES,
-                    weights=_UDP_CONN_WEIGHTS,
-                    k=1,
-                )[0]
-                conn_state, _, history = entry
-            if conn_state == "S0":
-                duration = None
-                resp_bytes = 0
+            conn_state, history, duration, resp_bytes = self._plan_sampled_udp_state(
+                service=service,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                rng=rng,
+            )
         else:
-            if duration is not None:
-                tcp_entries = _TCP_CONN_ENTRIES
-                tcp_weights = _TCP_CONN_WEIGHTS
-                if facts.caller_provided_payload:
-                    candidates = [
-                        entry
-                        for entry in _TCP_CONN_ENTRIES
-                        if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
-                    ]
-                    if candidates:
-                        tcp_entries = candidates
-                        tcp_weights = [entry[1] for entry in candidates]
-                entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
-                conn_state, _, history = entry
-                if conn_state == "OTH":
-                    history = rng.choice(("DAd", "DdA", "ADad"))
-            else:
-                conn_state = "S0"
-                history = "S"
-            if conn_state in ("S0", "REJ"):
-                duration = None
-                resp_bytes = 0
-                # S0/REJ: Zeek orig_bytes/resp_bytes are payload (application
-                # data), not packet overhead.  No handshake completed → zero payload.
-                orig_bytes = 0
-            elif conn_state in ("S1", "SH", "SHR"):
-                # S1/SH/SHR = partial handshake, no application data transferred.
-                # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
-                # handshake-only states); IP-byte totals are computed from packet
-                # counts + header overhead downstream.
-                orig_bytes = 0
-                resp_bytes = 0
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_handshake",
-                    )
-            elif conn_state in ("S2", "S3"):
-                # S2/S3 = half-closed: connection established, one side sent FIN
-                # but the other never replied. Some data transferred before close.
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_half_close",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
-            elif conn_state in ("RSTO", "RSTR"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_reset",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
-            elif conn_state == "OTH":
-                # OTH/Cc = midstream capture fragment — minimal data visible
-                orig_bytes = rng.randint(0, 200)
-                resp_bytes = rng.randint(0, 200)
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_midstream",
-                    )
+            conn_state, history, duration, orig_bytes, resp_bytes = self._plan_sampled_tcp_state(
+                request,
+                caller_provided_payload=facts.caller_provided_payload,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                rng=rng,
+            )
 
         if (
             not facts.suppress_application_side_effects
@@ -4290,32 +4417,15 @@ class NetworkTransactionPlanner:
                 timing_runtime=self._timing_runtime,
             )
         if protocol_evidence.proto == "icmp":
-            zeek_type = src_port if src_port else 8
-            zeek_code = dst_port if dst_port else 0
-            icmp_key = (endpoints.src_ip, zeek_type, endpoints.dst_ip, zeek_code)
-            requested_ts_us = int(round(time.timestamp() * 1_000_000))
-            next_ts_us = network_preparation.read_point(
-                NetworkRuntimePointFamily.ICMP_OBSERVATION,
-                icmp_key,
-                requested_ts_us,
-                at=ensure_utc(time),
+            time = self._stage_icmp_observation_time(
+                endpoints=endpoints,
+                src_port=src_port,
+                dst_port=dst_port,
+                time=time,
+                duration=duration,
+                network_preparation=network_preparation,
+                window_end=boundary.network_runtime.window_end,
             )
-            adjusted_ts_us = max(requested_ts_us, int(next_ts_us))
-            gap_seed = _stable_seed(
-                f"icmp_observation_gap:{endpoints.src_ip}:{zeek_type}:{endpoints.dst_ip}:{zeek_code}:{adjusted_ts_us}"
-            )
-            interval_us = max(0, int(round((duration or 0.0) * 1_000_000)))
-            network_preparation.stage_point(
-                NetworkRuntimePointFamily.ICMP_OBSERVATION,
-                icmp_key,
-                adjusted_ts_us + interval_us + 7_000 + (gap_seed % 77_000),
-                expires_at=min(
-                    boundary.network_runtime.window_end,
-                    ensure_utc(time) + timedelta(days=1),
-                ),
-            )
-            if adjusted_ts_us != requested_ts_us:
-                time += timedelta(microseconds=adjusted_ts_us - requested_ts_us)
         else:
             if pid > 0 and endpoints.resolved_source_system is not None:
                 final_end_plan = executor.state_manager.process_session_end_plan(

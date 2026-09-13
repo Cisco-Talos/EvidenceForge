@@ -39,7 +39,8 @@ _RAW_TEMPORAL_METHODS = frozenset(
 # debt. Keeping the conservative superset here prevents either class from
 # growing while allowing any owner to remove a selector or lower its count.
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
-4|actions/network_transaction_planner.py|_plan_network_transport|uniform
+2|actions/network_transaction_planner.py|_plan_explicit_transport_state|uniform
+2|actions/network_transaction_planner.py|_plan_sampled_tcp_state|uniform
 1|actions/process_execution_service.py|_prepare_evidence|uniform
 1|actions/rdp_session.py|execute|uniform
 1|actions/smb_activity.py|_directional_transport_byte_allocations|uniform
@@ -320,7 +321,7 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 194
+    assert len(caps) == 195
     assert sum(caps.values()) == 358
     assert not observed - caps
     assert len(observed) <= len(caps)

@@ -2,6 +2,22 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 8b accepted — protocol-specific transport accounting
+
+Predecessor `9db12667`. ICMP echo payload/duration, explicit TCP/UDP states, sampled UDP states, sampled TCP states and ICMP observation spacing now have five focused operations. Identity allocation, preparation entry, packet accounting, process/session caps and tuple ownership remain at their original execution points. The ICMP spacing helper receives the exact existing preparation and window bound; it acquires no independent state or cancellation authority. The static prepared-region regression now follows direct helper calls transitively, preventing extracted code from hiding publication, owner RNG or unstaged timing operations.
+
+Acceptance: 48 passed in 2.08s,
+8550 passed, 27 skipped, 2011 deselected in 295.89s (0:04:55). Targeted slow controls:
+14 passed, 33 deselected in 22.42s. Both Ruff checks, revision-74 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.119/0.121/0.120/0.120 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-transport.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The first two targeted slow runs reported the old 194-selector assertion after one four-call function was split into two two-call helpers. The first edit missed the assertion variable name; the assertion was then corrected to 195 without changing the 358-call ceiling. Both failed logs are preserved as item8b-slow-initial.log and item8b-slow-second.log. The accepted rerun passed all 14 selected slow tests. Ruff corrected import ordering before acceptance. No production output gate failed.
+
 ### Item 8a accepted — network request decisions
 
 Predecessor `4a41709a`. The request coordinator falls from 1,030 lines/85 branches to 853 lines/69 branches. Five direct helpers own scoped Kerberos discovery (44 lines), ownerless Linux-server attribution policy (35), explicit endpoint lookup (35), process lifetime attribution (106), and command HTTP discovery (50). Proxy delegation, invalid-request exits, application-channel admission and independently committed process/DNS prerequisites stay visible at their original execution points. Stage docstrings explain cancellation and committed-prerequisite semantics and link production regression contracts. Existing composed stage records and all six stages remain unchanged.

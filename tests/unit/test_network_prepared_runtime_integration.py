@@ -1182,6 +1182,26 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         == "executor._lifecycle_authority.materialize_prepared_network_transaction"
     )
     prepared_calls = [node for node in calls if begin_line < node.lineno < commit_line]
+    # Follow direct planner helpers so extracting an interior cannot hide an
+    # eager publication, owner RNG draw, or unstaged timing call from this gate.
+    visited: set[str] = set()
+    pending = list(prepared_calls)
+    while pending:
+        call = pending.pop()
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "self"
+            and call.func.attr in functions
+            and call.func.attr not in visited
+        ):
+            continue
+        visited.add(call.func.attr)
+        nested = [
+            node for node in ast.walk(functions[call.func.attr]) if isinstance(node, ast.Call)
+        ]
+        prepared_calls.extend(nested)
+        pending.extend(nested)
     prepared_names = {call_name(node) for node in prepared_calls}
     forbidden = {
         "executor.dispatcher.dispatch_builder",
