@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 76
+current_revision: 77
 history_start_revision: 1
-behavior_surface_sha256: "a27f2cf81549040396eef85fcc2e1c32159e9fadb540204d861db33160d7ad95"
+behavior_surface_sha256: "e7e63e873cd8360210cbbd2eb116cc6c3bb86ad9cc3a500d5ac5572efd100905"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -701,3 +701,10 @@ changes:
       - network
     formats: []
     summary: Separate persistent SMB file recipe preparation and canonical root execution without changing continuation phases or cleanup scope
+  - revision: 77
+    id: cleanup-persistent-smb-source-preparation
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Separate persistent SMB source construction timing certification and state finalization using existing exact preparation records

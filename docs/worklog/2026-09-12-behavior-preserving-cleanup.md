@@ -2,6 +2,20 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 9b accepted — SMB source construction and certification
+
+Predecessor `2b1b7e5e`. Operation events, session events, projection/timing preparation and fresh-attempt certification now have named operations consuming existing authenticated preparation records. The main coordinator falls from 1,060 to 539 lines. One 24-line finalization operation replaces the identical fresh/resumed materialize-recover-retry blocks; callers retain their original authentication and close-rebinding checks. Existing retry certification remains separate because it can adopt retained certifications or timing commits. Digest functions preserve their exact serialization. No authentication or mutation was moved across a phase boundary.
+
+Acceptance: 36 passed, 29 deselected in 17.88s,
+8550 passed, 27 skipped, 2011 deselected in 295.80s (0:04:55). Targeted slow controls:
+37 passed, 7 deselected in 74.37s (0:01:14). Both Ruff checks, revision-77 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.531/2.544/2.538/2.537 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-source-preparation.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
 ### Item 9a accepted — SMB reversible action and root execution
 
 Predecessor `6d022448`. Three direct operations now prepare each file mutation, assemble/bind the reversible action recipe, and execute the canonical network root. File preparation appends to the same local plan buffers in the same order, under the original journal cleanup scope. The coordinator retains phase admission, recipe validation, root-fact refresh and all retained-owner authentication. A compact phase table documents prepared/committed state, authenticated evidence, allowed retry and recovery ownership, with representative regression links. Two obsolete forwarding locals were removed. The network URI comment now describes the shared HTTP/HTTPS RNG order accurately.
