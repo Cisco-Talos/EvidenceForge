@@ -156,7 +156,7 @@ def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
 def test_gpo_refresh_termination_requires_admitted_process() -> None:
     """A source-timing-rejected gpupdate process must not receive a termination."""
 
-    source = inspect.getsource(BaselineMixin._generate_system_traffic)
+    source = inspect.getsource(BaselineMixin._generate_system_group_policy_activity)
 
     assert "if gpupdate_pid and end_ts is not None:" in source
 
@@ -2631,9 +2631,9 @@ class TestBaselineRegistryRealism:
         """Baseline registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(BaselineMixin)
+        source = inspect.getsource(BaselineMixin._generate_system_registry_activity)
         assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
-        assert "_template_user,\n                        _reg_ts," in source
+        assert "_template_user, _reg_ts," in " ".join(source.split())
         assert "value_type=_value_type" in source
 
     def test_registry_writer_candidates_preserve_native_ownership(self):

@@ -100,6 +100,65 @@ def _minimal_linux_system_traffic(
     return baseline, activity, state_manager, system
 
 
+def test_system_dhcp_authored_lease_skips_remaining_host_families(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline, _activity, _state, system = _minimal_linux_system_traffic(
+        _WINDOW_START + timedelta(minutes=10)
+    )
+    baseline._dhcp_lease_state = {system.hostname: {"lease_time": 3600}}
+    authored_time = _WINDOW_START + timedelta(minutes=3)
+    baseline._storyline_dhcp_lease_time_in_hour = lambda *_args: authored_time
+    profile = Mock()
+    baseline._generate_profile_traffic = profile
+    monkeypatch.setattr(timing_module, "hawkes_timestamps", lambda **_kwargs: ([], None))
+
+    baseline._generate_system_traffic(_WINDOW_START)
+
+    profile.assert_not_called()
+    assert baseline._dhcp_lease_state[system.hostname]["next_renewal"] == authored_time.timestamp()
+
+
+def test_ambient_resolver_control_preserves_legacy_last_host_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Characterize existing cross-pass resolver input; correcting it is separate work."""
+    baseline, _activity, _state, first = _minimal_linux_system_traffic(
+        _WINDOW_START + timedelta(minutes=10)
+    )
+    second = first.model_copy(update={"hostname": "LINUX-SECOND", "ip": "10.0.0.22"})
+    baseline.scenario.environment.systems.append(second)
+    baseline._system_service_defaults[second.hostname] = []
+    baseline._system_pids[second.hostname] = {"logind": 556}
+    baseline._kernel_boot_uptimes[second.hostname] = 500000.0
+    pools = {first.ip: ["10.0.0.53"], second.ip: ["10.0.0.54"]}
+    monkeypatch.setattr(
+        baseline_module, "activity_dns_resolver_ips", lambda _activity, ip: pools[ip]
+    )
+
+    class GenericSyslogRandom(random.Random):
+        def random(self) -> float:
+            return 0.99
+
+    monkeypatch.setattr(baseline_module, "_get_rng", lambda: GenericSyslogRandom(42))
+    monkeypatch.setattr(timing_module, "hawkes_timestamps", lambda **_kwargs: ([300.0], None))
+    monkeypatch.setattr(baseline_module, "_linux_ambient_logind_session_budget", lambda *_args: 0)
+    entry = {"app": "systemd-resolved", "weight": 1, "messages": ["DNS control"]}
+    monkeypatch.setattr(extra_syslog_module, "load_extra_syslog_messages", lambda: [entry])
+    monkeypatch.setattr(
+        extra_syslog_module, "filter_syslog_message_entries", lambda programs, *_args: programs
+    )
+    render = Mock(return_value="DNS control")
+    baseline._render_systemd_resolved_message = render
+
+    baseline._generate_system_traffic(_WINDOW_START)
+
+    assert [(call.args[1], call.args[2]) for call in render.call_args_list] == [
+        (first.hostname, pools[second.ip]),
+        (second.hostname, pools[second.ip]),
+    ]
+
+
 def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owner() -> None:
     """Inventory every literal sink and its reviewed rendered-close owner."""
 
@@ -161,7 +220,11 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_generate_profile_traffic": 4,
             "_generate_rsat_sessions": 1,
             "_generate_suspicious_noise": 2,
-            "_generate_system_traffic": 9,
+            "_generate_system_traffic": 5,
+            "_generate_system_dns_traffic": 1,
+            "_generate_system_ntp_traffic": 1,
+            "_generate_system_kerberos_traffic": 1,
+            "_generate_system_ldap_traffic": 1,
         }
     )
     # Each tuple classifies literal sinks in source order. A new or moved raw
@@ -191,11 +254,11 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "direct-rendered-dns",
             "direct-rendered-outbound",
         ),
+        "_generate_system_dns_traffic": ("direct-rendered-dns",),
+        "_generate_system_ntp_traffic": ("direct-rendered-ntp",),
+        "_generate_system_kerberos_traffic": ("direct-rendered-kerberos",),
+        "_generate_system_ldap_traffic": ("direct-rendered-ldap",),
         "_generate_system_traffic": (
-            "direct-rendered-dns",
-            "direct-rendered-ntp",
-            "direct-rendered-kerberos",
-            "direct-rendered-ldap",
             "direct-rendered-dc-kerberos",
             "direct-rendered-dc-tgs",
             "direct-rendered-ufw",
@@ -227,7 +290,11 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_generate_profile_traffic": 2,
             "_generate_rsat_sessions": 1,
             "_generate_suspicious_noise": 2,
-            "_generate_system_traffic": 8,
+            "_generate_system_traffic": 4,
+            "_generate_system_dns_traffic": 1,
+            "_generate_system_ntp_traffic": 1,
+            "_generate_system_kerberos_traffic": 1,
+            "_generate_system_ldap_traffic": 1,
         }
     )
     canonical_only_calls = Counter()
@@ -264,7 +331,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
     )
     assert Counter(
         owner for owner, _call in _calls("_baseline_dhcp_renewal_close_bound_seconds")
-    ) == Counter({"_generate_system_traffic": 1})
+    ) == Counter({"_generate_system_dhcp_renewal": 1})
     assert Counter(owner for owner, _call in _calls("prepare_smb_activity")) == Counter(
         {
             "_generate_baseline_smb_activity": 1,
@@ -278,7 +345,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         }
     )
     assert Counter(owner for owner, _call in _calls("generate_dhcp_lease")) == Counter(
-        {"_generate_system_traffic": 1}
+        {"_generate_system_dhcp_renewal": 1}
     )
     assert Counter(owner for owner, _call in _named_calls("BrowserSessionActionBundle")) == Counter(
         {

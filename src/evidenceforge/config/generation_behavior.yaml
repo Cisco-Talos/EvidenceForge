@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 64
+current_revision: 65
 history_start_revision: 1
-behavior_surface_sha256: "8afe360070be55822401ac7b47cb0f0b8d837ea84203221a123a043f4eb208d9"
+behavior_surface_sha256: "06aec786e5a85cd9490e86db994f247c35842f11c70036d081d22ac4167dcc27"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -617,3 +617,10 @@ changes:
       - checkpoint-provenance
     formats: []
     summary: Derive exact build identity and component diagnostics from one local payload without changing hashing or resume classification.
+  - revision: 65
+    id: separate-per-host-baseline-activities
+    impact: none
+    domains:
+      - baseline-system-traffic
+    formats: []
+    summary: Extract ordered per-host DNS NTP DHCP authentication process registry and shell activities while retaining host skips RNG order and shared runtime owners.

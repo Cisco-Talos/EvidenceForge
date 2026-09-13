@@ -2,6 +2,53 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 2a accepted — per-host baseline operations
+
+Fourteen direct methods on the existing baseline owner now perform the per-host DNS, NTP, DHCP,
+directory authentication, Windows process/registry and Linux shell families. The coordinator retains
+host iteration, shared RNG preparation, the authored-DHCP whole-host skip and every call's original
+position. No scheduler, persistent context, cache or RNG was introduced. Cross-host work remains in
+the coordinator for the separately committed next substep.
+
+Isolated alternating generation medians were 5.415 s (initial baseline), 5.190 s (candidate),
+5.212 s (repeated baseline), and 5.188 s (repeated candidate). Peak traced memory remained about
+20.2 MB. Every measurement's evidence hashes agree. These observations show no material runtime
+or retention change in the fixed workload; there is no speed-based acceptance threshold.
+Detailed structural measurements, performance samples, gate counts and report/log hashes are in
+`2026-09-12-nine-item-baseline-per-host.json`.
+
+The coordinator shrank from 2,314 to 1,354 lines, from 233 to 137 statement branches and from 666 to
+377 calls. These are responsibility-location measurements, not claims that behavior branches were
+removed. Its direct owner-attribute dependencies decreased from 73 to 67; cross-host decomposition
+will remove the remaining family implementation dependencies. The helpers receive existing values
+explicitly and retain no state.
+
+Before extraction, two new characterizations passed on the preceding implementation: authored DHCP
+skips the remainder of a host, and ambient resolver messages retain the last host's resolver pool.
+The latter confirms a pre-existing realism defect and is intentionally preserved here. It needs a
+separate owning-layer correction and evidence review, without treating this preservation control as
+the desired long-term behavior.
+
+Acceptance: **8,511 standard tests**, 27 unchanged skips, 2,011 deselected (304.16 seconds); **267
+focused tests**, one existing skip, 20 deselected (6.74 seconds); **23 targeted slow RDP/RNG tests**
+(14.04 seconds); both Ruff checks; revision-65 validation against `a6b28bcf`; **38 raw-byte cases**
+against both `26a150ac` and `a6b28bcf`. The preceding commit's full **200-case capture** also passed.
+Reports are `/private/tmp/eforge-cleanup-evidence/pass4-item2a-report.json` and
+`pass4-item2a-previous-report.json`; predecessor capture is `pass4-item1-full-report.json`.
+
+The first focused run had three source-location assertion failures after moving the implementations.
+Their owner inventories now name the extracted methods; sink/admission classifications and totals
+remain unchanged. The RNG inventory relocates its existing 28 calls without raising the global
+358-call ceiling. All repeated checks passed. A read-only process-list command was unavailable in
+the sandbox; no acceptance gate depends on it.
+
+Independent preparation for later items froze 12 live/prepared clock controls and 11 gate/lock
+controls against the preserved `26a150ac` checkout, before those production paths change. One draft
+gate control used the wrong SSH lock-helper import name; correcting it to `_stable_locks` made all
+11 controls pass. These control files remain outside the working tree until their owning item.
+The six existing revision-62 checkpoint fixtures were verified against `26a150ac`'s actual installed
+build digest; they already preserve that exact build and do not need to be regenerated.
+
 Starting commit: `26a150ac4d807b1b00e6d7c02019837132447dc1`, clean on
 `codex/2.0.0-code-cleanup`. Preserved checkout: `/private/tmp/eforge-cleanup-nine-baseline`.
 All nine approved items remain behavior-preserving; realism/correctness take priority over speed.
