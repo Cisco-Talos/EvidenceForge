@@ -1,0 +1,361 @@
+{
+  "after": {
+    "command_calls": 154,
+    "command_lines_including_public_signature": 571,
+    "command_statement_branches": 46,
+    "preparation_and_report_operations": {
+      "_load_generation_scenario": {
+        "arguments": [
+          "scenario_file",
+          "checkpoint_scenario_file",
+          "scenario_was_explicit",
+          "resume",
+          "seed",
+          "project_root",
+          "oob_hosts",
+          "verbose",
+          "debug"
+        ],
+        "lines": 132
+      },
+      "_prepare_generation_formats": {
+        "arguments": [
+          "compiled",
+          "formats",
+          "resume",
+          "stored_run_options",
+          "oob_hosts",
+          "scenario_file",
+          "issues"
+        ],
+        "lines": 76
+      },
+      "_prepare_generation_oob_hosts": {
+        "arguments": [
+          "oob_host",
+          "resume",
+          "stored_run_options"
+        ],
+        "lines": 24
+      },
+      "_prepare_generation_options": {
+        "arguments": [
+          "scenario_file",
+          "output",
+          "resume",
+          "overwrite",
+          "force",
+          "resume_policy"
+        ],
+        "lines": 72
+      },
+      "_prepare_resume_policy": {
+        "arguments": [
+          "resume",
+          "preliminary_recovery",
+          "fingerprint",
+          "fingerprint_components",
+          "resume_policy"
+        ],
+        "lines": 77
+      },
+      "_recover_generation_input": {
+        "arguments": [
+          "scenario_file",
+          "output",
+          "resume"
+        ],
+        "lines": 39
+      },
+      "_report_generation_output": {
+        "arguments": [
+          "ground_truth_dir",
+          "data_dir",
+          "artifacts_dir"
+        ],
+        "lines": 46
+      },
+      "_select_generation_target": {
+        "arguments": [
+          "target",
+          "resume",
+          "stored_run_options"
+        ],
+        "lines": 18
+      }
+    }
+  },
+  "ast_preservation_proof": {
+    "_load_generation_scenario": {
+      "ast_sha256": "e93fae60d325898ee817f828bd31065c5c6c7be9b1e524570901ec82bf350b28",
+      "unchanged_statement_subtrees": 2
+    },
+    "_prepare_generation_formats": {
+      "ast_sha256": "8052088e8cf030f9f9bfd435b57a6b1f0da0fdd63c92f737780b7db3f9302af6",
+      "unchanged_statement_subtrees": 2
+    },
+    "_prepare_generation_oob_hosts": {
+      "ast_sha256": "0318998c6b154a2bc398e73e4b9cf80402ad8a43cdd9929f1f9935adf67475ed",
+      "unchanged_statement_subtrees": 4
+    },
+    "_prepare_generation_options": {
+      "ast_sha256": "4f5d5b85968bf42df48df5519ba422a699df461e1ecf51a4d9b74de30d43cfe3",
+      "unchanged_statement_subtrees": 6
+    },
+    "_prepare_resume_policy": {
+      "ast_sha256": "a1630a816ef9b1e93191fccdf935503b2321f5dbf28b48d95680ad7082ac82e2",
+      "unchanged_statement_subtrees": 3
+    },
+    "_recover_generation_input": {
+      "ast_sha256": "af78779d724e0daaccc1351991bd7456b8c0e25b8b3b15f805712effc31cb19f",
+      "unchanged_statement_subtrees": 7
+    },
+    "_report_generation_output": {
+      "ast_sha256": "38c34df48b614748d9f48440f3c8c8a0e7e9a8d6d81bd2a994d79c40dd4593b5",
+      "unchanged_statement_subtrees": 6
+    },
+    "_select_generation_target": {
+      "ast_sha256": "8d082311238b770495a6138d34386d33b1f33585c8134fe042017b9a24d28c41",
+      "unchanged_statement_subtrees": 1
+    },
+    "public_typer_signature_unchanged": true
+  },
+  "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "command_calls": 323,
+    "command_lines_including_public_signature": 934,
+    "command_statement_branches": 116
+  },
+  "behavior_revision": 70,
+  "byte_comparisons": {
+    "cases": 6,
+    "references": [
+      "26a150ac",
+      "7e86b07e"
+    ],
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item6a-report.json",
+    "sha256": "51b213ccb6e1d75186d24197298a7310285ccdbcaa9d25869fe95b5344fb36a9"
+  },
+  "characterization_before": {
+    "baseline_repeat": "pass4-repeat-cli",
+    "new_admission_cases": 6,
+    "new_cli_raw_cases": 6,
+    "original_admission_seconds": 1.75,
+    "original_admission_warning": "Existing Typer is_flag/flag_value deprecation when running without repository conftest",
+    "preceding_capture": "pass4-item5-cli",
+    "unchanged_cli_before": "108 existing tests passed; draft assertion failed; corrected admission controls then all passed before production edits"
+  },
+  "failures": [
+    "Draft target-diagnostic assertion expected the invalid value to be echoed. Original implementation intentionally gives only the allowed values; corrected characterization passed before production edits."
+  ],
+  "focused_tests": {
+    "deselected": 14,
+    "passed": 114,
+    "seconds": 62.8
+  },
+  "introduced_context_objects": 0,
+  "introduced_persistent_state": 0,
+  "item": "6a",
+  "logs": {
+    "/private/tmp/eforge-pass4-item6a-admission-before.log": "789524624a87acc91d9fac6efae2b2361f408805b33655a9aa8b3664c20c11ef",
+    "/private/tmp/eforge-pass4-item6a-before-focused.log": "fbdca789d9a885594510f6aeca0a1969eeb0af4453c276e3885d39091006fb05",
+    "/private/tmp/eforge-pass4-item6a-focused.log": "97403ff6a61bcb422526d1b3c0232cb9bbbf241279a39c0fb8f63b478d188026",
+    "/private/tmp/eforge-pass4-item6a-matrix.log": "0f85bfe0a85ce33bcbc9ba9c8144556bd8be00e98fe82c04c2171d94ac9eb816",
+    "/private/tmp/eforge-pass4-item6a-original-admission.log": "2152f0f8f3180fdc40de3a80ec0d50d945d9e41a173cd4dc3218b538658b4d3b",
+    "/private/tmp/eforge-pass4-item6a-slow.log": "ab2df5dd432fedbf725ace987fba56958e0c47a27f1aa1144df4f686517697d7",
+    "/private/tmp/eforge-pass4-item6a-standard.log": "a7bfec8f67a9de9ffe530f4489f7893d2aeb7ee71624a51e097a7248859a0420"
+  },
+  "manifest": "passed against 7e86b07e; CLI is outside the covered surface but exact installed build identity changes",
+  "new_return_group_tuples_per_successful_run": 5,
+  "original": {
+    "command_calls": 324,
+    "command_lines_including_public_signature": 940,
+    "command_statement_branches": 116
+  },
+  "performance_alternating_runs": [
+    {
+      "allocation_sample_peak_bytes": 306198,
+      "allocation_sample_retained_blocks": 173,
+      "allocation_sample_retained_bytes": 9851,
+      "allocation_scope": "parent harness only; child RSS recorded separately",
+      "child_process_max_rss": 193331200,
+      "median_seconds": 7.395869833067991,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.1352106003176066,
+      "process_max_rss": 25444352,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "31ee6617a092bc7361c51a3d23e15dd3013e241fdc2a162732aa3b2263f9fd8d",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "9719758c700a28e989fe587b377ccdd9b1345e39e5786d4fe61c388207e1043b",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "data/TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "data/TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "data/core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "data/core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "data/core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "data/core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "data/core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "data/core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        7.411404917016625,
+        7.391537667019293,
+        7.395869833067991,
+        7.426651582936756,
+        7.373223416972905,
+        7.4103560000658035,
+        7.395131791941822
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation-cli"
+    },
+    {
+      "allocation_sample_peak_bytes": 306198,
+      "allocation_sample_retained_blocks": 173,
+      "allocation_sample_retained_bytes": 9851,
+      "allocation_scope": "parent harness only; child RSS recorded separately",
+      "child_process_max_rss": 195182592,
+      "median_seconds": 7.326511166058481,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.1364906129717919,
+      "process_max_rss": 24985600,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "31ee6617a092bc7361c51a3d23e15dd3013e241fdc2a162732aa3b2263f9fd8d",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "9719758c700a28e989fe587b377ccdd9b1345e39e5786d4fe61c388207e1043b",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "data/TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "data/TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "data/core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "data/core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "data/core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "data/core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "data/core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "data/core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        7.326861209003255,
+        7.300841041957028,
+        7.299133624997921,
+        7.326511166058481,
+        7.350446208030917,
+        7.294611916062422,
+        7.335428833961487
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation-cli"
+    },
+    {
+      "allocation_sample_peak_bytes": 306198,
+      "allocation_sample_retained_blocks": 173,
+      "allocation_sample_retained_bytes": 9851,
+      "allocation_scope": "parent harness only; child RSS recorded separately",
+      "child_process_max_rss": 194265088,
+      "median_seconds": 7.493729459005408,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.1334449028978854,
+      "process_max_rss": 25280512,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "31ee6617a092bc7361c51a3d23e15dd3013e241fdc2a162732aa3b2263f9fd8d",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "9719758c700a28e989fe587b377ccdd9b1345e39e5786d4fe61c388207e1043b",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "data/TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "data/TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "data/core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "data/core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "data/core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "data/core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "data/core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "data/core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        7.4836542080156505,
+        7.493729459005408,
+        7.501404166920111,
+        7.502155457972549,
+        7.467407583026215,
+        7.5480460420949385,
+        7.476877499953844
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation-cli"
+    },
+    {
+      "allocation_sample_peak_bytes": 306198,
+      "allocation_sample_retained_blocks": 173,
+      "allocation_sample_retained_bytes": 9851,
+      "allocation_scope": "parent harness only; child RSS recorded separately",
+      "child_process_max_rss": 194707456,
+      "median_seconds": 7.354266833048314,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.1359754850757168,
+      "process_max_rss": 25329664,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "31ee6617a092bc7361c51a3d23e15dd3013e241fdc2a162732aa3b2263f9fd8d",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "9719758c700a28e989fe587b377ccdd9b1345e39e5786d4fe61c388207e1043b",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "data/TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "data/TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "data/core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "data/core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "data/core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "data/core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "data/core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "data/core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        7.346379291964695,
+        7.368557124980725,
+        7.358601332991384,
+        7.354266833048314,
+        7.354142582975328,
+        7.342915708082728,
+        7.35820204205811
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation-cli"
+    }
+  ],
+  "performance_scope": "Cumulative comparison to original 26a150ac; CLI subprocess startup and generation included. Traced allocations cover parent harness, child max RSS is separate.",
+  "preceding_commit": "7e86b07e",
+  "representative_paths": [
+    "option validation -> incomplete workspace prompt -> preliminary input recovery -> target and OOB authorization -> compile and validate -> output paths -> format reachability -> authoritative resume input -> forecast -> overwrite prompt -> fingerprint and resume policy -> locked execution",
+    "lock -> locked recovery/controller -> staging -> generate -> sidecar publication -> successful reporting; suspension interruption failure and final cleanup remain in the command"
+  ],
+  "ruff_check": "passed",
+  "ruff_format_check": "passed",
+  "slow_tests": {
+    "deselected": 93,
+    "passed": 3,
+    "scope": "SIGKILL at heads durability, recovery publication, and index publication",
+    "seconds": 53.98
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8541,
+    "seconds": 292.66,
+    "skipped": 27
+  }
+}

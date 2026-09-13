@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 69
+current_revision: 70
 history_start_revision: 1
 behavior_surface_sha256: "6dc431e08bee730aeaca83342a4ca059340ea0b6dec15dadad4857116624e3f5"
 changes:
@@ -652,3 +652,10 @@ changes:
       - storyline-process-evidence
     formats: []
     summary: Extract redirected file HTTP database and SCP companions while retaining root identity foreground admission RNG order source visibility and lifecycle scheduling in the typed process handler.
+  - revision: 70
+    id: separate-cli-generation-preparation-and-reporting
+    impact: none
+    domains:
+      - cli-generation
+    formats: []
+    summary: Separate option and input preparation scenario and format checks resume policy and published-output reporting while preserving prompt diagnostics lock ownership publication and error exits.

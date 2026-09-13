@@ -2,6 +2,38 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 6a accepted — CLI preparation and published-output reporting
+
+Item 5 committed as `7e86b07e`. Eight direct functions now own option admission, preliminary input
+recovery, target selection, fresh OOB authorization, compilation/validation, format reachability,
+resume policy and successful-output reporting. The outer command retains workspace locking, recovery
+under lock, migration staging, generation, publication, and distinct suspension/interruption/failure
+branches. No context object or persistent owner is introduced; five small return tuples carry values
+already consumed by the command. The public Typer signature remains exactly unchanged.
+
+The command falls from **934 to 571 lines** (including its public signature), and **116 to 46 statement
+branches**. An AST comparison confirms that extracted statement subtrees match the preceding source.
+The largest helper is 132 lines and owns scenario compilation plus its ordered diagnostic/exit boundary.
+Six new admission controls passed against original 26 and the preceding code. A draft assertion
+expected an invalid target value to be echoed; it was corrected to the existing allowed-values-only
+diagnostic before production changes. The isolated original-source run emitted the existing Typer
+`is_flag`/`flag_value` deprecation warning.
+
+Six full/narrowed public CLI captures across seeds 42/137 and all targets were frozen, repeated and
+captured from the preceding build before extraction. The complete matrix now has **212 cases**.
+After extraction: **114 focused tests** (14 slow deselected, 62.80 seconds), **8,541 standard tests**
+(27 unchanged skips, 2,011 deselected, 292.66 seconds), **3 slow publication crash controls**
+(93 deselected, 53.98 seconds), both Ruff checks, revision-70 validation against `7e86b07e`, and
+**all six CLI byte comparisons against both references** pass. CLI code is outside the covered
+behavior surface; the unchanged surface digest and changed exact installed-build identity are correct.
+
+A frozen CLI subprocess benchmark includes startup and public generation. Alternating medians were
+7.396/7.327/7.494/7.354 seconds (original baseline/candidate/baseline/candidate), with identical artifact hashes.
+Traced allocations measure the parent harness; child-process max RSS is recorded separately. These
+are cumulative comparisons against 26, not an isolated attribution of earlier fingerprint savings to
+this extraction. `2026-09-12-nine-item-cli-preparation.json` contains structural, AST, performance and
+gate evidence. No performance threshold or output exception was introduced.
+
 ### Item 5 accepted — ordered process companions
 
 Item 4 committed as `1c266cfd`. The typed process handler now calls four direct operations for

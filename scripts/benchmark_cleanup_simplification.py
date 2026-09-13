@@ -10,8 +10,10 @@ import argparse
 import gc
 import hashlib
 import json
+import os
 import resource
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -25,6 +27,38 @@ from typing import Any
 
 def workload(name: str, source: Path) -> tuple[Callable[[], object], int]:
     """Bind one fixed workload to the selected checkout's existing owners."""
+    if name == "generation-cli":
+        from compare_cleanup_output import snapshot
+
+        fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/scenarios/minimal.yaml"
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(source / "src")
+
+        def generate_cli() -> object:
+            with tempfile.TemporaryDirectory(prefix="eforge-cleanup-cli-measure-") as temporary:
+                output = Path(temporary) / "bundle"
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "evidenceforge",
+                        "generate",
+                        str(fixture),
+                        "--output",
+                        str(output),
+                        "--seed",
+                        "42",
+                        "--checkpoint-hours",
+                        "0",
+                    ],
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                return snapshot(output)
+
+        return generate_cli, 1
     if name == "generation":
         from compare_cleanup_output import snapshot
 
@@ -177,6 +211,7 @@ def main() -> None:
             "gates",
             "gates-context",
             "generation",
+            "generation-cli",
         ),
         required=True,
     )
@@ -211,6 +246,10 @@ def main() -> None:
         "allocation_sample_peak_bytes": peak,
         "allocation_sample_retained_blocks": retained_blocks,
         "process_max_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "child_process_max_rss": resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
+        "allocation_scope": "parent harness only; child RSS recorded separately"
+        if args.workload == "generation-cli"
+        else "in-process workload",
         "result": result,
     }
     with args.output.open("x") as stream:

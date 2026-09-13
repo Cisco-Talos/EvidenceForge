@@ -105,11 +105,13 @@ from evidenceforge.models.exceptions import (
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import (
     OUTPUT_TARGET_FILENAME,
+    OutputTarget,
     normalize_output_target,
     write_output_target_marker,
 )
 
 if TYPE_CHECKING:
+    from evidenceforge.generation.checkpoints.models import CheckpointRecovery
     from evidenceforge.generation.storage_world import StorageWorldModel
     from evidenceforge.validation.schema import ScenarioValidator, ValidationIssue
 
@@ -1212,109 +1214,15 @@ def _legacy_public_identity_deprecation_issues(
     ]
 
 
-@app.command()
-def generate(
-    scenario_file: Path | None = typer.Argument(
-        None,
-        help="Path to scenario YAML file (optional with --output and --resume)",
-    ),
-    output: Path | None = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output bundle root (default: directory containing the scenario)",
-    ),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
-    ),
-    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Deprecated alias for --overwrite",
-    ),
-    overwrite: bool = typer.Option(
-        False,
-        "--overwrite",
-        help="Replace existing output or an incompatible incomplete run without prompting",
-    ),
-    resume: bool = typer.Option(
-        False,
-        "--resume",
-        help="Resume the latest compatible generation checkpoint",
-    ),
-    resume_policy: str = typer.Option(
-        "compatible",
-        "--resume-policy",
-        help="Resume policy: exact, compatible (default), or explicit drift consent via attempt",
-    ),
-    checkpoint_hours: int | None = typer.Option(
-        None,
-        "--checkpoint-hours",
-        min=0,
-        help="Checkpoint every N completed simulated hours (default: 24); 0 disables checkpoints",
-    ),
-    formats: str | None = typer.Option(
-        None,
-        "--formats",
-        "-F",
-        help="Comma-separated format filter (e.g., 'zeek_conn,zeek_dns' or 'zeek'). "
-        "Only generates formats present in both this list and the scenario. "
-        "Supports group names (zeek, windows). See 'eforge info format_groups'.",
-    ),
-    target: str | None = typer.Option(
-        None,
-        "--target",
-        help="Output rendering target: default, sof-elk, or splunk",
-    ),
-    oob_host: list[str] = typer.Option(
-        [],
-        "--oob-host",
-        help="LIVE CALLBACK (out-of-band) testing: register an operator-controlled host "
-        "(e.g. a Burp Collaborator / interactsh / sinkhole domain) for adversarial_payload "
-        "events. The payload's canary is replaced with this host so a vulnerable target "
-        "actually calls back to YOU. Must be a concrete registrable domain (e.g. oast.fun) "
-        "or an IP literal. Repeatable. Passing it is the explicit opt-in: only use against "
-        "systems you are authorized to test. Off by default (payloads use the inert, "
-        "non-resolving canary).",
-    ),
-    seed: int | None = typer.Option(
-        None,
-        "--seed",
-        min=0,
-        max=2**64 - 1,
-        help="Override scenario generation_seed for this deterministic run.",
-    ),
-    project_root: Path | None = typer.Option(
-        None,
-        "--project-root",
-        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
-    ),
-    allow_large_workload: bool = typer.Option(
-        False,
-        "--allow-large-workload",
-        hidden=True,
-    ),
-    profile: bool = typer.Option(
-        False,
-        "--profile",
-        help="Write an opt-in generation performance profile into the output bundle",
-        hidden=True,
-    ),
-) -> None:
-    """Generate synthetic security logs from a scenario file.
-
-    Validates the scenario schema, initializes the generation engine,
-    and produces coordinated logs across multiple formats.
-
-    Exit codes:
-    - 0: Success
-    - 1: Input error (file not found, invalid path)
-    - 2: Schema validation error
-    - 21: Generation error
-    - 130: Interrupted (Ctrl+C)
-    """
+def _prepare_generation_options(
+    scenario_file: Path | None,
+    output: Path | None,
+    resume: bool,
+    overwrite: bool,
+    force: bool,
+    resume_policy: str,
+) -> tuple[bool, bool]:
+    """Validate options and resolve incomplete-workspace prompts before reading inputs."""
     if resume_policy not in {"exact", "compatible", "attempt"}:
         console.print(
             "[bold red]Error:[/bold red] --resume-policy must be exact, compatible, or attempt",
@@ -1377,8 +1285,15 @@ def generate(
                 else:
                     console.print("[dim]Aborted.[/dim]")
                     raise typer.Exit(EXIT_ABORTED)
+    return resume, overwrite
 
-    scenario_was_explicit = scenario_file is not None
+
+def _recover_generation_input(
+    scenario_file: Path | None,
+    output: Path | None,
+    resume: bool,
+) -> "tuple[Path, Path | None, CheckpointRecovery | None, dict[str, object]]":
+    """Inspect retained input before locking; execution must recover again under the workspace lock."""
     checkpoint_scenario_file: Path | None = None
     preliminary_store: IncrementalCheckpointStore | None = None
     preliminary_recovery = None
@@ -1411,9 +1326,15 @@ def generate(
             style="red",
         )
         raise typer.Exit(EXIT_INPUT_ERROR)
+    return scenario_file, checkpoint_scenario_file, preliminary_recovery, stored_run_options
 
-    setup_logging(verbose, debug)
-    logger = logging.getLogger(__name__)
+
+def _select_generation_target(
+    target: str | None,
+    resume: bool,
+    stored_run_options: dict[str, object],
+) -> OutputTarget:
+    """Resolve the output target from explicit options or retained run settings."""
     try:
         selected_target = target
         if selected_target is None and resume:
@@ -1425,7 +1346,15 @@ def generate(
     except ValueError as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
+    return output_target
 
+
+def _prepare_generation_oob_hosts(
+    oob_host: list[str],
+    resume: bool,
+    stored_run_options: dict[str, object],
+) -> tuple[str, ...]:
+    """Require current explicit callback authorization even when resuming retained options."""
     # Live-callback (OOB) opt-in for adversarial_payload events. Off by default; passing
     # --oob-host IS the explicit opt-in, and only the explicitly-registered host(s) become
     # allowlisted, so a payload can never silently point anywhere else. Normalize + validate
@@ -1443,19 +1372,21 @@ def generate(
         )
         raise typer.Exit(EXIT_INPUT_ERROR)
     oob_hosts: tuple[str, ...] = _normalize_oob_hosts(oob_host)
+    return oob_hosts
 
-    console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
-    console.print(f"Scenario: {scenario_file}")
-    console.print(f"Output target: {output_target.value}")
-    if oob_hosts:
-        console.print(
-            "[bold red]⚠ LIVE CALLBACK MODE[/bold red] — adversarial_payload events will "
-            f"point at {', '.join(oob_hosts)} instead of the inert canary. A VULNERABLE "
-            "TARGET WILL CALL BACK to these host(s). Only use against systems you are "
-            "authorized to test.",
-            style="red",
-        )
 
+def _load_generation_scenario(
+    scenario_file: Path,
+    checkpoint_scenario_file: Path | None,
+    scenario_was_explicit: bool,
+    resume: bool,
+    seed: int | None,
+    project_root: Path | None,
+    oob_hosts: tuple[str, ...],
+    verbose: bool,
+    debug: bool,
+) -> "tuple[CompiledScenario, CompiledScenario | None, list[ValidationIssue]]":
+    """Compile the input and report ordered cross-reference diagnostics with their existing exits."""
     # Load and validate scenario
     checkpoint_compiled: CompiledScenario | None = None
     try:
@@ -1575,37 +1506,22 @@ def generate(
         if verbose or debug:
             console.print_exception()
         raise typer.Exit(EXIT_INPUT_ERROR)
+    return compiled, checkpoint_compiled, issues
 
-    # Determine output directory
-    scenario_dir = scenario_file.parent
-    if output:
-        # Explicit --output flag: logs in data/ subdirectory, ground truth at root
-        data_dir = output / "data"
-        ground_truth_dir = output
-    else:
-        # Default: derive from scenario file location
-        # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
-        data_dir = scenario_dir / "data"
-        ground_truth_dir = scenario_dir
-    if (
-        compiled.authored_kind == "resolved"
-        and ground_truth_dir.resolve() == scenario_file.resolve().parent
-    ):
-        console.print(
-            "[bold red]Error:[/bold red] A resolved scenario cannot be replayed into "
-            "the directory that contains the authoritative input. Choose a distinct "
-            "bundle root with --output.",
-            style="red",
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
-    artifacts_dir = ground_truth_dir / "artifacts"
 
+def _prepare_generation_formats(
+    compiled: CompiledScenario,
+    formats: str | None,
+    resume: bool,
+    stored_run_options: dict[str, object],
+    oob_hosts: tuple[str, ...],
+    scenario_file: Path,
+    issues: "list[ValidationIssue]",
+) -> tuple[CompiledScenario, str | None]:
+    """Apply retained or explicit format filters and recheck evidence reachability."""
     from evidenceforge.config.provider import effective_config_scope
-    from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
-    from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
-    from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
-    from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 
+    scenario = compiled.scenario
     # Apply --formats filter (intersection with scenario output.logs)
     if formats is None and resume:
         retained_formats = stored_run_options.get("formats_filter")
@@ -1668,6 +1584,328 @@ def generate(
                     "project. Cannot proceed with generation.[/bold red]"
                 )
                 raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    return compiled, formats
+
+
+def _prepare_resume_policy(
+    resume: bool,
+    preliminary_recovery: "CheckpointRecovery | None",
+    fingerprint: str,
+    fingerprint_components: dict[str, Any],
+    resume_policy: str,
+) -> tuple[ResumeCompatibility | None, str]:
+    """Classify the preliminary snapshot and obtain only the consent required by its policy."""
+    resume_compatibility: ResumeCompatibility | None = None
+    resume_confirmation_status = "not-required"
+    if resume and preliminary_recovery is not None:
+        resume_compatibility = classify_resume_compatibility(
+            stored_fingerprint=preliminary_recovery.manifest.run_fingerprint,
+            current_fingerprint=fingerprint,
+            stored_components=preliminary_recovery.manifest.metadata.get(
+                "fingerprint_components", {}
+            ),
+            current_components=fingerprint_components,
+            authoritative_resolved_scenario=True,
+        )
+        if not resume_compatibility.can_resume:
+            detail = resume_compatibility.reason or "hard compatibility fields differ"
+            console.print(
+                f"[bold red]Error:[/bold red] Cannot resume generation: {detail}",
+                style="red",
+            )
+            if resume_compatibility.hard_mismatches:
+                console.print(
+                    "[red]Incompatible fields: "
+                    f"{', '.join(resume_compatibility.hard_mismatches)}[/red]"
+                )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if resume_policy == "exact" and resume_compatibility.level != "exact":
+            console.print(
+                "[bold red]Error:[/bold red] --resume-policy exact requires the complete "
+                "original fingerprint, including build and runtime environment",
+                style="red",
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if resume_compatibility.confirmation_required:
+            affected: list[str] = []
+            if resume_compatibility.behavior_domains:
+                affected.append("domains=" + ",".join(resume_compatibility.behavior_domains))
+            if resume_compatibility.behavior_formats:
+                affected.append("formats=" + ",".join(resume_compatibility.behavior_formats))
+            scope = "; ".join(affected) or "affected output cannot be bounded"
+            console.print(
+                "[bold yellow]Behavior warning:[/bold yellow] EvidenceForge behavior drift is "
+                f"{resume_compatibility.behavior_change} ({scope})."
+            )
+            for summary in resume_compatibility.behavior_summaries:
+                console.print(f"  [yellow]• {summary}[/yellow]")
+            if resume_policy == "attempt":
+                resume_confirmation_status = "explicit-attempt"
+            elif not _generation_prompt_available():
+                console.print(
+                    "[bold red]Error:[/bold red] Non-interactive compatible resume cannot accept "
+                    "material or unknown behavior drift. Run 'eforge checkpoint verify <bundle>' "
+                    "first, then rerun with '--resume-policy attempt' only if you accept the risk."
+                )
+                raise typer.Exit(EXIT_INPUT_ERROR)
+            elif not typer.confirm(
+                "Continue despite material or unknown EvidenceForge behavior drift?",
+                default=False,
+            ):
+                console.print("[dim]Resume aborted; the checkpoint bundle is unchanged.[/dim]")
+                raise typer.Exit(EXIT_ABORTED)
+            else:
+                resume_confirmation_status = "confirmed"
+        if resume_compatibility.level == "load-compatible":
+            console.print(
+                "[bold yellow]Warning:[/bold yellow] This checkpoint was created by a different "
+                "EvidenceForge build or runtime environment. EvidenceForge will attempt full "
+                "state hydration, but remaining output "
+                "equivalence is not guaranteed. Recovery provenance will be recorded."
+            )
+    return resume_compatibility, resume_confirmation_status
+
+
+def _report_generation_output(ground_truth_dir: Path, data_dir: Path, artifacts_dir: Path) -> None:
+    """List the successfully published bundle in the existing source and path order."""
+    from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
+    from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
+    from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
+    from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+
+    console.print("\n[bold green]✓ Generation complete![/bold green]")
+    console.print("\nGenerated files:")
+    console.print(f"  Scenario directory: {ground_truth_dir}")
+
+    # List files in scenario root (GROUND_TRUTH.md + machine-readable sidecars)
+    if ground_truth_dir.exists():
+        for file in sorted(ground_truth_dir.iterdir()):
+            if file.is_file() and file.name in {
+                "GROUND_TRUTH.md",
+                GROUND_TRUTH_JSON_FILENAME,
+                OBSERVATION_MANIFEST_FILENAME,
+                ARTIFACTS_MANIFEST_FILENAME,
+                COLLECTION_PROFILE_FILENAME,
+                GENERATION_PROFILE_FILENAME,
+                "STORAGE_MANIFEST.json",
+                OUTPUT_TARGET_FILENAME,
+                RESOLVED_SCENARIO_FILENAME,
+                GENERATION_MANIFEST_FILENAME,
+            }:
+                size = file.stat().st_size
+                size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+                console.print(f"  • {file.name} ({size_str})")
+
+    # List generated log files in data/
+    if data_dir.exists():
+        console.print(f"  Data: {data_dir}")
+        for file in sorted(data_dir.iterdir()):
+            if file.is_file():
+                size = file.stat().st_size
+                size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+                console.print(f"    • {file.name} ({size_str})")
+
+    if artifacts_dir.exists():
+        console.print(f"  Artifacts: {artifacts_dir}")
+        for file in sorted(artifacts_dir.rglob("*")):
+            if file.is_file():
+                size = file.stat().st_size
+                size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+                console.print(f"    • {file.relative_to(artifacts_dir)} ({size_str})")
+
+
+@app.command()
+def generate(
+    scenario_file: Path | None = typer.Argument(
+        None,
+        help="Path to scenario YAML file (optional with --output and --resume)",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output bundle root (default: directory containing the scenario)",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
+    ),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Deprecated alias for --overwrite",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace existing output or an incompatible incomplete run without prompting",
+    ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume the latest compatible generation checkpoint",
+    ),
+    resume_policy: str = typer.Option(
+        "compatible",
+        "--resume-policy",
+        help="Resume policy: exact, compatible (default), or explicit drift consent via attempt",
+    ),
+    checkpoint_hours: int | None = typer.Option(
+        None,
+        "--checkpoint-hours",
+        min=0,
+        help="Checkpoint every N completed simulated hours (default: 24); 0 disables checkpoints",
+    ),
+    formats: str | None = typer.Option(
+        None,
+        "--formats",
+        "-F",
+        help="Comma-separated format filter (e.g., 'zeek_conn,zeek_dns' or 'zeek'). "
+        "Only generates formats present in both this list and the scenario. "
+        "Supports group names (zeek, windows). See 'eforge info format_groups'.",
+    ),
+    target: str | None = typer.Option(
+        None,
+        "--target",
+        help="Output rendering target: default, sof-elk, or splunk",
+    ),
+    oob_host: list[str] = typer.Option(
+        [],
+        "--oob-host",
+        help="LIVE CALLBACK (out-of-band) testing: register an operator-controlled host "
+        "(e.g. a Burp Collaborator / interactsh / sinkhole domain) for adversarial_payload "
+        "events. The payload's canary is replaced with this host so a vulnerable target "
+        "actually calls back to YOU. Must be a concrete registrable domain (e.g. oast.fun) "
+        "or an IP literal. Repeatable. Passing it is the explicit opt-in: only use against "
+        "systems you are authorized to test. Off by default (payloads use the inert, "
+        "non-resolving canary).",
+    ),
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        min=0,
+        max=2**64 - 1,
+        help="Override scenario generation_seed for this deterministic run.",
+    ),
+    project_root: Path | None = typer.Option(
+        None,
+        "--project-root",
+        help="Override the current working directory for optional .eforge/config and .eforge/packs.",
+    ),
+    allow_large_workload: bool = typer.Option(
+        False,
+        "--allow-large-workload",
+        hidden=True,
+    ),
+    profile: bool = typer.Option(
+        False,
+        "--profile",
+        help="Write an opt-in generation performance profile into the output bundle",
+        hidden=True,
+    ),
+) -> None:
+    """Generate synthetic security logs from a scenario file.
+
+    Validates the scenario schema, initializes the generation engine,
+    and produces coordinated logs across multiple formats.
+
+    Exit codes:
+    - 0: Success
+    - 1: Input error (file not found, invalid path)
+    - 2: Schema validation error
+    - 21: Generation error
+    - 130: Interrupted (Ctrl+C)
+    """
+    resume, overwrite = _prepare_generation_options(
+        scenario_file=scenario_file,
+        output=output,
+        resume=resume,
+        overwrite=overwrite,
+        force=force,
+        resume_policy=resume_policy,
+    )
+
+    scenario_was_explicit = scenario_file is not None
+    scenario_file, checkpoint_scenario_file, preliminary_recovery, stored_run_options = (
+        _recover_generation_input(scenario_file=scenario_file, output=output, resume=resume)
+    )
+
+    setup_logging(verbose, debug)
+    logger = logging.getLogger(__name__)
+    output_target = _select_generation_target(
+        target=target,
+        resume=resume,
+        stored_run_options=stored_run_options,
+    )
+
+    oob_hosts = _prepare_generation_oob_hosts(
+        oob_host=oob_host,
+        resume=resume,
+        stored_run_options=stored_run_options,
+    )
+
+    console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
+    console.print(f"Scenario: {scenario_file}")
+    console.print(f"Output target: {output_target.value}")
+    if oob_hosts:
+        console.print(
+            "[bold red]⚠ LIVE CALLBACK MODE[/bold red] — adversarial_payload events will "
+            f"point at {', '.join(oob_hosts)} instead of the inert canary. A VULNERABLE "
+            "TARGET WILL CALL BACK to these host(s). Only use against systems you are "
+            "authorized to test.",
+            style="red",
+        )
+
+    compiled, checkpoint_compiled, issues = _load_generation_scenario(
+        scenario_file=scenario_file,
+        checkpoint_scenario_file=checkpoint_scenario_file,
+        scenario_was_explicit=scenario_was_explicit,
+        resume=resume,
+        seed=seed,
+        project_root=project_root,
+        oob_hosts=oob_hosts,
+        verbose=verbose,
+        debug=debug,
+    )
+    scenario = compiled.scenario
+
+    # Determine output directory
+    scenario_dir = scenario_file.parent
+    if output:
+        # Explicit --output flag: logs in data/ subdirectory, ground truth at root
+        data_dir = output / "data"
+        ground_truth_dir = output
+    else:
+        # Default: derive from scenario file location
+        # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
+        data_dir = scenario_dir / "data"
+        ground_truth_dir = scenario_dir
+    if (
+        compiled.authored_kind == "resolved"
+        and ground_truth_dir.resolve() == scenario_file.resolve().parent
+    ):
+        console.print(
+            "[bold red]Error:[/bold red] A resolved scenario cannot be replayed into "
+            "the directory that contains the authoritative input. Choose a distinct "
+            "bundle root with --output.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    artifacts_dir = ground_truth_dir / "artifacts"
+
+    from evidenceforge.config.provider import effective_config_scope
+
+    compiled, formats = _prepare_generation_formats(
+        compiled=compiled,
+        formats=formats,
+        resume=resume,
+        stored_run_options=stored_run_options,
+        oob_hosts=oob_hosts,
+        scenario_file=scenario_file,
+        issues=issues,
+    )
+    scenario = compiled.scenario
 
     if resume and scenario_was_explicit:
         if checkpoint_compiled is None or checkpoint_scenario_file is None:  # pragma: no cover
@@ -1765,74 +2003,13 @@ def generate(
         formats=checkpoint_formats,
         oob_hosts=oob_hosts,
     )
-    resume_compatibility: ResumeCompatibility | None = None
-    resume_confirmation_status = "not-required"
-    if resume and preliminary_recovery is not None:
-        resume_compatibility = classify_resume_compatibility(
-            stored_fingerprint=preliminary_recovery.manifest.run_fingerprint,
-            current_fingerprint=fingerprint,
-            stored_components=preliminary_recovery.manifest.metadata.get(
-                "fingerprint_components", {}
-            ),
-            current_components=fingerprint_components,
-            authoritative_resolved_scenario=True,
-        )
-        if not resume_compatibility.can_resume:
-            detail = resume_compatibility.reason or "hard compatibility fields differ"
-            console.print(
-                f"[bold red]Error:[/bold red] Cannot resume generation: {detail}",
-                style="red",
-            )
-            if resume_compatibility.hard_mismatches:
-                console.print(
-                    "[red]Incompatible fields: "
-                    f"{', '.join(resume_compatibility.hard_mismatches)}[/red]"
-                )
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        if resume_policy == "exact" and resume_compatibility.level != "exact":
-            console.print(
-                "[bold red]Error:[/bold red] --resume-policy exact requires the complete "
-                "original fingerprint, including build and runtime environment",
-                style="red",
-            )
-            raise typer.Exit(EXIT_INPUT_ERROR)
-        if resume_compatibility.confirmation_required:
-            affected: list[str] = []
-            if resume_compatibility.behavior_domains:
-                affected.append("domains=" + ",".join(resume_compatibility.behavior_domains))
-            if resume_compatibility.behavior_formats:
-                affected.append("formats=" + ",".join(resume_compatibility.behavior_formats))
-            scope = "; ".join(affected) or "affected output cannot be bounded"
-            console.print(
-                "[bold yellow]Behavior warning:[/bold yellow] EvidenceForge behavior drift is "
-                f"{resume_compatibility.behavior_change} ({scope})."
-            )
-            for summary in resume_compatibility.behavior_summaries:
-                console.print(f"  [yellow]• {summary}[/yellow]")
-            if resume_policy == "attempt":
-                resume_confirmation_status = "explicit-attempt"
-            elif not _generation_prompt_available():
-                console.print(
-                    "[bold red]Error:[/bold red] Non-interactive compatible resume cannot accept "
-                    "material or unknown behavior drift. Run 'eforge checkpoint verify <bundle>' "
-                    "first, then rerun with '--resume-policy attempt' only if you accept the risk."
-                )
-                raise typer.Exit(EXIT_INPUT_ERROR)
-            elif not typer.confirm(
-                "Continue despite material or unknown EvidenceForge behavior drift?",
-                default=False,
-            ):
-                console.print("[dim]Resume aborted; the checkpoint bundle is unchanged.[/dim]")
-                raise typer.Exit(EXIT_ABORTED)
-            else:
-                resume_confirmation_status = "confirmed"
-        if resume_compatibility.level == "load-compatible":
-            console.print(
-                "[bold yellow]Warning:[/bold yellow] This checkpoint was created by a different "
-                "EvidenceForge build or runtime environment. EvidenceForge will attempt full "
-                "state hydration, but remaining output "
-                "equivalence is not guaranteed. Recovery provenance will be recorded."
-            )
+    resume_compatibility, resume_confirmation_status = _prepare_resume_policy(
+        resume=resume,
+        preliminary_recovery=preliminary_recovery,
+        fingerprint=fingerprint,
+        fingerprint_components=fingerprint_components,
+        resume_policy=resume_policy,
+    )
     resolved_scenario = serialize_resolved_document(build_resolved_document(compiled))
     checkpoint_store = IncrementalCheckpointStore(
         ground_truth_dir,
@@ -2026,45 +2203,7 @@ def generate(
 
         generation_succeeded = True
 
-        console.print("\n[bold green]✓ Generation complete![/bold green]")
-        console.print("\nGenerated files:")
-        console.print(f"  Scenario directory: {ground_truth_dir}")
-
-        # List files in scenario root (GROUND_TRUTH.md + machine-readable sidecars)
-        if ground_truth_dir.exists():
-            for file in sorted(ground_truth_dir.iterdir()):
-                if file.is_file() and file.name in {
-                    "GROUND_TRUTH.md",
-                    GROUND_TRUTH_JSON_FILENAME,
-                    OBSERVATION_MANIFEST_FILENAME,
-                    ARTIFACTS_MANIFEST_FILENAME,
-                    COLLECTION_PROFILE_FILENAME,
-                    GENERATION_PROFILE_FILENAME,
-                    "STORAGE_MANIFEST.json",
-                    OUTPUT_TARGET_FILENAME,
-                    RESOLVED_SCENARIO_FILENAME,
-                    GENERATION_MANIFEST_FILENAME,
-                }:
-                    size = file.stat().st_size
-                    size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
-                    console.print(f"  • {file.name} ({size_str})")
-
-        # List generated log files in data/
-        if data_dir.exists():
-            console.print(f"  Data: {data_dir}")
-            for file in sorted(data_dir.iterdir()):
-                if file.is_file():
-                    size = file.stat().st_size
-                    size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
-                    console.print(f"    • {file.name} ({size_str})")
-
-        if artifacts_dir.exists():
-            console.print(f"  Artifacts: {artifacts_dir}")
-            for file in sorted(artifacts_dir.rglob("*")):
-                if file.is_file():
-                    size = file.stat().st_size
-                    size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
-                    console.print(f"    • {file.relative_to(artifacts_dir)} ({size_str})")
+        _report_generation_output(ground_truth_dir, data_dir, artifacts_dir)
 
         # Success - exit normally
         return

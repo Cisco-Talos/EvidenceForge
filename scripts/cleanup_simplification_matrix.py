@@ -21,11 +21,13 @@ GROUPS = {
     "process": ("cleanup_process_matrix.py", None, 36),
     "parent-preflight": ("cleanup_parent_preflight_matrix.py", None, 72),
     "system": ("cleanup_supplement_matrix.py", "cleanup-system-families.yaml", 6),
+    "cli": ("cleanup_cli_matrix.py", None, 6),
     "companions": ("cleanup_supplement_matrix.py", "cleanup-process-companions.yaml", 6),
 }
 
 ADDITIONAL_BASELINES = {
     "system": "pass4-baseline-system",
+    "cli": "pass4-baseline-cli",
     "companions": "pass4-baseline-companions-v2",
 }
 
@@ -60,6 +62,13 @@ def main() -> None:
         ]
         if group == "core":
             command.extend(["--fixtures", str(scripts.parent / "tests/fixtures/scenarios")])
+        if group == "cli":
+            command.extend(
+                [
+                    "--fixture",
+                    str(scripts.parent / "tests/fixtures/scenarios/checkpoint-all-formats.yaml"),
+                ]
+            )
         if fixture:
             command.extend(["--fixture", str(scripts / "fixtures" / fixture)])
         started = time.perf_counter()
