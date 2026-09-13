@@ -2,6 +2,34 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 5 accepted — ordered process companions
+
+Item 4 committed as `1c266cfd`. The typed process handler now calls four direct operations for
+redirected files, HTTP, database and SCP evidence. Root actor/session/parent resolution, admission,
+identity registration, explicit credentials, supplementary suppression and termination remain in the
+coordinator. Network and SSH companions retain their existing bundles; redirected output retains its
+existing canonical occurrence/dispatcher path. No state, context object, cache or RNG is introduced.
+
+The coordinator shrinks from **745 to 432 lines**, and from **56 to 34 statement branches**. Helpers
+consume the resolved identity and preserve source-visibility clamps. Modeled SCP still previews the
+SSH tuple; external SCP still reserves its tuple. The process-order regression confirms root -> file
+-> network -> lifecycle, shared PID/image and supplementary suppression. The existing RNG ceiling
+remains 358; only selectors moved to the new functions (190 -> 194 selectors).
+
+Six new frozen companion cases cover HTTP redirection, known/failed database destinations, modeled
+and external SCP, named processes and suppression. Original-26 repeat and preceding-item captures
+pass. The expanded matrix now contains **206 cases**. Before extraction, 114 existing focused tests
+and the new order control passed. After extraction: **115 focused tests**, **3 slow RNG-policy tests**,
+**8,535 standard tests** (27 unchanged skips, 2,011 deselected, 292.83 seconds), both Ruff checks,
+revision-69 validation against `1c266cfd`, and **48 byte comparisons against both references** pass.
+
+Isolated generation medians were 5.176/5.195/5.205/5.226 seconds (baseline/candidate/baseline/candidate), with
+identical evidence hashes. Four additional direct calls per process clarify companion responsibilities;
+there is no new retained service state or independent scheduling owner. Complete allocation/performance data,
+structural counts, input references and gate hashes are in `2026-09-12-nine-item-process-companions.json`.
+The earlier unfrozen-fixture refusal remains recorded. An optional process-list diagnostic was denied
+by the sandbox; it had no bearing on acceptance. No refactor output difference was accepted.
+
 ### Item 4 accepted — shared registry admission and lock mechanics
 
 Item 3 committed as `bdbc8f93`. Eight gate implementations now share `MutationWatermarkGate`;

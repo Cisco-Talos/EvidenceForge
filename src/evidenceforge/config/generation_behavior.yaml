@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 68
+current_revision: 69
 history_start_revision: 1
-behavior_surface_sha256: "8772b01665453bdeaa6a502beacde515044ff27436c4d34b7f3ffd96463821b8"
+behavior_surface_sha256: "6dc431e08bee730aeaca83342a4ca059340ea0b6dec15dadad4857116624e3f5"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -645,3 +645,10 @@ changes:
       - runtime-registries
     formats: []
     summary: Consolidate writer-preferred mutation watermark admission and identity-deduplicated stable lock acquisition while retaining independent registry gates and checkpoint reconstruction.
+  - revision: 69
+    id: separate-ordered-process-storyline-companions
+    impact: none
+    domains:
+      - storyline-process-evidence
+    formats: []
+    summary: Extract redirected file HTTP database and SCP companions while retaining root identity foreground admission RNG order source visibility and lifecycle scheduling in the typed process handler.

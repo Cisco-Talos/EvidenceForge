@@ -218,7 +218,11 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|engine/typed_handlers/periodic.py|handle_dns_query|uniform
 1|engine/typed_handlers/periodic.py|handle_dns_tunnel|triangular
 3|engine/typed_handlers/periodic.py|handle_dns_tunnel|uniform
-8|engine/typed_handlers/process.py|handle_process|uniform
+2|engine/typed_handlers/process.py|handle_process|uniform
+1|engine/typed_handlers/process.py|_emit_process_output_file|uniform
+1|engine/typed_handlers/process.py|_emit_process_http_companion|uniform
+2|engine/typed_handlers/process.py|_emit_process_database_companion|uniform
+2|engine/typed_handlers/process.py|_emit_process_scp_companion|uniform
 1|network_observation.py|_lose_direction|uniform
 1|state_manager.py|_allocate_linux_pid|lognormvariate
 1|state_manager.py|_allocate_windows_pid|lognormvariate
@@ -316,7 +320,7 @@ def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 190
+    assert len(caps) == 194
     assert sum(caps.values()) == 358
     assert not observed - caps
     assert len(observed) <= len(caps)

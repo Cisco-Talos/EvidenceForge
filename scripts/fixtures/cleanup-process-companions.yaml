@@ -1,0 +1,178 @@
+version: '1.0'
+name: cleanup-process-companions
+description: 'Frozen bounded process companions: HTTP/output, database success/failure,
+  and modeled/external SCP.'
+environment:
+  description: One Windows and one Linux workstation behind network and firewall sensors
+  proxy:
+    mode: explicit
+    listener_port: 8080
+  users:
+  - username: alice
+    full_name: Alice Example
+    email: alice@example.test
+    primary_system: WIN-01
+    enabled: true
+  - username: bob
+    full_name: Bob Example
+    email: bob@example.test
+    primary_system: LINUX-01
+    enabled: true
+  systems:
+  - hostname: WIN-01
+    ip: 10.0.0.10
+    os: Windows 10
+    type: workstation
+  - hostname: LINUX-01
+    ip: 10.0.0.20
+    os: Ubuntu 22.04
+    type: server
+    services:
+    - squid
+    - nginx
+    - dns-client
+    roles:
+    - forward_proxy
+    - web_server
+  - hostname: DB-01
+    ip: 10.0.0.30
+    os: Windows Server 2022
+    type: server
+    roles:
+    - database_server
+    services:
+    - mssql
+    - dns-client
+  - hostname: LINUX-02
+    ip: 10.0.0.21
+    os: Ubuntu 22.04
+    type: server
+    services:
+    - sshd
+    - dns-client
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      exposure: internal
+      systems:
+      - WIN-01
+      - LINUX-01
+      - DB-01
+      - LINUX-02
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+    - type: ids
+      name: core-ids
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - snort_alert
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - cisco_asa
+time_window:
+  start: '2024-01-15T10:00:00Z'
+  duration: 40m
+  warmup: 1h
+baseline_activity:
+  description: Small mixed-platform baseline
+  intensity: low
+  variation: low
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+storyline:
+- id: http-output
+  time: +5m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise http-output process companion
+  events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: curl https://example.com/health > ~/health.txt
+- id: database-known
+  time: +9m
+  actor: alice
+  system: WIN-01
+  activity: Exercise database-known process companion
+  events:
+  - type: process
+    process_name: sqlcmd.exe
+    command_line: sqlcmd.exe -S 10.0.0.30 -Q "SELECT 1"
+- id: database-unresolved
+  time: +13m
+  actor: alice
+  system: WIN-01
+  activity: Exercise database-unresolved process companion
+  events:
+  - type: process
+    process_name: sqlcmd.exe
+    command_line: sqlcmd.exe -S missing-db -Q "SELECT 1"
+- id: scp-modeled
+  time: +17m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise scp-modeled process companion
+  events:
+  - type: process
+    process_name: /usr/bin/scp
+    command_line: scp /tmp/archive.tar.gz bob@10.0.0.21:/tmp/archive.tar.gz
+- id: scp-external
+  time: +23m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise scp-external process companion
+  events:
+  - type: process
+    process_name: /usr/bin/scp
+    command_line: scp /tmp/archive.tar.gz bob@198.51.100.77:/tmp/archive.tar.gz
+- id: named-http
+  time: +28m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise named-http process companion
+  events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: curl https://example.com/status
+    process_ref: named-http
+- id: suppressed-output
+  time: +31m
+  actor: alice
+  system: WIN-01
+  activity: Exercise suppressed-output process companion
+  events:
+  - type: process
+    process_name: cmd.exe
+    command_line: cmd.exe /c whoami > C:\Temp\identity.txt
+    supplementary: none
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: bash_history
+  - format: snort_alert
+  - format: cisco_asa
+  - format: web_access
+  - format: proxy_access
+  destination: ./output
+  compression: false

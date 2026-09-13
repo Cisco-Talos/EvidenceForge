@@ -31,6 +31,7 @@ from .context import TypedEventContext
 
 if TYPE_CHECKING:
     from evidenceforge.generation.engine.storyline import StorylineMixin
+    from evidenceforge.models.scenario import System, User
 
 
 def handle_process(
@@ -38,7 +39,6 @@ def handle_process(
 ) -> dict[str, Any] | None:
     """Execute the process evidence path using the existing runtime owners."""
     from evidenceforge.generation.engine.storyline_helpers.process import (
-        _IPV4_LITERAL_RE,
         _estimate_process_lifetime,
         _extract_schtasks_option,
         _linux_shell_process_command_line,
@@ -315,6 +315,176 @@ def handle_process(
     self._record_storyline_service_create_command(system, command_line)
     self._record_storyline_account_create_command(system, command_line)
 
+    # Companions consume this root identity in order; their RNG draws precede the
+    # termination draw. Keep lifecycle admission and registration in this handler.
+    _emit_process_output_file(
+        self,
+        system=system,
+        process_actor=process_actor,
+        pid=pid,
+        parent_pid=parent_pid,
+        process_name=process_name,
+        process_command_line=process_command_line,
+        process_logon_id=process_logon_id,
+        output_file=output_file,
+        os_category=os_category,
+        time=time,
+        rng=rng,
+        malicious_event=malicious_event,
+    )
+    _emit_process_http_companion(
+        self,
+        system=system,
+        pid=pid,
+        process_name=process_name,
+        command_line=command_line,
+        time=time,
+        rng=rng,
+        malicious_event=malicious_event,
+    )
+    _emit_process_database_companion(
+        self,
+        system=system,
+        pid=pid,
+        process_name=process_name,
+        command_line=command_line,
+        time=time,
+        rng=rng,
+        malicious_event=malicious_event,
+        os_category=os_category,
+    )
+    _emit_process_scp_companion(
+        self,
+        system=system,
+        process_actor=process_actor,
+        pid=pid,
+        process_name=process_name,
+        command_line=command_line,
+        time=time,
+        rng=rng,
+        os_category=os_category,
+    )
+
+    _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks"}
+    proc_basename = (
+        process_name.rsplit("\\", 1)[-1].lower() if "\\" in process_name else process_name.lower()
+    )
+    command_lower = command_line.lower()
+    uses_explicit_creds = proc_basename in _EXPLICIT_CRED_TOOLS or (
+        proc_basename in {"net.exe", "net1.exe"}
+        and any(token in command_lower for token in ("/user:", " /u:", " /user "))
+    )
+    if uses_explicit_creds and os_category == "windows":
+        cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
+        self.activity_generator.generate_explicit_credentials(
+            user=process_actor,
+            system=system,
+            time=cred_time,
+            target_username=process_actor.username,
+            target_server="localhost",
+            process_name=process_name,
+            process_pid=pid,
+        )
+
+    if os_category == "windows" and getattr(spec, "supplementary", "auto") != "none":
+        self.activity_generator._expand_and_emit(
+            "process_create",
+            time,
+            actor=process_actor,
+            target_system=system,
+            command_line=command_line,
+            os_category=os_category,
+            source_pid=pid,
+            logon_id=process_logon_id,
+            skip_types=explicit_types,
+        )
+
+    # Mark as story process and schedule termination
+    self.state_manager.mark_story_process(system.hostname, pid)
+    lifetime = _estimate_process_lifetime(process_name, process_command_line)
+    if lifetime is not None:
+        term_delay = rng.uniform(lifetime[0], lifetime[1])
+        term_time = time + timedelta(seconds=term_delay)
+        shell_release_time = term_time
+        terminate_immediately = False
+        if os_category == "linux":
+            from evidenceforge.generation.activity.generator import (
+                _linux_foreground_lifetime,
+            )
+
+            terminate_immediately = (
+                _linux_foreground_lifetime(process_name, process_command_line) is not None
+            )
+            if process_ref is not None:
+                terminate_immediately = False
+            if terminate_immediately and self._process_has_following_same_host_connection(
+                system,
+                future_specs,
+            ):
+                terminate_immediately = False
+        if terminate_immediately:
+            self.activity_generator.generate_process_termination(
+                user=process_actor,
+                system=system,
+                time=term_time,
+                pid=pid,
+                process_name=process_name,
+                logon_id=process_logon_id,
+                from_storyline=True,
+            )
+        else:
+            release_storyline_index = (
+                self._storyline_process_ref_release_index(
+                    actor=process_actor,
+                    system=system,
+                    process_ref=process_ref,
+                )
+                if process_ref is not None
+                else None
+            )
+            self._queue_story_process_termination(
+                actor=process_actor,
+                system=system,
+                time=term_time,
+                pid=pid,
+                process_name=process_name,
+                logon_id=process_logon_id,
+                release_storyline_index=release_storyline_index,
+            )
+        if os_category == "linux":
+            self.activity_generator.remember_linux_foreground_process_completion(
+                system=system,
+                username=process_actor.username,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                termination_time=shell_release_time,
+                process_name=process_name,
+                command_line=process_command_line,
+            )
+            self._storyline_shell_available_at[shell_key] = shell_release_time
+            process_shell_key = (system.hostname, process_actor.username)
+            self._storyline_shell_available_at[process_shell_key] = shell_release_time
+
+    return context.malicious_event
+
+
+def _emit_process_output_file(
+    self: StorylineMixin,
+    *,
+    system: System,
+    process_actor: User,
+    pid: int,
+    parent_pid: int | None,
+    process_name: str,
+    process_command_line: str,
+    process_logon_id: str,
+    output_file: str | None,
+    os_category: str,
+    time: datetime,
+    rng: random.Random,
+    malicious_event: dict[str, Any],
+) -> None:
+    """Render the existing redirected-file occurrence after the root process exists."""
     if output_file:
         if os_category == "linux" and output_file.startswith("~/"):
             home = (
@@ -352,6 +522,19 @@ def handle_process(
         )
         malicious_event["output_file"] = output_file
 
+
+def _emit_process_http_companion(
+    self: StorylineMixin,
+    *,
+    system: System,
+    pid: int,
+    process_name: str,
+    command_line: str,
+    time: datetime,
+    rng: random.Random,
+    malicious_event: dict[str, Any],
+) -> None:
+    """Request URL evidence through the network bundle using the resolved root process."""
     http_url = self._extract_http_url(command_line)
     if http_url is not None:
         parsed_target = self._parse_http_url_target(http_url)
@@ -439,6 +622,22 @@ def handle_process(
             )
             malicious_event["network_url"] = http_url
 
+
+def _emit_process_database_companion(
+    self: StorylineMixin,
+    *,
+    system: System,
+    pid: int,
+    process_name: str,
+    command_line: str,
+    time: datetime,
+    rng: random.Random,
+    malicious_event: dict[str, Any],
+    os_category: str,
+) -> None:
+    """Retain database fallback and denial semantics before requesting network evidence."""
+    from evidenceforge.generation.engine.storyline_helpers.process import _IPV4_LITERAL_RE
+
     remote_db_target = self._extract_database_client_target(command_line, os_category)
     if remote_db_target is not None:
         target_host, dst_port, service = remote_db_target
@@ -522,6 +721,20 @@ def handle_process(
             malicious_event["network_target_ip"] = target_ip
             malicious_event["network_target_port"] = dst_port
 
+
+def _emit_process_scp_companion(
+    self: StorylineMixin,
+    *,
+    system: System,
+    process_actor: User,
+    pid: int,
+    process_name: str,
+    command_line: str,
+    time: datetime,
+    rng: random.Random,
+    os_category: str,
+) -> None:
+    """Delegate modeled receivers to SSH before producing transfer-specific artifacts."""
     scp_destination = self._extract_scp_destination(command_line, os_category)
     scp_target = scp_destination[0] if scp_destination is not None else None
     if scp_target is not None:
@@ -676,108 +889,6 @@ def handle_process(
                     process_image=process_name,
                     src_port=source_port,
                 )
-
-    _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks"}
-    proc_basename = (
-        process_name.rsplit("\\", 1)[-1].lower() if "\\" in process_name else process_name.lower()
-    )
-    command_lower = command_line.lower()
-    uses_explicit_creds = proc_basename in _EXPLICIT_CRED_TOOLS or (
-        proc_basename in {"net.exe", "net1.exe"}
-        and any(token in command_lower for token in ("/user:", " /u:", " /user "))
-    )
-    if uses_explicit_creds and os_category == "windows":
-        cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
-        self.activity_generator.generate_explicit_credentials(
-            user=process_actor,
-            system=system,
-            time=cred_time,
-            target_username=process_actor.username,
-            target_server="localhost",
-            process_name=process_name,
-            process_pid=pid,
-        )
-
-    if os_category == "windows" and getattr(spec, "supplementary", "auto") != "none":
-        self.activity_generator._expand_and_emit(
-            "process_create",
-            time,
-            actor=process_actor,
-            target_system=system,
-            command_line=command_line,
-            os_category=os_category,
-            source_pid=pid,
-            logon_id=process_logon_id,
-            skip_types=explicit_types,
-        )
-
-    # Mark as story process and schedule termination
-    self.state_manager.mark_story_process(system.hostname, pid)
-    lifetime = _estimate_process_lifetime(process_name, process_command_line)
-    if lifetime is not None:
-        term_delay = rng.uniform(lifetime[0], lifetime[1])
-        term_time = time + timedelta(seconds=term_delay)
-        shell_release_time = term_time
-        terminate_immediately = False
-        if os_category == "linux":
-            from evidenceforge.generation.activity.generator import (
-                _linux_foreground_lifetime,
-            )
-
-            terminate_immediately = (
-                _linux_foreground_lifetime(process_name, process_command_line) is not None
-            )
-            if process_ref is not None:
-                terminate_immediately = False
-            if terminate_immediately and self._process_has_following_same_host_connection(
-                system,
-                future_specs,
-            ):
-                terminate_immediately = False
-        if terminate_immediately:
-            self.activity_generator.generate_process_termination(
-                user=process_actor,
-                system=system,
-                time=term_time,
-                pid=pid,
-                process_name=process_name,
-                logon_id=process_logon_id,
-                from_storyline=True,
-            )
-        else:
-            release_storyline_index = (
-                self._storyline_process_ref_release_index(
-                    actor=process_actor,
-                    system=system,
-                    process_ref=process_ref,
-                )
-                if process_ref is not None
-                else None
-            )
-            self._queue_story_process_termination(
-                actor=process_actor,
-                system=system,
-                time=term_time,
-                pid=pid,
-                process_name=process_name,
-                logon_id=process_logon_id,
-                release_storyline_index=release_storyline_index,
-            )
-        if os_category == "linux":
-            self.activity_generator.remember_linux_foreground_process_completion(
-                system=system,
-                username=process_actor.username,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                termination_time=shell_release_time,
-                process_name=process_name,
-                command_line=process_command_line,
-            )
-            self._storyline_shell_available_at[shell_key] = shell_release_time
-            process_shell_key = (system.hostname, process_actor.username)
-            self._storyline_shell_available_at[process_shell_key] = shell_release_time
-
-    return context.malicious_event
 
 
 def handle_create_remote_thread(

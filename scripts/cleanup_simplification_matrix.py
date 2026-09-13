@@ -21,6 +21,12 @@ GROUPS = {
     "process": ("cleanup_process_matrix.py", None, 36),
     "parent-preflight": ("cleanup_parent_preflight_matrix.py", None, 72),
     "system": ("cleanup_supplement_matrix.py", "cleanup-system-families.yaml", 6),
+    "companions": ("cleanup_supplement_matrix.py", "cleanup-process-companions.yaml", 6),
+}
+
+ADDITIONAL_BASELINES = {
+    "system": "pass4-baseline-system",
+    "companions": "pass4-baseline-companions-v2",
 }
 
 
@@ -38,9 +44,7 @@ def main() -> None:
     measurements: dict[str, float] = {}
     for group in args.groups:
         driver, fixture, expected_count = GROUPS[group]
-        reference = args.root / (
-            "pass4-baseline-system" if group == "system" else f"pass3-final-{group}"
-        )
+        reference = args.root / ADDITIONAL_BASELINES.get(group, f"pass3-final-{group}")
         output = args.root / f"{args.prefix}-{group}"
         if output.exists():
             raise ValueError(f"Refusing to overwrite capture: {output}")
