@@ -1,0 +1,468 @@
+{
+  "after": {
+    "_execute_persistent_windows": {
+      "branches": 54,
+      "calls": 245,
+      "lines": 1060
+    }
+  },
+  "allocation_changes": "No new plan/list/state owner. The per-file helper appends to the same two preparation-local buffers and returns the existing cursor; root execution returns its capture and UID. Existing recipe fields are consumed directly by the root helper.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_execute_persistent_windows": {
+      "branches": 66,
+      "calls": 302,
+      "lines": 1298
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item9a-report.json",
+    "sha256": "ee48c685ee2aed2969e8df3d7141782b4827d2fd989f57b5919a1fb4b72a2f53"
+  },
+  "coordinators": [
+    "_execute_persistent_windows"
+  ],
+  "description": "Three direct operations now prepare each file mutation, assemble/bind the reversible action recipe, and execute the canonical network root. File preparation appends to the same local plan buffers in the same order, under the original journal cleanup scope. The coordinator retains phase admission, recipe validation, root-fact refresh and all retained-owner authentication. A compact phase table documents prepared/committed state, authenticated evidence, allowed retry and recovery ownership, with representative regression links. Two obsolete forwarding locals were removed. The network URI comment now describes the shared HTTP/HTTPS RNG order accurately.",
+  "failures": [
+    "Before production edits, the bounded SMB matrix had 28 passes and one failure: its soak atomicity test expected a new client in the active-process list after the operation had already terminated it. Original 26a150ac failed identically. The corrected test observes the exact new client at successful canonical root commit, retains all precommit-failure neutrality checks, and passes on both builds before extraction. No production behavior or golden evidence changed.",
+    "Ruff identified two now-unused forwarding locals, affinity and operation_plans; both were removed before gates."
+  ],
+  "gates": {
+    "before-atomic-corrected": {
+      "log": "/private/tmp/eforge-pass4-item9a-before-atomic-corrected.log",
+      "sha256": "5864adc0f04f4bfc0d6cba1ce984c9942ba1ded1b8adfb8cfdd41f3e53e0f7d8",
+      "summary": "============================== 1 passed in 3.61s ==============================="
+    },
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item9a-focused.log",
+      "sha256": "a118c33dc3d617b2ddf4450489d9ae86041f6e4c72641ac323cc078392ef301e",
+      "summary": "====================== 36 passed, 29 deselected in 17.16s ======================"
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item9a-matrix.log",
+      "sha256": "d11b8a32cc50b8e58039d06228f428ac53fdaa5c34a52522c65761ec541ebd0e",
+      "summary": ""
+    },
+    "original-atomic-corrected": {
+      "log": "/private/tmp/eforge-pass4-item9a-original-atomic-corrected.log",
+      "sha256": "d92b652a1e9995e075cfdb2e892de1ee8329eb03a6eb247d5c8743dde1a56e9f",
+      "summary": "============================== 1 passed in 3.60s ==============================="
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item9a-slow.log",
+      "sha256": "6bb8c68eb4bd50ed097cf9589631553df19b8f1299eba89bc06228997680170b",
+      "summary": "================= 37 passed, 7 deselected in 74.39s (0:01:14) =================="
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item9a-standard.log",
+      "sha256": "ab1b624f06148b846db0ff39cf7a3d58c54228d84f119fb3998e72d7a690d544",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 294.57s (0:04:54) ========="
+    }
+  },
+  "item": "9a",
+  "logs": [
+    "focused",
+    "slow",
+    "standard",
+    "matrix",
+    "original-atomic-corrected",
+    "before-atomic-corrected"
+  ],
+  "manifest": "passed vs 6d022448",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 11379683,
+      "allocation_sample_retained_blocks": 67526,
+      "allocation_sample_retained_bytes": 5799753,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5411622499814257,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1805621620665616,
+      "process_max_rss": 171933696,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.5420360000571236,
+        2.527002791990526,
+        2.5920957080088556,
+        2.5306676659965888,
+        2.5537033749278635,
+        2.5252403339836746,
+        2.5411622499814257
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11374358,
+      "allocation_sample_retained_blocks": 67482,
+      "allocation_sample_retained_bytes": 5796852,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5334070830140263,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1841760529187684,
+      "process_max_rss": 174424064,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.5334070830140263,
+        2.5242016670526937,
+        2.5607647500000894,
+        2.5198120420100167,
+        2.542123083025217,
+        2.5451520000351593,
+        2.5119944169418886
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11380374,
+      "allocation_sample_retained_blocks": 67420,
+      "allocation_sample_retained_bytes": 5794221,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.5448669170727953,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1788435693331722,
+      "process_max_rss": 174194688,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.5378361250041053,
+        2.528993000043556,
+        2.576360374921933,
+        2.5149579999269918,
+        2.5508846670854837,
+        2.5554910419741645,
+        2.5448669170727953
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11373579,
+      "allocation_sample_retained_blocks": 67436,
+      "allocation_sample_retained_bytes": 5794016,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.541726708994247,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1802999863770132,
+      "process_max_rss": 171769856,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.5651512080803514,
+        2.541760125081055,
+        2.541726708994247,
+        2.5433277080301195,
+        2.5336891670012847,
+        2.5222750829998404,
+        2.5139503750251606
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    }
+  ],
+  "performance_control": "Original baseline and pre-SMB predecessor match all native evidence hashes, operation truth and RNG digest; all retained file/connection counters are zero.",
+  "performance_runs": [
+    "baseline-smb-a",
+    "smb-a",
+    "baseline-smb-b",
+    "smb-b"
+  ],
+  "preexisting_failure_logs": [
+    "/private/tmp/eforge-pass4-item9a-before-recovery.log",
+    "/private/tmp/eforge-pass4-item9a-original-atomic-soak.log"
+  ],
+  "preserved_predecessor_source": "/private/tmp/eforge-cleanup-smb-baseline",
+  "previous": "6d022448",
+  "revision": 76,
+  "ruff": "both passed",
+  "slug": "smb-action-root",
+  "source": "src/evidenceforge/generation/actions/smb_activity.py",
+  "targeted_tiers": "The 37 selected checks include the entire bounded SMB production slow/soak fault matrix and eight timing-owner checks. This is a targeted subsystem diagnostic, not the excluded full repository soak tier.",
+  "title": "SMB reversible action and root execution"
+}

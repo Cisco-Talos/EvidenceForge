@@ -2,6 +2,22 @@
 
 ## Nine-item simplification pass — in progress
 
+### Item 9a accepted — SMB reversible action and root execution
+
+Predecessor `6d022448`. Three direct operations now prepare each file mutation, assemble/bind the reversible action recipe, and execute the canonical network root. File preparation appends to the same local plan buffers in the same order, under the original journal cleanup scope. The coordinator retains phase admission, recipe validation, root-fact refresh and all retained-owner authentication. A compact phase table documents prepared/committed state, authenticated evidence, allowed retry and recovery ownership, with representative regression links. Two obsolete forwarding locals were removed. The network URI comment now describes the shared HTTP/HTTPS RNG order accurately.
+
+Acceptance: 36 passed, 29 deselected in 17.16s,
+8550 passed, 27 skipped, 2011 deselected in 294.57s (0:04:54). Targeted slow controls:
+37 passed, 7 deselected in 74.39s (0:01:14). Both Ruff checks, revision-76 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.541/2.533/2.545/2.542 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-action-root.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: Before production edits, the bounded SMB matrix had 28 passes and one failure: its soak atomicity test expected a new client in the active-process list after the operation had already terminated it. Original 26a150ac failed identically. The corrected test observes the exact new client at successful canonical root commit, retains all precommit-failure neutrality checks, and passes on both builds before extraction. No production behavior or golden evidence changed. Ruff identified two now-unused forwarding locals, affinity and operation_plans; both were removed before gates.
+
 ### Item 8c accepted — protocol evidence and interval reconciliation
 
 Predecessor `6556fe20`. The protocol-evidence coordinator falls from 1,138 to 527 lines. Focused operations own DNS normalization/cache staging (127 lines), proxy request presentation (68), proxy source context (160), automatic HTTP evidence (135), NTP parser/clock evidence (115), and HTTP transport accounting (99). The duplicated legacy HTTP/HTTPS URI/referrer branches now share one parameterized operation. All helpers use the existing phase-local event draft and preparation. Protocol/body adjustments still precede process visibility, session bounds and exact tuple reservation; responder preparation and independently committed prerequisites retain their boundaries. Existing composed records are unchanged.

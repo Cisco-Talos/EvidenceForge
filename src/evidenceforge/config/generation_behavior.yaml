@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 75
+current_revision: 76
 history_start_revision: 1
-behavior_surface_sha256: "d9f211f1e55ec6f42503095d18c910325c1c4caa3792ae5f916244472c6c3d1a"
+behavior_surface_sha256: "a27f2cf81549040396eef85fcc2e1c32159e9fadb540204d861db33160d7ad95"
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -694,3 +694,10 @@ changes:
       - network
     formats: []
     summary: Extract DNS proxy HTTP and NTP evidence preparation and preserve final interval reconciliation before tuple reservation
+  - revision: 76
+    id: cleanup-persistent-smb-action-root
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Separate persistent SMB file recipe preparation and canonical root execution without changing continuation phases or cleanup scope

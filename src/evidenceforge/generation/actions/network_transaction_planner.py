@@ -4843,7 +4843,7 @@ class NetworkTransactionPlanner:
             user_agent = http.user_agent
             proxy_referrer = http.referrer
         else:
-            # Legacy single-connection HTTPS path
+            # Sample the URI before its referrer to preserve the request RNG sequence.
             _src_os = (
                 _get_os_category(endpoints.source_system.os) if endpoints.source_system else None
             )

@@ -70,6 +70,7 @@ from evidenceforge.generation.persistent_smb_continuation import (
     PersistentSmbClientProcessPreparation,
     PersistentSmbRootHandoff,
     PersistentSmbTerminalContinuation,
+    PersistentSmbTerminalContinuationAuthority,
     SmbActivityResult,
 )
 from evidenceforge.generation.persistent_smb_continuation import (
@@ -1728,6 +1729,353 @@ class SmbActivityActionBundle:
             lifecycle=rendered.lifecycle,
         )
 
+    def _append_persistent_smb_file_operation(
+        self,
+        file: CompiledStorageFile,
+        index: int,
+        *,
+        share: CompiledStorageShare,
+        journal: SmbFileMutationJournal,
+        operation_cursor: datetime,
+        byte_allocation: tuple[int, int],
+        operation_plans: list[SmbCompletedOperationPlan],
+        prepared_records: list[_PersistentSmbPreparedOperation],
+    ) -> datetime:
+        """Stage one file mutation and append its plans to the caller's local preparation buffers.
+
+        The journal remains reversible until the existing network root commits.
+        Append order matters for partial failure; cancellation stays with the
+        enclosing action preparation, which also owns the operation deadline.
+        """
+        timing = self._operation_timing(
+            file,
+            index,
+            size_bytes=self._planned_operation_size(file, index),
+        )
+        started_at = (
+            operation_cursor if index == 0 else operation_cursor + timedelta(microseconds=1)
+        )
+        ended_at = started_at + timedelta(seconds=timing.total_seconds)
+        action = self.request.spec.operation
+        result = self.outcome
+        creates_remote_copy = (
+            action in {"copy", "move"}
+            and not isinstance(self.request.spec.source, SmbShareLocation)
+            and isinstance(self.request.spec.destination, SmbShareLocation)
+        )
+        state = file
+        handle_access = ""
+        handle_deny_write = False
+        handle_role = "operation"
+        if result in {"access_denied", "not_found"}:
+            pass
+        elif result == "sharing_violation":
+            state = self.executor.state_manager.touch_smb_file(file, journal=journal)
+            handle_access = "read"
+            handle_deny_write = True
+            handle_role = "sharing-conflict"
+        elif action == "create" or creates_remote_copy:
+            state = self.executor.state_manager.create_smb_file(
+                share=share.ref,
+                path=file.path,
+                size_bytes=file.size_bytes,
+                mime_type=file.mime_type,
+                timestamp=started_at,
+                tags=file.tags,
+                journal=journal,
+            )
+            handle_access = "write"
+            if result == "success" and action == "move" and creates_remote_copy:
+                source_file = self._client_source_by_destination.get(file.file_id)
+                if source_file is not None:
+                    source_state = self.executor.state_manager.touch_smb_file(
+                        source_file,
+                        journal=journal,
+                    )
+                    self.executor.state_manager.delete_smb_file(
+                        source_state.file_id,
+                        journal=journal,
+                    )
+        else:
+            state = self.executor.state_manager.touch_smb_file(file, journal=journal)
+            handle_access = "read" if action in {"browse", "read", "copy"} else "write"
+        previous_path = ""
+        previous_client_path = ""
+        previous_server_path = ""
+        if result == "success" and action == "update":
+            state = self.executor.state_manager.update_smb_file(
+                state.file_id,
+                size_bytes=self._updated_size(file, index),
+                journal=journal,
+            )
+        elif result == "success" and action == "move" and not creates_remote_copy:
+            destination = self.request.spec.destination
+            destination_path = (
+                destination.path
+                if isinstance(destination, SmbShareLocation) and destination.path
+                else f"Archive\\{ntpath.basename(state.path)}"
+            )
+            destination_share = (
+                destination.share if isinstance(destination, SmbShareLocation) else share.ref
+            )
+            previous_path = state.path
+            previous_client_path = self._client_path(state.path, share)
+            previous_server_path = self.world.server_local_path(share, state.path)
+            state = self.executor.state_manager.move_smb_file(
+                state.file_id,
+                share=destination_share,
+                path=destination_path,
+                journal=journal,
+            )
+        elif result == "success" and action == "delete":
+            state = self.executor.state_manager.delete_smb_file(
+                state.file_id,
+                journal=journal,
+            )
+
+        handle_file_id = state.file_id
+        handle_content_version = state.version
+
+        phase_type = {
+            "browse": "smb_directory_enumeration",
+            "read": "smb_file_read",
+            "create": "smb_file_write",
+            "update": "smb_file_write",
+            "copy": "smb_file_read"
+            if isinstance(self.request.spec.source, SmbShareLocation)
+            else "smb_file_write",
+            "move": "smb_file_write" if creates_remote_copy else "smb_file_rename",
+            "delete": "smb_file_delete",
+        }[action]
+        phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
+        action_time = started_at + timedelta(seconds=timing.setup_seconds + timing.jitter_seconds)
+        handle_close_time = min(
+            ended_at,
+            action_time + timedelta(seconds=timing.transfer_seconds + timing.close_delay_seconds),
+        )
+        if result == "sharing_violation":
+            handle_close_time = min(
+                ended_at,
+                started_at + timedelta(milliseconds=5),
+            )
+        handles = (
+            (
+                SmbCompletedHandlePlan(
+                    file_id=handle_file_id,
+                    content_version=handle_content_version,
+                    access=handle_access,
+                    opened_at=started_at,
+                    closed_at=handle_close_time,
+                    deny_write=handle_deny_write,
+                    role=handle_role,
+                ),
+            )
+            if handle_access
+            else ()
+        )
+        operation_plans.append(
+            SmbCompletedOperationPlan(
+                semantic_operation_id=f"{self.anchor.stable_id}:{index}",
+                started_at=started_at,
+                ended_at=ended_at,
+                initiator_bytes=byte_allocation[0],
+                responder_bytes=byte_allocation[1],
+                handles=handles,
+            )
+        )
+        prepared_records.append(
+            _PersistentSmbPreparedOperation(
+                state=state,
+                timing=timing,
+                phase_type=phase_type,
+                phase=phase,
+                action_time=action_time,
+                handle_close_time=handle_close_time,
+                previous_path=previous_path,
+                previous_client_path=previous_client_path,
+                previous_server_path=previous_server_path,
+            )
+        )
+        return ended_at
+
+    def _prepare_persistent_windows_action(
+        self,
+        *,
+        share: CompiledStorageShare,
+        selected: tuple[CompiledStorageFile, ...],
+        server: System,
+        client_system: System | None,
+        client_ip: str,
+        process: ProcessContext | None,
+        duration: float,
+        auth_protocol: str,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        terminal_continuation: PersistentSmbTerminalContinuation,
+        client_process_preparation: PersistentSmbClientProcessPreparation,
+    ) -> None:
+        """Bind the reversible recipe only after every file fits the planned transport."""
+        timing = self._timing_planner()
+        timing_lifecycle_id = self.anchor.stable_id
+        auth_time = self.request.time + timing.packet_observation_delta(
+            relationship_key="smb.transport_to_auth",
+            stable_id=f"{self.anchor.stable_id}:authentication",
+            minimum_ms=28,
+            maximum_ms=96,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="authentication",
+        )
+        tree_time = auth_time + timing.packet_observation_delta(
+            relationship_key="smb.auth_to_tree_connect",
+            stable_id=f"{self.anchor.stable_id}:tree-connect",
+            minimum_ms=14,
+            maximum_ms=88,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="tree_connect",
+        )
+        close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
+        auth_session_ref = stable_uuid(
+            "persistent-smb-auth-session",
+            self.anchor.stable_id,
+            server.hostname,
+            self.smb_principal,
+            client_ip,
+            auth_time,
+        )
+        operation_start = tree_time + timedelta(seconds=self._session_setup_seconds())
+        affinity = self._channel_affinity(
+            share=share,
+            server=server,
+            client_system=client_system,
+            client_ip=client_ip,
+            process=process,
+            client_logon_id=client_process_preparation.logon_id,
+            auth_protocol=auth_protocol,
+        )
+        byte_allocations = self._transport_byte_allocations(selected)
+        journal = self.executor.state_manager.begin_smb_file_mutation_journal(
+            f"{self.anchor.stable_id}:files"
+        )
+        operation_plans: list[SmbCompletedOperationPlan] = []
+        prepared_records: list[_PersistentSmbPreparedOperation] = []
+        operation_cursor = operation_start
+        try:
+            for index, file in enumerate(selected):
+                operation_cursor = self._append_persistent_smb_file_operation(
+                    file,
+                    index,
+                    share=share,
+                    journal=journal,
+                    operation_cursor=operation_cursor,
+                    byte_allocation=byte_allocations[index],
+                    operation_plans=operation_plans,
+                    prepared_records=prepared_records,
+                )
+            if operation_cursor > close_time:
+                raise StateError("Persistent SMB operations exceed their physical transport")
+            preparation = _PersistentSmbActionPreparation(
+                auth_time=auth_time,
+                tree_time=tree_time,
+                close_time=close_time,
+                auth_session_ref=auth_session_ref,
+                affinity=affinity,
+                byte_allocations=tuple(byte_allocations),
+                journal=journal,
+                operation_plans=tuple(operation_plans),
+                operations=tuple(prepared_records),
+                client_process=client_process_preparation,
+            )
+            authority.bind_action_prepared(terminal_continuation, preparation)
+        except BaseException as primary:
+            self._cancel_file_journal_after_failure(journal, primary)
+            raise
+
+    def _execute_persistent_windows_root(
+        self,
+        *,
+        preparation: _PersistentSmbActionPreparation,
+        share: CompiledStorageShare,
+        server: System,
+        client_system: System | None,
+        client_ip: str,
+        principal_user: User,
+        auth_protocol: str,
+        effective_uid: int | None,
+        effective_gid: int | None,
+        duration: float,
+        final_orig_bytes: int,
+        final_resp_bytes: int,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        terminal_continuation: PersistentSmbTerminalContinuation,
+    ) -> tuple[NetworkConnectionIdentityCapture, str]:
+        """Execute or recover the exact prepared root through the canonical network bundle."""
+        capture = NetworkConnectionIdentityCapture()
+        transport_uid = self.executor.generate_connection(
+            src_ip=client_ip,
+            dst_ip=server.ip,
+            time=self.request.time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=duration,
+            orig_bytes=final_orig_bytes,
+            resp_bytes=final_resp_bytes,
+            conn_state="SF",
+            emit_dns=False,
+            source_system=client_system,
+            pid=-1,
+            process_image=None,
+            hostname=server.hostname,
+            preserve_start_time=True,
+            preserve_explicit_payload=True,
+            suppress_application_side_effects=True,
+            suppress_source_pid_inference=True,
+            suppress_prereq_dns=True,
+            parent_action_group_id=self.anchor.stable_id,
+            persistent_smb_root_intent=PersistentSmbRootIntent(
+                username=principal_user.username,
+                system=server.hostname,
+                auth_time=preparation.auth_time,
+                lifecycle_group_id=self.anchor.stable_id,
+                auth_protocol=auth_protocol,
+                smb_principal=self.smb_principal,
+                account_scope="directory",
+                auth_session_ref=preparation.auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_process=preparation.client_process,
+            ),
+            persistent_smb_application_intent=PersistentSmbApplicationIntent(
+                manager=self.executor._smb_channel_manager,
+                affinity=preparation.affinity,
+                auth_session_ref=preparation.auth_session_ref,
+                principal=self.smb_principal,
+                auth_protocol=auth_protocol,
+                account_scope="directory",
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_access=self.client_access,
+                server_hostname=server.hostname,
+                client_ip=client_ip,
+                lifecycle_group_id=self.anchor.stable_id,
+                share_ref=share.ref,
+                tree_connected_at=preparation.tree_time,
+                operations=preparation.operation_plans,
+                idle_timeout=max(
+                    self._idle_timeout(),
+                    preparation.close_time - preparation.operation_plans[-1].ended_at,
+                ),
+                closed_at=preparation.close_time,
+            ),
+            persistent_smb_file_mutation_journal=preparation.journal,
+            persistent_smb_terminal_authority=authority,
+            persistent_smb_terminal_continuation=terminal_continuation,
+            defer_source_publication=True,
+            identity_capture=capture,
+        )
+        return capture, transport_uid
+
     def _execute_persistent_windows(
         self,
         *,
@@ -1750,234 +2098,46 @@ class SmbActivityActionBundle:
         terminal_continuation: PersistentSmbTerminalContinuation,
         client_process_preparation: PersistentSmbClientProcessPreparation,
     ) -> SmbActivityResult:
-        """Execute one bounded persistent Windows disk-share action."""
+        """Advance one authenticated continuation without replaying committed work.
+
+        Phase             Retained truth/proof                 Permitted next work
+        reserved          exact claim and source capacity      prepare reversible file recipe
+        action_prepared   action recipe and file journal       prepare/execute network root
+        cancelling        incomplete cancellation ownership    cleanup only, via outer owner
+        root_prepared     exact root/capabilities              commit/adopt that same root
+        root_committed    State/lifecycle/application receipts construct source projections
+        source_building   source shell and exact member specs  resume member append
+        source_prepared   members, timing, any certifications  certify/commit/publish exact work
+        source_published  authenticated publication result     terminal acknowledgements only
+
+        File journals, network root, timing, projection members and publication
+        retain separate recovery owners. A lost return may mean committed work;
+        authenticate/recover it before retrying. Preserve the original failure
+        when recovery also fails. Never rebuild evidence from a rendered row.
+
+        Representative contracts in tests/unit/test_smb_persistent_production.py:
+        test_persistent_smb_second_file_failure_is_neutral_and_replayable,
+        test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral,
+        test_persistent_smb_projection_and_publication_faults_recover_exact_bytes,
+        test_persistent_smb_ordinary_retry_resumes_terminal_cursor_without_new_root.
+        """
 
         authority = self.executor._persistent_smb_terminal_continuations
         root_facts = authority.root_facts(terminal_continuation)
         if root_facts.phase == "reserved":
-            timing = self._timing_planner()
-            timing_lifecycle_id = self.anchor.stable_id
-            auth_time = self.request.time + timing.packet_observation_delta(
-                relationship_key="smb.transport_to_auth",
-                stable_id=f"{self.anchor.stable_id}:authentication",
-                minimum_ms=28,
-                maximum_ms=96,
-                host=server.hostname,
-                lifecycle_id=timing_lifecycle_id,
-                sample_key="authentication",
-            )
-            tree_time = auth_time + timing.packet_observation_delta(
-                relationship_key="smb.auth_to_tree_connect",
-                stable_id=f"{self.anchor.stable_id}:tree-connect",
-                minimum_ms=14,
-                maximum_ms=88,
-                host=server.hostname,
-                lifecycle_id=timing_lifecycle_id,
-                sample_key="tree_connect",
-            )
-            close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
-            auth_session_ref = stable_uuid(
-                "persistent-smb-auth-session",
-                self.anchor.stable_id,
-                server.hostname,
-                self.smb_principal,
-                client_ip,
-                auth_time,
-            )
-            operation_start = tree_time + timedelta(seconds=self._session_setup_seconds())
-            affinity = self._channel_affinity(
+            self._prepare_persistent_windows_action(
                 share=share,
+                selected=selected,
                 server=server,
                 client_system=client_system,
                 client_ip=client_ip,
                 process=process,
-                client_logon_id=client_process_preparation.logon_id,
+                duration=duration,
                 auth_protocol=auth_protocol,
+                authority=authority,
+                terminal_continuation=terminal_continuation,
+                client_process_preparation=client_process_preparation,
             )
-            byte_allocations = self._transport_byte_allocations(selected)
-            journal = self.executor.state_manager.begin_smb_file_mutation_journal(
-                f"{self.anchor.stable_id}:files"
-            )
-            operation_plans: list[SmbCompletedOperationPlan] = []
-            prepared_records: list[_PersistentSmbPreparedOperation] = []
-            operation_cursor = operation_start
-            try:
-                for index, file in enumerate(selected):
-                    timing = self._operation_timing(
-                        file,
-                        index,
-                        size_bytes=self._planned_operation_size(file, index),
-                    )
-                    started_at = (
-                        operation_cursor
-                        if index == 0
-                        else operation_cursor + timedelta(microseconds=1)
-                    )
-                    ended_at = started_at + timedelta(seconds=timing.total_seconds)
-                    action = self.request.spec.operation
-                    result = self.outcome
-                    creates_remote_copy = (
-                        action in {"copy", "move"}
-                        and not isinstance(self.request.spec.source, SmbShareLocation)
-                        and isinstance(self.request.spec.destination, SmbShareLocation)
-                    )
-                    state = file
-                    handle_access = ""
-                    handle_deny_write = False
-                    handle_role = "operation"
-                    if result in {"access_denied", "not_found"}:
-                        pass
-                    elif result == "sharing_violation":
-                        state = self.executor.state_manager.touch_smb_file(file, journal=journal)
-                        handle_access = "read"
-                        handle_deny_write = True
-                        handle_role = "sharing-conflict"
-                    elif action == "create" or creates_remote_copy:
-                        state = self.executor.state_manager.create_smb_file(
-                            share=share.ref,
-                            path=file.path,
-                            size_bytes=file.size_bytes,
-                            mime_type=file.mime_type,
-                            timestamp=started_at,
-                            tags=file.tags,
-                            journal=journal,
-                        )
-                        handle_access = "write"
-                        if result == "success" and action == "move" and creates_remote_copy:
-                            source_file = self._client_source_by_destination.get(file.file_id)
-                            if source_file is not None:
-                                source_state = self.executor.state_manager.touch_smb_file(
-                                    source_file,
-                                    journal=journal,
-                                )
-                                self.executor.state_manager.delete_smb_file(
-                                    source_state.file_id,
-                                    journal=journal,
-                                )
-                    else:
-                        state = self.executor.state_manager.touch_smb_file(file, journal=journal)
-                        handle_access = "read" if action in {"browse", "read", "copy"} else "write"
-                    previous_path = ""
-                    previous_client_path = ""
-                    previous_server_path = ""
-                    if result == "success" and action == "update":
-                        state = self.executor.state_manager.update_smb_file(
-                            state.file_id,
-                            size_bytes=self._updated_size(file, index),
-                            journal=journal,
-                        )
-                    elif result == "success" and action == "move" and not creates_remote_copy:
-                        destination = self.request.spec.destination
-                        destination_path = (
-                            destination.path
-                            if isinstance(destination, SmbShareLocation) and destination.path
-                            else f"Archive\\{ntpath.basename(state.path)}"
-                        )
-                        destination_share = (
-                            destination.share
-                            if isinstance(destination, SmbShareLocation)
-                            else share.ref
-                        )
-                        previous_path = state.path
-                        previous_client_path = self._client_path(state.path, share)
-                        previous_server_path = self.world.server_local_path(share, state.path)
-                        state = self.executor.state_manager.move_smb_file(
-                            state.file_id,
-                            share=destination_share,
-                            path=destination_path,
-                            journal=journal,
-                        )
-                    elif result == "success" and action == "delete":
-                        state = self.executor.state_manager.delete_smb_file(
-                            state.file_id,
-                            journal=journal,
-                        )
-
-                    handle_file_id = state.file_id
-                    handle_content_version = state.version
-
-                    phase_type = {
-                        "browse": "smb_directory_enumeration",
-                        "read": "smb_file_read",
-                        "create": "smb_file_write",
-                        "update": "smb_file_write",
-                        "copy": "smb_file_read"
-                        if isinstance(self.request.spec.source, SmbShareLocation)
-                        else "smb_file_write",
-                        "move": "smb_file_write" if creates_remote_copy else "smb_file_rename",
-                        "delete": "smb_file_delete",
-                    }[action]
-                    phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
-                    action_time = started_at + timedelta(
-                        seconds=timing.setup_seconds + timing.jitter_seconds
-                    )
-                    handle_close_time = min(
-                        ended_at,
-                        action_time
-                        + timedelta(seconds=timing.transfer_seconds + timing.close_delay_seconds),
-                    )
-                    if result == "sharing_violation":
-                        handle_close_time = min(
-                            ended_at,
-                            started_at + timedelta(milliseconds=5),
-                        )
-                    handles = (
-                        (
-                            SmbCompletedHandlePlan(
-                                file_id=handle_file_id,
-                                content_version=handle_content_version,
-                                access=handle_access,
-                                opened_at=started_at,
-                                closed_at=handle_close_time,
-                                deny_write=handle_deny_write,
-                                role=handle_role,
-                            ),
-                        )
-                        if handle_access
-                        else ()
-                    )
-                    operation_plans.append(
-                        SmbCompletedOperationPlan(
-                            semantic_operation_id=f"{self.anchor.stable_id}:{index}",
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            initiator_bytes=byte_allocations[index][0],
-                            responder_bytes=byte_allocations[index][1],
-                            handles=handles,
-                        )
-                    )
-                    prepared_records.append(
-                        _PersistentSmbPreparedOperation(
-                            state=state,
-                            timing=timing,
-                            phase_type=phase_type,
-                            phase=phase,
-                            action_time=action_time,
-                            handle_close_time=handle_close_time,
-                            previous_path=previous_path,
-                            previous_client_path=previous_client_path,
-                            previous_server_path=previous_server_path,
-                        )
-                    )
-                    operation_cursor = ended_at
-                if operation_cursor > close_time:
-                    raise StateError("Persistent SMB operations exceed their physical transport")
-                preparation = _PersistentSmbActionPreparation(
-                    auth_time=auth_time,
-                    tree_time=tree_time,
-                    close_time=close_time,
-                    auth_session_ref=auth_session_ref,
-                    affinity=affinity,
-                    byte_allocations=tuple(byte_allocations),
-                    journal=journal,
-                    operation_plans=tuple(operation_plans),
-                    operations=tuple(prepared_records),
-                    client_process=client_process_preparation,
-                )
-                authority.bind_action_prepared(terminal_continuation, preparation)
-            except BaseException as primary:
-                self._cancel_file_journal_after_failure(journal, primary)
-                raise
             root_facts = authority.root_facts(terminal_continuation)
         preparation = root_facts.action_preparation
         if type(preparation) is not _PersistentSmbActionPreparation:
@@ -1986,10 +2146,8 @@ class SmbActivityActionBundle:
         tree_time = preparation.tree_time
         close_time = preparation.close_time
         auth_session_ref = preparation.auth_session_ref
-        affinity = preparation.affinity
         byte_allocations = preparation.byte_allocations
         journal = preparation.journal
-        operation_plans = preparation.operation_plans
         prepared_records = preparation.operations
         final_orig_bytes = sum(orig for orig, _resp in byte_allocations)
         final_resp_bytes = sum(resp for _orig, resp in byte_allocations)
@@ -1997,69 +2155,21 @@ class SmbActivityActionBundle:
         capture: NetworkConnectionIdentityCapture | None = None
         transport_uid = ""
         if root_facts.phase in {"action_prepared", "root_prepared"}:
-            capture = NetworkConnectionIdentityCapture()
-            transport_uid = self.executor.generate_connection(
-                src_ip=client_ip,
-                dst_ip=server.ip,
-                time=self.request.time,
-                dst_port=445,
-                proto="tcp",
-                service="smb",
+            capture, transport_uid = self._execute_persistent_windows_root(
+                preparation=preparation,
+                share=share,
+                server=server,
+                client_system=client_system,
+                client_ip=client_ip,
+                principal_user=principal_user,
+                auth_protocol=auth_protocol,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
                 duration=duration,
-                orig_bytes=final_orig_bytes,
-                resp_bytes=final_resp_bytes,
-                conn_state="SF",
-                emit_dns=False,
-                source_system=client_system,
-                pid=-1,
-                process_image=None,
-                hostname=server.hostname,
-                preserve_start_time=True,
-                preserve_explicit_payload=True,
-                suppress_application_side_effects=True,
-                suppress_source_pid_inference=True,
-                suppress_prereq_dns=True,
-                parent_action_group_id=self.anchor.stable_id,
-                persistent_smb_root_intent=PersistentSmbRootIntent(
-                    username=principal_user.username,
-                    system=server.hostname,
-                    auth_time=auth_time,
-                    lifecycle_group_id=self.anchor.stable_id,
-                    auth_protocol=auth_protocol,
-                    smb_principal=self.smb_principal,
-                    account_scope="directory",
-                    auth_session_ref=auth_session_ref,
-                    effective_uid=effective_uid,
-                    effective_gid=effective_gid,
-                    client_process=preparation.client_process,
-                ),
-                persistent_smb_application_intent=PersistentSmbApplicationIntent(
-                    manager=self.executor._smb_channel_manager,
-                    affinity=affinity,
-                    auth_session_ref=auth_session_ref,
-                    principal=self.smb_principal,
-                    auth_protocol=auth_protocol,
-                    account_scope="directory",
-                    effective_uid=effective_uid,
-                    effective_gid=effective_gid,
-                    client_access=self.client_access,
-                    server_hostname=server.hostname,
-                    client_ip=client_ip,
-                    lifecycle_group_id=self.anchor.stable_id,
-                    share_ref=share.ref,
-                    tree_connected_at=tree_time,
-                    operations=operation_plans,
-                    idle_timeout=max(
-                        self._idle_timeout(),
-                        close_time - operation_plans[-1].ended_at,
-                    ),
-                    closed_at=close_time,
-                ),
-                persistent_smb_file_mutation_journal=journal,
-                persistent_smb_terminal_authority=authority,
-                persistent_smb_terminal_continuation=terminal_continuation,
-                defer_source_publication=True,
-                identity_capture=capture,
+                final_orig_bytes=final_orig_bytes,
+                final_resp_bytes=final_resp_bytes,
+                authority=authority,
+                terminal_continuation=terminal_continuation,
             )
             root_facts = authority.root_facts(terminal_continuation)
         if root_facts.phase not in {
