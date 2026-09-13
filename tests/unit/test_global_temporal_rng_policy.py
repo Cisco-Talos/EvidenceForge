@@ -39,7 +39,9 @@ _RAW_TEMPORAL_METHODS = frozenset(
 # debt. Keeping the conservative superset here prevents either class from
 # growing while allowing any owner to remove a selector or lower its count.
 _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
-4|actions/network_transaction_planner.py|_execute|uniform
+2|actions/network_transaction_planner.py|_plan_explicit_transport_state|uniform
+2|actions/network_transaction_planner.py|_plan_sampled_tcp_state|uniform
+1|actions/process_execution_service.py|_prepare_evidence|uniform
 1|actions/rdp_session.py|execute|uniform
 1|actions/smb_activity.py|_directional_transport_byte_allocations|uniform
 1|actions/smb_activity.py|_duration|uniform
@@ -67,7 +69,7 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|activity/generator.py|_ensure_email_server_process|uniform
 2|activity/generator.py|_ensure_explicit_proxy_client_process|uniform
 2|activity/generator.py|_ensure_linux_apt_frontend_process|uniform
-1|activity/generator.py|_ensure_parent_chain|uniform
+1|actions/process_support/parents.py|_ensure_parent_chain|uniform
 2|activity/generator.py|_ensure_system_connection_owner_process|uniform
 2|activity/generator.py|_ensure_user_connection_owner_process|uniform
 1|activity/generator.py|_ensure_visible_created_account_kerberos_exchange|uniform
@@ -79,27 +81,23 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|activity/generator.py|_execute_kerberos_preauth_failure_bundle|uniform
 1|activity/generator.py|_execute_machine_account_logon_bundle|uniform
 1|activity/generator.py|_execute_nmap_command_probe_bundle|uniform
-1|activity/generator.py|_execute_process_create_bundle|uniform
 2|activity/generator.py|_external_sender_received_headers|uniform
 1|activity/generator.py|_factory|uniform
 1|activity/generator.py|_generate_bounded_foreground_process_termination|uniform
-1|activity/generator.py|_held_process_termination_time|uniform
+1|actions/process_support/foreground.py|_held_process_termination_time|uniform
 4|activity/generator.py|_jitter_default_connection_duration|uniform
 1|activity/generator.py|_maybe_generate_email_recipient_reads|uniform
 1|activity/generator.py|_nmap_concurrent_probe_offsets|betavariate
 1|activity/generator.py|_nmap_concurrent_probe_offsets|uniform
 4|activity/generator.py|_nmap_probe_profile|uniform
-1|activity/generator.py|_ntp_payload_accounting|uniform
 1|activity/generator.py|_plan_generic_logoff_process_closes|uniform
 4|activity/generator.py|_postfix_delays|uniform
-1|activity/generator.py|_process_termination_delay_after_activity_seconds|uniform
 1|activity/generator.py|_remember_system_connection_owner_finalizer|uniform
 8|activity/generator.py|_schedule_bash_history_time|uniform
 2|activity/generator.py|_smtp_transfer_sizes|uniform
-1|activity/generator.py|_space_browser_launch|uniform
-1|activity/generator.py|_space_interactive_shell_child_launch|uniform
-2|activity/generator.py|_space_one_shot_cli_launch|uniform
-1|activity/generator.py|_tcp_ip_byte_count|uniform
+1|actions/process_support/scheduling.py|_space_browser_launch|uniform
+1|actions/process_support/scheduling.py|_space_interactive_shell_child_launch|uniform
+2|actions/process_support/scheduling.py|_space_one_shot_cli_launch|uniform
 1|activity/generator.py|ensure_smb_client_process|uniform
 6|activity/generator.py|execute_baseline_activity|uniform
 1|activity/generator.py|generate_adversarial_payload|uniform
@@ -108,10 +106,13 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|activity/host_activity_profiles.py|pick_firewall_deny_offset|uniform
 1|activity/host_activity_profiles.py|resolve_host_activity_profile|uniform
 3|activity/http_content.py|apply_transfer_size_variance|uniform
+1|activity/network_ntp.py|_ntp_payload_accounting|uniform
+1|activity/network_transport.py|_tcp_ip_byte_count|uniform
 2|activity/pack_traffic.py|_burst_times|uniform
 1|activity/pack_traffic.py|_periodic_times|uniform
 1|activity/pack_traffic.py|_weighted_times|gauss
 1|activity/pack_traffic.py|_weighted_times|uniform
+1|activity/process_helpers.py|_process_termination_delay_after_activity_seconds|uniform
 6|emitters/windows_record_ids.py|_host_background_rate|uniform
 1|emitters/windows_record_ids.py|_sample_poisson|gauss
 1|engine/baseline.py|_activity_time_outside_locked_session|uniform
@@ -149,8 +150,27 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 2|engine/baseline.py|_generate_scheduled_tasks|uniform
 3|engine/baseline.py|_generate_stale_account_noise|uniform
 3|engine/baseline.py|_generate_suspicious_noise|uniform
-5|engine/baseline.py|_generate_system_traffic|gauss
-23|engine/baseline.py|_generate_system_traffic|uniform
+1|engine/baseline.py|_generate_system_dc_authentication|gauss
+4|engine/baseline.py|_generate_system_dc_authentication|uniform
+1|engine/baseline.py|_generate_system_dns_traffic|uniform
+2|engine/baseline.py|_generate_system_group_policy_activity|uniform
+1|engine/baseline.py|_generate_system_icmp_traffic|gauss
+1|engine/baseline.py|_generate_system_icmp_traffic|uniform
+2|engine/baseline.py|_generate_system_ids_noise|uniform
+1|engine/baseline.py|_generate_system_kerberos_traffic|gauss
+1|engine/baseline.py|_generate_system_kerberos_traffic|uniform
+1|engine/baseline.py|_generate_system_ldap_traffic|gauss
+1|engine/baseline.py|_generate_system_ldap_traffic|uniform
+2|engine/baseline.py|_generate_system_linux_shell_activity|uniform
+1|engine/baseline.py|_generate_system_machine_authentication|gauss
+1|engine/baseline.py|_generate_system_module_activity|uniform
+2|engine/baseline.py|_generate_system_ntp_traffic|uniform
+1|engine/baseline.py|_generate_system_process_access_activity|uniform
+1|engine/baseline.py|_generate_system_registry_activity|uniform
+1|engine/baseline.py|_generate_system_remote_thread_activity|uniform
+1|engine/baseline.py|_generate_system_service_logons|uniform
+1|engine/baseline.py|_generate_system_service_processes|uniform
+1|engine/baseline.py|_plan_system_rdp_requests|uniform
 1|engine/baseline.py|_generate_user_traffic_affinity|uniform
 1|engine/baseline.py|_gpo_refresh_interval_seconds|uniform
 4|engine/baseline.py|_journald_housekeeping_schedule|uniform
@@ -184,17 +204,26 @@ _DIRECT_CONTINUOUS_RNG_CAPS_TEXT = """
 1|engine/storyline.py|_execute_single_red_herring_event|uniform
 1|engine/storyline.py|_execute_single_storyline_event|uniform
 1|engine/storyline.py|_execute_storyline|uniform
-1|engine/storyline.py|_execute_typed_event|triangular
-18|engine/storyline.py|_execute_typed_event|uniform
 3|engine/storyline.py|_execute_web_scan_bundle|uniform
-1|engine/storyline.py|_iter_dns_tunnel_ticks|expovariate
-2|engine/storyline.py|_iter_dns_tunnel_ticks|uniform
-1|engine/storyline.py|_iter_periodic_ticks|uniform
+1|engine/storyline_helpers/periodic.py|_iter_dns_tunnel_ticks|expovariate
+2|engine/storyline_helpers/periodic.py|_iter_dns_tunnel_ticks|uniform
+1|engine/storyline_helpers/periodic.py|_iter_periodic_ticks|uniform
 4|engine/storyline.py|_port_scan_connection_profile|uniform
-1|engine/storyline.py|_resolve_storyline_process_spill_logon_id|uniform
+2|engine/storyline.py|_resolve_storyline_process_logon_id|uniform
 2|engine/storyline.py|_storyline_event_offsets|uniform
 1|engine/storyline.py|_web_scan_connection_profile|lognormvariate
 5|engine/storyline.py|_web_scan_connection_profile|uniform
+1|engine/typed_handlers/network.py|handle_connection|uniform
+2|engine/typed_handlers/periodic.py|handle_beacon|uniform
+1|engine/typed_handlers/periodic.py|handle_dga_queries|uniform
+1|engine/typed_handlers/periodic.py|handle_dns_query|uniform
+1|engine/typed_handlers/periodic.py|handle_dns_tunnel|triangular
+3|engine/typed_handlers/periodic.py|handle_dns_tunnel|uniform
+2|engine/typed_handlers/process.py|handle_process|uniform
+1|engine/typed_handlers/process.py|_emit_process_output_file|uniform
+1|engine/typed_handlers/process.py|_emit_process_http_companion|uniform
+2|engine/typed_handlers/process.py|_emit_process_database_companion|uniform
+2|engine/typed_handlers/process.py|_emit_process_scp_companion|uniform
 1|network_observation.py|_lose_direction|uniform
 1|state_manager.py|_allocate_linux_pid|lognormvariate
 1|state_manager.py|_allocate_windows_pid|lognormvariate
@@ -287,13 +316,13 @@ def test_generation_has_no_remaining_legacy_timing_helper_calls() -> None:
 
 
 def test_direct_continuous_rng_inventory_can_only_shrink() -> None:
-    """The exact 359-call compatibility census cannot gain selectors or calls."""
+    """The exact 358-call compatibility census cannot gain selectors or calls."""
 
     caps = _direct_continuous_rng_caps()
     observed = _generation_call_inventory(_DIRECT_CONTINUOUS_METHODS)
 
-    assert len(caps) == 166
-    assert sum(caps.values()) == 359
+    assert len(caps) == 195
+    assert sum(caps.values()) == 358
     assert not observed - caps
     assert len(observed) <= len(caps)
     assert sum(observed.values()) <= sum(caps.values())

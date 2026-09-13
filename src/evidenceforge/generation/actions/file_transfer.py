@@ -73,13 +73,12 @@ from evidenceforge.generation.source_timing import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import (
-    ConstantDistribution,
-    DistributionSpec,
-    MixtureDistribution,
     TimingRuntime,
     TimingScope,
     TriangularDistribution,
-    WeightedDistribution,
+)
+from evidenceforge.generation.timing.distributions import (
+    uniform_distribution as _uniform_timing_distribution,
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System, User
@@ -138,25 +137,6 @@ def _http_transfer_throughput_range(response_body_len: int) -> tuple[int, int] |
     if response_body_len >= _HTTP_BULK_BODY_BYTES:
         return (6 * 1024 * 1024, 55 * 1024 * 1024)
     return (2 * 1024 * 1024, 35 * 1024 * 1024)
-
-
-def _uniform_timing_distribution(minimum: float, maximum: float) -> DistributionSpec:
-    """Return the exact continuous-uniform law using supported timing primitives."""
-
-    if minimum == maximum:
-        return ConstantDistribution(minimum)
-    return MixtureDistribution(
-        (
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
-            ),
-            WeightedDistribution(
-                1.0,
-                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
-            ),
-        )
-    )
 
 
 def _planning_http_transfer_runtime(

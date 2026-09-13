@@ -404,7 +404,7 @@ def test_dhcp_helper_and_three_callers_have_exact_runtime_wiring() -> None:
     expected = {
         "engine/emitter_setup.py": 1,
         "engine/baseline.py": 1,
-        "engine/storyline.py": 1,
+        "engine/typed_handlers/network.py": 1,
     }
     for relative, count in expected.items():
         tree = ast.parse((generation_root / relative).read_text(encoding="utf-8"))

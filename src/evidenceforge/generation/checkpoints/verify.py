@@ -14,7 +14,7 @@ from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.output_targets import normalize_output_target
 
 from .errors import CheckpointCompatibilityError, CheckpointError
-from .fingerprint import classify_resume_compatibility, run_fingerprint, run_fingerprint_components
+from .fingerprint import classify_resume_compatibility, run_fingerprint_details
 from .runtime import IncrementalCheckpointController
 from .store import IncrementalCheckpointStore
 
@@ -89,13 +89,7 @@ def verify_checkpoint_recovery(
         for log in compiled.scenario.output.logs
         if isinstance(log, dict) and "format" in log
     ]
-    current_fingerprint = run_fingerprint(
-        compiled,
-        output_target=target.value,
-        formats=formats,
-        oob_hosts=oob_hosts,
-    )
-    current_components = run_fingerprint_components(
+    current_fingerprint, current_components = run_fingerprint_details(
         compiled,
         output_target=target.value,
         formats=formats,

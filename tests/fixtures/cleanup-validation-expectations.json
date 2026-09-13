@@ -1,0 +1,102 @@
+{
+  "raw": {
+    "issues": [
+      {
+        "severity": "ERROR",
+        "file": "overlay/activity/network_params.yaml",
+        "message": "Unexpected top-level key \"unknown_field\" \u2014 this will be ignored by the engine. Check for typos."
+      },
+      {
+        "severity": "ERROR",
+        "file": "overlay/activity/network_params.yaml",
+        "message": "Field \"public_ntp_servers\" should be a list, got str"
+      },
+      {
+        "severity": "ERROR",
+        "file": "overlay/activity/unknown.yaml",
+        "message": "Unknown overlay file \u2014 not a recognized config path. Check filename for typos."
+      },
+      {
+        "severity": "ERROR",
+        "file": "overlay/personas/alice.yaml",
+        "message": "Persona name \"bob\" does not match filename \"alice\" \u2014 filename must match the name field"
+      }
+    ],
+    "files_checked": 3
+  },
+  "merged": {
+    "issues": [
+      {
+        "severity": "ERROR",
+        "file": "extra_syslog_messages.yaml",
+        "message": "App \"NetworkManager\" has invalid system_type \"unknown\" (valid: ['domain_controller', 'server', 'workstation'])"
+      },
+      {
+        "severity": "ERROR",
+        "file": "extra_syslog_messages.yaml",
+        "message": "Persistent app \"NetworkManager\" has recurring startup banner \"daemon started\""
+      },
+      {
+        "severity": "ERROR",
+        "file": "extra_syslog_messages.yaml",
+        "message": "NetworkManager state transition must change states, got \"state change: connected -> connected\""
+      },
+      {
+        "severity": "ERROR",
+        "file": "extra_syslog_messages.yaml",
+        "message": "App \"NetworkManager\" has schedule-native cron/systemd message \"cron.daily job\"; use systemd_schedules.yaml or a dedicated schedule-aware generator instead"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (dns_tunnel_response_templates)",
+        "message": "entry 0 uses unsupported placeholder(s): unknown"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (dns_tunnel_response_templates)",
+        "message": "entry 1 contains readable literal text; DNS tunnel response templates should stay opaque"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (dns_tunnel_rcode_weights)",
+        "message": "unsupported rcode 'UNKNOWN'"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (dns_tunnel_rcode_weights)",
+        "message": "weight for 'NOERROR' must be a positive finite number"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (dns_tunnel_rcode_weights)",
+        "message": "response-code weights must have a positive finite total"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (proxy_connect_status_messages)",
+        "message": "status code 'bad' must be an integer"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (proxy_connect_status_messages)",
+        "message": "status code '600' must be between 100 and 599"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (proxy_connect_status_messages)",
+        "message": "messages for status 200 must be non-empty strings"
+      },
+      {
+        "severity": "ERROR",
+        "file": "network_params.yaml (proxy_connect_status_messages)",
+        "message": "messages for status 403 must be non-empty strings"
+      },
+      {
+        "severity": "ERROR",
+        "file": "extra_syslog_messages.yaml",
+        "message": "Entry \"NetworkManager\": weight: Input should be greater than 0"
+      }
+    ],
+    "files_checked": 92
+  }
+}

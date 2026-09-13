@@ -1,0 +1,313 @@
+{
+  "after": {
+    "_plan_network_protocol_evidence": {
+      "branches": 53,
+      "calls": 71,
+      "lines": 527
+    }
+  },
+  "allocation_changes": "One local six-value proxy-presentation result replaces two duplicated branches. DNS suppression and NTP timing return only their revised values; remaining helpers mutate the existing phase-local draft. No new retained record, RNG or authority.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_plan_network_protocol_evidence": {
+      "branches": 99,
+      "calls": 198,
+      "lines": 1138
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item8c-report.json",
+    "sha256": "276b90af4c830c29fe1c6f70401c7f90bd3b297fbe3abe66d729975d0ad0e356"
+  },
+  "coordinators": [
+    "_plan_network_protocol_evidence"
+  ],
+  "description": "The protocol-evidence coordinator falls from 1,138 to 527 lines. Focused operations own DNS normalization/cache staging (127 lines), proxy request presentation (68), proxy source context (160), automatic HTTP evidence (135), NTP parser/clock evidence (115), and HTTP transport accounting (99). The duplicated legacy HTTP/HTTPS URI/referrer branches now share one parameterized operation. All helpers use the existing phase-local event draft and preparation. Protocol/body adjustments still precede process visibility, session bounds and exact tuple reservation; responder preparation and independently committed prerequisites retain their boundaries. Existing composed records are unchanged.",
+  "duplicate_uri_branches": {
+    "after": 1,
+    "before": 2
+  },
+  "failures": [
+    "An initial focused command named a nonexistent test_zeek_ntp.py and collected no tests. The log is preserved as item8c-focused-initial.log. Corrected verified paths passed 64 focused tests; the additional NTP/proxy selection passed 33 tests with one existing skip because gitignored sample_data/Zeek-JSON is unavailable (44 deselected).",
+    "No production correctness or byte comparison failed."
+  ],
+  "frozen_next_control": "cleanup-smb-performance.yaml fixes a three-file canonical SMB request, native source hashes, RNG digest and zero retained file/connection authorities; its baseline measurements precede SMB production edits.",
+  "gates": {
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item8c-focused.log",
+      "sha256": "5d55913afea3a01686867d7d6d8f90ce119ccf9f1e346bb99462bd34ab304014",
+      "summary": "============================== 64 passed in 2.15s =============================="
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item8c-matrix.log",
+      "sha256": "d11b8a32cc50b8e58039d06228f428ac53fdaa5c34a52522c65761ec541ebd0e",
+      "summary": ""
+    },
+    "protocol-focused": {
+      "log": "/private/tmp/eforge-pass4-item8c-protocol-focused.log",
+      "sha256": "3b59dc52475dd40691ae7172332c3f0fd6a5caadaa7ed86740cbf54a16df12d8",
+      "summary": "================= 33 passed, 1 skipped, 44 deselected in 1.07s ================="
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item8c-slow.log",
+      "sha256": "030a25bedc81fa4931e25d929ba6471be514df4fb03b3ccc074c24823bd533b2",
+      "summary": "====================== 14 passed, 33 deselected in 23.14s ======================"
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item8c-standard.log",
+      "sha256": "d3a4fadfb5400e656ad2ca2474c01c40549709e260aade069c180531c2d2d002",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 297.95s (0:04:57) ========="
+    }
+  },
+  "item": "8c",
+  "logs": [
+    "focused",
+    "protocol-focused",
+    "slow",
+    "standard",
+    "matrix"
+  ],
+  "manifest": "passed vs 6556fe20",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 3386154,
+      "allocation_sample_retained_blocks": 3555,
+      "allocation_sample_retained_bytes": 291479,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.11916337499860674,
+      "operations_per_sample": 8,
+      "operations_per_second": 67.1347215542824,
+      "process_max_rss": 142573568,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11858445801772177,
+        0.11878979101311415,
+        0.14128566696308553,
+        0.1200366250704974,
+        0.1388049580855295,
+        0.11916175007354468,
+        0.11916337499860674
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3386133,
+      "allocation_sample_retained_blocks": 3595,
+      "allocation_sample_retained_bytes": 293519,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12106137489899993,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.08218357568056,
+      "process_max_rss": 140361728,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.1323557080468163,
+        0.12088108400348574,
+        0.14223795908037573,
+        0.12050695798825473,
+        0.14056704100221395,
+        0.12008566700387746,
+        0.12106137489899993
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3387240,
+      "allocation_sample_retained_blocks": 3560,
+      "allocation_sample_retained_bytes": 291880,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.120825249934569,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.21132589696502,
+      "process_max_rss": 140951552,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11894062499050051,
+        0.120825249934569,
+        0.14386549999471754,
+        0.1200651660328731,
+        0.14063270902261138,
+        0.11938641697634012,
+        0.1214716249378398
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3386431,
+      "allocation_sample_retained_blocks": 3612,
+      "allocation_sample_retained_bytes": 294549,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12121116695925593,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.0005195947757,
+      "process_max_rss": 140279808,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11896187497768551,
+        0.1210437499685213,
+        0.1421803330304101,
+        0.1221697919536382,
+        0.1402082919375971,
+        0.11971566709689796,
+        0.12121116695925593
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    }
+  ],
+  "performance_runs": [
+    "baseline-network-a",
+    "network-a",
+    "baseline-network-b",
+    "network-b"
+  ],
+  "prepared_region_guard": "Transitive helper-call inventory passes without weakening forbidden publication, owner-RNG, timing or HTTP cache checks.",
+  "previous": "6556fe20",
+  "revision": 75,
+  "ruff": "both passed",
+  "slug": "network-evidence",
+  "source": "src/evidenceforge/generation/actions/network_transaction_planner.py",
+  "title": "protocol evidence and interval reconciliation"
+}

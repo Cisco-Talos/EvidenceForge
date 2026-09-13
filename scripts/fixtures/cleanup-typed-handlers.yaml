@@ -1,0 +1,183 @@
+version: '1.0'
+name: cleanup-typed-handlers
+description: Frozen bounded coverage for refactor byte comparisons
+environment:
+  description: One Windows and one Linux workstation behind network and firewall sensors
+  proxy:
+    mode: explicit
+    listener_port: 8080
+  users:
+  - username: alice
+    full_name: Alice Example
+    email: alice@example.test
+    primary_system: WIN-01
+    enabled: true
+  - username: bob
+    full_name: Bob Example
+    email: bob@example.test
+    primary_system: LINUX-01
+    enabled: true
+  systems:
+  - hostname: WIN-01
+    ip: 10.0.0.10
+    os: Windows 10
+    type: workstation
+  - hostname: LINUX-01
+    ip: 10.0.0.20
+    os: Ubuntu 22.04
+    type: server
+    services:
+    - squid
+    - nginx
+    - dns-client
+    roles:
+    - forward_proxy
+    - web_server
+  - hostname: WIN-02
+    ip: 10.0.0.11
+    os: Windows 10
+    type: workstation
+    roles:
+    - dhcp_server
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      exposure: internal
+      systems:
+      - WIN-01
+      - LINUX-01
+      - WIN-02
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+    - type: ids
+      name: core-ids
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - snort_alert
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - cisco_asa
+time_window:
+  start: '2024-01-15T10:00:00Z'
+  duration: 40m
+  warmup: 1h
+baseline_activity:
+  description: Small mixed-platform baseline
+  intensity: low
+  variation: low
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+storyline:
+- id: fixture-activity
+  time: +10m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise Linux command and web request output families
+  events:
+  - type: process
+    process_name: /usr/bin/curl
+    command_line: curl https://example.com/health
+  - type: connection
+    dst_ip: 93.184.216.34
+    dst_port: 443
+    hostname: example.com
+    service: https
+  - type: web_scan
+    source_ip: 198.51.100.25
+    dst_ip: 10.0.0.20
+    dst_port: 80
+    hostname: linux-01.example.test
+    preset: nikto
+    rate: 1.0
+    duration: 1m
+- id: fixture-ssh
+  time: +14m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise ssh typed handler
+  events:
+  - type: ssh_session
+    source_ip: 10.0.0.10
+- id: fixture-rdp
+  time: +17m
+  actor: alice
+  system: WIN-01
+  activity: Exercise rdp typed handler
+  events:
+  - type: rdp_session
+    source_ip: 10.0.0.11
+- id: fixture-account
+  time: +20m
+  actor: alice
+  system: WIN-01
+  activity: Exercise account typed handler
+  events:
+  - type: account_created
+    target_username: fixture_temp
+  - type: group_member_added
+    group_name: Administrators
+    member_name: fixture_temp
+  - type: account_deleted
+    target_username: fixture_temp
+- id: fixture-service
+  time: +23m
+  actor: alice
+  system: WIN-01
+  activity: Exercise service typed handler
+  events:
+  - type: service_installed
+    service_name: FixtureService
+    service_file_name: C:\Windows\System32\cmd.exe
+  - type: scheduled_task_created
+    task_name: FixtureTask
+  - type: log_cleared
+- id: fixture-dns
+  time: +26m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise dns typed handler
+  events:
+  - type: dns_query
+    query: fixture.example.test
+    answer: 192.0.2.24
+  - type: dhcp_lease
+    requested_ip: 10.0.0.20
+- id: fixture-lock
+  time: +29m
+  actor: alice
+  system: WIN-01
+  activity: Exercise lock typed handler
+  events:
+  - type: workstation_lock
+  - type: workstation_unlock
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: bash_history
+  - format: snort_alert
+  - format: cisco_asa
+  - format: web_access
+  - format: proxy_access
+  destination: ./output
+  compression: false

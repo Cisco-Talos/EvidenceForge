@@ -84,9 +84,7 @@ _UNICODE_DOT_MAP = {0x3002: ".", 0xFF0E: ".", 0xFF61: "."}
 # rejected outright (tab is allowed and escaped at render time).
 _LINE_BOUNDARY_CHARS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 
-# (The non-interactive bash-user set lives in the generator as the canonical
-# _NONINTERACTIVE_BASH_USERS; the spillage validator imports it directly so it
-# cannot drift from the actual bash-history suppression behaviour.)
+# Shell-history eligibility is shared with validation through config.shell_history_policy.
 
 # RFC 5737 (IPv4 doc) + RFC 3849 (IPv6 doc) ranges, accepted in addition to the
 # private/loopback/link-local ranges that ipaddress recognises directly.

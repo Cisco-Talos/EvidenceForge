@@ -1,0 +1,213 @@
+version: '1.0'
+name: cleanup-smb-phases
+description: Frozen bounded persistent SMB file-operation and encrypted-share controls
+environment:
+  description: Windows workstation and file server calibration environment
+  domain: example.test
+  users:
+  - username: analyst
+    full_name: Resource Analyst
+    email: analyst@example.test
+    primary_system: WS-01
+    enabled: true
+  systems:
+  - hostname: WS-01
+    ip: 10.20.0.10
+    os: Windows 11
+    type: workstation
+    roles:
+    - workstation
+    services:
+    - smb-client
+    - kerberos-client
+    - dns-client
+  - hostname: FS-01
+    ip: 10.20.0.20
+    os: Windows Server 2022
+    type: server
+    roles:
+    - file_server
+    services:
+    - smb
+  network:
+    segments:
+    - name: office
+      cidr: 10.20.0.0/24
+      exposure: internal
+      systems:
+      - WS-01
+      - FS-01
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - office
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+  storage:
+    population: small
+    activity: low
+    servers:
+    - system: FS-01
+      presets: []
+      audit: high
+      default_volume: data
+      volumes:
+      - id: data
+        mount: D:\
+        filesystem: ntfs
+        label: SharedData
+      - id: archive
+        mount: C:\Mounts\Archive\
+        filesystem: refs
+        label: ArchiveData
+      shares:
+      - id: team
+        name: Team
+        volume: data
+        root: Departments\Team
+        preset: collaboration
+        population: small
+        activity: low
+        access:
+          read:
+          - analyst
+          modify:
+          - analyst
+      - id: protected
+        name: Protected
+        volume: archive
+        root: Protected
+        preset: department
+        population: small
+        activity: low
+        encryption: required
+        access:
+          read:
+          - analyst
+    mappings:
+    - id: team-p
+      share: FS-01.team
+      audience:
+        users:
+        - analyst
+        systems:
+        - WS-01
+      drive: 'P:'
+      lifecycle: persistent
+time_window:
+  start: '2024-01-15T10:00:00Z'
+  duration: 35m
+  warmup: 1h
+baseline_activity:
+  description: Low non-SMB noise with representative SMB activity
+  intensity: low
+  variation: low
+storyline:
+- id: single-read
+  time: +3m
+  actor: analyst
+  system: WS-01
+  activity: Read one team document
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: FS-01.team
+    outcome: success
+    path_style: mapped
+    mapping: team-p
+- id: batch-read
+  time: +8m
+  actor: analyst
+  system: WS-01
+  activity: Review a working set
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: collection
+    target:
+      type: share
+      share: FS-01.team
+    batch:
+      count: 3
+      duration: 1m
+    outcome: success
+- id: batch-update
+  time: +13m
+  actor: analyst
+  system: WS-01
+  activity: Update a working set with high auditing
+  events:
+  - type: smb_activity
+    operation: update
+    purpose: interactive
+    target:
+      type: share
+      share: FS-01.team
+    batch:
+      count: 3
+      duration: 1m
+    outcome: success
+- id: batch-copy
+  time: +18m
+  actor: analyst
+  system: WS-01
+  activity: Collect files to a local cache
+  events:
+  - type: smb_activity
+    operation: copy
+    purpose: collection
+    source:
+      type: share
+      share: FS-01.team
+    destination:
+      type: client
+      directory: C:\ProgramData\cache\
+    batch:
+      count: 3
+      duration: 1m
+    outcome: success
+- id: batch-delete
+  time: +23m
+  actor: analyst
+  system: WS-01
+  activity: Delete obsolete documents
+  events:
+  - type: smb_activity
+    operation: delete
+    purpose: administrative
+    target:
+      type: share
+      share: FS-01.team
+    batch:
+      count: 3
+      duration: 1m
+    outcome: success
+- id: encrypted-read
+  time: +28m
+  actor: analyst
+  system: WS-01
+  activity: Read from an encrypted share
+  events:
+  - type: smb_activity
+    operation: read
+    purpose: interactive
+    target:
+      type: share
+      share: FS-01.protected
+    batch:
+      count: 3
+      duration: 1m
+    outcome: success
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  destination: ./output
+  compression: false

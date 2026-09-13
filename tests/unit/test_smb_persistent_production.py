@@ -1283,18 +1283,28 @@ def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
         )
         _assert_transient_authorities_drained(engine)
 
-        monkeypatch.setattr(generator, "generate_connection", original)
+        materialized: list[tuple[str, str, str]] = []
+
+        def observe_committed_client(*args: object, **kwargs: object) -> str:
+            uid = original(*args, **kwargs)
+            # Observe at the root commit: successful operation-lived clients
+            # have already terminated by the time the outer SMB action returns.
+            root = kwargs["identity_capture"].require_prepared_root()
+            for plan in root.state_plan.batch.processes:
+                identity = state.get_process_identity(plan.identity.hostname, plan.identity.pid)
+                assert identity is not None
+                assert identity.object_id == plan.identity.object_id
+                materialized.append((identity.object_id, identity.image, identity.command_line))
+            return uid
+
+        monkeypatch.setattr(generator, "generate_connection", observe_committed_client)
         result = _invoke_windows_read(engine, scenario)
         assert len(result.transport_uids) == 1
         before_ids = {identity[0] for identity in before}
-        materialized = [
-            process
-            for process in state.get_processes_on_system(client.hostname)
-            if process.ecar_object_id not in before_ids
-        ]
         assert len(materialized) == 1
-        assert materialized[0].image == "/usr/bin/smbclient"
-        assert "smbclient" in materialized[0].command_line
+        assert materialized[0][0] not in before_ids
+        assert materialized[0][1] == "/usr/bin/smbclient"
+        assert "smbclient" in materialized[0][2]
         _assert_transient_authorities_drained(engine)
     finally:
         engine._close_emitters()

@@ -403,7 +403,7 @@ def test_startup_module_observation_timing_is_bounded_and_heavy_tailed():
 
 def test_windows_process_source_timing_respects_visible_parent_create():
     """Child process source-create times should not sort before visible parent create."""
-    generator = object.__new__(ActivityGenerator)
+    generator = ActivityGenerator(StateManager(), {})
     generator._source_timing_planner = SourceTimingPlanner()
     parent_visible_time = datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC)
     generator._process_source_create_times = {("WS-01", 1000): parent_visible_time}
@@ -457,7 +457,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
             process=replace(event.process, pid=pid),
             source_timing=None,
         )
-        sampled_generator = object.__new__(ActivityGenerator)
+        sampled_generator = ActivityGenerator(StateManager(), {})
         sampled_generator._source_timing_planner = SourceTimingPlanner()
         sampled_generator._process_source_create_times = {}
         sampled_generator._plan_process_source_create_times(sampled_event)
@@ -489,7 +489,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
 
 def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
     """Stored source-terminate time should preserve lifetime from the real create."""
-    generator = object.__new__(ActivityGenerator)
+    generator = ActivityGenerator(StateManager(), {})
     generator._source_timing_planner = SourceTimingPlanner()
     generator._process_source_create_times = {}
     generator._process_source_terminate_times = {}
@@ -525,7 +525,7 @@ def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
 
 def test_process_source_terminate_time_uses_stored_visible_create_anchor():
     """Termination planning should not add the full process lifetime twice."""
-    generator = object.__new__(ActivityGenerator)
+    generator = ActivityGenerator(StateManager(), {})
     generator._source_timing_planner = SourceTimingPlanner()
     start_time = datetime(2024, 3, 18, 13, 48, 41, tzinfo=UTC)
     terminate_time = start_time + timedelta(hours=2, minutes=4, seconds=48)

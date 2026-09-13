@@ -2763,3 +2763,38 @@ output:
         assert "persistent Windows SMB activity" in result.stdout
         assert "Cannot proceed with generation" in " ".join(result.stdout.split())
         mock_engine_class.assert_not_called()
+
+
+@pytest.mark.parametrize("checkpoint_hours", [0, 24])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_generation_failure_retains_only_checkpoint_owned_staging(
+    checkpoint_hours: int,
+    interrupted: bool,
+    scenarios_dir: Path,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data/old.log").write_bytes(b"original evidence\n")
+    (tmp_path / "GROUND_TRUTH.md").write_bytes(b"original ground truth\n")
+    engine = Mock()
+    engine.generate.side_effect = KeyboardInterrupt() if interrupted else OSError("staging fault")
+    with patch("evidenceforge.cli.commands.GenerationEngine", return_value=engine):
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--overwrite",
+                "--checkpoint-hours",
+                str(checkpoint_hours),
+            ],
+        )
+    assert result.exit_code == (EXIT_SIGINT if interrupted else EXIT_GENERATION_ERROR)
+    assert (tmp_path / "data/old.log").read_bytes() == b"original evidence\n"
+    assert (tmp_path / "GROUND_TRUTH.md").read_bytes() == b"original ground truth\n"
+    assert "Previous output preserved" in result.stdout
+    assert ("Cleaned up staging directory" in result.stdout) == (checkpoint_hours == 0)
+    assert list(tmp_path.glob(".eforge_staging_*")) == []
+    assert (tmp_path / ".eforge-generation/staged").exists() == (checkpoint_hours > 0)

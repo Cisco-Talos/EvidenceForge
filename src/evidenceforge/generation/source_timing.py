@@ -4955,11 +4955,32 @@ class SourceTimingPlanner:
                 f"host={hostname} floor={source_floor.isoformat()} "
                 f"close={source_close.isoformat()}"
             )
-        if source_floor <= preferred < source_close - _WFP_TRANSPORT_EPSILON:
+        latest = source_close - _WFP_TRANSPORT_EPSILON
+        is_kdc_responder = (
+            host.ip == network.dst_ip
+            and network.src_ip != network.dst_ip
+            and network.dst_port == 88
+            and network.protocol.lower() in {"tcp", "udp"}
+            and network.service == "kerberos"
+        )
+        if is_kdc_responder:
+            minimum_us, _ = self._windows_kdc_delay_bounds()
+            # KDC source timing is planned after this permit is published. Leave
+            # two integer delays above its open minimum, plus one tick before
+            # the next boundary. A transport can carry an AS/TGS pair, selected
+            # through ticket-cache policy after network commit. Budget both
+            # steps without coupling permit timing to output selection.
+            # See test_two_microsecond_kdc_window_is_repaired_before_wfp_admission.
+            latest = source_close - timedelta(microseconds=2 * (minimum_us + 3))
+        if source_floor <= preferred < source_close - _WFP_TRANSPORT_EPSILON and (
+            not is_kdc_responder or preferred <= latest
+        ):
             return preferred
 
-        available_us = int(
-            (source_close - _WFP_TRANSPORT_EPSILON - source_floor).total_seconds() * 1_000_000
+        available_us = (
+            (latest - source_floor) // _WFP_TRANSPORT_EPSILON
+            if is_kdc_responder
+            else int((latest - source_floor).total_seconds() * 1_000_000)
         )
         if available_us <= 1:
             raise StateError(
@@ -4989,7 +5010,7 @@ class SourceTimingPlanner:
             sample_key=f"inside_transport:{available_us}",
         )
         timestamp = source_floor + delay
-        if timestamp >= source_close:
+        if timestamp > latest:
             raise StateError(
                 "WFP admissible source timing reached its transport close: "
                 f"host={hostname} timestamp={timestamp.isoformat()} "
@@ -4999,6 +5020,23 @@ class SourceTimingPlanner:
             "source.windows_wfp_connection.admissible_window"
         )
         return timestamp
+
+    @staticmethod
+    def _windows_kdc_delay_bounds() -> tuple[int, int]:
+        """Return the shared open minimum and inclusive maximum KDC delay."""
+
+        window = get_timing_window(
+            "windows.kerberos_after_wfp",
+            default_min_ms=1,
+            default_max_ms=45,
+            default_position="after",
+            default_class="source_latency",
+        )
+        minimum_us = window.min_ms * 1_000
+        maximum_us = window.max_ms * 1_000
+        if maximum_us - minimum_us < 2:
+            raise StateError("KDC timing profile must admit at least two whole-microsecond delays")
+        return minimum_us, maximum_us
 
     def _windows_kdc_time_after_wfp(
         self,
@@ -5038,25 +5076,20 @@ class SourceTimingPlanner:
             hostname=hostname,
             os_category=host.os_category,
         )
+        minimum_us, maximum_us = self._windows_kdc_delay_bounds()
+        if event.event_type == "kerberos_tgt":
+            # Leave the potential TGS successor an interior before admitting
+            # the TGT. Published AS evidence cannot later move to make room.
+            close_time -= timedelta(microseconds=minimum_us + 3)
         if anchor < preferred < close_time:
             return preferred
-        available_us = int(
-            (close_time - anchor - _WFP_TRANSPORT_EPSILON).total_seconds() * 1_000_000
-        )
-        if available_us <= 1:
+        available_us = (close_time - anchor) // _WFP_TRANSPORT_EPSILON - 1
+        maximum_us = min(maximum_us, available_us)
+        if maximum_us - minimum_us < 2:
             raise StateError(
                 "KDC source window cannot fit after target WFP admission: "
                 f"host={hostname} anchor={anchor.isoformat()} close={close_time.isoformat()}"
             )
-        window = get_timing_window(
-            "windows.kerberos_after_wfp",
-            default_min_ms=1,
-            default_max_ms=45,
-            default_position="after",
-            default_class="source_latency",
-        )
-        maximum_us = min(window.max_ms * 1_000, available_us)
-        minimum_us = window.min_ms * 1_000 if maximum_us > window.min_ms * 1_000 else 1
         timestamp = anchor + self.timing_runtime.sampler.sample_timedelta(
             self._right_skew_distribution(minimum_us, maximum_us + 1),
             relationship_key="windows.kerberos_after_wfp",
@@ -5200,6 +5233,54 @@ class SourceTimingPlanner:
                 ),
                 maximum_us=4_000,
             )
+            if (
+                family == "windows_security"
+                and event.event_type
+                in {"kerberos_tgt", "kerberos_service", "kerberos_preauth_failed"}
+                and event.network is not None
+                and event.network.closed_at is not None
+                and event.dst_host is not None
+                and self._transaction_transport_key(
+                    lifecycle.group_id,
+                    hostname,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.network.protocol,
+                )
+                in self._admitted_windows_transport_transactions
+            ):
+                # A network-group dependent is not an unbounded session row.
+                # Preserve an admissible existing ordering draw; if it escapes
+                # the transport, sample the remaining interior instead. The
+                # preceding TGT reserved this space before it was admitted.
+                # See test_pair_of_kdc_audits_fits_after_one_admitted_permit.
+                # Without that exact observed permit, retain existing source
+                # ordering; no WFP admission established this shared budget.
+                # See test_unobserved_transport_preserves_existing_paired_ticket_order.
+                close = self._runtime_endpoint_clock_time(
+                    event.network.closed_at,
+                    hostname=hostname,
+                    os_category=event.dst_host.os_category,
+                )
+                if timestamp >= close:
+                    available_us = (close - previous) // _WFP_TRANSPORT_EPSILON
+                    if available_us <= 2:
+                        raise StateError("KDC dependent order cannot fit inside its transport")
+                    timestamp = self._sample_after_floor(
+                        previous,
+                        relationship_key="windows_security.kerberos.dependent_order",
+                        scope=TimingScope(
+                            stable_id=self._endpoint_event_object_id(
+                                event, hostname, "session-order"
+                            ),
+                            host=hostname,
+                            source=source_instance,
+                            lifecycle_id=session_group,
+                        ),
+                        maximum_us=min(4_000, available_us),
+                    )
         return timestamp
 
     def _runtime_session_closure_time(

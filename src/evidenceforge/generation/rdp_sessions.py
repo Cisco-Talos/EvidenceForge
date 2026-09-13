@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from struct import Struct
-from threading import Condition, Lock, RLock
+from threading import Lock, RLock
 from typing import Literal
 from weakref import WeakValueDictionary
 
@@ -62,6 +62,8 @@ from evidenceforge.generation.indexes import (
     PackedHandleExpiryIndex,
     PackedUniqueDigestMap,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _MutationGate
+from evidenceforge.generation.synchronization import acquire_stable_locks as _acquire_stable_locks
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -361,51 +363,6 @@ def _decoded_row_cache_value_bytes(value: tuple[bytes, bytes, str]) -> int:
     """Estimate one bounded decoded row/digest cache entry."""
 
     return sum(sys.getsizeof(item) for item in (value, *value))
-
-
-class _MutationGate:
-    """Admit disjoint mutations concurrently while fencing watermarks."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter one shared mutation admission lane."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._readers -= 1
-                if self._readers == 0:
-                    self._condition.notify_all()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Fence mutations while one canonical cutoff commits."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 class _PackedRdpSessionStore:
@@ -1180,25 +1137,6 @@ class _RdpSessionShard:
         cached = self.snapshot_cache.pop(route_key, None)
         if cached is not None:
             self.snapshot_cache_value_bytes -= _decoded_row_cache_value_bytes(cached)
-
-
-@contextmanager
-def _acquire_stable_locks(
-    entries: list[tuple[tuple[int, int], RLock]],
-) -> Iterator[None]:
-    """Acquire distinct affinity-route then owner-shard locks stably."""
-
-    unique: dict[int, tuple[tuple[int, int], RLock]] = {}
-    for token, lock in entries:
-        unique.setdefault(id(lock), (token, lock))
-    ordered = sorted(unique.values(), key=lambda item: item[0])
-    for _token, lock in ordered:
-        lock.acquire()
-    try:
-        yield
-    finally:
-        for _token, lock in reversed(ordered):
-            lock.release()
 
 
 class RdpReconnectStateManager:

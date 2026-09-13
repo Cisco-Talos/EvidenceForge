@@ -24,9 +24,11 @@
 
 import ast
 import copy
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -41,6 +43,9 @@ from evidenceforge.events.dispatcher import (
     PreparedDispatch,
     PreparedDispatchStateIntent,
     PreparedNetworkDependentBatch,
+)
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
 )
 from evidenceforge.generation.actions import network_transaction_planner as planner_module
 from evidenceforge.generation.actions.command_effects import (
@@ -318,6 +323,93 @@ def test_normal_network_root_commits_one_authenticated_prepared_receipt() -> Non
     assert state.get_connection_by_transaction_id(transaction.stable_id) is not None
     assert generator._network_transaction_runtime.census().has_last_result
     emitter.emit.assert_called_once()
+
+
+def test_network_stages_share_facts_and_exact_publication_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator, _, emitter = _generator()
+    capture = NetworkConnectionIdentityCapture()
+    outputs: dict[str, Any] = {}
+    boundaries: list[object] = []
+    phase_names = (
+        "_resolve_network_request",
+        "_plan_network_transport",
+        "_plan_network_protocol_evidence",
+        "_prepare_network_publication",
+        "_commit_prepared_network",
+        "_publish_committed_network",
+    )
+
+    def observe(name: str, original: Callable[..., Any]) -> Callable[..., Any]:
+        def execute(self: object, request: object, boundary: object, *args: object) -> Any:
+            boundaries.append(boundary)
+            result = original(self, request, boundary, *args)
+            outputs[name] = result
+            return result
+
+        return execute
+
+    planner = planner_module.NetworkTransactionPlanner
+    for name in phase_names:
+        monkeypatch.setattr(planner, name, observe(name, getattr(planner, name)))
+
+    uid = _generate(generator, capture)
+
+    assert tuple(outputs) == phase_names
+    assert all(boundary is boundaries[0] for boundary in boundaries)
+    resolved, transport, evidence, prepared, committed, published = outputs.values()
+    assert resolved.facts is transport.facts is evidence.publication.facts
+    assert resolved.applications is transport.applications is evidence.applications
+    assert evidence.applications is prepared.applications
+    assert transport.endpoints is evidence.publication.endpoints
+    assert evidence.publication is prepared.publication is committed.publication
+    assert prepared.sources is committed.sources
+    assert prepared.sources.prepared_dispatch is not None
+    assert published == uid == capture.require().zeek_uid
+    assert prepared.root is capture.require_prepared_root()
+    assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+        prepared.root, capture.require_receipt()
+    )
+    emitter.emit.assert_called_once()
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_network_stage_failure_keeps_commit_and_cancellation_distinct(
+    monkeypatch: pytest.MonkeyPatch, after_commit: bool
+) -> None:
+    generator, state, emitter = _generator()
+    capture = NetworkConnectionIdentityCapture()
+    before = state.materialization_digest()
+    rng = generator_module._get_rng()
+    rng_before = rng.getstate()
+    timing_before = generator._source_timing_planner.state_digest()
+
+    def reject(*args: object) -> None:
+        raise StateError("injected composed-stage failure")
+
+    monkeypatch.setattr(
+        planner_module.NetworkTransactionPlanner,
+        "_publish_committed_network" if after_commit else "_commit_prepared_network",
+        reject,
+    )
+    with pytest.raises(StateError, match="injected composed-stage failure"):
+        _generate(generator, capture)
+
+    emitter.emit.assert_not_called()
+    if after_commit:
+        transaction = capture.require()
+        assert state.get_connection_by_transaction_id(transaction.stable_id) is not None
+        assert generator._lifecycle_authority.authenticates_prepared_network_receipt(
+            capture.require_prepared_root(), capture.require_receipt()
+        )
+        assert capture.require_outcome() is NetworkConnectionPublicationOutcome.PUBLISHED
+    else:
+        assert state.materialization_digest() == before
+        assert rng.getstate() == rng_before
+        assert generator._source_timing_planner.state_digest() == timing_before
+        assert capture.transaction is capture.receipt is capture.outcome is None
+        assert capture._claim is None
 
 
 def test_failed_transport_keeps_internal_close_but_source_native_duration_missing() -> None:
@@ -980,7 +1072,9 @@ def test_rejected_dns_normalization_does_not_mutate_the_caller_context() -> None
     emitter.emit.assert_not_called()
 
 
-def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> None:
+def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The pre-transport Windows visibility repair cannot advance base timing."""
 
     generator, state, emitter = _generator()
@@ -1005,7 +1099,14 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
     )
     state.materialize_process(process_plan)
     generator._ip_to_system = {source.ip: source}
-    generator.process_source_create_bound = Mock(return_value=_START + timedelta(milliseconds=10))
+    from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
+
+    source_bound = Mock(return_value=_START + timedelta(milliseconds=10))
+    monkeypatch.setattr(
+        ProcessSourceTiming,
+        "process_source_create_bound",
+        lambda self, system, pid: source_bound(system, pid),
+    )
     timing_before = generator._source_timing_planner.state_digest()
 
     def _reject() -> None:
@@ -1034,7 +1135,7 @@ def test_rejected_windows_process_visibility_clamp_uses_only_staged_timing() -> 
         )
 
     assert generator._source_timing_planner.state_digest() == timing_before
-    generator.process_source_create_bound.assert_called_with(source, process_plan.identity.pid)
+    source_bound.assert_called_with(source, process_plan.identity.pid)
     emitter.emit.assert_not_called()
 
 
@@ -1042,11 +1143,25 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
     """The prepared region uses only revocable capabilities before authority commit."""
 
     tree = ast.parse(Path(planner_module.__file__).read_text(encoding="utf-8"))
-    execute = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute"
+    phase_names = (
+        "_resolve_network_request",
+        "_plan_network_transport",
+        "_plan_network_protocol_evidence",
+        "_prepare_network_publication",
+        "_commit_prepared_network",
+        "_publish_committed_network",
     )
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    execute = ast.Module(body=[functions[name] for name in phase_names], type_ignores=[])
+    coordinator_calls = [
+        node.func.attr
+        for node in ast.walk(functions["_execute"])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+    ]
+    assert coordinator_calls == list(phase_names)
 
     def call_name(call: ast.Call) -> str:
         def expression_name(expression: ast.expr) -> str:
@@ -1067,6 +1182,26 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         == "executor._lifecycle_authority.materialize_prepared_network_transaction"
     )
     prepared_calls = [node for node in calls if begin_line < node.lineno < commit_line]
+    # Follow direct planner helpers so extracting an interior cannot hide an
+    # eager publication, owner RNG draw, or unstaged timing call from this gate.
+    visited: set[str] = set()
+    pending = list(prepared_calls)
+    while pending:
+        call = pending.pop()
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "self"
+            and call.func.attr in functions
+            and call.func.attr not in visited
+        ):
+            continue
+        visited.add(call.func.attr)
+        nested = [
+            node for node in ast.walk(functions[call.func.attr]) if isinstance(node, ast.Call)
+        ]
+        prepared_calls.extend(nested)
+        pending.extend(nested)
     prepared_names = {call_name(node) for node in prepared_calls}
     forbidden = {
         "executor.dispatcher.dispatch_builder",
@@ -1079,7 +1214,7 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         "executor.state_manager.set_current_time",
         "executor.state_manager.update_process_activity_time",
         "executor.state_manager.update_session_activity_time",
-        "generator_module._get_rng",
+        "_get_rng",
     }
     assert prepared_names.isdisjoint(forbidden)
 
@@ -1096,9 +1231,7 @@ def test_post_begin_network_inventory_has_no_eager_publish_or_owner_runtime_call
         assert isinstance(runtime_keyword.value, ast.Attribute)
         assert runtime_keyword.value.attr == "_timing_runtime"
 
-    status_call = next(
-        node for node in prepared_calls if call_name(node) == "generator_module._get_http_status"
-    )
+    status_call = next(node for node in prepared_calls if call_name(node) == "_get_http_status")
     cache_keyword = next(
         keyword for keyword in status_call.keywords if keyword.arg == "publish_cache"
     )
@@ -1501,6 +1634,7 @@ def test_direct_dns_cache_deadline_is_bounded_by_network_runtime_window(
 
     generator, _state, _emitter = _generator()
     monkeypatch.setattr(generator_module, "_dns_base_ttl", lambda _query, _internal: 86_400)
+    monkeypatch.setattr(network_planner_module, "_dns_base_ttl", lambda _query, _internal: 86_400)
 
     generator.generate_connection(
         src_ip="10.0.0.10",
@@ -1580,6 +1714,9 @@ def test_rejected_command_http_root_without_prerequisite_is_owner_neutral(
     generator._ip_to_system = {source.ip: source}
     command_parser = Mock(wraps=generator_module._http_context_from_process_command)
     monkeypatch.setattr(generator_module, "_http_context_from_process_command", command_parser)
+    monkeypatch.setattr(
+        network_planner_module, "_http_context_from_process_command", command_parser
+    )
     capture = NetworkConnectionIdentityCapture()
     owner_rng = generator_module._get_rng()
     state_before = state.materialization_digest()
@@ -1672,3 +1809,62 @@ def test_committed_dns_prerequisite_survives_later_root_rejection_without_orphan
     assert census.preparation_fences == 0
     assert census.reserved_deadlines == 0
     assert emitter.emit.call_count == 1
+
+
+@pytest.mark.parametrize("destination", ["missing.local", "downloads.example.test"])
+def test_command_response_sizing_discovery_survives_endpoint_admission(
+    monkeypatch: pytest.MonkeyPatch, destination: str
+) -> None:
+    state = StateManager()
+    state.set_current_time(_START)
+    source = System(hostname="CLIENT", ip="10.0.0.10", os="Ubuntu 24.04", type="workstation")
+    process = state.plan_process_materialization(
+        system=source.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line=f"curl https://{destination}/payload.bin",
+        username="analyst",
+        integrity_level="Medium",
+        os_category="linux",
+        logon_id="0x1001",
+        start_time=_START - timedelta(seconds=1),
+        auth_session_id=0x1001,
+        auth_logon_type=2,
+    )
+    state.materialize_process(process)
+    generator = ActivityGenerator(
+        state,
+        {},
+        generation_window_start=_START - timedelta(hours=1),
+        generation_window_end=_START + timedelta(hours=1),
+    )
+    generator._ip_to_system = {source.ip: source}
+    observed: dict[str, object] = {}
+
+    def stop_before_preparation(
+        self: object, request: object, boundary: object, resolved: Any
+    ) -> str:
+        observed["needs_size"] = resolved.facts.command_http_needs_response_size
+        observed["http"] = resolved.protocol.http
+        return ""
+
+    monkeypatch.setattr(
+        planner_module.NetworkTransactionPlanner, "_plan_network_transport", stop_before_preparation
+    )
+    generator.generate_connection(
+        src_ip=source.ip,
+        dst_ip="203.0.113.20",
+        time=_START,
+        dst_port=443,
+        proto="tcp",
+        service=None,
+        pid=process.identity.pid,
+        source_system=source,
+        hostname="",
+        conn_state="SF",
+        preserve_dst_ip=True,
+        suppress_prereq_dns=True,
+        suppress_source_pid_inference=True,
+    )
+    assert observed["needs_size"] is True
+    assert (observed["http"] is None) is (destination == "missing.local")

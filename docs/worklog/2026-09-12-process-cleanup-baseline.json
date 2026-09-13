@@ -1,0 +1,392 @@
+{
+  "baseline_commit": "010ae90ff3dc345d5f05224345c4d529b87fe37a",
+  "behavior_revision": 58,
+  "forwarding_callers": [
+    {
+      "caller": "_ensure_system_connection_owner_process",
+      "calls": [
+        {
+          "expression": "self._ensure_profiled_service_worker(system=source_system, worker_time=process_time, activity_time=time, family_name=family_name, worker_name=worker_name)",
+          "line": 7810,
+          "method": "_ensure_profiled_service_worker"
+        },
+        {
+          "expression": "self._windows_system_parent_fallback(source_system, process_time)",
+          "line": 7827,
+          "method": "_windows_system_parent_fallback"
+        },
+        {
+          "expression": "self._linux_system_parent_fallback(source_system, process_time)",
+          "line": 7829,
+          "method": "_linux_system_parent_fallback"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_linux_apt_frontend_process",
+      "calls": [
+        {
+          "expression": "self._linux_system_parent_fallback(source_system, frontend_time)",
+          "line": 8076,
+          "method": "_linux_system_parent_fallback"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_user_connection_owner_process",
+      "calls": [
+        {
+          "expression": "self._record_user_process(source_system, user, pid, image)",
+          "line": 8685,
+          "method": "_record_user_process"
+        },
+        {
+          "expression": "self._select_parent_pid(source_system, user, image, time=process_time, logon_id=session.logon_id)",
+          "line": 8624,
+          "method": "_select_parent_pid"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_windows_user_cli_parent",
+      "calls": [
+        {
+          "expression": "self._ensure_session_explorer_pid(system, user, time=shell_time, logon_id=session.logon_id)",
+          "line": 8836,
+          "method": "_ensure_session_explorer_pid"
+        },
+        {
+          "expression": "self._record_user_process(system, user, shell_pid, shell_image)",
+          "line": 8863,
+          "method": "_record_user_process"
+        },
+        {
+          "expression": "self._windows_explorer_parent_pid(system, user, shell_time, session.logon_id)",
+          "line": 8842,
+          "method": "_windows_explorer_parent_pid"
+        }
+      ]
+    },
+    {
+      "caller": "_windows_user_cli_parent_source_bound",
+      "calls": [
+        {
+          "expression": "self._get_session_explorer_pid(system, user, time=shell_time, logon_id=session.logon_id)",
+          "line": 8879,
+          "method": "_get_session_explorer_pid"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_explicit_proxy_client_process",
+      "calls": [
+        {
+          "expression": "self._select_parent_pid(source_system, user, image, time=process_time, logon_id=session.logon_id)",
+          "line": 10220,
+          "method": "_select_parent_pid"
+        },
+        {
+          "expression": "self._record_user_process(source_system, user, pid, image)",
+          "line": 10247,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_browser_http_client_process",
+      "calls": [
+        {
+          "expression": "self._select_parent_pid(source_system, user, image, time=process_time, logon_id=session.logon_id)",
+          "line": 10539,
+          "method": "_select_parent_pid"
+        },
+        {
+          "expression": "self._record_user_process(source_system, user, pid, image)",
+          "line": 10558,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_preflight_bounded_process_source_deadline",
+      "calls": [
+        {
+          "expression": "self._resolve_existing_prepared_process_parent(system=request.system, user=request.user, time=actor.started_at, logon_id=actor.logon_id, parent_pid=parent_pid, process_username=actor.username)",
+          "line": 16603,
+          "method": "_resolve_existing_prepared_process_parent"
+        }
+      ]
+    },
+    {
+      "caller": "ensure_linux_ssh_client_process",
+      "calls": [
+        {
+          "expression": "self._record_user_process(source_system, user, pid, image)",
+          "line": 18991,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_email_client_process",
+      "calls": [
+        {
+          "expression": "self._select_parent_pid(system, user, image, time=process_time, logon_id=session.logon_id)",
+          "line": 20767,
+          "method": "_select_parent_pid"
+        },
+        {
+          "expression": "self._record_user_process(system, user, pid, image)",
+          "line": 20786,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_email_server_process",
+      "calls": [
+        {
+          "expression": "self._ensure_profiled_service_worker(system=system, worker_time=process_time, activity_time=time, family_name=profiled_worker[0], worker_name=profiled_worker[1])",
+          "line": 20935,
+          "method": "_ensure_profiled_service_worker"
+        }
+      ]
+    },
+    {
+      "caller": "_active_email_mta_outbound_process",
+      "calls": [
+        {
+          "expression": "self._profiled_service_manager_parent_pid(system=system, time=time, family=family)",
+          "line": 21039,
+          "method": "_profiled_service_manager_parent_pid"
+        },
+        {
+          "expression": "self._active_profiled_service_process(system=system, time=time, spec=family.manager, parent_pid=manager_parent)",
+          "line": 21044,
+          "method": "_active_profiled_service_process"
+        },
+        {
+          "expression": "self._active_profiled_service_process(system=system, time=time, spec=family.workers['smtp'], parent_pid=manager_pid)",
+          "line": 21052,
+          "method": "_active_profiled_service_process"
+        }
+      ]
+    },
+    {
+      "caller": "_ensure_email_mta_outbound_process",
+      "calls": [
+        {
+          "expression": "self._ensure_profiled_service_worker(system=system, worker_time=process_time, activity_time=time, family_name='postfix', worker_name='smtp')",
+          "line": 21085,
+          "method": "_ensure_profiled_service_worker"
+        }
+      ]
+    },
+    {
+      "caller": "ensure_linux_session_shell",
+      "calls": [
+        {
+          "expression": "self._linux_anchor_pid(target_system, anchor_time)",
+          "line": 25312,
+          "method": "_linux_anchor_pid"
+        }
+      ]
+    },
+    {
+      "caller": "ensure_linux_visible_shell_parent",
+      "calls": [
+        {
+          "expression": "self._linux_anchor_pid(target_system, activity_time)",
+          "line": 25612,
+          "method": "_linux_anchor_pid"
+        }
+      ]
+    },
+    {
+      "caller": "_maybe_emit_bash_process_telemetry",
+      "calls": [
+        {
+          "expression": "self._record_user_process(system, user, pid, image)",
+          "line": 26003,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_align_bash_history_with_foreground_process",
+      "calls": [
+        {
+          "expression": "self._active_session_shell_pid(system, user, activity_time, session.logon_id)",
+          "line": 26228,
+          "method": "_active_session_shell_pid"
+        }
+      ]
+    },
+    {
+      "caller": "execute_baseline_activity",
+      "calls": [
+        {
+          "expression": "self._resolve_parent(system, user, process_time, logon_id, process_name)",
+          "line": 28396,
+          "method": "_resolve_parent"
+        },
+        {
+          "expression": "self._resolve_parent(system, user, time, logon_id, process_name)",
+          "line": 28651,
+          "method": "_resolve_parent"
+        },
+        {
+          "expression": "self._record_user_process(system, user, pid, process_name)",
+          "line": 28661,
+          "method": "_record_user_process"
+        },
+        {
+          "expression": "self._record_user_process(system, user, source_pid, source_process_name)",
+          "line": 28476,
+          "method": "_record_user_process"
+        },
+        {
+          "expression": "self._resolve_parent(system, user, process_time, logon_id, process_name)",
+          "line": 28697,
+          "method": "_resolve_parent"
+        },
+        {
+          "expression": "self._record_user_process(system, user, pid, process_name)",
+          "line": 28725,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_direct_rdp_source_process_factory",
+      "calls": [
+        {
+          "expression": "self._record_user_process(source_system, user, pid, 'C:\\\\Windows\\\\System32\\\\mstsc.exe')",
+          "line": 30204,
+          "method": "_record_user_process"
+        }
+      ]
+    },
+    {
+      "caller": "_linux_local_login_parent_pid",
+      "calls": [
+        {
+          "expression": "self._linux_anchor_pid(system, time)",
+          "line": 35538,
+          "method": "_linux_anchor_pid"
+        }
+      ]
+    }
+  ],
+  "parent_methods": {
+    "_active_profiled_service_process": {
+      "line": 2051,
+      "lines": 24
+    },
+    "_active_remote_execution_wrapper_pid": {
+      "line": 1509,
+      "lines": 14
+    },
+    "_active_session_shell_pid": {
+      "line": 704,
+      "lines": 32
+    },
+    "_ensure_parent_chain": {
+      "line": 1157,
+      "lines": 280
+    },
+    "_ensure_profiled_service_worker": {
+      "line": 1831,
+      "lines": 192
+    },
+    "_ensure_session_explorer_pid": {
+      "line": 78,
+      "lines": 79
+    },
+    "_ensure_windows_service_shell_parent": {
+      "line": 1438,
+      "lines": 50
+    },
+    "_get_session_explorer_pid": {
+      "line": 158,
+      "lines": 38
+    },
+    "_is_windows_same_exe_gui_child": {
+      "line": 819,
+      "lines": 9
+    },
+    "_linux_anchor_pid": {
+      "line": 215,
+      "lines": 26
+    },
+    "_linux_service_parent_pid": {
+      "line": 1489,
+      "lines": 19
+    },
+    "_linux_system_parent_fallback": {
+      "line": 197,
+      "lines": 8
+    },
+    "_live_parent_chain_anchor": {
+      "line": 1794,
+      "lines": 36
+    },
+    "_materialize_visible_linux_shell_parent_for_child": {
+      "line": 242,
+      "lines": 51
+    },
+    "_profiled_service_manager_parent_pid": {
+      "line": 2024,
+      "lines": 26
+    },
+    "_prune_user_process_history": {
+      "line": 1702,
+      "lines": 37
+    },
+    "_record_user_process": {
+      "line": 1783,
+      "lines": 10
+    },
+    "_repair_process_parent_pid": {
+      "line": 294,
+      "lines": 130
+    },
+    "_resolve_existing_prepared_process_parent": {
+      "line": 620,
+      "lines": 83
+    },
+    "_resolve_parent": {
+      "line": 879,
+      "lines": 277
+    },
+    "_sanitize_user_parent_pid": {
+      "line": 425,
+      "lines": 194
+    },
+    "_select_parent_pid": {
+      "line": 1524,
+      "lines": 177
+    },
+    "_windows_explorer_parent_pid": {
+      "line": 829,
+      "lines": 49
+    },
+    "_windows_remote_command_owner_pid": {
+      "line": 1740,
+      "lines": 42
+    },
+    "_windows_same_exe_gui_parent_pid": {
+      "line": 737,
+      "lines": 81
+    },
+    "_windows_system_parent_fallback": {
+      "line": 206,
+      "lines": 8
+    }
+  },
+  "source_hashes": {
+    "src/evidenceforge/generation/actions/process_support/parents.py": "6f76d6bbf7a46e5ca8cd878cd4607ab4a32b8eb2c27e9fdaf339f39b3a352d64",
+    "src/evidenceforge/generation/activity/generator.py": "1eacdd112bf747c93ebb8bf5a20dd75f4c4f38443a52f83f935e9be964b7ca83",
+    "uv.lock": "298d9408c78bbab6b64d38997c0b6897f9279d5997a7dec81c44f759fde5f4e5"
+  }
+}

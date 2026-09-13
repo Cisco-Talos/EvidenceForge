@@ -549,18 +549,18 @@ def test_production_claim_site_enforces_global_timing_before_authority_lock_orde
             "_materialize_prepared_network_transaction",
         ): "materialize_connection_composite",
         (
-            "src/evidenceforge/generation/activity/generator.py",
-            "_execute_process_create_bundle",
+            "src/evidenceforge/generation/actions/process_execution_service.py",
+            "_publish_process",
         ): "materialize_process",
         (
-            "src/evidenceforge/generation/activity/generator.py",
+            "src/evidenceforge/generation/actions/process_support/parents.py",
             "_ensure_parent_chain",
         ): "materialize_process",
     }
     expected_source_only_sites = {
         (
             "src/evidenceforge/generation/actions/smb_activity.py",
-            "_execute_persistent_windows",
+            "_certify_new_persistent_smb_sources",
         ): 1,
         (
             "src/evidenceforge/generation/actions/smb_activity.py",

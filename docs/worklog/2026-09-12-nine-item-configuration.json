@@ -1,0 +1,214 @@
+{
+  "after": {
+    "_collect_network_parameter_schema_checks": {
+      "branches": 3,
+      "lines": 66
+    },
+    "_collect_process_access_schema_checks": {
+      "branches": 14,
+      "lines": 95
+    },
+    "_collect_syslog_schema_checks": {
+      "branches": 16,
+      "lines": 106
+    },
+    "_collect_system_process_schema_checks": {
+      "branches": 16,
+      "lines": 93
+    },
+    "_configured_entry_weight_total": {
+      "branches": 3,
+      "lines": 11
+    },
+    "_validate_merged_schemas": {
+      "branches": 44,
+      "lines": 317
+    },
+    "_validate_raw_overlays": {
+      "branches": 62,
+      "lines": 384
+    }
+  },
+  "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_validate_merged_schemas": {
+      "branches": 127,
+      "lines": 834
+    },
+    "_validate_raw_overlays": {
+      "branches": 62,
+      "lines": 659
+    }
+  },
+  "bytes": {
+    "cases": 12,
+    "references": [
+      "26a150ac",
+      "2fe26cb8"
+    ],
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item7-report.json",
+    "sha256": "fd3a5531b101c0d7e6f8a8fcb815206a0d9a3ce41b016b0d5611cc6eb16ad81b"
+  },
+  "diagnostic_fixture_sha256": "66b2b6a23e3d49b1a63bccd8d6541f71551e2b8b8863e6a45b69deb1e5ce3712",
+  "durable_runtime_state_added": 0,
+  "failures": [
+    "Draft new-test import ordering fixed before production extraction. No correctness or byte gate failed."
+  ],
+  "family_order": "System/process checks, process-access checks, syslog checks, network checks remain at original coordinator positions; schema validation remains deferred in one ordered list",
+  "focused": {
+    "passed": 24,
+    "seconds": 2.24
+  },
+  "item": 7,
+  "logs": {
+    "/private/tmp/eforge-pass4-item7-before-focused.log": "0012edfe7b82b1ed7ea9537d6bdf76c6be85b53656511fea5eac22d81ecf671b",
+    "/private/tmp/eforge-pass4-item7-family.log": "649a106edb1977fadef032a47887c762e4b302ef085c4731bfaa25ab5c2d9501",
+    "/private/tmp/eforge-pass4-item7-focused.log": "7bad76331f409dbf51c46bceea48c3fc9a30ff7d4e31a3c171f0d3c3595d94fd",
+    "/private/tmp/eforge-pass4-item7-matrix.log": "b126c0ddd1f6fc0f76839dae3b304c661bd60bc6b93096c65960992828c7ee41",
+    "/private/tmp/eforge-pass4-item7-original-characterization.log": "ea9106f92819092b5d3e8ea219b43794355bb75051142f4e0c91ab4c03bf17f9",
+    "/private/tmp/eforge-pass4-item7-standard.log": "4e3ea81117bf8ae71ccf667e6f666064e3ef7b0caecf390c580a6dbf81e0c332"
+  },
+  "manifest": "passed vs 2fe26cb8",
+  "overlay_shapes": {
+    "allocation_change": "124 shape containers now allocated once at module import, retained read-only in use; previously rebuilt per raw phase",
+    "definitions": 48,
+    "mutable_literal_containers": 124,
+    "proof": {
+      "file_shapes": 48,
+      "literal_mutable_containers": 124,
+      "table_ast_sha256": "7e4346298c1f578b12ce77245fd2523c7feb1a512f785710741e0f685999c92c",
+      "table_constructions_after": "once at module import; consumers only read shapes",
+      "table_constructions_before": "each raw-overlay phase",
+      "weight_sum_implementations_after": 1,
+      "weight_sum_implementations_before": 3
+    }
+  },
+  "performance_alternating_runs": [
+    {
+      "allocation_sample_peak_bytes": 3170165,
+      "allocation_sample_retained_blocks": 2031,
+      "allocation_sample_retained_bytes": 118127,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.767685417085886,
+      "operations_per_sample": 1,
+      "operations_per_second": 1.3026169023712528,
+      "process_max_rss": 143179776,
+      "result": {
+        "files_checked": 92,
+        "issues": []
+      },
+      "seconds": [
+        0.7739700420061126,
+        0.7519470420666039,
+        0.767685417085886,
+        0.7528626669663936,
+        0.7733285420108587,
+        0.7781392500037327,
+        0.7519902079366148
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "configuration"
+    },
+    {
+      "allocation_sample_peak_bytes": 3170362,
+      "allocation_sample_retained_blocks": 2002,
+      "allocation_sample_retained_bytes": 116884,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.7854799579363316,
+      "operations_per_sample": 1,
+      "operations_per_second": 1.2731069582313348,
+      "process_max_rss": 143769600,
+      "result": {
+        "files_checked": 92,
+        "issues": []
+      },
+      "seconds": [
+        0.7671315420884639,
+        0.7898549170931801,
+        0.7703152919420972,
+        0.7854799579363316,
+        0.765661665936932,
+        0.8004014579346403,
+        0.7942468750989065
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "configuration"
+    },
+    {
+      "allocation_sample_peak_bytes": 3170106,
+      "allocation_sample_retained_blocks": 2025,
+      "allocation_sample_retained_bytes": 117869,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.7794774590292946,
+      "operations_per_sample": 1,
+      "operations_per_second": 1.2829107351549696,
+      "process_max_rss": 143278080,
+      "result": {
+        "files_checked": 92,
+        "issues": []
+      },
+      "seconds": [
+        0.7818942499579862,
+        0.7612926670117304,
+        0.7794774590292946,
+        0.7585939170094207,
+        0.7818992499960586,
+        0.7849433750379831,
+        0.763540708925575
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "configuration"
+    },
+    {
+      "allocation_sample_peak_bytes": 3170421,
+      "allocation_sample_retained_blocks": 2095,
+      "allocation_sample_retained_bytes": 121015,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.7771547909360379,
+      "operations_per_sample": 1,
+      "operations_per_second": 1.2867449466477046,
+      "process_max_rss": 142557184,
+      "result": {
+        "files_checked": 92,
+        "issues": []
+      },
+      "seconds": [
+        0.7603125419700518,
+        0.7771547909360379,
+        0.7643391249002889,
+        0.7839487090241164,
+        0.76194933289662,
+        0.7838612499181181,
+        0.7853563340613618
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "configuration"
+    }
+  ],
+  "preceding_commit": "2fe26cb8",
+  "revision": 72,
+  "ruff": "both passed",
+  "standard": {
+    "deselected": 2011,
+    "passed": 8548,
+    "seconds": 294.89,
+    "skipped": 27
+  },
+  "targeted_family": {
+    "deselected": 64,
+    "passed": 28,
+    "seconds": 16.4
+  },
+  "weight_sum_implementations": {
+    "after": 1,
+    "before": 3
+  }
+}

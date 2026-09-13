@@ -24,6 +24,9 @@ import pytest
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -221,6 +224,7 @@ class TestHostnameConsistency:
         rng = random.Random(42)
         monkeypatch.setattr(rng, "random", lambda: 0.5)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
         state_manager.set_current_time(timestamp)
         hostname = "cdn-assets-update.com"
 
@@ -252,6 +256,7 @@ class TestHostnameConsistency:
         rng = random.Random(42)
         monkeypatch.setattr(rng, "random", lambda: 0.5)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
         state_manager.set_current_time(timestamp)
         hostname = "updates.example.net"
 
@@ -291,6 +296,7 @@ class TestHostnameConsistency:
         rng = random.Random(42)
         monkeypatch.setattr(rng, "random", lambda: 0.5)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
         state_manager.set_current_time(timestamp)
 
         for index, hostname in enumerate(
@@ -821,6 +827,7 @@ class TestHostnameConsistency:
 
         delegate_rng.random = always_failure_roll
         monkeypatch.setattr(generator_module, "_get_rng", lambda: delegate_rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: delegate_rng)
 
         activity_gen._emit_dns_lookup(
             src_ip="10.0.1.50",
@@ -1472,7 +1479,9 @@ class TestWeirdProtocolConstraint:
 
         state_manager.set_current_time(timestamp)
         monkeypatch.setattr(generator_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
+        monkeypatch.setattr(network_planner_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
         monkeypatch.setattr(generator_module, "_UDP_CONN_WEIGHTS", [1])
+        monkeypatch.setattr(network_planner_module, "_UDP_CONN_WEIGHTS", [1])
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -1513,6 +1522,7 @@ class TestWeirdProtocolConstraint:
 
         rng.choices = tcp_only_choices
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -2064,6 +2074,7 @@ class TestDnsSupportQueryTypes:
 
         monkeypatch.setattr(rng, "random", _fixed_random)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
 
     def test_dns_companion_distribution_gates_authoritative_qtypes_by_source_role(self):
         from evidenceforge.generation.activity.generator import (

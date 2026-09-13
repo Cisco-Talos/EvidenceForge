@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from threading import Condition, Lock, RLock
+from threading import RLock
 from typing import Literal
 from weakref import WeakValueDictionary
 
@@ -46,6 +46,7 @@ from evidenceforge.generation.indexes import (
     PackedHandleExpiryIndex,
     PackedUniqueDigestMap,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _SidecarMutationGate
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -702,51 +703,6 @@ class ExplicitProxyChannelCensus:
     reserved_origin_transport_ids: int
     estimated_prepared_bytes: int
     application: ApplicationChannelCensus
-
-
-class _SidecarMutationGate:
-    """Allow disjoint-owner work while giving watermarks exclusive admission."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter a concurrent sidecar operation lane."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._readers -= 1
-                if self._readers == 0:
-                    self._condition.notify_all()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Enter the exclusive sidecar expiry/compaction lane."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 def _tunnel_estimated_bytes(tunnel: ExplicitProxyTunnelIdentity) -> int:

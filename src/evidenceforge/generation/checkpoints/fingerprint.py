@@ -261,13 +261,7 @@ def run_fingerprint(
         formats=formats,
         oob_hosts=oob_hosts,
     )
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return _fingerprint_from_payload(payload)
 
 
 def run_fingerprint_payload(
@@ -314,11 +308,49 @@ def run_fingerprint_components(
         formats=formats,
         oob_hosts=oob_hosts,
     )
-    resolved = json.dumps(
-        payload.pop("resolved"),
+    return _components_from_payload(payload)
+
+
+def run_fingerprint_details(
+    compiled: CompiledScenario,
+    *,
+    output_target: str,
+    formats: list[str],
+    oob_hosts: tuple[str, ...],
+) -> tuple[str, dict[str, Any]]:
+    """Derive exact identity and diagnostics from one operation-local snapshot.
+
+    File/dependency discovery remains fresh for every operation. Sharing this
+    payload avoids a second build scan without caching identity across edits.
+    """
+    payload = run_fingerprint_payload(
+        compiled,
+        output_target=output_target,
+        formats=formats,
+        oob_hosts=oob_hosts,
+    )
+    return _fingerprint_from_payload(payload), _components_from_payload(payload)
+
+
+def _fingerprint_from_payload(payload: dict[str, Any]) -> str:
+    """Hash the unchanged canonical serialization of the complete payload."""
+    encoded = json.dumps(
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    payload["resolved_sha256"] = hashlib.sha256(resolved).hexdigest()
-    return payload
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _components_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project diagnostics without removing resolved input from the shared snapshot."""
+    components = payload.copy()
+    resolved = json.dumps(
+        components.pop("resolved"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    components["resolved_sha256"] = hashlib.sha256(resolved).hexdigest()
+    return components

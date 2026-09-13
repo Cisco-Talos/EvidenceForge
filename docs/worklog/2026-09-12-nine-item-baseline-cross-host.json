@@ -1,0 +1,283 @@
+{
+  "after": {
+    "coordinator_calls": 57,
+    "coordinator_lines": 299,
+    "coordinator_statement_branches": 15,
+    "cross_host_operations": {
+      "_generate_system_dc_authentication": {
+        "explicit_arguments": [
+          "current_hour",
+          "dc_hostnames",
+          "dc_ips",
+          "rng"
+        ],
+        "lines": 174
+      },
+      "_generate_system_icmp_traffic": {
+        "explicit_arguments": [
+          "current_hour",
+          "rng",
+          "systems"
+        ],
+        "lines": 55
+      },
+      "_generate_system_ids_noise": {
+        "explicit_arguments": [
+          "current_hour",
+          "rng",
+          "systems"
+        ],
+        "lines": 300
+      },
+      "_generate_system_linux_syslog": {
+        "explicit_arguments": [
+          "current_hour",
+          "pass_end",
+          "rng",
+          "system_dns_ips",
+          "terminal_pass"
+        ],
+        "lines": 463
+      },
+      "_generate_system_machine_authentication": {
+        "explicit_arguments": [
+          "current_hour",
+          "dc_hostnames",
+          "dc_ips",
+          "pass_end",
+          "rng",
+          "terminal_pass"
+        ],
+        "lines": 43
+      },
+      "_generate_system_service_logons": {
+        "explicit_arguments": [
+          "current_hour",
+          "rng"
+        ],
+        "lines": 55
+      },
+      "_plan_system_rdp_requests": {
+        "explicit_arguments": [
+          "current_hour",
+          "rng"
+        ],
+        "lines": 83
+      }
+    },
+    "direct_owner_attributes": 38
+  },
+  "before": {
+    "coordinator_calls": 377,
+    "coordinator_lines": 1354,
+    "coordinator_statement_branches": 137,
+    "direct_owner_attributes": 67
+  },
+  "behavior_revision": 66,
+  "byte_comparisons": {
+    "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+    "cases": 38,
+    "previous_prefix": "pass4-item2a",
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item2b-report.json",
+    "sha256": "2f7136091c8ddbbac51bc3d8e5ab43a4cd726df07458bff0829b0f528194b464"
+  },
+  "failures": [],
+  "focused_tests": {
+    "deselected": 20,
+    "passed": 267,
+    "seconds": 6.21,
+    "skipped": 1
+  },
+  "introduced_persistent_contexts": 0,
+  "introduced_persistent_owners": 0,
+  "introduced_rngs": 0,
+  "item": "2b",
+  "logs": {
+    "/private/tmp/eforge-pass4-item2b-focused.log": "435ff7c7e39699d175db846d725b38a946c8bcb4cde78153153b395b5df164d9",
+    "/private/tmp/eforge-pass4-item2b-slow.log": "ce0ca70f83e278113f413c988a5ab25d32717d59fc89ace510a7139a435b714e",
+    "/private/tmp/eforge-pass4-item2b-standard.log": "dcd22e90360a34c7b8b429aecaa8cb2cc6edfe7a5a86bdba2101d74947a9a61c"
+  },
+  "manifest": "passed against 8230adf6",
+  "original": {
+    "coordinator_calls": 666,
+    "coordinator_lines": 2314,
+    "coordinator_statement_branches": 233,
+    "direct_owner_attributes": 73
+  },
+  "performance_alternating_runs": [
+    {
+      "allocation_sample_peak_bytes": 20193618,
+      "allocation_sample_retained_bytes": 12163041,
+      "median_seconds": 5.211813542060554,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19187179125457313,
+      "process_max_rss": 185581568,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.2549151660641655,
+        5.206202166969888,
+        5.190926042036153,
+        5.211813542060554,
+        5.239892084035091,
+        5.233163291006349,
+        5.196876667090692
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20194679,
+      "allocation_sample_retained_bytes": 12165738,
+      "median_seconds": 5.223808791022748,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19143120278799755,
+      "process_max_rss": 185810944,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.192808542051353,
+        5.223808791022748,
+        5.244153125095181,
+        5.209781417041086,
+        5.222129083005711,
+        5.254856167011894,
+        5.225560207967646
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20194798,
+      "allocation_sample_retained_bytes": 12164564,
+      "median_seconds": 5.208791833021678,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.1919830993552854,
+      "process_max_rss": 184795136,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.231801250018179,
+        5.1930442079901695,
+        5.174621917074546,
+        5.208791833021678,
+        5.227504916954786,
+        5.227152084000409,
+        5.165271500009112
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20200731,
+      "allocation_sample_retained_bytes": 12167854,
+      "median_seconds": 5.193840624997392,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19253574997798514,
+      "process_max_rss": 186007552,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.188141374965198,
+        5.193840624997392,
+        5.184409041074105,
+        5.183436541003175,
+        5.198776500066742,
+        5.22762295906432,
+        5.234049499966204
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation"
+    }
+  ],
+  "preceding_commit": "8230adf6",
+  "rdp_intent_tuple_allocations_per_pass": {
+    "after": 1,
+    "before": 1
+  },
+  "representative_paths": [
+    "all per-host families -> RDP placement tuple -> existing RDP executor -> RSAT -> service -> machine auth -> DC auth/renewal -> Linux syslog -> ICMP -> IDS -> existing web renderer",
+    "empty host list skips Linux resolver argument access; per-host DHCP skip remains above cross-host work"
+  ],
+  "ruff_check": "passed",
+  "ruff_format_check": "passed",
+  "slow_tests": {
+    "passed": 23,
+    "seconds": 13.29
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8511,
+    "seconds": 297.19,
+    "skipped": 27
+  },
+  "starting_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1"
+}

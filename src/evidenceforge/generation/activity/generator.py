@@ -41,34 +41,51 @@ import shlex
 import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import urlsplit
 
+from evidenceforge.generation.actions.process_support import policy as process_policy
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.actions.process_execution_service import (
+        ProcessExecutionService,
+        ProcessTerminationService,
+    )
+    from evidenceforge.generation.actions.process_support.actors import ProcessActorResolver
+    from evidenceforge.generation.actions.process_support.capabilities import (
+        ProcessActivityTiming,
+        ProcessIdentityCapabilities,
+    )
+    from evidenceforge.generation.actions.process_support.effects import ProcessEvidencePreparer
+    from evidenceforge.generation.actions.process_support.foreground import (
+        ProcessForegroundLifecycle,
+    )
+    from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
+    from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
+    from evidenceforge.generation.actions.process_support.queries import ProcessStateQueries
+    from evidenceforge.generation.actions.process_support.reuse import ProcessReusePolicy
+    from evidenceforge.generation.actions.process_support.scheduling import ProcessLaunchScheduler
+    from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
+    from evidenceforge.generation.actions.process_support.system import SystemProcessService
+
 import evidenceforge.events.dispatcher as dispatcher_types
+from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
 from evidenceforge.events.artifacts_manifest import (
     ARTIFACTS_MANIFEST_SCHEMA_VERSION,
 )
 from evidenceforge.events.authentication import (
-    WINDOWS_DESKTOP_LOGON_TYPES,
     WINDOWS_WORKSTATION_LOGON_TYPES,
     RemoteAuthenticationPlan,
     windows_logon_can_own_desktop,
     windows_logon_has_local_source,
 )
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.content_identity import (
-    Architecture,
-    Platform,
-    UnresolvedBinaryIdentity,
-    canonical_native_path,
-)
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
@@ -86,24 +103,20 @@ from evidenceforge.events.contexts import (
     ProcessAccessContext,
     ProcessContext,
     ProxyContext,
-    RegistryContext,
     RemoteThreadContext,
     SmtpContext,
     SslContext,
     X509Context,
 )
 from evidenceforge.events.contracts import (
-    EffectOccurrenceKind,
     OccurrenceRole,
     OwnedEffectOccurrencePlan,
-    SemanticOccurrenceKey,
 )
 from evidenceforge.events.cryptography import (
     OcspTransactionPlan,
     TlsCertificatePresentationPlan,
 )
 from evidenceforge.events.dispatcher import (
-    ActionCohortEffectMemberBinding,
     ActionCohortProjectionDisposition,
     ActionCohortProjectionOutcome,
     ActionCohortPublicationReceipt,
@@ -146,10 +159,6 @@ from evidenceforge.generation.actions import (
     DhcpLeaseRequest,
     DnsLookupActionBundle,
     DnsLookupRequest,
-    EffectExecutionOutcome,
-    EffectKind,
-    EffectOutcomeStatus,
-    EffectRequirement,
     EmailAccessActionBundle,
     EmailAccessRequest,
     EmailDeliveryActionBundle,
@@ -157,10 +166,7 @@ from evidenceforge.generation.actions import (
     EmailDeliveryResult,
     ExecutionEffectAuditCounter,
     ExecutionEffectAuditSnapshot,
-    ExecutionEffectNode,
     ExecutionEffectPlan,
-    ExecutionEffectPlanError,
-    ExecutionEffectPlanErrorCode,
     ExecutionEffectReconciliation,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
@@ -168,10 +174,6 @@ from evidenceforge.generation.actions import (
     FailedLogonRequest,
     GroupMembershipChangeActionBundle,
     GroupMembershipChangeRequest,
-    HttpFileTransferActionBundle,
-    HttpFileTransferRequest,
-    HttpResponseFileTransferActionBundle,
-    HttpResponseFileTransferRequest,
     KerberosConnectionAuditActionBundle,
     KerberosConnectionAuditRequest,
     KerberosLogonTicketsActionBundle,
@@ -199,7 +201,6 @@ from evidenceforge.generation.actions import (
     NetworkConnectionActionBundle,
     NetworkConnectionIdentityCapture,
     NetworkConnectionRequest,
-    NmapCommandProbeActionBundle,
     NmapCommandProbePlan,
     NmapCommandProbePlanner,
     NmapCommandProbeRequest,
@@ -223,13 +224,11 @@ from evidenceforge.generation.actions import (
     ProcessExecutionActionBundle,
     ProcessExecutionPreparedEffects,
     ProcessExecutionRequest,
-    ProcessRuntimeImageLoadPlan,
     ProcessTerminationActionBundle,
     ProcessTerminationRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
     RdpSourceProcessFactory,
-    ScannerEffectIntent,
     ScheduledTaskActionBundle,
     ScheduledTaskRequest,
     ServiceLogonActionBundle,
@@ -240,7 +239,6 @@ from evidenceforge.generation.actions import (
     SmbActivityResult,
     SshSessionActionBundle,
     SshSessionRequest,
-    UnplannedEffectFailure,
     WindowsRemoteAuthenticationActionBundle,
     WindowsRemoteAuthenticationPlanner,
     WindowsRemoteAuthenticationRequest,
@@ -252,7 +250,6 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
     file_transfer_hashes,
-    http_response_parent_duration_floor,
     plan_dhcp_source_timeline,
     plan_linux_pipeline_stage_times,
 )
@@ -267,7 +264,6 @@ from evidenceforge.generation.actions.network_connection import (
 )
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionReuseIntent,
-    ProcessLifetimeMode,
     ProcessLifetimePlan,
 )
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
@@ -326,7 +322,6 @@ from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deployment_registry import (
-    DeploymentContentRegistry,
     LocalArtifactPublishToken,
 )
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -354,9 +349,7 @@ from evidenceforge.generation.process_runtime_cache import (
 from evidenceforge.generation.proxy_channels import ExplicitProxyChannelManager
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.runtime_content import (
-    RuntimeArtifactOwnerKind,
     RuntimeContentIdentityManager,
-    RuntimeContentOwnerError,
 )
 from evidenceforge.generation.smb_channels import SmbApplicationChannelManager
 from evidenceforge.generation.source_timing import (
@@ -416,16 +409,279 @@ from .network import (
     _ipv4_to_fake_ipv6,
     _is_private_ip,
 )
-from .network import (
-    _get_http_status as _network_get_http_status,
+from .network_common import (
+    _activity_timing_planner as _activity_timing_planner,
 )
-from .network import (
-    _is_invalid_network_connection as _network_is_invalid_connection,
+from .network_common import (
+    _activity_timing_stable_id as _activity_timing_stable_id,
 )
-
-get_timing_window = _activity_get_timing_window
-_get_http_status = _network_get_http_status
-_is_invalid_network_connection = _network_is_invalid_connection
+from .network_common import (
+    _command_tokens as _command_tokens,
+)
+from .network_common import (
+    _extract_ssh_attempted_username as _extract_ssh_attempted_username,
+)
+from .network_common import (
+    _get_http_status as _get_http_status,
+)
+from .network_common import (
+    _is_invalid_network_connection as _is_invalid_network_connection,
+)
+from .network_common import (
+    _is_modeled_local_ip as _is_modeled_local_ip,
+)
+from .network_common import (
+    _zeek_conn_observation_time as _zeek_conn_observation_time,
+)
+from .network_common import (
+    get_timing_window as get_timing_window,
+)
+from .network_dns import (
+    _DNS_QTYPE_RDATA_LENGTHS as _DNS_QTYPE_RDATA_LENGTHS,
+)
+from .network_dns import (
+    _dns_base_ttl as _dns_base_ttl,
+)
+from .network_dns import (
+    _dns_is_internal_name as _dns_is_internal_name,
+)
+from .network_dns import (
+    _dns_name_wire_size as _dns_name_wire_size,
+)
+from .network_dns import (
+    _dns_observation_cache_key as _dns_observation_cache_key,
+)
+from .network_dns import (
+    _dns_payload_accounting as _dns_payload_accounting,
+)
+from .network_dns import (
+    _dns_payload_padding as _dns_payload_padding,
+)
+from .network_dns import (
+    _dns_question_wire_size as _dns_question_wire_size,
+)
+from .network_dns import (
+    _dns_response_wire_size as _dns_response_wire_size,
+)
+from .network_dns import (
+    _dns_rr_rdata_size as _dns_rr_rdata_size,
+)
+from .network_http import (
+    _apply_plaintext_http_policy as _apply_plaintext_http_policy,
+)
+from .network_http import (
+    _attach_http_file_transfers as _attach_http_file_transfers,
+)
+from .network_http import (
+    _extract_http_url_from_command as _extract_http_url_from_command,
+)
+from .network_http import (
+    _http_context_flow_body_len as _http_context_flow_body_len,
+)
+from .network_http import (
+    _http_context_flow_transaction_count as _http_context_flow_transaction_count,
+)
+from .network_http import (
+    _http_context_from_process_command as _http_context_from_process_command,
+)
+from .network_http import (
+    _http_flow_payload_bytes as _http_flow_payload_bytes,
+)
+from .network_http import (
+    _http_method_for_process_command as _http_method_for_process_command,
+)
+from .network_http import (
+    _http_request_header_len as _http_request_header_len,
+)
+from .network_http import (
+    _http_response_header_len as _http_response_header_len,
+)
+from .network_http import (
+    _http_user_agent_for_process as _http_user_agent_for_process,
+)
+from .network_http import (
+    _is_tool_http_user_agent as _is_tool_http_user_agent,
+)
+from .network_http import (
+    _normalize_http_context_for_source_native_response as _normalize_http_context_for_source_native_response,
+)
+from .network_http import (
+    _source_native_http_referrer as _source_native_http_referrer,
+)
+from .network_ntp import (
+    _NTP_STRATUM_TIMING as _NTP_STRATUM_TIMING,
+)
+from .network_ntp import (
+    _ntp_observed_response_fields as _ntp_observed_response_fields,
+)
+from .network_ntp import (
+    _ntp_parser_min_gap_seconds as _ntp_parser_min_gap_seconds,
+)
+from .network_ntp import (
+    _ntp_payload_accounting as _ntp_payload_accounting,
+)
+from .network_ntp import (
+    _ntp_stratum_and_ref_id as _ntp_stratum_and_ref_id,
+)
+from .network_ntp import (
+    _select_public_ntp_ip as _select_public_ntp_ip,
+)
+from .network_proxy import (
+    _PROXY_CS_OVERHEAD as _PROXY_CS_OVERHEAD,
+)
+from .network_proxy import (
+    _PROXY_SC_OVERHEAD as _PROXY_SC_OVERHEAD,
+)
+from .network_proxy import (
+    _proxy_action_for_context as _proxy_action_for_context,
+)
+from .network_proxy import (
+    _proxy_request_allows_cache_hit as _proxy_request_allows_cache_hit,
+)
+from .network_proxy import (
+    _proxy_time_taken_ms as _proxy_time_taken_ms,
+)
+from .network_transport import (
+    _AUTO_WEIRD_ENABLED as _AUTO_WEIRD_ENABLED,
+)
+from .network_transport import (
+    _CLIENT_FIRST_TCP_PAYLOAD_PORTS as _CLIENT_FIRST_TCP_PAYLOAD_PORTS,
+)
+from .network_transport import (
+    _CLIENT_FIRST_TCP_PAYLOAD_SERVICES as _CLIENT_FIRST_TCP_PAYLOAD_SERVICES,
+)
+from .network_transport import (
+    _TCP_ACK_FLOOR_PAYLOAD_BYTES as _TCP_ACK_FLOOR_PAYLOAD_BYTES,
+)
+from .network_transport import (
+    _TCP_CONN_ENTRIES as _TCP_CONN_ENTRIES,
+)
+from .network_transport import (
+    _TCP_CONN_WEIGHTS as _TCP_CONN_WEIGHTS,
+)
+from .network_transport import (
+    _TCP_MSS_BYTES as _TCP_MSS_BYTES,
+)
+from .network_transport import (
+    _TCP_MSS_VALUES as _TCP_MSS_VALUES,
+)
+from .network_transport import (
+    _TCP_MSS_WEIGHTS as _TCP_MSS_WEIGHTS,
+)
+from .network_transport import (
+    _TCP_OVERHEAD_VALUES as _TCP_OVERHEAD_VALUES,
+)
+from .network_transport import (
+    _TCP_OVERHEAD_WEIGHTS as _TCP_OVERHEAD_WEIGHTS,
+)
+from .network_transport import (
+    _TCP_SUCCESS_HISTORY_ENTRIES as _TCP_SUCCESS_HISTORY_ENTRIES,
+)
+from .network_transport import (
+    _TCP_SUCCESS_HISTORY_WEIGHTS as _TCP_SUCCESS_HISTORY_WEIGHTS,
+)
+from .network_transport import (
+    _UDP_CONN_ENTRIES as _UDP_CONN_ENTRIES,
+)
+from .network_transport import (
+    _UDP_CONN_WEIGHTS as _UDP_CONN_WEIGHTS,
+)
+from .network_transport import (
+    _UDP_OVERHEAD_VALUES as _UDP_OVERHEAD_VALUES,
+)
+from .network_transport import (
+    _UDP_OVERHEAD_WEIGHTS as _UDP_OVERHEAD_WEIGHTS,
+)
+from .network_transport import (
+    TCP_CONN_STATE_DISTRIBUTION as TCP_CONN_STATE_DISTRIBUTION,
+)
+from .network_transport import (
+    UDP_CONN_STATE_DISTRIBUTION as UDP_CONN_STATE_DISTRIBUTION,
+)
+from .network_transport import (
+    _align_tcp_network_payload_with_history as _align_tcp_network_payload_with_history,
+)
+from .network_transport import (
+    _apply_tcp_ack_packet_floors as _apply_tcp_ack_packet_floors,
+)
+from .network_transport import (
+    _client_first_originator_payload_floor as _client_first_originator_payload_floor,
+)
+from .network_transport import (
+    _enforce_client_first_tcp_payload_order as _enforce_client_first_tcp_payload_order,
+)
+from .network_transport import (
+    _ephemeral_port as _ephemeral_port,
+)
+from .network_transport import (
+    _icmp_echo_duration as _icmp_echo_duration,
+)
+from .network_transport import (
+    _icmp_echo_payload_size as _icmp_echo_payload_size,
+)
+from .network_transport import (
+    _insert_originator_payload_before_responder_payload as _insert_originator_payload_before_responder_payload,
+)
+from .network_transport import (
+    _preserve_explicit_tcp_payload_overrides as _preserve_explicit_tcp_payload_overrides,
+)
+from .network_transport import (
+    _tcp_ack_packet_floor as _tcp_ack_packet_floor,
+)
+from .network_transport import (
+    _tcp_effective_mss_bytes as _tcp_effective_mss_bytes,
+)
+from .network_transport import (
+    _tcp_history_packet_counts as _tcp_history_packet_counts,
+)
+from .network_transport import (
+    _tcp_ip_byte_count as _tcp_ip_byte_count,
+)
+from .network_transport import (
+    _tcp_packet_counts_from_payload_and_history as _tcp_packet_counts_from_payload_and_history,
+)
+from .network_transport import (
+    _tcp_payload_bytes_consistent_with_history as _tcp_payload_bytes_consistent_with_history,
+)
+from .network_transport import (
+    _tcp_payload_packet_count as _tcp_payload_packet_count,
+)
+from .network_transport import (
+    _tcp_payload_segment_count as _tcp_payload_segment_count,
+)
+from .network_transport import (
+    _tcp_service_requires_client_payload_first as _tcp_service_requires_client_payload_first,
+)
+from .network_transport import (
+    _tcp_success_history as _tcp_success_history,
+)
+from .process_helpers import (
+    _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT as _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT,
+)
+from .process_helpers import (
+    _SYSTEM_ACCOUNT_LOGON_IDS as _SYSTEM_ACCOUNT_LOGON_IDS,
+)
+from .process_helpers import (
+    _SYSTEM_ACCOUNTS as _SYSTEM_ACCOUNTS,
+)
+from .process_helpers import (
+    _is_bare_windows_explorer_launch as _is_bare_windows_explorer_launch,
+)
+from .process_helpers import (
+    _linux_foreground_lifetime as _linux_foreground_lifetime,
+)
+from .process_helpers import (
+    _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
+)
+from .process_helpers import (
+    _process_termination_delay_after_activity_seconds as _process_termination_delay_after_activity_seconds,
+)
+from .process_helpers import (
+    _windows_script_host_process as _windows_script_host_process,
+)
+from .process_helpers import (
+    _windows_service_process_account as _windows_service_process_account,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -452,45 +708,6 @@ def _format_windows_account_attribute_time(value: datetime) -> str:
     hour = timestamp.hour % 12 or 12
     meridiem = "AM" if timestamp.hour < 12 else "PM"
     return f"{timestamp.month}/{timestamp.day}/{timestamp.year} {hour}:{timestamp:%M:%S} {meridiem}"
-
-
-def _is_modeled_local_ip(executor: Any, ip: str) -> bool:
-    """Return whether an IP belongs to the modeled organization/network."""
-    if hasattr(executor, "_ip_to_system") and ip in executor._ip_to_system:
-        return True
-    environment = getattr(executor, "_scenario_environment", None)
-    network = getattr(environment, "network", None)
-    try:
-        address = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    if network is not None:
-        for segment in getattr(network, "segments", []) or []:
-            if getattr(segment, "exposure", "internal") not in {"internal", "both"}:
-                continue
-            try:
-                if address in ipaddress.ip_network(segment.cidr, strict=False):
-                    return True
-            except ValueError:
-                continue
-        for rule in getattr(network, "nat_rules", []) or []:
-            if ip in {
-                str(getattr(rule, "mapped_ip", "") or ""),
-                str(getattr(rule, "real_ip", "") or ""),
-            }:
-                return True
-    dispatcher = getattr(executor, "dispatcher", None)
-    visibility = getattr(dispatcher, "visibility_engine", None)
-    if visibility is not None:
-        resolve_segments = getattr(visibility, "_resolve_ip_segments", None)
-        if callable(resolve_segments) and resolve_segments(ip):
-            return True
-        vip_to_real = getattr(visibility, "_vip_to_real_ip", {})
-        if ip in vip_to_real or ip in set(vip_to_real.values()):
-            return True
-    if network is None and visibility is None:
-        return _is_private_ip(ip)
-    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,29 +751,12 @@ _TLS_RESUMPTION_STATE_HORIZON = timedelta(hours=24)
 _NETWORK_RUNTIME_WATERMARK_PAGE = 4_096
 
 
-_WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
-    {
-        "spoolsv.exe",
-        "dns.exe",
-        "dfsr.exe",
-        "ismserv.exe",
-        "msdtc.exe",
-        "searchindexer.exe",
-    }
-)
-_WINDOWS_SINGLETON_SERVICE_PATHS = {
-    exe: {f"c:\\windows\\system32\\{exe}"} for exe in _WINDOWS_SINGLETON_SERVICE_EXES
-}
-_FILE_ACTION_EVENT_TYPES = {
-    "read": "file_read",
-    "create": "file_create",
-    "modify": "file_modify",
-    "delete": "file_delete",
-}
-_SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_WINDOWS_SINGLETON_SERVICE_EXES = process_policy._WINDOWS_SINGLETON_SERVICE_EXES
+_WINDOWS_SINGLETON_SERVICE_PATHS = process_policy._WINDOWS_SINGLETON_SERVICE_PATHS
+_FILE_ACTION_EVENT_TYPES = process_policy._FILE_ACTION_EVENT_TYPES
 _USER_MODEL_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
-_FOREGROUND_SHELL_INITIAL_READY_MIN_MS = 1_800
-_FOREGROUND_SHELL_INITIAL_READY_SPAN_MS = 5_200
+_FOREGROUND_SHELL_INITIAL_READY_MIN_MS = process_policy._FOREGROUND_SHELL_INITIAL_READY_MIN_MS
+_FOREGROUND_SHELL_INITIAL_READY_SPAN_MS = process_policy._FOREGROUND_SHELL_INITIAL_READY_SPAN_MS
 _FOREGROUND_SHELL_INITIAL_READY_MAX_MS = (
     _FOREGROUND_SHELL_INITIAL_READY_MIN_MS + _FOREGROUND_SHELL_INITIAL_READY_SPAN_MS - 1
 )
@@ -598,27 +798,9 @@ _SYSTEM_ACCOUNT_SIDS = {
     "LOCAL SERVICE": "S-1-5-19",
     "NETWORK SERVICE": "S-1-5-20",
 }
-_SYSTEM_ACCOUNT_LOGON_IDS = {
-    "SYSTEM": "0x3e7",
-    "LOCAL SERVICE": "0x3e5",
-    "NETWORK SERVICE": "0x3e4",
-}
 
 
-def _runtime_artifact_owner_kind(
-    platform: Platform,
-    principal: str,
-    logon_id: str,
-) -> RuntimeArtifactOwnerKind:
-    """Classify one process owner consistently for runtime artifact publication."""
-
-    if (
-        principal in _SYSTEM_ACCOUNTS
-        or logon_id in _SYSTEM_ACCOUNT_LOGON_IDS.values()
-        or (platform == "linux" and principal == "root")
-    ):
-        return "system"
-    return "user"
+_runtime_artifact_owner_kind = process_policy._runtime_artifact_owner_kind
 
 
 _BASH_BLOCKING_PREFIXES = (
@@ -753,8 +935,7 @@ _LINUX_SHELL_MAX_STAGE_CHARS = 4096
 _LINUX_SHELL_MAX_SCAN_CHARS = 32768
 _LINUX_SUDO_TTY_MAP_CENSUS_LIMIT = 4096
 _LINUX_SUDO_TTY_RECONCILE_ATTEMPTS = 8
-_PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT = 256
-_PROCESS_SOURCE_BOUND_MAX_ANCESTORS = 65_536
+_PROCESS_SOURCE_BOUND_MAX_ANCESTORS = process_policy._PROCESS_SOURCE_BOUND_MAX_ANCESTORS
 _NMAP_PORT_SERVICES = {
     21: "ftp",
     22: "ssh",
@@ -808,56 +989,7 @@ def _background_linux_shell_command_if_needed(command: str) -> str:
     return command
 
 
-_WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
-    "smss.exe": "smss",
-    "csrss.exe": "csrss_s0",
-    "wininit.exe": "wininit",
-    "services.exe": "services",
-    "lsass.exe": "lsass",
-    "searchindexer.exe": "search_indexer",
-}
-
-
-def _extract_http_url_from_command(command_line: str) -> str | None:
-    """Return the first valid HTTP(S) URL embedded in a process command line."""
-    for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
-        candidate = match.group(0).rstrip(").,;]")
-        try:
-            parsed = urlsplit(candidate)
-            _ = parsed.port
-        except ValueError:
-            continue
-        if parsed.scheme in {"http", "https"} and parsed.hostname:
-            return candidate
-    return None
-
-
-def _http_user_agent_for_process(process_name: str, command_line: str) -> str:
-    """Return a source-native HTTP User-Agent for command-line HTTP clients."""
-    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-    command = command_line.lower()
-    if exe in {"curl", "curl.exe"} or command.startswith("curl "):
-        return "curl/7.88.1"
-    if exe in {"wget", "wget.exe"} or command.startswith("wget "):
-        return "Wget/1.21.3"
-    if "python" in exe and "requests" in command:
-        return "python-requests/2.31.0"
-    return ""
-
-
-def _is_tool_http_user_agent(user_agent: str) -> bool:
-    """Return true when the UA identifies a command-line/library HTTP client."""
-    ua = user_agent.strip().lower()
-    return ua.startswith(
-        (
-            "curl/",
-            "wget/",
-            "python-requests/",
-            "go-http-client/",
-            "apache-httpclient/",
-            "powershell/",
-        )
-    )
+_WINDOWS_SINGLETON_SYSTEM_PROCESSES = process_policy._WINDOWS_SINGLETON_SYSTEM_PROCESSES
 
 
 _BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS = (
@@ -878,235 +1010,6 @@ def _is_browser_family_http_user_agent(user_agent: str) -> bool:
     if not ua.startswith("mozilla/"):
         return False
     return any(token in ua for token in _BROWSER_HTTP_USER_AGENT_FAMILY_TOKENS)
-
-
-def _source_native_http_referrer(
-    user_agent: str,
-    referrer: str,
-    *,
-    request_scheme: str | None = None,
-    request_port: int | None = None,
-) -> str:
-    """Return a referrer that agrees with the HTTP client family."""
-    if not referrer:
-        return ""
-    if _is_tool_http_user_agent(user_agent):
-        return ""
-    target_is_plaintext = request_scheme == "http" or request_port == 80
-    if target_is_plaintext:
-        try:
-            if urlsplit(referrer).scheme == "https":
-                return ""
-        except ValueError:
-            return ""
-    return referrer
-
-
-def _http_method_for_process_command(command_line: str) -> str:
-    """Infer the HTTP method visible for a simple CLI HTTP command."""
-    lowered = f" {command_line.lower()} "
-    if " -i " in lowered or " --head " in lowered or " --head" in lowered:
-        return "HEAD"
-    method_match = re.search(r"(?:\s-X\s+|\s--request\s+)([A-Za-z]+)", command_line)
-    if method_match:
-        return method_match.group(1).upper()
-    return "GET"
-
-
-def _http_context_from_process_command(
-    process_name: str,
-    command_line: str,
-    *,
-    response_body_len: int,
-) -> tuple[HttpContext, str, int, str] | None:
-    """Build canonical HTTP request metadata from a process command URL.
-
-    Returns ``(context, host, port, service)`` so the owning process, proxy, and
-    Zeek records agree on host, path, method, and User-Agent for the same flow.
-    """
-    http_url = _extract_http_url_from_command(command_line)
-    if not http_url:
-        return None
-    try:
-        parsed = urlsplit(http_url)
-        host = parsed.hostname or ""
-        if not host:
-            return None
-        service = "ssl" if parsed.scheme == "https" else "http"
-        port = parsed.port or (443 if service == "ssl" else 80)
-    except ValueError:
-        return None
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-    user_agent = _http_user_agent_for_process(process_name, command_line)
-    if not user_agent:
-        return None
-
-    from evidenceforge.generation.activity.http_content import (
-        infer_mime_type_from_path,
-        is_stable_resource_path,
-        response_mime_types_for_status,
-        response_size_for_status,
-    )
-
-    mime_type = infer_mime_type_from_path(path)
-    method = _http_method_for_process_command(command_line)
-    body_len = 0 if method == "HEAD" else response_body_len
-    if method != "HEAD" and is_stable_resource_path(path):
-        body_len = response_size_for_status(200, host, path)
-    context = HttpContext(
-        method=method,
-        host=host if port in (80, 443) else f"{host}:{port}",
-        uri=path,
-        version="1.1",
-        user_agent=user_agent,
-        request_body_len=0,
-        response_body_len=body_len,
-        status_code=200,
-        status_msg="OK",
-        referrer="",
-        resp_mime_types=response_mime_types_for_status(
-            200,
-            mime_type,
-            body_len,
-            method=method,
-        ),
-        tags=[],
-    )
-    return context, host, port, service
-
-
-def _normalize_http_context_for_source_native_response(http: HttpContext) -> HttpContext:
-    """Keep caller-provided HTTP metadata source-native before cross-source fan-out."""
-    from evidenceforge.generation.activity.http_content import (
-        coerce_response_size_for_mime,
-        http_response_body_is_prohibited,
-        http_status_message,
-        is_download_scale_mime,
-        is_stable_resource_path,
-        normalize_mime_type_for_path,
-        response_mime_types_for_status,
-    )
-
-    method = (http.method or "GET").upper()
-    status_code = http.status_code
-    response_body_len = max(0, http.response_body_len)
-    status_msg = http.status_msg
-    bodyless_status = http_response_body_is_prohibited(method, status_code)
-
-    if bodyless_status:
-        response_body_len = 0
-    elif (
-        status_code == 200
-        and response_body_len == 0
-        and method not in {"CONNECT", "HEAD"}
-        and is_stable_resource_path(http.uri)
-    ):
-        status_code = 304
-        status_msg = http_status_message(status_code)
-    elif method != "CONNECT":
-        status_msg = http_status_message(status_code)
-
-    resp_mime_types = list(http.resp_mime_types)
-    if 200 <= status_code < 300 and not bodyless_status:
-        mime_type = (
-            resp_mime_types[0]
-            if resp_mime_types
-            else normalize_mime_type_for_path(
-                http.uri,
-                "text/html",
-            )
-        )
-        if is_download_scale_mime(mime_type):
-            response_body_len = coerce_response_size_for_mime(
-                random.Random(
-                    _stable_seed(
-                        "http_context_body_size:"
-                        f"{http.host}:{http.uri}:{mime_type}:{response_body_len}"
-                    )
-                ),
-                mime_type,
-                response_body_len,
-            )
-    if not resp_mime_types or response_body_len <= 0 or bodyless_status or status_code >= 400:
-        mime_type = resp_mime_types[0] if resp_mime_types else ""
-        if not mime_type and response_body_len > 0 and status_code < 300:
-            mime_type = normalize_mime_type_for_path(
-                http.uri,
-                "application/octet-stream",
-            )
-        resp_mime_types = response_mime_types_for_status(
-            status_code,
-            mime_type,
-            response_body_len,
-            method=method,
-        )
-
-    if (
-        status_code == http.status_code
-        and status_msg == http.status_msg
-        and response_body_len == http.response_body_len
-        and resp_mime_types == list(http.resp_mime_types)
-    ):
-        return http
-    return replace(
-        http,
-        response_body_len=response_body_len,
-        status_code=status_code,
-        status_msg=status_msg,
-        resp_mime_types=resp_mime_types,
-    )
-
-
-def _apply_plaintext_http_policy(
-    http: HttpContext,
-    *,
-    hostname: str | None,
-    dst_ip: str,
-    dst_port: int,
-) -> HttpContext:
-    """Apply public-domain plaintext HTTP policy to caller-provided HTTP context."""
-    if not hostname or dst_port != 80:
-        return http
-
-    from evidenceforge.generation.activity.http_content import (
-        http_status_message,
-        response_mime_types_for_status,
-        response_size_for_status,
-    )
-    from evidenceforge.generation.activity.proxy_uri import plaintext_http_redirect_status
-
-    redirect_status = plaintext_http_redirect_status(
-        hostname,
-        port=dst_port,
-        path=http.uri,
-        dst_ip=dst_ip,
-    )
-    if redirect_status is None or http.status_code in {301, 302}:
-        return http
-
-    response_body_len = (
-        0
-        if (http.method or "GET").upper() == "HEAD"
-        else response_size_for_status(redirect_status, hostname, http.uri)
-    )
-    resp_mime_types = response_mime_types_for_status(
-        redirect_status,
-        "text/html",
-        response_body_len,
-        method=http.method,
-    )
-    return replace(
-        http,
-        response_body_len=response_body_len,
-        flow_response_body_len=response_body_len
-        if http.flow_response_body_len is not None
-        else None,
-        status_code=redirect_status,
-        status_msg=http_status_message(redirect_status),
-        resp_mime_types=resp_mime_types,
-    )
 
 
 _SSH_CLIENT_IDENTITY_FILES = (
@@ -1183,304 +1086,6 @@ def _ssh_command_target(target_host: str, attempted_username: str | None) -> str
     if username:
         return f"{username}@{target_host}"
     return target_host
-
-
-def _attach_http_file_transfers(
-    event: OccurrenceBuilder,
-    *,
-    dst_ip: str,
-    rng: random.Random,
-    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
-    timing_scope: TimingScope | None = None,
-    deployment_registry: DeploymentContentRegistry | None = None,
-) -> None:
-    """Attach source-native Zeek files.log metadata for visible HTTP entities."""
-
-    if event.network is None or event.http is None:
-        return
-    if event.network.service != "http" or event.network.conn_state != "SF":
-        return
-    http = event.http
-    method = (http.method or "GET").upper()
-    runtime = (
-        timing_runtime if timing_runtime is not None else TimingRuntime.compatibility_default()
-    )
-    if type(runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
-        raise StateError("HTTP file-transfer timing requires an exact engine TimingRuntime")
-    scope = timing_scope or TimingScope(
-        stable_id=(
-            f"http-files:{event.network.src_ip}:{event.network.src_port}:"
-            f"{event.network.dst_ip}:{event.network.dst_port}:{http.host}:{http.uri}:"
-            f"{event.timestamp.isoformat()}"
-        ),
-        source="network",
-        lifecycle_id=event.network.conn_id or event.network.zeek_uid,
-    )
-
-    def parent_duration_slack(sample_key: str) -> float:
-        """Return right-skew transfer slack without a fixed floor or ceiling atom."""
-
-        return runtime.sampler.sample_timedelta(
-            TruncatedLognormalDistribution(
-                median=145_000.0,
-                sigma=0.72,
-                minimum=50_000.0,
-                maximum=550_001.0,
-            ),
-            relationship_key="network.http.file_parent_duration_slack",
-            scope=scope,
-            sample_key=sample_key,
-        ).total_seconds()
-
-    existing = [
-        transfer
-        for transfer in (event.file_transfer, *event.file_transfers)
-        if transfer is not None
-    ]
-    has_request_transfer = any(transfer.is_orig for transfer in existing)
-    has_response_transfer = any(not transfer.is_orig for transfer in existing)
-
-    if http.request_body_len > 0 and not has_request_transfer:
-        from evidenceforge.generation.activity.http_file_profiles import (
-            request_content_type_for_activity,
-        )
-
-        request_entity = http.request_entity
-        request_mime = http.request_content_type or (
-            request_entity.mime_type if request_entity is not None else ""
-        )
-        if not request_mime:
-            request_mime = request_content_type_for_activity(
-                method,
-                http.uri,
-                http.user_agent,
-                local_source_path=(request_entity.local_source_path if request_entity else ""),
-            )
-        request_duration_floor = http_response_parent_duration_floor(http.request_body_len)
-        if request_duration_floor > 0:
-            event.network.duration = max(
-                event.network.duration or 0.0,
-                request_duration_floor + parent_duration_slack("request"),
-            )
-            if event.proxy is not None:
-                event.proxy = replace(
-                    event.proxy,
-                    time_taken=_proxy_time_taken_ms(
-                        event.network.duration,
-                        rng,
-                        method=event.proxy.method,
-                        status_code=event.proxy.status_code,
-                        cache_result=event.proxy.cache_result,
-                        stable_id=f"{scope.stable_id}:proxy-request-duration",
-                    ),
-                )
-        content_identity = (
-            request_entity.content_identity
-            if request_entity is not None
-            else (
-                f"http-request:{http.host}:{http.uri}:{method}:"
-                f"{http.request_body_len}:{request_mime}"
-            )
-        )
-        request_result = HttpFileTransferActionBundle(
-            HttpFileTransferRequest(
-                host=http.host,
-                uri=http.uri,
-                dst_ip=dst_ip,
-                body_len=http.request_body_len,
-                mime_types=(request_mime,),
-                timestamp=event.timestamp,
-                is_orig=True,
-                multipart=http.request_multipart,
-                filename=request_entity.wire_filename if request_entity else "",
-                content_identity=content_identity,
-                parent_duration=event.network.duration,
-            ),
-            rng,
-            timing_runtime=runtime,
-        ).execute()
-        event.file_transfers.extend(request_result.file_transfers)
-        request_transfers = request_result.file_transfers
-        from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
-
-        max_files_orig = int(load_http_file_profiles()["multipart"]["max_files_orig"])
-        request_referenced = request_transfers[:max_files_orig]
-        event.http = replace(
-            event.http,
-            request_content_type=request_mime,
-            orig_fuids=tuple(transfer.fuid for transfer in request_referenced),
-            orig_filenames=tuple(
-                transfer.filename for transfer in request_referenced if transfer.filename
-            ),
-            orig_mime_types=tuple(
-                transfer.mime_type for transfer in request_transfers if transfer.mime_type
-            )[:max_files_orig],
-        )
-        event.pe_analyses.extend(request_result.pe_analyses)
-
-    http = event.http
-    from evidenceforge.generation.activity.http_content import http_response_has_entity_body
-
-    if has_response_transfer or not http_response_has_entity_body(
-        method,
-        http.status_code,
-        http.response_body_len,
-    ):
-        return
-
-    duration_floor = http_response_parent_duration_floor(http.response_body_len)
-    if duration_floor > 0:
-        min_http_file_duration = duration_floor + parent_duration_slack("response")
-        event.network.duration = max(event.network.duration or 0.0, min_http_file_duration)
-        if event.proxy is not None:
-            event.proxy = replace(
-                event.proxy,
-                time_taken=_proxy_time_taken_ms(
-                    event.network.duration,
-                    rng,
-                    method=event.proxy.method,
-                    status_code=event.proxy.status_code,
-                    cache_result=event.proxy.cache_result,
-                    stable_id=f"{scope.stable_id}:proxy-response-duration",
-                ),
-            )
-
-    file_result = HttpResponseFileTransferActionBundle(
-        HttpResponseFileTransferRequest(
-            host=http.host,
-            uri=http.uri,
-            dst_ip=dst_ip,
-            response_body_len=http.response_body_len,
-            response_mime_types=list(http.resp_mime_types),
-            timestamp=event.timestamp,
-            multipart=http.response_multipart,
-            content_identity=http.response_content_identity,
-            parent_duration=event.network.duration,
-        ),
-        rng,
-        timing_runtime=runtime,
-    ).execute()
-    if file_result.file_transfers and event.file_transfer is None:
-        event.file_transfer = file_result.file_transfers[0]
-        event.file_transfers.extend(file_result.file_transfers[1:])
-    else:
-        event.file_transfers.extend(file_result.file_transfers)
-    from evidenceforge.generation.activity.http_file_profiles import load_http_file_profiles
-
-    max_files_resp = int(load_http_file_profiles()["multipart"]["max_files_resp"])
-    response_referenced = file_result.file_transfers[:max_files_resp]
-    event.http = replace(
-        event.http,
-        resp_fuids=tuple(transfer.fuid for transfer in response_referenced),
-        resp_filenames=tuple(
-            transfer.filename for transfer in response_referenced if transfer.filename
-        ),
-        resp_mime_types=tuple(
-            transfer.mime_type for transfer in file_result.file_transfers if transfer.mime_type
-        )[:max_files_resp],
-    )
-    event.pe_analyses.extend(file_result.pe_analyses)
-
-
-def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
-    """Return the HTTP body bytes represented by the parent TCP flow."""
-    if side == "request":
-        value = http.flow_request_body_len
-        fallback = http.request_body_len
-    else:
-        value = http.flow_response_body_len
-        fallback = http.response_body_len
-    if value is None:
-        value = fallback
-    return max(0, value or 0)
-
-
-def _http_context_flow_transaction_count(http: HttpContext) -> int:
-    """Return the number of HTTP transactions represented by the parent TCP flow."""
-    return max(1, http.flow_transaction_count or 1)
-
-
-def _http_request_header_len(http: HttpContext, transaction_count: int) -> int:
-    """Approximate source-native HTTP request header bytes for conn.log payload accounting."""
-    method = (http.method or "GET").upper()
-    version = http.version or "1.1"
-    uri = http.uri or "/"
-    host = http.host or "-"
-    user_agent = http.user_agent or ""
-    body_len = _http_context_flow_body_len(http, "request")
-    seed = _stable_seed(
-        f"http_request_headers:{method}:{host}:{uri}:{user_agent}:{transaction_count}:{body_len}"
-    )
-    accept = "*/*" if not user_agent else "text/html,application/xhtml+xml,*/*;q=0.8"
-    header_lines = [
-        f"{method} {uri} HTTP/{version}",
-        f"Host: {host}",
-        f"Accept: {accept}",
-        "Accept-Encoding: gzip, deflate, br",
-        "Connection: keep-alive" if transaction_count > 1 else "Connection: close",
-    ]
-    if user_agent:
-        header_lines.append(f"User-Agent: {user_agent}")
-    if http.referrer:
-        header_lines.append(f"Referer: {http.referrer}")
-    if http.status_code == 304:
-        header_lines.append(f'If-None-Match: W/"{seed & 0xFFFFFFFF:x}"')
-    if body_len > 0:
-        header_lines.append(f"Content-Length: {body_len}")
-        header_lines.append(
-            f"Content-Type: {http.request_content_type or 'application/octet-stream'}"
-        )
-    base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
-    per_transaction_extra = 24 + (seed % 97)
-    return (base_len + per_transaction_extra) * transaction_count
-
-
-def _http_response_header_len(http: HttpContext, transaction_count: int) -> int:
-    """Approximate source-native HTTP response header bytes for conn.log payload accounting."""
-    method = (http.method or "GET").upper()
-    status_code = int(http.status_code or 0)
-    status_msg = http.status_msg or "OK"
-    host = http.host or "-"
-    uri = http.uri or "/"
-    body_len = _http_context_flow_body_len(http, "response")
-    seed = _stable_seed(
-        f"http_response_headers:{method}:{status_code}:{status_msg}:{host}:{uri}:"
-        f"{transaction_count}:{body_len}"
-    )
-    content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
-    header_lines = [
-        f"HTTP/{http.version or '1.1'} {status_code} {status_msg}",
-        "Server: nginx",
-        f"Content-Length: {0 if method == 'HEAD' else body_len}",
-        "Connection: keep-alive" if transaction_count > 1 else "Connection: close",
-    ]
-    if method != "HEAD" and status_code not in {204, 304}:
-        header_lines.append(f"Content-Type: {content_type}")
-    if status_code in {301, 302}:
-        header_lines.append(f"Location: https://{host}{uri if uri.startswith('/') else '/'}")
-    if status_code == 304:
-        header_lines.append(f'ETag: W/"{seed & 0xFFFFFFFF:x}"')
-        header_lines.append("Cache-Control: max-age=300")
-    if 200 <= status_code < 300:
-        header_lines.append(f"Date: {seed % 28 + 1:02d} May 2026 12:00:00 GMT")
-    base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
-    per_transaction_extra = 16 + (seed % 83)
-    return (base_len + per_transaction_extra) * transaction_count
-
-
-def _http_flow_payload_bytes(http: HttpContext) -> tuple[int, int]:
-    """Return TCP payload byte counts implied by source-native HTTP metadata."""
-    transaction_count = _http_context_flow_transaction_count(http)
-    request_bytes = _http_context_flow_body_len(http, "request") + _http_request_header_len(
-        http,
-        transaction_count,
-    )
-    response_body_len = _http_context_flow_body_len(http, "response")
-    response_header_len = _http_response_header_len(http, transaction_count)
-    response_bytes = response_header_len
-    if (http.method or "GET").upper() != "HEAD":
-        response_bytes += response_body_len
-    return request_bytes, response_bytes
 
 
 def _dhcp_message_payload_size(
@@ -1579,15 +1184,6 @@ def _normalize_command_host_token(value: str) -> str:
     return host.rstrip(".")
 
 
-def _command_tokens(command_line: str) -> list[str]:
-    """Split a process command line enough to recover network target arguments."""
-    try:
-        tokens = shlex.split(command_line, posix=False)
-    except ValueError:
-        tokens = command_line.split()
-    return [token.strip().strip("'\"") for token in tokens if token.strip().strip("'\"")]
-
-
 def _extract_network_command_target(command_line: str, service: str) -> str | None:
     """Extract a user-visible network target from common client command lines."""
     normalized_service = service.lower()
@@ -1662,50 +1258,6 @@ def _extract_network_command_target(command_line: str, service: str) -> str | No
             if candidate:
                 return _normalize_database_command_target(candidate)
         return None
-    return None
-
-
-def _extract_ssh_attempted_username(command_line: str) -> str | None:
-    """Extract the username a source-native SSH client command attempted."""
-
-    tokens = _command_tokens(command_line)
-    if not tokens:
-        return None
-    option_args = {
-        "-b",
-        "-c",
-        "-e",
-        "-f",
-        "-i",
-        "-j",
-        "-l",
-        "-m",
-        "-o",
-        "-p",
-        "-s",
-        "-w",
-    }
-    skip_next = False
-    for idx, token in enumerate(tokens[1:], start=1):
-        lower = token.lower()
-        if skip_next:
-            skip_next = False
-            continue
-        if lower == "-l" and idx + 1 < len(tokens):
-            candidate = tokens[idx + 1].strip()
-            return candidate or None
-        if lower.startswith("-l") and len(token) > 2:
-            candidate = token[2:].strip()
-            return candidate or None
-        if lower in option_args:
-            skip_next = True
-            continue
-        if lower.startswith("-"):
-            continue
-        if "@" not in token:
-            continue
-        candidate = token.rsplit("@", 1)[0].rsplit("\\", 1)[-1].strip()
-        return candidate or None
     return None
 
 
@@ -1811,69 +1363,15 @@ def _nmap_conn_state(port: int, target_system: System | None = None) -> str:
     return _nmap_probe_profile(port, target_system, rng)[0]
 
 
-_WINDOWS_USER_SESSION_PROCESSES = {
-    "sihost.exe",
-    "searchhost.exe",
-    "searchprotocolhost.exe",
-    "searchfilterhost.exe",
-    "runtimebroker.exe",
-    "textinputhost.exe",
-    "startmenuexperiencehost.exe",
-    "shellexperiencehost.exe",
-    "applicationframehost.exe",
-}
-_WINDOWS_SHELL_UWP_USER_PROCESS_EXES = frozenset(
-    {
-        "sihost.exe",
-        "searchhost.exe",
-        "runtimebroker.exe",
-        "backgroundtaskhost.exe",
-        "textinputhost.exe",
-        "startmenuexperiencehost.exe",
-        "shellexperiencehost.exe",
-        "applicationframehost.exe",
-    }
-)
-_WINDOWS_ONE_SHOT_CLI_EXES = {
-    "dsquery.exe",
-    "gpresult.exe",
-    "gpupdate.exe",
-    "ipconfig.exe",
-    "net.exe",
-    "net1.exe",
-    "nltest.exe",
-    "quser.exe",
-    "qwinsta.exe",
-    "tasklist.exe",
-    "whoami.exe",
-    "wmic.exe",
-}
-_WINDOWS_BROWSER_EXES = frozenset(
-    {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe", "opera.exe"}
-)
-_PERSISTENT_USER_APP_EXES = frozenset(
-    {
-        "evolution",
-        "outlook.exe",
-        "onedrive.exe",
-        "teams.exe",
-        "thunderbird",
-        "thunderbird.exe",
-    }
-)
-_WINDOWS_BROWSER_CHILD_MARKERS = (
-    "--type=",
-    "--utility-sub-type=",
-    "-contentproc",
-    " -childid ",
-    " /prefetch:",
-)
-_WINDOWS_ELECTRON_CHILD_EXES = frozenset({"slack.exe", "teams.exe", "zoom.exe"})
-_WINDOWS_ELECTRON_CHILD_MARKERS = (
-    "--type=",
-    "--utility-sub-type=",
-)
-_WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = WINDOWS_DESKTOP_LOGON_TYPES
+_WINDOWS_USER_SESSION_PROCESSES = process_policy._WINDOWS_USER_SESSION_PROCESSES
+_WINDOWS_SHELL_UWP_USER_PROCESS_EXES = process_policy._WINDOWS_SHELL_UWP_USER_PROCESS_EXES
+_WINDOWS_ONE_SHOT_CLI_EXES = process_policy._WINDOWS_ONE_SHOT_CLI_EXES
+_WINDOWS_BROWSER_EXES = process_policy._WINDOWS_BROWSER_EXES
+_PERSISTENT_USER_APP_EXES = process_policy._PERSISTENT_USER_APP_EXES
+_WINDOWS_BROWSER_CHILD_MARKERS = process_policy._WINDOWS_BROWSER_CHILD_MARKERS
+_WINDOWS_ELECTRON_CHILD_EXES = process_policy._WINDOWS_ELECTRON_CHILD_EXES
+_WINDOWS_ELECTRON_CHILD_MARKERS = process_policy._WINDOWS_ELECTRON_CHILD_MARKERS
+_WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = process_policy._WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
 _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = WINDOWS_WORKSTATION_LOGON_TYPES
 _WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
 _LINUX_LOCAL_SESSION_LOGON_TYPES = frozenset({2, 11})
@@ -1888,143 +1386,19 @@ def _is_windows_workstation_session(session: ActiveSession) -> bool:
     )
 
 
-def _zeek_conn_observation_time(
-    base_time: datetime,
-    src_ip: str,
-    src_port: int,
-    dst_ip: str,
-    dst_port: int,
-    proto: str,
-    service: str,
-    *,
-    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
-) -> datetime:
-    """Return runtime-owned canonical spacing for one exact transport tuple."""
-
-    relationship_key = "network.connection_start_jitter"
-    window = _activity_get_timing_window(
-        relationship_key,
-        default_min_ms=0,
-        default_max_ms=0,
-        default_position="after",
-    )
-    stable_id = (
-        f"network-connection-start:{src_ip}:{src_port}:{dst_ip}:{dst_port}:"
-        f"{proto}:{service}:{base_time.isoformat()}"
-    )
-    runtime = timing_runtime or TimingRuntime.compatibility_default()
-    planner = BaselineTimingPlanner(runtime, source="network")
-    return base_time + planner.packet_observation_delta(
-        relationship_key=relationship_key,
-        stable_id=stable_id,
-        minimum_ms=window.min_ms,
-        maximum_ms=window.max_ms,
-        host=src_ip,
-        lifecycle_id=stable_id,
-        sample_key="transport_open",
-    )
+_session_started_by = process_policy._session_started_by
 
 
-def _session_started_by(session: Any, time: datetime) -> bool:
-    """Return whether a session exists at the given activity time."""
-    session_start = session.start_time
-    if session_start.tzinfo is None:
-        session_start = session_start.replace(tzinfo=UTC)
-    else:
-        session_start = session_start.astimezone(UTC)
-    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
-    return session_start <= activity_time
+_session_activity_end_time = process_policy._session_activity_end_time
 
 
-def _session_activity_end_time(session: Any) -> datetime | None:
-    """Return the earliest canonical boundary that ends session-owned activity."""
-    deadlines: list[datetime] = []
-    end_plan = getattr(session, "end_plan", None)
-    if end_plan is not None:
-        deadlines.append(ensure_utc(end_plan.canonical_end))
-    network_close_time = getattr(session, "network_close_time", None)
-    if network_close_time is not None:
-        deadlines.append(ensure_utc(network_close_time))
-    return min(deadlines) if deadlines else None
+_session_active_for_activity = process_policy._session_active_for_activity
 
 
-def _session_active_for_activity(
-    session: Any, time: datetime, *, margin_seconds: float = 0.0
-) -> bool:
-    """Return whether a session can own activity at the given visible time."""
-    if not _session_started_by(session, time):
-        return False
-    activity_end = _session_activity_end_time(session)
-    if activity_end is None:
-        return True
-    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
-    return activity_time < activity_end - timedelta(seconds=margin_seconds)
+_session_source_ready_time = process_policy._session_source_ready_time
 
 
-def _session_source_ready_time(session: Any) -> datetime | None:
-    """Return when source-visible child activity may begin for this session."""
-    ready_time = getattr(session, "source_ready_time", None)
-    return ensure_utc(ready_time) if ready_time is not None else None
-
-
-def _extract_image_from_command(command_line: str) -> str:
-    """Extract an executable image from a command line without truncating paths with spaces."""
-    cleaned = command_line.strip()
-    if not cleaned:
-        return ""
-    if cleaned[0] == '"':
-        closing = cleaned.find('"', 1)
-        if closing > 1:
-            return cleaned[1:closing]
-
-    import re
-
-    match = re.match(r"^([A-Za-z]:\\.*?\.exe)\b", cleaned, flags=re.IGNORECASE)
-    if match:
-        return match.group(1)
-    match = re.match(r"^(/[^ ]+)", cleaned)
-    if match:
-        return match.group(1)
-    return cleaned.split()[0]
-
-
-def _windows_script_host_process(
-    process_name: str,
-    command_line: str,
-) -> tuple[str, str]:
-    """Return the real Windows process image for batch-script execution."""
-    basename = ntpath.basename(process_name).lower()
-    if not basename.endswith((".cmd", ".bat")):
-        return process_name, command_line
-
-    host_image = r"C:\Windows\System32\cmd.exe"
-    stripped = command_line.strip()
-    command_lower = stripped.lower()
-    if command_lower.startswith(("cmd.exe ", r"c:\windows\system32\cmd.exe ")):
-        return host_image, command_line
-    if command_lower.startswith("cmd "):
-        return host_image, f"cmd.exe {stripped[4:]}"
-    return host_image, f"cmd.exe /c {stripped or ntpath.basename(process_name)}"
-
-
-def _windows_service_process_account(process_name: str, command_line: str) -> str | None:
-    """Return the built-in service identity for service-hosted Windows processes."""
-    exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-    command = command_line.lower()
-    normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
-    if exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"} or normalized_path == (
-        r"c:\windows\system32\searchindexer.exe"
-    ):
-        return "SYSTEM"
-    if exe_name != "svchost.exe":
-        return None
-    if "localservice" in command:
-        return "LOCAL SERVICE"
-    if "networkservice" in command:
-        return "NETWORK SERVICE"
-    if "dcomlaunch" in command or "netsvcs" in command or "-s schedule" in command:
-        return "SYSTEM"
-    return None
+_extract_image_from_command = process_policy._extract_image_from_command
 
 
 def _account_leaf_name(username: str) -> str:
@@ -2048,535 +1422,22 @@ def _ldap_base_dn(domain: str) -> str:
     return ",".join(f"dc={label}" for label in labels)
 
 
-def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
-    """Estimate foreground Linux command lifetime for shell-history ordering."""
-    exe_name = process_name.rsplit("/", 1)[-1].lower()
-    command = command_line.lower()
-    follows_output = (
-        any(pattern in command for pattern in ("tail -f", "watch ", "--follow"))
-        or (exe_name == "journalctl" and " -f " in f" {command} ")
-        or (
-            exe_name in {"docker", "kubectl"}
-            and " logs " in f" {command} "
-            and " -f " in f" {command} "
-        )
-    )
-    if follows_output:
-        return None
-    if "/usr/lib/apt/methods/" in process_name.lower() or command.startswith(
-        "/usr/lib/apt/methods/"
-    ):
-        return (5.0, 60.0)
-    if exe_name in {"python", "python3", "node", "npm", "git"} and any(
-        marker in f" {command} " for marker in (" --version ", " -v ", " version ")
-    ):
-        return (0.05, 2.0)
-    if exe_name in {"apt", "apt-get", "dnf", "yum"} and any(
-        token in command for token in ("update", "upgradable", "makecache", "check-update")
-    ):
-        return (20.0, 180.0)
-    if exe_name in {
-        "cat",
-        "date",
-        "ls",
-        "pwd",
-        "true",
-        "whoami",
-        "id",
-        "uname",
-        "hostname",
-        "df",
-        "free",
-    }:
-        return (0.05, 0.8)
-    if exe_name == "sleep":
-        try:
-            argv = shlex.split(command_line)
-        except ValueError:
-            argv = []
-        if (
-            len(argv) == 2
-            and argv[0].rsplit("/", 1)[-1].lower() == "sleep"
-            and re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", argv[1]) is not None
-        ):
-            try:
-                requested = Decimal(argv[1])
-            except InvalidOperation:
-                requested = Decimal(-1)
-            if requested.is_finite() and requested >= 0:
-                bounded = min(requested, Decimal(86_400))
-                bounded_seconds = float(bounded)
-                lower = max(0.05, bounded_seconds)
-                completion_slack = min(2.0, max(0.05, bounded_seconds * 0.02))
-                return (lower, lower + completion_slack)
-        return (0.2, 2.0)
-    if exe_name == "test":
-        return (0.2, 2.0)
-    if exe_name in {"mysql", "psql"}:
-        if " -p " in f" {command} " or command.endswith(" -p"):
-            return (8.0, 45.0)
-        return (1.5, 12.0)
-    if exe_name in {"sqlite3", "redis-cli", "pg_isready"}:
-        return (0.8, 8.0)
-    if exe_name in {"systemctl", "journalctl"}:
-        return (0.8, 9.0)
-    if exe_name in {"du", "find"}:
-        return (0.8, 8.0)
-    if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
-        return (0.35, 5.0)
-    if exe_name in {"curl", "wget"}:
-        return (0.8, 12.0)
-    if exe_name == "smbclient":
-        return (1.0, 20.0) if " -c " in f" {command} " else None
-    if exe_name == "git":
-        if any(token in f" {command} " for token in (" pull ", " fetch ", " clone ")):
-            return (3.0, 90.0)
-        return (0.3, 12.0)
-    if exe_name == "npm" and " run build" in command:
-        return (8.0, 180.0)
-    if exe_name == "ssh":
-        return (30.0, 3600.0)
-    if exe_name in {"gzip", "tar", "zip", "scp", "kubectl", "docker"}:
-        return (3.0, 18.0)
-    if exe_name in {"make", "gcc", "cargo", "npm", "python", "python3", "mysqldump"}:
-        return (8.0, 45.0)
-    if exe_name in {"code", "codium"}:
-        return None
-    if exe_name in {"vim", "vi", "nano", "emacs"}:
-        return (20.0, 95.0)
-    return (1.0, 8.0)
+_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS = process_policy._LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS
 
 
-def _linux_shell_process_reserves_foreground(process_name: str, command_line: str) -> bool:
-    """Return whether a shell child owns its interactive shell's foreground slot."""
-    normalized = f" {command_line.strip().lower()} "
-    if not command_line.strip():
-        return False
-    if command_line.rstrip().endswith("&") or " nohup " in normalized:
-        return False
-    if any(pattern in normalized for pattern in (" tail -f ", " watch ", " --follow ")):
-        return False
-    if any(
-        marker in normalized
-        for marker in (
-            " tmux new-session -d ",
-            " tmux new -d ",
-            " screen -d -m ",
-            " setsid ",
-        )
-    ):
-        return False
-    exe_name = process_name.rsplit("/", 1)[-1].lower()
-    return exe_name not in {"code", "codium", "gnome-terminal", "konsole", "xterm"}
+_LINUX_ONE_SHOT_NETWORK_EXES = process_policy._LINUX_ONE_SHOT_NETWORK_EXES
 
 
-_LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS = 1_400
+_WINDOWS_SESSION_OWNED_EXECUTABLES = process_policy._WINDOWS_SESSION_OWNED_EXECUTABLES
 
 
-_LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
-    "apt",
-    "apt-get",
-    "curl",
-    "dnf",
-    "git",
-    "npm",
-    "python3",
-    "smbclient",
-    "wget",
-    "scp",
-    "kubectl",
-    "ldapsearch",
-    "mysqldump",
-}
+_bounded_windows_lifetime = process_policy._bounded_windows_lifetime
 
 
-_WINDOWS_SESSION_OWNED_EXECUTABLES = {
-    "acrobat.exe",
-    "chrome.exe",
-    "code.exe",
-    "excel.exe",
-    "firefox.exe",
-    "iexplore.exe",
-    "msedge.exe",
-    "notepad++.exe",
-    "outlook.exe",
-    "powerpnt.exe",
-    "sublime_text.exe",
-    "teams.exe",
-    "winword.exe",
-}
+_windows_process_lifetime_plan = process_policy._windows_process_lifetime_plan
 
 
-def _bounded_windows_lifetime(
-    minimum_seconds: float,
-    maximum_seconds: float,
-    classification: str,
-    *,
-    mode: ProcessLifetimeMode = ProcessLifetimeMode.BOUNDED,
-) -> ProcessLifetimePlan:
-    """Build one validated bounded Windows process lifetime plan."""
-
-    return ProcessLifetimePlan(
-        mode=mode,
-        minimum_seconds=minimum_seconds,
-        maximum_seconds=maximum_seconds,
-        classification=classification,
-    )
-
-
-def _windows_process_lifetime_plan(
-    process_name: str,
-    command_line: str,
-) -> ProcessLifetimePlan:
-    """Classify one Windows process lifetime before canonical publication."""
-
-    exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-    command = command_line.lower()
-    padded_command = f" {command} "
-    if any(
-        pattern in command
-        for pattern in (
-            "tcpclient",
-            "tcplistener",
-            "$s.read",
-            "start-sleep -seconds 99",
-            "while(true)",
-            "while true",
-            " -listen",
-            " -l ",
-        )
-    ):
-        return ProcessLifetimePlan(
-            mode=ProcessLifetimeMode.PERSISTENT,
-            classification="explicit-continuous-command",
-        )
-    if exe_name in _WINDOWS_SESSION_OWNED_EXECUTABLES:
-        return ProcessLifetimePlan(
-            mode=ProcessLifetimeMode.SESSION_OWNED,
-            classification="interactive-desktop-application",
-        )
-    if exe_name in {"runas.exe", "runas"}:
-        return _bounded_windows_lifetime(0.4, 8.0, "runas-launcher")
-    if exe_name in {"git.exe", "git"}:
-        if any(
-            marker in padded_command
-            for marker in (" clone ", " fetch ", " pull ", " push ", " lfs ")
-        ):
-            return _bounded_windows_lifetime(
-                3.0,
-                180.0,
-                "git-network-operation",
-                mode=ProcessLifetimeMode.OPERATION_OWNED,
-            )
-        return _bounded_windows_lifetime(0.3, 20.0, "git-one-shot")
-    if exe_name in {"kubectl.exe", "kubectl"}:
-        continuous_markers = (
-            " port-forward ",
-            " proxy ",
-            " logs -f ",
-            " logs --follow ",
-            " --watch ",
-            " -w ",
-        )
-        if any(marker in padded_command for marker in continuous_markers):
-            return ProcessLifetimePlan(
-                mode=ProcessLifetimeMode.PERSISTENT,
-                classification="kubectl-continuous-operation",
-            )
-        if " exec " in padded_command and any(
-            marker in padded_command for marker in (" -it ", " -i ", " -t ")
-        ):
-            return ProcessLifetimePlan(
-                mode=ProcessLifetimeMode.SESSION_OWNED,
-                classification="kubectl-interactive-exec",
-            )
-        operation_mode = any(
-            marker in padded_command
-            for marker in (" apply ", " cp ", " create ", " delete ", " rollout ")
-        )
-        return _bounded_windows_lifetime(
-            0.8,
-            90.0 if operation_mode else 20.0,
-            "kubectl-operation" if operation_mode else "kubectl-one-shot",
-            mode=(
-                ProcessLifetimeMode.OPERATION_OWNED
-                if operation_mode
-                else ProcessLifetimeMode.BOUNDED
-            ),
-        )
-    if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
-        return _bounded_windows_lifetime(0.8, 12.0, "http-client")
-    if exe_name == "service-healthcheck.exe":
-        if "--service" in command:
-            return ProcessLifetimePlan(
-                mode=ProcessLifetimeMode.PERSISTENT,
-                classification="service-health-worker",
-            )
-        return _bounded_windows_lifetime(2.0, 45.0, "service-health-check")
-    if " check --once" in f" {command} ":
-        return _bounded_windows_lifetime(2.0, 45.0, "explicit-one-shot-check")
-    if any(marker in command for marker in ("--silent", " /quiet", " /norestart")) and any(
-        marker in exe_name for marker in ("setup", "installer", "update", "updater", "msi")
-    ):
-        return _bounded_windows_lifetime(8.0, 360.0, "unattended-installer")
-    if exe_name in {
-        "whoami.exe",
-        "hostname.exe",
-        "ipconfig.exe",
-        "nltest.exe",
-        "klist.exe",
-        "qwinsta.exe",
-        "quser.exe",
-        "query.exe",
-        "cmdkey.exe",
-        "net.exe",
-        "net1.exe",
-        "dsquery.exe",
-        "dsget.exe",
-        "dsmod.exe",
-        "gpresult.exe",
-        "gpupdate.exe",
-        "tasklist.exe",
-        "arp.exe",
-        "route.exe",
-        "netstat.exe",
-        "sc.exe",
-        "wevtutil.exe",
-    }:
-        return _bounded_windows_lifetime(0.4, 6.0, "administrative-utility")
-    if exe_name == "cmd.exe":
-        if " /c " in padded_command:
-            return _bounded_windows_lifetime(0.4, 8.0, "cmd-one-shot-wrapper")
-        return ProcessLifetimePlan(
-            mode=ProcessLifetimeMode.SESSION_OWNED,
-            classification="interactive-command-shell",
-        )
-    if exe_name in {"powershell.exe", "pwsh.exe"}:
-        one_shot_markers = (
-            " -command ",
-            " -encodedcommand ",
-            " -enc ",
-            " -file ",
-            " invoke-webrequest",
-            " iwr ",
-            " downloadstring",
-        )
-        if any(marker in padded_command for marker in one_shot_markers):
-            return _bounded_windows_lifetime(2.0, 25.0, "powershell-one-shot")
-        return ProcessLifetimePlan(
-            mode=ProcessLifetimeMode.SESSION_OWNED,
-            classification="interactive-powershell",
-        )
-    if exe_name in {"wmic.exe", "certutil.exe"}:
-        return _bounded_windows_lifetime(4.0, 35.0, "administrative-operation")
-    if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
-        return _bounded_windows_lifetime(2.0, 25.0, "sql-query")
-    return _bounded_windows_lifetime(
-        1.0,
-        8.0,
-        "unclassified-foreground-candidate",
-        mode=ProcessLifetimeMode.UNCLASSIFIED,
-    )
-
-
-def _windows_foreground_lifetime(
-    process_name: str, command_line: str
-) -> tuple[float, float] | None:
-    """Return bounded legacy lifetime semantics for known Windows foreground tools."""
-
-    plan = _windows_process_lifetime_plan(process_name, command_line)
-    if plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
-        return None
-    return plan.bounds
-
-
-def _is_bare_windows_explorer_launch(process_name: str, command_line: str) -> bool:
-    """Return whether Explorer represents the durable desktop shell itself."""
-
-    process_exe = process_name.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
-    if process_exe != "explorer.exe":
-        return False
-    normalized_command = command_line.strip().strip('"').replace("/", "\\").casefold()
-    return normalized_command in {
-        "explorer.exe",
-        r"c:\windows\explorer.exe",
-    }
-
-
-def _process_termination_delay_after_activity_seconds(
-    *,
-    hostname: str,
-    pid: int,
-    last_activity_time: datetime,
-) -> float:
-    """Return the stable grace period after a process's last activity."""
-    delay_rng = random.Random(
-        _stable_seed(
-            f"process_terminate_after_activity:{hostname}:{pid}:{last_activity_time.isoformat()}"
-        )
-    )
-    return delay_rng.uniform(2.0, 30.0)
-
-
-_DNS_QTYPE_RDATA_LENGTHS = {
-    "A": 4,
-    "AAAA": 16,
-}
-
-
-def _dns_name_wire_size(name: str) -> int:
-    """Return the encoded DNS owner-name size, including label lengths and root."""
-    labels = [label for label in name.rstrip(".").split(".") if label]
-    if not labels:
-        return 1
-    return sum(1 + len(label.encode("utf-8", errors="ignore")) for label in labels) + 1
-
-
-def _dns_question_wire_size(query: str) -> int:
-    """Return DNS question section size for one IN-class query."""
-    return _dns_name_wire_size(query) + 4
-
-
-def _dns_payload_padding(*, query: str, query_type: str, response: bool) -> int:
-    """Return stable EDNS/client-padding texture for DNS payload accounting."""
-    seed = _stable_seed(f"dns_payload_padding:{query.lower()}:{query_type}:{response}")
-    rng = random.Random(seed)
-    if query_type in {"TXT", "NULL"}:
-        choices = (0, 11, 23, 47, 71)
-        weights = (30, 35, 20, 10, 5)
-    elif response:
-        choices = (0, 11, 23, 35)
-        weights = (45, 35, 15, 5)
-    else:
-        choices = (0, 11, 23)
-        weights = (35, 50, 15)
-    return rng.choices(choices, weights=weights, k=1)[0]
-
-
-def _dns_rr_rdata_size(query_type: str, answer: str) -> int:
-    """Return an approximate RDATA length for a source-native DNS answer."""
-    if query_type in _DNS_QTYPE_RDATA_LENGTHS:
-        return _DNS_QTYPE_RDATA_LENGTHS[query_type]
-    if query_type in {"CNAME", "PTR", "NS"}:
-        return _dns_name_wire_size(answer)
-    if query_type == "MX":
-        parts = answer.split(maxsplit=1)
-        exchange = parts[1] if len(parts) == 2 else answer
-        return 2 + _dns_name_wire_size(exchange)
-    if query_type == "SRV":
-        parts = answer.split()
-        target = parts[-1] if parts else answer
-        return 6 + _dns_name_wire_size(target)
-    if query_type == "SOA":
-        parts = answer.split()
-        if len(parts) >= 2:
-            return _dns_name_wire_size(parts[0]) + _dns_name_wire_size(parts[1]) + 20
-        return max(24, len(answer.encode("utf-8", errors="ignore")))
-    if query_type == "TXT":
-        text_len = len(answer.encode("utf-8", errors="ignore"))
-        return text_len + max(1, math.ceil(text_len / 255))
-    return max(4, len(answer.encode("utf-8", errors="ignore")))
-
-
-def _dns_response_wire_size(*, dns: DnsContext, question_size: int, query_type: str) -> int:
-    """Return DNS response payload bytes derived from the visible DNS context."""
-    base_size = 12 + question_size
-    answers = dns.answers or []
-    if answers:
-        rr_bytes = 0
-        for answer in answers:
-            rdata_size = _dns_rr_rdata_size(query_type, str(answer))
-            rr_bytes += 2 + 10 + rdata_size  # compressed owner pointer + RR metadata
-        return (
-            base_size
-            + rr_bytes
-            + _dns_payload_padding(
-                query=dns.query,
-                query_type=query_type,
-                response=True,
-            )
-        )
-
-    rcode = (dns.rcode or "").upper()
-    if rcode in {"NXDOMAIN", "SERVFAIL", "REFUSED"} or dns.rcode_num in {2, 3, 5}:
-        failure_seed = _stable_seed(f"dns_failure_payload:{dns.query}:{query_type}:{rcode}")
-        failure_rng = random.Random(failure_seed)
-        authority_bytes = {
-            "NXDOMAIN": failure_rng.randint(36, 92),
-            "SERVFAIL": failure_rng.randint(18, 46),
-            "REFUSED": failure_rng.randint(18, 54),
-        }.get(rcode, failure_rng.randint(18, 54))
-        return (
-            base_size
-            + authority_bytes
-            + _dns_payload_padding(
-                query=dns.query,
-                query_type=query_type,
-                response=True,
-            )
-        )
-
-    if rcode == "NOERROR" or dns.rcode_num == 0:
-        return base_size + _dns_payload_padding(
-            query=dns.query,
-            query_type=query_type,
-            response=True,
-        )
-    return 0
-
-
-def _dns_payload_accounting(
-    *,
-    dns: DnsContext,
-    duration: float | None,
-    orig_bytes: int | None,
-    resp_bytes: int | None,
-) -> tuple[float | None, int, int]:
-    """Normalize DNS conn.log payload accounting to the DNS transaction."""
-    query = dns.query or ""
-    query_type = (dns.query_type or "").upper()
-    response_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
-    has_response = (
-        dns.rtt is not None
-        or bool(dns.answers)
-        or dns.rcode.upper() in response_rcodes
-        or dns.rcode_num in {0, 2, 3, 5}
-    )
-    question_size = _dns_question_wire_size(query)
-    query_payload_size = (
-        12
-        + question_size
-        + _dns_payload_padding(
-            query=query,
-            query_type=query_type,
-            response=False,
-        )
-    )
-    normalized_orig = max(28, min(query_payload_size, 1232))
-
-    if not has_response:
-        normalized_resp = 0
-    else:
-        response_payload_size = _dns_response_wire_size(
-            dns=dns,
-            question_size=question_size,
-            query_type=query_type,
-        )
-        normalized_resp = max(40, min(response_payload_size, 1232))
-
-    normalized_duration = duration
-    if dns.rtt is not None:
-        normalized_duration = dns.rtt
-
-    return normalized_duration, normalized_orig, normalized_resp
-
-
-_NONINTERACTIVE_BASH_USERS = {"apache", "www-data", "nginx", "httpd", "tomcat"}
-
-
-def _is_noninteractive_bash_user(user: User) -> bool:
-    """Return True for service accounts that should not render shell history."""
-    return user.username.lower() in _NONINTERACTIVE_BASH_USERS
+_windows_foreground_lifetime = process_policy._windows_foreground_lifetime
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -2832,75 +1693,14 @@ PERSONA_APP_INDICES_LINUX = {
 # Zeek TCP connection state distribution with matching history strings
 # Format: (conn_state, weight, history_string)
 # Rebalanced: SF ~62% (real enterprise: 55-75%), non-SF states expanded
-TCP_CONN_STATE_DISTRIBUTION = [
-    # Normal completions (SF) — ~62% total (real: 55-75%)
-    ("SF", 21, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
-    ("SF", 11, "ShADaDadfF"),  # Multiple data exchanges before FIN
-    ("SF", 6, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
-    ("SF", 5, "ShADadfFa"),  # FIN-ACK with trailing ACK
-    ("SF", 5, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
-    ("SF", 4, "ShADadFf"),  # Originator FIN first (client closes)
-    ("SF", 4, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
-    ("SF", 3, "ShADadTFf"),  # Retransmit then FIN
-    ("SF", 2, "ShADaDadFf"),  # Multi data then client closes
-    ("SF", 1, "ShADaDaTtdfF"),  # Multi data with retransmissions
-    # Connection attempts (S0) — ~14% (timeouts, unreachable hosts, scanning)
-    ("S0", 9, "S"),  # Single SYN, no reply
-    ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
-    # Partial handshakes (S1) — ~3%
-    ("S1", 2, "Sh"),  # SYN-ACK seen, no termination observed
-    ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
-    # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
-    ("REJ", 3, "Sr"),  # RST from responder immediately
-    ("REJ", 2, "Srr"),  # Multiple RSTs from responder
-    # Reset by originator (RSTO) — ~8% (client aborts, load balancer health checks)
-    ("RSTO", 4, "ShADaR"),  # Data exchange then originator RST
-    ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
-    ("RSTO", 2, "ShAR"),  # Quick RST after handshake
-    # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
-    ("RSTR", 3, "ShADadr"),  # Data exchange then responder RST
-    ("RSTR", 2, "ShAdr"),  # Partial data then responder RST
-    # Half-closed states — ~2% (one side closed, other didn't respond)
-    ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
-    ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
-    # Midstream (OTH) — ~1% (partial captures, asymmetric routing, NAT state loss)
-    ("OTH", 1, "DAd"),  # Midstream bidirectional data/ACK (handshake not observed)
-]
 
 # Zeek UDP connection state distribution
 # UDP has no TCP handshake — only D/d datagram flags
 # Rebalanced: SF ~72% (more S0 timeouts for realistic DNS/NTP failures)
-UDP_CONN_STATE_DISTRIBUTION = [
-    ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
-    ("SF", 8, "DdDd"),  # Multi-packet exchange
-    ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 4, "DDd"),  # Retransmitted query before response
-    ("S0", 12, "D"),  # Originator only, no response (timeout)
-    ("S0", 6, "DD"),  # Retransmitted datagram, no response
-    ("OTH", 6, "Dd"),  # Midstream UDP exchange
-    ("OTH", 4, "DdDd"),  # Midstream multi-packet exchange
-]
 
 # Pre-extract for random.choices — TCP (select full tuples, not just states)
-_TCP_CONN_ENTRIES = TCP_CONN_STATE_DISTRIBUTION
-_TCP_CONN_WEIGHTS = [s[1] for s in TCP_CONN_STATE_DISTRIBUTION]
-_TCP_SUCCESS_HISTORY_ENTRIES = [
-    (history, weight) for conn_state, weight, history in _TCP_CONN_ENTRIES if conn_state == "SF"
-]
-_TCP_SUCCESS_HISTORY_WEIGHTS = [weight for _history, weight in _TCP_SUCCESS_HISTORY_ENTRIES]
 
 # Pre-extract for random.choices — UDP
-_UDP_CONN_ENTRIES = UDP_CONN_STATE_DISTRIBUTION
-_UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
-
-
-def _tcp_success_history(rng: random.Random) -> str:
-    """Choose a plausible Zeek history string for a completed TCP connection."""
-    return rng.choices(
-        [history for history, _weight in _TCP_SUCCESS_HISTORY_ENTRIES],
-        weights=_TCP_SUCCESS_HISTORY_WEIGHTS,
-        k=1,
-    )[0]
 
 
 # Legacy aliases for backward compatibility
@@ -2913,325 +1713,12 @@ _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
 
 # UDP/IP header overhead: standard IPv4 (28), VLAN/QinQ and IP options variants.
 # Keep this bounded by the physical IPv4 maximum: IP header 60 + UDP header 8.
-_UDP_OVERHEAD_VALUES = (28, 32, 52, 60, 68)
-_UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
 
 # TCP header overhead: bimodal around 40/52/60
 # 40=no options (legacy), 52=timestamps (dominant), 60=SACK+ts, 64=full
-_TCP_OVERHEAD_VALUES = (40, 52, 60, 64)
-_TCP_OVERHEAD_WEIGHTS = (10, 75, 10, 5)
-_TCP_MSS_BYTES = 1460
-_TCP_MSS_VALUES = (1200, 1320, 1360, 1448, 1460)
-_TCP_MSS_WEIGHTS = (2, 4, 10, 22, 62)
-_TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
-_CLIENT_FIRST_TCP_PAYLOAD_SERVICES = frozenset(
-    {
-        "dce_rpc",
-        "dns",
-        "http",
-        "https",
-        "kerberos",
-        "ldap",
-        "ldaps",
-        "mssql",
-        "mysql",
-        "postgresql",
-        "rdp",
-        "smb",
-        "ssl",
-        "tds",
-        "winrm",
-    }
-)
-_CLIENT_FIRST_TCP_PAYLOAD_PORTS = frozenset(
-    {
-        53,
-        80,
-        88,
-        135,
-        389,
-        443,
-        445,
-        464,
-        636,
-        1433,
-        3268,
-        3269,
-        3306,
-        3389,
-        5432,
-        5985,
-        5986,
-        8080,
-        8443,
-    }
-)
-
-
-def _tcp_effective_mss_bytes(rng: random.Random) -> int:
-    """Return a plausible effective TCP MSS for source packet accounting."""
-    return rng.choices(_TCP_MSS_VALUES, weights=_TCP_MSS_WEIGHTS, k=1)[0]
-
-
-def _tcp_payload_segment_count(
-    payload_bytes: int | None,
-    mss_bytes: int = _TCP_MSS_BYTES,
-) -> int:
-    """Return the minimum TCP payload segment count for Zeek packet accounting."""
-    if payload_bytes is None or payload_bytes <= 0:
-        return 0
-    effective_mss = max(1, mss_bytes)
-    return max(1, (payload_bytes + effective_mss - 1) // effective_mss)
-
-
-def _tcp_payload_packet_count(payload_bytes: int | None, rng: random.Random) -> int:
-    """Return source-visible TCP data packets with MSS and segmentation texture."""
-    segments = _tcp_payload_segment_count(payload_bytes, _tcp_effective_mss_bytes(rng))
-    if segments <= 0:
-        return 0
-    if segments >= 8:
-        extra_fraction = rng.choices(
-            (0.0, 0.001, 0.0025, 0.005, 0.01),
-            weights=(35, 20, 20, 15, 10),
-            k=1,
-        )[0]
-        if extra_fraction > 0:
-            segments += max(1, int(round(segments * extra_fraction)))
-        elif rng.random() < 0.35:
-            segments += 1
-    return segments
-
-
-def _tcp_history_packet_counts(history: str | None) -> tuple[int, int, int, int]:
-    """Return total and non-data packet markers by Zeek history side."""
-    text = history or ""
-    orig_total = sum(1 for char in text if char.isupper())
-    resp_total = sum(1 for char in text if char.islower())
-    orig_control = sum(1 for char in text if char.isupper() and char != "D")
-    resp_control = sum(1 for char in text if char.islower() and char != "d")
-    return orig_total, resp_total, orig_control, resp_control
-
-
-def _tcp_packet_counts_from_payload_and_history(
-    orig_bytes: int | None,
-    resp_bytes: int | None,
-    history: str | None,
-    rng: random.Random,
-) -> tuple[int, int]:
-    """Return TCP packet counts including payload segments and visible control packets."""
-    orig_total, resp_total, orig_control, resp_control = _tcp_history_packet_counts(history)
-    orig_data = _tcp_payload_packet_count(orig_bytes, rng)
-    resp_data = _tcp_payload_packet_count(resp_bytes, rng)
-
-    orig_pkts = max(orig_total, orig_data + orig_control) if orig_data else orig_total
-    resp_pkts = max(resp_total, resp_data + resp_control) if resp_data else resp_total
-    return _apply_tcp_ack_packet_floors(orig_pkts, resp_pkts, orig_bytes, resp_bytes, rng)
-
-
-def _tcp_payload_bytes_consistent_with_history(
-    orig_bytes: int | None,
-    resp_bytes: int | None,
-    history: str | None,
-) -> tuple[int | None, int | None]:
-    """Return TCP payload byte counts that agree with Zeek history data markers."""
-    if not history or history == "-":
-        return orig_bytes, resp_bytes
-
-    normalized_orig = orig_bytes
-    normalized_resp = resp_bytes
-    if (orig_bytes or 0) > 0 and "D" not in history:
-        normalized_orig = 0
-    if (resp_bytes or 0) > 0 and "d" not in history:
-        normalized_resp = 0
-    return normalized_orig, normalized_resp
-
-
-def _tcp_service_requires_client_payload_first(service: str | None, dst_port: int) -> bool:
-    """Return whether responder payload requires prior originator payload."""
-    normalized_service = (service or "").strip().lower()
-    return (
-        normalized_service in _CLIENT_FIRST_TCP_PAYLOAD_SERVICES
-        or dst_port in _CLIENT_FIRST_TCP_PAYLOAD_PORTS
-    )
-
-
-def _insert_originator_payload_before_responder_payload(history: str) -> str:
-    """Add a Zeek originator data marker before the first responder data marker."""
-    if "D" in history or "d" not in history:
-        return history
-    resp_index = history.index("d")
-    if resp_index > 0 and history[resp_index - 1] == "A":
-        return f"{history[:resp_index]}Da{history[resp_index:]}"
-    return f"{history[:resp_index]}D{history[resp_index:]}"
-
-
-def _client_first_originator_payload_floor(
-    service: str | None,
-    dst_port: int,
-    rng: random.Random,
-) -> int:
-    """Return a plausible minimum request/client-hello payload for client-first TCP."""
-    normalized_service = (service or "").strip().lower()
-    if normalized_service in {"ssl", "https"} or dst_port in {443, 8443}:
-        return rng.randint(180, 900)
-    if normalized_service == "http" or dst_port in {80, 8080}:
-        return rng.randint(120, 620)
-    if normalized_service in {"smb", "ldap", "ldaps", "kerberos", "dce_rpc", "rdp", "winrm"}:
-        return rng.randint(72, 420)
-    if normalized_service in {"mssql", "mysql", "postgresql", "tds"} or dst_port in {
-        1433,
-        3306,
-        5432,
-    }:
-        return rng.randint(64, 360)
-    if normalized_service == "dns" or dst_port == 53:
-        return rng.randint(40, 220)
-    return rng.randint(72, 480)
-
-
-def _enforce_client_first_tcp_payload_order(
-    net: NetworkTransactionDraft, rng: random.Random
-) -> bool:
-    """Ensure client-first TCP responses have visible originator application payload."""
-    if (
-        net.protocol != "tcp"
-        or net.conn_state in {"S0", "REJ", "S1", "SH", "SHR", "OTH"}
-        or not _tcp_service_requires_client_payload_first(net.service, net.dst_port)
-        or (net.resp_bytes or 0) <= 0
-        or "d" not in (net.history or "")
-    ):
-        return False
-
-    changed = False
-    history = net.history or ""
-    normalized_history = _insert_originator_payload_before_responder_payload(history)
-    if normalized_history != history:
-        net.history = normalized_history
-        changed = True
-
-    if (net.orig_bytes or 0) <= 0:
-        net.orig_bytes = _client_first_originator_payload_floor(net.service, net.dst_port, rng)
-        changed = True
-
-    return changed
-
-
-def _align_tcp_network_payload_with_history(
-    net: NetworkTransactionDraft,
-    rng: random.Random,
-) -> bool:
-    """Align TCP payload, packet, and IP-byte fields with Zeek history markers."""
-    if net.protocol != "tcp":
-        return False
-    changed = _enforce_client_first_tcp_payload_order(net, rng)
-    orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
-        net.orig_bytes,
-        net.resp_bytes,
-        net.history,
-    )
-    if not changed and orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
-        return False
-
-    net.orig_bytes = orig_bytes
-    net.resp_bytes = resp_bytes
-    net.orig_pkts, net.resp_pkts = _tcp_packet_counts_from_payload_and_history(
-        net.orig_bytes,
-        net.resp_bytes,
-        net.history,
-        rng,
-    )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
-    return True
-
-
-def _preserve_explicit_tcp_payload_overrides(
-    net: NetworkTransactionDraft,
-    *,
-    explicit_orig_bytes: int | None,
-    explicit_resp_bytes: int | None,
-    rng: random.Random,
-) -> bool:
-    """Re-apply explicit author payload intent after protocol shaping."""
-    if net.protocol != "tcp" or net.conn_state != "SF":
-        return False
-
-    changed = False
-    if explicit_orig_bytes is not None and explicit_orig_bytes > (net.orig_bytes or 0):
-        net.orig_bytes = explicit_orig_bytes
-        changed = True
-    if explicit_resp_bytes is not None and explicit_resp_bytes > (net.resp_bytes or 0):
-        net.resp_bytes = explicit_resp_bytes
-        changed = True
-    if not changed:
-        return False
-
-    net.orig_pkts, net.resp_pkts = _tcp_packet_counts_from_payload_and_history(
-        net.orig_bytes,
-        net.resp_bytes,
-        net.history,
-        rng,
-    )
-    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
-    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
-    return True
-
-
-def _tcp_ip_byte_count(
-    payload_bytes: int | None,
-    packet_count: int,
-    rng: random.Random,
-    *,
-    overhead_override: int | None = None,
-) -> int:
-    """Return MTU-bounded TCP IP-byte accounting with header texture."""
-    if packet_count <= 0:
-        return 0
-    payload = payload_bytes or 0
-    mtu_ceiling = packet_count * 1500
-    if overhead_override is not None:
-        return min(payload + packet_count * overhead_override, mtu_ceiling)
-    overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-    option_extra = 0
-    if packet_count > 1:
-        textured_packets = min(
-            packet_count,
-            8192,
-            max(1, int(round(packet_count * rng.uniform(0.001, 0.018)))),
-        )
-        max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
-        option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
-    return min(payload + packet_count * overhead + option_extra, mtu_ceiling)
-
-
-def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:
-    """Return a plausible ACK-only packet floor for a peer's large TCP payload."""
-    segments = _tcp_payload_segment_count(peer_payload_bytes)
-    if segments == 0 or (peer_payload_bytes or 0) < _TCP_ACK_FLOOR_PAYLOAD_BYTES:
-        return 0
-    ack_every_segments = rng.choices((2, 3, 4), weights=(70, 20, 10), k=1)[0]
-    return max(16, (segments + ack_every_segments - 1) // ack_every_segments)
-
-
-def _apply_tcp_ack_packet_floors(
-    orig_pkts: int,
-    resp_pkts: int,
-    orig_bytes: int | None,
-    resp_bytes: int | None,
-    rng: random.Random,
-) -> tuple[int, int]:
-    """Ensure large one-way TCP transfers include plausible reverse ACK packets."""
-    orig_ack_floor = _tcp_ack_packet_floor(resp_bytes, rng)
-    resp_ack_floor = _tcp_ack_packet_floor(orig_bytes, rng)
-    return max(orig_pkts, orig_ack_floor), max(resp_pkts, resp_ack_floor)
 
 
 # NTP stratum-based timing: (mean_ms, sigma) for lognormal
-_NTP_STRATUM_TIMING = {
-    1: (2.0, 0.5),  # GPS-connected
-    2: (10.0, 0.7),  # synced to stratum 1
-    3: (30.0, 0.8),  # synced to stratum 2
-}
 
 # TLS cipher distributions (weighted)
 _TLS_VERSION_VALUES = ("TLSv12", "TLSv13")
@@ -3350,9 +1837,6 @@ def _weighted_choice_from_roll(
 
 
 # Proxy header overhead ranges (bytes)
-_PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
-_PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
-_AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 240
 _PROXY_MACHINE_USER_AGENT_MARKERS = (
     "adobearm/",
@@ -3378,17 +1862,6 @@ _KERBEROS_SVC_DIST = (
 )
 _KERBEROS_SVC_VALUES = tuple(s[0] for s in _KERBEROS_SVC_DIST)
 _KERBEROS_SVC_WEIGHTS = tuple(s[1] for s in _KERBEROS_SVC_DIST)
-
-
-def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
-    """Generate a random ephemeral port appropriate for the OS.
-
-    Linux uses 32768-60999 (net.ipv4.ip_local_port_range default).
-    Windows uses 49152-65535 (IANA dynamic port range).
-    """
-    if os_category == "linux":
-        return rng.randint(32768, 60999)
-    return rng.randint(49152, 65535)
 
 
 def _dns_rtt(rng: random.Random, resolver_ip: str | None = None) -> float:
@@ -3796,48 +2269,6 @@ def _linux_uid_for_user(username: str) -> int:
     return default_linux_uid_for_user(username)
 
 
-def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
-    """Return a varied but source-native ICMP echo payload size."""
-    common_sizes = [32, 48, 56, 64, 84, 120, 256, 512, 1024, 1200, 1472]
-    weights = [8, 10, 18, 18, 10, 8, 7, 7, 5, 4, 5]
-    if requested is not None and 32 <= requested <= 1472:
-        return requested
-    return rng.choices(common_sizes, weights=weights, k=1)[0]
-
-
-def _icmp_echo_duration(
-    rng: random.Random,
-    requested: float | None,
-    *,
-    timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
-    stable_id: str = "",
-) -> float:
-    """Return one runtime-owned ICMP RTT with the legacy mixture support."""
-    del rng
-    if type(timing_runtime) not in {TimingRuntime, SourceTimingPlanningRuntime}:
-        raise StateError("ICMP echo duration requires an injected TimingRuntime")
-    if type(stable_id) is not str or not stable_id:
-        raise StateError("ICMP echo duration requires a stable connection identity")
-
-    components: tuple[tuple[float, float, float, float], ...] = (
-        (0.85, 0.001, 0.012, 0.045),
-        (0.15, 0.045, 0.072, 0.145),
-    )
-    if requested is not None and 0.001 <= requested <= 0.15:
-        components = (
-            (0.65, requested, requested, requested),
-            (0.35 * 0.85, 0.001, 0.012, 0.045),
-            (0.35 * 0.15, 0.045, 0.072, 0.145),
-        )
-    return BaselineTimingPlanner(timing_runtime, source="activity").mixture_seconds(
-        relationship_key="activity.icmp.echo_rtt",
-        stable_id=stable_id,
-        components=components,
-        lifecycle_id=stable_id,
-        sample_key="rtt",
-    )
-
-
 def _linux_command_process_from_shell(
     command: str,
     *,
@@ -4154,14 +2585,6 @@ def _strip_linux_shell_redirections(parts: list[str]) -> list[str]:
     return cleaned
 
 
-def _dns_base_ttl(query: str, is_internal: bool) -> int:
-    """Return a stable authoritative TTL for a DNS query name."""
-    domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
-    if is_internal:
-        return domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
-    return domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
-
-
 def _dns_cache_window(value: object) -> tuple[float, float]:
     """Return a DNS client-cache validity window from current or legacy state."""
     if isinstance(value, tuple) and len(value) == 2:
@@ -4169,31 +2592,6 @@ def _dns_cache_window(value: object) -> tuple[float, float]:
     if isinstance(value, (int, float)):
         return 0.0, float(value)
     return 0.0, 0.0
-
-
-def _dns_observation_cache_key(
-    src_ip: str,
-    resolver_ip: str,
-    dns: "DnsContext",
-) -> tuple[str, str, str, str] | None:
-    """Return the cache key for suppressing repeated visible DNS observations."""
-    qtype_name = (dns.query_type or str(dns.qtype)).upper()
-    if qtype_name not in {"A", "AAAA", "MX", "SRV"}:
-        return None
-    if dns.rcode != "NOERROR" or not dns.answers or not dns.TTLs:
-        return None
-    normalized_query = (dns.query or "").rstrip(".").lower()
-    if not normalized_query:
-        return None
-    normalized_answers = "|".join(sorted(str(answer) for answer in dns.answers))
-    return (src_ip, resolver_ip, normalized_query, f"{qtype_name}:{normalized_answers}")
-
-
-def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
-    """Return whether a DNS query belongs to the scenario's internal namespace."""
-    lowered = query.rstrip(".").lower()
-    domain = ad_domain.rstrip(".").lower()
-    return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
 def _dns_nxdomain_companion_queries(hostname: str | None, ad_domain: str) -> list[str]:
@@ -4215,30 +2613,6 @@ def _dns_nxdomain_companion_queries(hostname: str | None, ad_domain: str) -> lis
         f"oldserver.{ad_domain}",
         f"printer01.{ad_domain}",
     ]
-
-
-def _proxy_request_allows_cache_hit(
-    *,
-    method: str,
-    url: str,
-    content_type: str,
-    domain_tags: list[str] | tuple[str, ...],
-) -> bool:
-    """Return whether a proxy request can plausibly be served from cache."""
-    if method.upper() not in {"GET", "HEAD"}:
-        return False
-    url_l = url.lower()
-    content_l = content_type.lower()
-    if any(tag in {"c2", "malware", "beacon", "command-control"} for tag in domain_tags):
-        return False
-    if any(marker in url_l for marker in ("/api/", "/checkin", "/beacon", "/task", "/gate")):
-        return False
-    if content_l in {"application/json", "application/octet-stream"}:
-        return False
-    return content_l.startswith(("image/", "font/")) or content_l in {
-        "application/javascript",
-        "text/css",
-    }
 
 
 def _origin_form_uri_from_proxy_url(url: str) -> str:
@@ -4299,152 +2673,6 @@ def _proxy_http_response_body_len(
         proxy_context.content_type or "text/html",
         max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1]),
     )
-
-
-def _proxy_time_taken_ms(
-    duration: float | None,
-    rng: random.Random,
-    *,
-    method: str,
-    status_code: int,
-    cache_result: str = "",
-    minimum_ms: int = 1,
-    timing_runtime: TimingRuntime | None = None,
-    stable_id: str = "",
-) -> int:
-    """Return proxy-side service time without mirroring wire duration exactly."""
-    base_ms = max(1, int((duration or 0.0) * 1000))
-    method_upper = method.upper()
-    cache_upper = cache_result.upper()
-    planner = _activity_timing_planner(timing_runtime)
-    timing_id = stable_id or _activity_timing_stable_id(
-        "proxy-time",
-        base_ms,
-        method_upper,
-        status_code,
-        cache_upper,
-        rng=rng,
-    )
-
-    if status_code >= 400:
-        minimum, median, maximum = (
-            (20.0, 140.0, 1500.0) if method_upper == "CONNECT" else (35.0, 210.0, 2400.0)
-        )
-        sampled_ms = round(
-            planner.right_skew_seconds(
-                relationship_key="activity.proxy.error_service_time_ms",
-                stable_id=timing_id,
-                minimum=minimum,
-                median=median,
-                maximum=maximum,
-                sample_key="milliseconds",
-            )
-        )
-    elif cache_upper == "HIT":
-        ratio = planner.right_skew_seconds(
-            relationship_key="activity.proxy.cache_hit_ratio",
-            stable_id=timing_id,
-            minimum=0.08,
-            median=0.16,
-            maximum=0.42,
-            sample_key="ratio",
-        )
-        overhead_ms = planner.right_skew_seconds(
-            relationship_key="activity.proxy.cache_hit_overhead_ms",
-            stable_id=timing_id,
-            minimum=3.0,
-            median=12.0,
-            maximum=95.0,
-            sample_key="overhead",
-        )
-        sampled_ms = round(max(8.0, base_ms * ratio) + overhead_ms)
-    elif method_upper == "CONNECT":
-        overhead_ms = planner.right_skew_seconds(
-            relationship_key="activity.proxy.connect_overhead_ms",
-            stable_id=timing_id,
-            minimum=19.0,
-            median=72.0,
-            maximum=420.0,
-            sample_key="overhead",
-        )
-        if base_ms > 10_000:
-            overhead_ms += planner.right_skew_seconds(
-                relationship_key="activity.proxy.connect_long_tail_ms",
-                stable_id=timing_id,
-                minimum=1.0,
-                median=60.0,
-                maximum=950.0,
-                sample_key="tail",
-            )
-        jitter_ms = planner.centered_seconds(
-            relationship_key="activity.proxy.connect_jitter_ms",
-            stable_id=timing_id,
-            mean=8.0,
-            standard_deviation=15.0,
-            minimum=-11.0,
-            maximum=47.0,
-            sample_key="jitter",
-        )
-        sampled_ms = round(base_ms + overhead_ms + jitter_ms)
-    else:
-        overhead_ms = planner.right_skew_seconds(
-            relationship_key="activity.proxy.request_overhead_ms",
-            stable_id=timing_id,
-            minimum=7.0,
-            median=34.0,
-            maximum=180.0,
-            sample_key="overhead",
-        )
-        if base_ms > 5000:
-            overhead_ms += planner.right_skew_seconds(
-                relationship_key="activity.proxy.request_long_tail_ms",
-                stable_id=timing_id,
-                minimum=1.0,
-                median=28.0,
-                maximum=500.0,
-                sample_key="tail",
-            )
-        jitter_ms = planner.centered_seconds(
-            relationship_key="activity.proxy.request_jitter_ms",
-            stable_id=timing_id,
-            mean=6.0,
-            standard_deviation=12.0,
-            minimum=-9.0,
-            maximum=35.0,
-            sample_key="jitter",
-        )
-        sampled_ms = round(base_ms + overhead_ms + jitter_ms)
-
-    sampled_ms = max(minimum_ms, sampled_ms)
-    if duration is not None and sampled_ms == base_ms:
-        sampled_ms += 11
-    return max(minimum_ms, sampled_ms)
-
-
-def _proxy_action_for_context(
-    *,
-    method: str,
-    url: str,
-    status_code: int,
-    cache_result: str,
-    dst_port: int | None = None,
-    explicit_mode: bool = False,
-) -> str:
-    """Return a source-native proxy policy/action hint for proxy events."""
-    normalized_cache = (cache_result or "").upper()
-    if normalized_cache == "DENIED":
-        return "deny"
-    if normalized_cache == "AUTH_REQUIRED":
-        return "auth-required"
-    if normalized_cache == "GATEWAY_ERROR":
-        return "gateway-error"
-    normalized_method = method.upper()
-    normalized_url = url.lower()
-    if normalized_method == "CONNECT":
-        return "tunnel"
-    if dst_port == 443 or normalized_url.startswith("https://"):
-        return "ssl-inspect"
-    return "forward"
 
 
 def _is_machine_context_proxy_user_agent(user_agent: str) -> bool:
@@ -4581,29 +2809,6 @@ def _ocsp_status_for_certificate(
     return "good"
 
 
-def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
-    """Return stable NTP server metadata for a destination."""
-    from evidenceforge.generation.activity.network_params import public_ntp_servers
-
-    for server in public_ntp_servers():
-        if server.get("ip") == dst_ip:
-            stratum = int(server.get("stratum", 2))
-            ref_id = str(server.get("ref_id", ".GPS."))
-            return stratum, ref_id
-
-    rng = random.Random(_stable_seed(f"ntp_server_profile:{dst_ip}"))
-    if _is_private_ip(dst_ip):
-        return rng.choice([2, 2, 3, 3, 4]), rng.choice(
-            [
-                server.get("ip")
-                for server in public_ntp_servers()
-                if isinstance(server.get("ip"), str) and server.get("ip") != dst_ip
-            ]
-            or ["129.6.15.28", "132.163.97.1", "132.163.96.1", "192.5.41.40"]
-        )
-    return rng.choice([1, 1, 2]), rng.choice([".GPS.", ".PPS.", ".GOES.", ".ACTS."])
-
-
 _NTP_ASSOCIATION_POLL_CYCLE = (1024, 2048, 2048, 4096, 4096)
 
 
@@ -4627,126 +2832,6 @@ def _ntp_association_poll_seconds(src_ip: str, dst_ip: str) -> int:
 def _ntp_precision_interval_seconds(precision_exponent: int) -> float:
     """Convert the NTP wire precision exponent into Zeek's interval field."""
     return float(2**precision_exponent)
-
-
-def _ntp_parser_min_gap_seconds(poll_seconds: float) -> float:
-    """Return the minimum plausible gap between successful parser observations."""
-    return max(300.0, poll_seconds * 0.40)
-
-
-def _ntp_payload_accounting(
-    *,
-    src_ip: str,
-    dst_ip: str,
-    time: datetime,
-    conn_state: str | None,
-    history: str | None,
-    orig_bytes: int | None,
-    resp_bytes: int | None,
-    duration: float | None,
-) -> tuple[int | None, int | None, float | None]:
-    """Return source-native NTP UDP payload sizes for conn.log accounting."""
-    rng = random.Random(
-        _stable_seed(
-            "ntp_payload_accounting:"
-            f"{src_ip}:{dst_ip}:{time.isoformat()}:{conn_state or ''}:{history or ''}"
-        )
-    )
-    request_datagrams = max(1, (history or "").count("D"))
-    response_datagrams = (history or "").count("d") if (resp_bytes or 0) > 0 else 0
-
-    def sample_payload_size() -> int:
-        return int(
-            rng.choices(
-                (48, 48, 56, 64, 68, 76, 88, 96, 112, 120),
-                weights=(34, 20, 14, 9, 7, 5, 4, 3, 2, 2),
-                k=1,
-            )[0]
-        )
-
-    normalized_orig = sum(sample_payload_size() for _ in range(request_datagrams))
-    normalized_resp = (
-        sum(sample_payload_size() for _ in range(response_datagrams))
-        if conn_state not in {"S0", "REJ"} and response_datagrams > 0
-        else 0
-    )
-    normalized_duration = duration
-    if normalized_resp > 0 and (normalized_duration is None or normalized_duration > 0.25):
-        normalized_duration = rng.uniform(0.003, 0.12)
-    return normalized_orig, normalized_resp, normalized_duration
-
-
-def _ntp_observed_response_fields(
-    server_response: dict[str, float],
-    *,
-    dst_ip: str,
-    event_time: datetime,
-    timing_runtime: TimingRuntime | None = None,
-) -> dict[str, float]:
-    """Return NTP response fields with stable server traits and per-poll texture."""
-    root_delay = float(server_response["root_delay"])
-    root_disp = float(server_response["root_disp"])
-    timing = _activity_timing_planner(timing_runtime)
-    stable_id = f"ntp-response:{dst_ip}:{event_time.isoformat()}"
-    observed_delay = timing.centered_seconds(
-        relationship_key="activity.ntp.observed_root_delay",
-        stable_id=stable_id,
-        mean=root_delay,
-        standard_deviation=max(0.00001, root_delay * 0.06),
-        minimum=max(0.000001, root_delay * 0.91 - 0.00025),
-        maximum=max(0.000003, root_delay * 1.12 + 0.00035),
-        sample_key="root_delay",
-    )
-    observed_disp = timing.mixture_seconds(
-        relationship_key="activity.ntp.observed_root_dispersion",
-        stable_id=stable_id,
-        components=(
-            (
-                0.82,
-                max(0.000001, root_disp * 0.88 - 0.00015),
-                max(0.000002, root_disp),
-                max(0.000003, root_disp * 1.16 + 0.0004),
-            ),
-            (
-                0.18,
-                max(0.000001, root_disp * 0.95 + 0.00035),
-                max(0.000002, root_disp * 1.08 + 0.0007),
-                max(0.000003, root_disp * 1.20 + 0.0018),
-            ),
-        ),
-        sample_key="root_dispersion",
-    )
-    return {
-        "precision": float(server_response["precision"]),
-        "root_delay": round(max(0.00025, observed_delay), 6),
-        "root_disp": round(max(0.00025, observed_disp), 6),
-    }
-
-
-def _select_public_ntp_ip(src_ip: str, dst_ip: str, time: datetime) -> str | None:
-    """Return a configured public NTP server IP for inferred public NTP traffic."""
-    from evidenceforge.generation.activity.network_params import public_ntp_servers
-
-    servers = [
-        server
-        for server in public_ntp_servers()
-        if isinstance(server.get("ip"), str) and server["ip"]
-    ]
-    if not servers:
-        return None
-    rng = random.Random(
-        _stable_seed(
-            "public_ntp_destination:"
-            f"{src_ip}:{dst_ip}:{time.replace(minute=0, second=0, microsecond=0).isoformat()}"
-        )
-    )
-    weights = [
-        max(0.1, float(server.get("weight", 1.0)))
-        if isinstance(server.get("weight", 1.0), int | float)
-        else 1.0
-        for server in servers
-    ]
-    return str(rng.choices([server["ip"] for server in servers], weights=weights, k=1)[0])
 
 
 def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
@@ -4815,34 +2900,6 @@ def _tls_signature_algorithm_for_issuer(
         fallback_type=fallback_key_type,
         fallback_length=fallback_key_length,
     )
-
-
-def _activity_timing_planner(timing_runtime: TimingRuntime | None) -> BaselineTimingPlanner:
-    """Return the engine planner or an isolated direct-helper adapter."""
-
-    runtime = timing_runtime if isinstance(timing_runtime, TimingRuntime) else None
-    return BaselineTimingPlanner(
-        runtime or TimingRuntime.compatibility_default(),
-        source="activity",
-    )
-
-
-def _activity_timing_stable_id(
-    family: str,
-    *parts: object,
-    rng: random.Random | None = None,
-) -> str:
-    """Return a stable compatibility scope without continuous RNG timing draws."""
-
-    state_token = ""
-    if rng is not None:
-        state = rng.getstate()[1]
-        adapter_ordinal = int(getattr(rng, "_eforge_activity_timing_ordinal", 0))
-        rng._eforge_activity_timing_ordinal = adapter_ordinal + 1  # type: ignore[attr-defined]
-        state_token = (
-            f"{_stable_seed(':'.join(str(value) for value in state[:8]))}:{adapter_ordinal}"
-        )
-    return ":".join((family, *(str(part) for part in parts), state_token))
 
 
 @dataclass(frozen=True, slots=True)
@@ -6069,34 +4126,16 @@ class ActivityGenerator:
             )
 
     def _process_termination_recorded(
-        self,
-        hostname: str,
-        pid: int,
-        start_time: datetime | None,
+        self, hostname: str, pid: int, start_time: datetime | None
     ) -> bool:
-        """Return whether a process instance termination was already generated."""
-        if start_time is None:
-            return any(
-                terminated_host == hostname and terminated_pid == pid
-                for terminated_host, terminated_pid, _ in self._terminated_process_keys
-            )
-        return (hostname, pid, start_time) in self._terminated_process_keys
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._process_termination_recorded(hostname, pid, start_time)
 
     def _process_instance_key(
-        self,
-        hostname: str,
-        pid: int,
-        start_time: datetime | None = None,
+        self, hostname: str, pid: int, start_time: datetime | None = None
     ) -> tuple[str, int, datetime | None]:
-        """Return a PID-reuse-safe key for the current process instance."""
-        if start_time is None:
-            state_manager = getattr(self, "state_manager", None)
-            process = (
-                state_manager.get_process(hostname, pid) if state_manager is not None else None
-            )
-            if process is not None:
-                start_time = process.start_time
-        return hostname, pid, start_time
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._process_instance_key(hostname, pid, start_time)
 
     def _process_cached_time(
         self,
@@ -6105,18 +4144,8 @@ class ActivityGenerator:
         hostname: str,
         pid: int,
     ) -> datetime | None:
-        """Read an instance timestamp with compatibility for direct unit fixtures."""
-        instance_key = self._process_instance_key(hostname, pid)
-        value = cache.get(instance_key)
-        if value is not None:
-            return value
-        value = cache.get((hostname, pid))
-        if value is not None:
-            return value
-        if instance_key[2] is not None:
-            return None
-        latest_value = latest.get((hostname, pid))
-        return latest_value[1] if latest_value is not None else None
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._process_cached_time(cache, latest, hostname, pid)
 
     def advance_process_state_watermark(self, cutoff: datetime) -> None:
         """Discard process-instance helper state sealed by the engine watermark."""
@@ -6425,29 +4454,12 @@ class ActivityGenerator:
             )
 
     def _held_process_termination_time(
-        self,
-        *,
-        system: System,
-        pid: int,
-        requested_time: datetime,
+        self, *, system: System, pid: int, requested_time: datetime
     ) -> datetime:
-        """Move process termination after any active process-owned transport hold."""
-        hold_until = self._process_connection_hold_until.get(
-            self._process_instance_key(system.hostname, pid)
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._held_process_termination_time(
+            system=system, pid=pid, requested_time=requested_time
         )
-        if hold_until is None:
-            return requested_time
-        hold_until = ensure_utc(hold_until)
-        requested_time = ensure_utc(requested_time)
-        if requested_time > hold_until:
-            return requested_time
-        delay_rng = random.Random(
-            _stable_seed(
-                "process_terminate_after_connection_hold:"
-                f"{system.hostname}:{pid}:{hold_until.isoformat()}"
-            )
-        )
-        return hold_until + timedelta(seconds=delay_rng.uniform(1.0, 12.0))
 
     def _remember_foreground_process_finalizer(
         self,
@@ -6459,131 +4471,27 @@ class ActivityGenerator:
         logon_id: str,
         termination_time: datetime,
     ) -> None:
-        """Track a bounded foreground process until its terminate event is observed."""
-        key = self._process_instance_key(system.hostname, pid)
-        termination_time = self._held_process_termination_time(
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._remember_foreground_process_finalizer(
             system=system,
+            user=user,
             pid=pid,
-            requested_time=ensure_utc(termination_time),
+            process_name=process_name,
+            logon_id=logon_id,
+            termination_time=termination_time,
         )
-        self._foreground_process_finalizers[key] = (
-            system,
-            user.username,
-            process_name,
-            logon_id,
-            termination_time,
-        )
-        running = self.state_manager.get_process(system.hostname, pid)
-        if (
-            running is not None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(
-                running.image,
-                running.command_line,
-            )
-            and self._foreground_shell_key(
-                system=system,
-                username=running.username,
-                logon_id=running.logon_id,
-                parent_pid=running.parent_pid,
-            )
-            is not None
-        ):
-            self._remember_foreground_shell_available(
-                system=system,
-                username=running.username,
-                logon_id=running.logon_id,
-                parent_pid=running.parent_pid,
-                termination_time=termination_time,
-                seed_text=running.command_line,
-                concurrency_group_id=running.concurrency_group_id,
-            )
 
     def foreground_process_termination_time(self, hostname: str, pid: int) -> datetime | None:
-        """Return the canonical bounded-process deadline, when one is registered."""
-        finalizer = self._foreground_process_finalizers.get(
-            self._process_instance_key(hostname, pid)
-        )
-        return finalizer[4] if finalizer is not None else None
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground().foreground_process_termination_time(hostname, pid)
 
     def resolve_process_lifecycle_close_candidate(
-        self,
-        hostname: str,
-        pid: int,
-        close_at: datetime,
+        self, hostname: str, pid: int, close_at: datetime
     ) -> datetime | None:
-        """Resolve one advisory process close against its exact child frontier."""
-
-        running = self.state_manager.get_process(hostname, pid)
-        if running is None:
-            raise StateError(
-                f"Process close admission lost its live State identity: {hostname} pid={pid}"
-            )
-        lifecycle_process = self._lifecycle_authority.registry.get_process(running.ecar_object_id)
-        if lifecycle_process is None and self._lifecycle_compatibility_fixture_mode:
-            self._lifecycle_authority.ensure_process(hostname, pid)
-            lifecycle_process = self._lifecycle_authority.registry.get_process(
-                running.ecar_object_id
-            )
-        if (
-            lifecycle_process is None
-            or lifecycle_process.closed_at is not None
-            or lifecycle_process.close_barrier is not None
-            or lifecycle_process.closure_ticket is not None
-            or lifecycle_process.identity.hostname != running.system
-            or lifecycle_process.identity.pid != running.pid
-            or lifecycle_process.identity.started_at != running.start_time
-            or lifecycle_process.identity.image != running.image
-        ):
-            raise StateError(
-                "Process close admission has no matching live lifecycle identity: "
-                f"{hostname} pid={pid} object={running.ecar_object_id}"
-            )
-        if self._lifecycle_compatibility_fixture_mode:
-            direct_children = tuple(
-                child
-                for child in self.state_manager.get_processes_on_system(hostname)
-                if child.parent_pid == pid
-            )
-            for child in direct_children:
-                self._lifecycle_authority.ensure_process(hostname, child.pid)
-                child_lifecycle = self._lifecycle_authority.registry.get_process(
-                    child.ecar_object_id
-                )
-                if (
-                    child_lifecycle is None
-                    or child_lifecycle.closed_at is not None
-                    or child_lifecycle.identity.object_id != child.ecar_object_id
-                    or child_lifecycle.identity.hostname != child.system
-                    or child_lifecycle.identity.pid != child.pid
-                    or child_lifecycle.identity.started_at != child.start_time
-                    or child_lifecycle.identity.image != child.image
-                    or child_lifecycle.identity.parent_object_id != running.ecar_object_id
-                ):
-                    raise StateError(
-                        "Compatibility process close admission has no matching live child "
-                        f"lifecycle identity: {hostname} pid={child.pid} "
-                        f"object={child.ecar_object_id}"
-                    )
-        try:
-            latest_closed_child = self._lifecycle_authority.process_child_close_deadline(
-                hostname,
-                pid,
-            )
-        except StateError as error:
-            if self._lifecycle_authority.live_child_process_page_for_object(running.ecar_object_id):
-                return None
-            raise StateError(
-                "Process close admission child frontier changed during resolution: "
-                f"{hostname} pid={pid} object={running.ecar_object_id}"
-            ) from error
-        candidate = ensure_utc(close_at)
-        if latest_closed_child is not None:
-            candidate = max(
-                candidate,
-                ensure_utc(latest_closed_child) + timedelta(microseconds=1),
-            )
-        return candidate
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground().resolve_process_lifecycle_close_candidate(
+            hostname, pid, close_at
+        )
 
     def finalize_foreground_process_lifetimes(self, end_time: datetime) -> None:
         """Close any tracked one-shot foreground shell processes still running.
@@ -7764,22 +5672,32 @@ class ActivityGenerator:
         return ensure_utc(event_time) < ensure_utc(scenario_end)
 
     def _foreground_shell_key(
+        self, *, system: System, username: str, logon_id: str, parent_pid: int
+    ) -> tuple[str, str, str, int] | None:
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._foreground_shell_key(
+            system=system, username=username, logon_id=logon_id, parent_pid=parent_pid
+        )
+
+    def _unbounded_foreground_shell_ready_at(
         self,
         *,
         system: System,
         username: str,
         logon_id: str,
         parent_pid: int,
-    ) -> tuple[str, str, str, int] | None:
-        """Return the interactive shell key that serializes foreground Linux children."""
-        proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if proc is None:
-            return None
-        image = (proc.image or "").rsplit("/", 1)[-1].lower()
-        if image not in {"bash", "sh", "zsh"}:
-            return None
-        shell_logon_id = proc.logon_id or logon_id
-        return (system.hostname, username, shell_logon_id, parent_pid)
+        requested_time: datetime,
+        concurrency_group_id: str = "",
+    ) -> datetime | None:
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._unbounded_foreground_shell_ready_at(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=requested_time,
+            concurrency_group_id=concurrency_group_id,
+        )
 
     def _reserve_foreground_shell_time(
         self,
@@ -7791,49 +5709,37 @@ class ActivityGenerator:
         requested_time: datetime,
         seed_text: str,
         concurrency_group_id: str = "",
-    ) -> datetime:
-        """Delay a new foreground command until the same interactive shell is free."""
-        key = self._foreground_shell_key(
+    ) -> datetime | None:
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._reserve_foreground_shell_time(
             system=system,
             username=username,
             logon_id=logon_id,
             parent_pid=parent_pid,
+            requested_time=requested_time,
+            seed_text=seed_text,
+            concurrency_group_id=concurrency_group_id,
         )
-        if key is None:
-            return requested_time
-        shell_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if shell_proc is not None:
-            shell_start = ensure_utc(shell_proc.start_time)
-            readiness_seed = _stable_seed(
-                "foreground_shell_initial_ready:"
-                f"{system.hostname}:{username}:{logon_id}:{parent_pid}:"
-                f"{shell_start.isoformat()}"
-            )
-            requested_time = max(
-                requested_time,
-                shell_start
-                + timedelta(
-                    milliseconds=(
-                        _FOREGROUND_SHELL_INITIAL_READY_MIN_MS
-                        + (readiness_seed % _FOREGROUND_SHELL_INITIAL_READY_SPAN_MS)
-                    )
-                ),
-            )
-        next_time = self._foreground_shell_next_time.get(key)
-        if next_time is None or requested_time >= next_time:
-            return requested_time
-        if (
-            concurrency_group_id
-            and self._foreground_shell_release_groups.get(key) == concurrency_group_id
-        ):
-            return requested_time
-        rng = random.Random(
-            _stable_seed(
-                f"foreground_shell_gap:{system.hostname}:{username}:{logon_id}:"
-                f"{parent_pid}:{seed_text}:{next_time.timestamp()}"
-            )
+
+    @staticmethod
+    def _foreground_shell_release_time(
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        termination_time: datetime,
+        seed_text: str,
+    ) -> datetime:
+        """Forward to the shared process pure owner."""
+        return process_policy._foreground_shell_release_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            termination_time=termination_time,
+            seed_text=seed_text,
         )
-        return next_time + timedelta(milliseconds=rng.randint(120, 900))
 
     def _remember_foreground_shell_available(
         self,
@@ -7846,40 +5752,24 @@ class ActivityGenerator:
         seed_text: str,
         concurrency_group_id: str = "",
     ) -> None:
-        """Remember when an interactive Linux shell can plausibly accept more input."""
-        rng = random.Random(
-            _stable_seed(
-                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
-                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
-            )
-        )
-        release_time = termination_time + timedelta(
-            milliseconds=rng.randint(180, _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS)
-        )
-        bash_key = (system.hostname, username, logon_id)
-        self._bash_history_next_time[bash_key] = max(
-            self._bash_history_next_time.get(bash_key, release_time),
-            release_time,
-        )
-        generic_bash_key = (system.hostname, username, "")
-        self._bash_history_next_time[generic_bash_key] = max(
-            self._bash_history_next_time.get(generic_bash_key, release_time),
-            release_time,
-        )
-        key = self._foreground_shell_key(
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._remember_foreground_shell_available(
             system=system,
             username=username,
             logon_id=logon_id,
             parent_pid=parent_pid,
+            termination_time=termination_time,
+            seed_text=seed_text,
+            concurrency_group_id=concurrency_group_id,
         )
-        if key is None:
-            return
-        self._foreground_shell_next_time[key] = max(
-            release_time,
-            self._foreground_shell_next_time.get(key, release_time),
+
+    def _discard_superseded_foreground_reservation(
+        self, *, system: System, process: RunningProcess, termination_time: datetime
+    ) -> None:
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._discard_superseded_foreground_reservation(
+            system=system, process=process, termination_time=termination_time
         )
-        if self._foreground_shell_next_time[key] == release_time:
-            self._foreground_shell_release_groups[key] = concurrency_group_id
 
     def reserve_linux_foreground_process_start(
         self,
@@ -7892,7 +5782,7 @@ class ActivityGenerator:
         process_name: str,
         command_line: str,
         authoritative_time: bool = False,
-    ) -> datetime:
+    ) -> datetime | None:
         """Return a shell-serialized start time for a Linux foreground process.
 
         Authored events can be visited after later baseline reservations. When
@@ -7901,7 +5791,7 @@ class ActivityGenerator:
         """
         if _get_os_category(system.os) != "linux":
             return requested_time
-        if _linux_foreground_lifetime(process_name, command_line) is None:
+        if not _linux_shell_process_reserves_foreground(process_name, command_line):
             return requested_time
         authored_candidate = requested_time
         session = self.state_manager.get_session(logon_id)
@@ -7932,7 +5822,19 @@ class ActivityGenerator:
             requested_time=reserved_time,
             seed_text=command_line,
         )
+        if serialized_time is None:
+            return None
         if authoritative_time:
+            # An authored anchor cannot bypass an actually occupied shell.
+            occupied_until = self._unbounded_foreground_shell_ready_at(
+                system=system,
+                username=username,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                requested_time=authored_candidate,
+            )
+            if occupied_until is None or occupied_until > authored_candidate:
+                return serialized_time
             session_deadline = self.state_manager.get_session_end_time(logon_id)
             active_deadline = _session_activity_end_time(session) if session is not None else None
             if active_deadline is not None:
@@ -7957,36 +5859,14 @@ class ActivityGenerator:
         parent_pid: int,
         activity_time: datetime,
     ) -> datetime:
-        """Return the actual or deterministically planned SSH shell readiness."""
-
-        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if (
-            explicit_parent is not None
-            and explicit_parent.logon_id == session.logon_id
-            and explicit_parent.image.rsplit("/", 1)[-1].casefold() in {"bash", "sh", "zsh"}
-        ):
-            return ensure_utc(explicit_parent.start_time)
-
-        session_shell = (
-            self.state_manager.get_process(system.hostname, session.session_shell_pid)
-            if session.session_shell_pid is not None
-            else None
-        )
-        if (
-            session_shell is not None
-            and session_shell.logon_id == session.logon_id
-            and session_shell.image.rsplit("/", 1)[-1].casefold() in {"bash", "sh", "zsh"}
-        ):
-            return ensure_utc(session_shell.start_time)
-
-        _, shell_ready = self._linux_ssh_session_shell_times(
-            user=self._user_model_for_username(username),
-            target_system=system,
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._linux_ssh_process_shell_ready_time(
+            system=system,
             session=session,
-            logon_time=session.start_time,
+            username=username,
+            parent_pid=parent_pid,
             activity_time=activity_time,
         )
-        return shell_ready
 
     def _reusable_linux_sudo_shell_pid(
         self,
@@ -8027,7 +5907,7 @@ class ActivityGenerator:
         requested_time: datetime,
         command: str,
         session: ActiveSession | None,
-    ) -> datetime:
+    ) -> datetime | None:
         """Return an exact-or-conservative pre-mutation sudo serialization ceiling."""
 
         requested_time = ensure_utc(requested_time)
@@ -8632,45 +6512,10 @@ class ActivityGenerator:
         return rng.choice(options)
 
     def _active_interactive_windows_session(
-        self,
-        system: System,
-        time: datetime,
+        self, system: System, time: datetime
     ) -> ActiveSession | None:
-        """Return the newest user-owned interactive Windows session on a host."""
-        if _get_os_category(system.os) != "windows":
-            return None
-
-        candidates = [
-            session
-            for session in self.state_manager.get_active_sessions_on_system_at(
-                system.hostname,
-                time,
-            )
-            if (
-                session.username not in _SYSTEM_ACCOUNTS
-                and not session.username.endswith("$")
-                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
-                and session.session_kind not in {"network", "service"}
-                and _session_started_by(session, time)
-                and not self._workstation_logon_locked_at(
-                    system,
-                    session.username,
-                    session.logon_id,
-                    time,
-                )
-            )
-        ]
-        if not candidates:
-            return None
-
-        assigned_user = getattr(system, "assigned_user", None)
-        if assigned_user:
-            assigned_candidates = [
-                session for session in candidates if session.username == assigned_user
-            ]
-            if assigned_candidates:
-                candidates = assigned_candidates
-        return max(candidates, key=lambda session: session.start_time)
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._active_interactive_windows_session(system, time)
 
     def _active_user_interactive_windows_session(
         self,
@@ -8767,10 +6612,8 @@ class ActivityGenerator:
         return max(candidates, key=lambda session: ensure_utc(session.start_time))
 
     def _session_id_for_logon(self, logon_id: str) -> int:
-        """Return the canonical source-native session ID for a LogonID."""
-        if not logon_id:
-            return 0
-        return self.state_manager.get_session_id(logon_id)
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._session_id_for_logon(logon_id)
 
     def _locked_user_interactive_windows_session(
         self,
@@ -8868,35 +6711,16 @@ class ActivityGenerator:
         )
 
     def _resolve_process_identity(
-        self,
-        *,
-        system: System,
-        username: str,
-        logon_id: str,
-        process_name: str,
-        time: datetime,
+        self, *, system: System, username: str, logon_id: str, process_name: str, time: datetime
     ) -> tuple[str, str]:
-        """Resolve process owner/logon before emitters render cross-source evidence."""
-        if _get_os_category(system.os) != "windows":
-            return username, logon_id
-
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        normalized_username = username.upper().split("\\")[-1]
-        if (
-            normalized_username in _SYSTEM_ACCOUNT_LOGON_IDS
-            and exe_name not in _WINDOWS_USER_SESSION_PROCESSES
-        ):
-            return normalized_username, _SYSTEM_ACCOUNT_LOGON_IDS[normalized_username]
-        if (
-            exe_name not in _WINDOWS_USER_SESSION_PROCESSES
-            or normalized_username not in _SYSTEM_ACCOUNTS
-        ):
-            return username, logon_id
-
-        session = self._active_interactive_windows_session(system, time)
-        if session is None:
-            return username, logon_id
-        return session.username, session.logon_id
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._resolve_process_identity(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            time=time,
+        )
 
     def _remember_connection_tuple(
         self,
@@ -9951,7 +7775,7 @@ class ActivityGenerator:
 
         if profiled_worker is not None:
             family_name, worker_name, _family = profiled_worker
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=source_system,
                 worker_time=process_time,
                 activity_time=time,
@@ -9968,9 +7792,13 @@ class ActivityGenerator:
                 return pid, image
 
         if _get_os_category(source_system.os) == "windows":
-            parent_pid = self._windows_system_parent_fallback(source_system, process_time)
+            parent_pid = self._process_parents()._windows_system_parent_fallback(
+                source_system, process_time
+            )
         else:
-            parent_pid = self._linux_system_parent_fallback(source_system, process_time)
+            parent_pid = self._process_parents()._linux_system_parent_fallback(
+                source_system, process_time
+            )
             if image.lower().startswith("/usr/lib/apt/methods/"):
                 parent_pid = self._ensure_linux_apt_frontend_process(
                     source_system=source_system,
@@ -10005,43 +7833,20 @@ class ActivityGenerator:
         return -1, None
 
     def _active_profiled_service_process(
-        self,
-        *,
-        system: System,
-        time: datetime,
-        spec: ServiceProcessSpec,
-        parent_pid: int,
+        self, *, system: System, time: datetime, spec: ServiceProcessSpec, parent_pid: int
     ) -> int | None:
-        """Return one exact active service manager or worker process."""
-
-        candidates = [
-            process
-            for process in self.state_manager.get_processes_on_system(system.hostname)
-            if process.image.replace("/", "\\").casefold()
-            == spec.image.replace("/", "\\").casefold()
-            and process.command_line == spec.command_line
-            and process.username.casefold() == spec.username.casefold()
-            and process.parent_pid == parent_pid
-            and process.start_time <= time
-            and self._is_pid_active_at(system, process.pid, time)
-        ]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda process: process.start_time).pid
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._active_profiled_service_process(
+            system=system, time=time, spec=spec, parent_pid=parent_pid
+        )
 
     def _process_source_visible_by(
-        self,
-        *,
-        system: System,
-        pid: int,
-        deadline: datetime | None,
+        self, *, system: System, pid: int, deadline: datetime | None
     ) -> bool:
-        """Return whether a process's format-independent source bound fits a deadline."""
-
-        if deadline is None:
-            return True
-        source_time = self._process_source_frontier_or_bound(system=system, pid=pid)
-        return source_time is not None and source_time <= ensure_utc(deadline)
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_source_visible_by(
+            system=system, pid=pid, deadline=deadline
+        )
 
     def _process_source_bound_visible_by(
         self,
@@ -10065,10 +7870,9 @@ class ActivityGenerator:
         parent_source_time: datetime | None = None,
         session_source_time: datetime | None = None,
     ) -> datetime:
-        """Return the conservative finalized source frontier for one process create."""
-
-        return self._process_create_source_bound_for_os(
-            os_category=_get_os_category(system.os),
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_create_source_bound(
+            system=system,
             canonical_time=canonical_time,
             parent_source_time=parent_source_time,
             session_source_time=session_source_time,
@@ -10082,103 +7886,25 @@ class ActivityGenerator:
         parent_source_time: datetime | None = None,
         session_source_time: datetime | None = None,
     ) -> datetime:
-        """Return a process-create source bound for one canonical OS family."""
-
-        canonical_time = ensure_utc(canonical_time)
-        return canonical_time + self._source_timing_planner.process_create_positive_headroom(
-            canonical_time,
-            os_category,
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_create_source_bound_for_os(
+            os_category=os_category,
+            canonical_time=canonical_time,
             parent_source_time=parent_source_time,
             session_source_time=session_source_time,
         )
 
-    def _process_source_frontier_or_bound(
-        self,
-        *,
-        system: System,
-        pid: int,
-    ) -> datetime | None:
-        """Return the frozen conservative bound for one exact process instance."""
-
-        process = self.state_manager.get_process_identity(system.hostname, pid)
-        if process is None:
-            return None
-        return self._process_identity_source_bound(
-            os_category=_get_os_category(system.os),
-            process=process,
-        )
+    def _process_source_frontier_or_bound(self, *, system: System, pid: int) -> datetime | None:
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_source_frontier_or_bound(system=system, pid=pid)
 
     def _process_identity_source_bound(
-        self,
-        *,
-        os_category: str,
-        process: ProcessIdentity,
+        self, *, os_category: str, process: ProcessIdentity
     ) -> datetime | None:
-        """Freeze one exact process bound through a bounded iterative ancestry walk."""
-
-        cache = self._process_source_create_bounds
-        process_key = (
-            process.hostname,
-            process.pid,
-            process.started_at,
-            process.object_id,
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_identity_source_bound(
+            os_category=os_category, process=process
         )
-        cached = cache.get(process_key)
-        if cached is not None:
-            return cached
-
-        chain: list[ProcessIdentity] = []
-        seen_object_ids: set[str] = set()
-        cursor = process
-        parent_source_time: datetime | None = None
-        for _ in range(_PROCESS_SOURCE_BOUND_MAX_ANCESTORS):
-            cursor_key = (
-                cursor.hostname,
-                cursor.pid,
-                cursor.started_at,
-                cursor.object_id,
-            )
-            cached = cache.get(cursor_key)
-            if cached is not None:
-                parent_source_time = cached
-                break
-            if cursor.object_id in seen_object_ids:
-                return None
-            seen_object_ids.add(cursor.object_id)
-            chain.append(cursor)
-            if cursor.parent_pid <= 0 or cursor.parent_pid == cursor.pid:
-                break
-            parent = self.state_manager.get_process_identity(
-                cursor.hostname,
-                cursor.parent_pid,
-            )
-            if parent is None or parent.started_at > cursor.started_at:
-                break
-            cursor = parent
-        else:
-            return None
-
-        for identity in reversed(chain):
-            session = (
-                self.state_manager.get_session(identity.logon_id) if identity.logon_id else None
-            )
-            parent_source_time = self._process_create_source_bound_for_os(
-                os_category=os_category,
-                canonical_time=identity.started_at,
-                parent_source_time=parent_source_time,
-                session_source_time=(
-                    _session_source_ready_time(session) if session is not None else None
-                ),
-            )
-            cache[
-                (
-                    identity.hostname,
-                    identity.pid,
-                    identity.started_at,
-                    identity.object_id,
-                )
-            ] = parent_source_time
-        return parent_source_time
 
     def _profiled_service_manager_parent_pid(
         self,
@@ -10188,24 +7914,10 @@ class ActivityGenerator:
         family: ServiceProcessFamily,
         existing_only: bool = False,
     ) -> int:
-        """Resolve the configured service-control parent for one resident manager."""
-
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        configured = sys_pids.get(family.manager.parent_key)
-        if configured and self._is_pid_active_at(system, configured, time):
-            return configured
-        if existing_only:
-            return self._resolve_existing_prepared_process_parent(
-                system=system,
-                user=self._user_model_for_username(family.manager.username),
-                time=time,
-                logon_id="0x3e7",
-                parent_pid=0,
-                process_username=family.manager.username,
-            )
-        if family.os_category == "windows":
-            return self._windows_system_parent_fallback(system, time)
-        return self._linux_system_parent_fallback(system, time)
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._profiled_service_manager_parent_pid(
+            system=system, time=time, family=family, existing_only=existing_only
+        )
 
     def _ensure_profiled_service_worker(
         self,
@@ -10217,186 +7929,15 @@ class ActivityGenerator:
         worker_name: str,
         source_visible_by: datetime | None = None,
     ) -> int:
-        """Create or reuse one worker beneath its exact resident service manager."""
-
-        worker_time = ensure_utc(worker_time)
-        activity_time = ensure_utc(activity_time)
-        source_deadline = ensure_utc(source_visible_by) if source_visible_by is not None else None
-        if source_deadline is not None and worker_time > source_deadline:
-            return 0
-
-        family = service_process_family(family_name)
-        if family.os_category != _get_os_category(system.os):
-            raise ValueError(f"service family {family_name!r} does not support {system.os!r}")
-        try:
-            worker = family.workers[worker_name]
-        except KeyError as exc:
-            raise KeyError(
-                f"unknown worker {worker_name!r} for service family {family_name!r}"
-            ) from exc
-
-        singleton_worker_pid = None
-        if source_deadline is not None:
-            singleton_worker_pid = self._existing_windows_singleton_service_pid(
-                system=system,
-                process_name=worker.image,
-                time=activity_time,
-                username=worker.username,
-                command_line=worker.command_line,
-            )
-            if singleton_worker_pid is not None and not self._process_source_visible_by(
-                system=system,
-                pid=singleton_worker_pid,
-                deadline=source_deadline,
-            ):
-                # The recursive worker path must not discover this conflict only
-                # after publishing a newly materialized service manager.
-                return 0
-
-        manager_parent = self._profiled_service_manager_parent_pid(
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._ensure_profiled_service_worker(
             system=system,
-            time=activity_time,
-            family=family,
-            existing_only=source_deadline is not None,
+            worker_time=worker_time,
+            activity_time=activity_time,
+            family_name=family_name,
+            worker_name=worker_name,
+            source_visible_by=source_visible_by,
         )
-        if source_deadline is not None and manager_parent <= 0:
-            return 0
-        manager_pid = self._active_profiled_service_process(
-            system=system,
-            time=activity_time,
-            spec=family.manager,
-            parent_pid=manager_parent,
-        )
-        manager_source_deadline = (
-            source_deadline - timedelta(milliseconds=1) if source_deadline is not None else None
-        )
-        manager_time = None
-        manager_source_time = None
-        if manager_pid is not None:
-            manager_source_time = self._process_source_frontier_or_bound(
-                system=system,
-                pid=manager_pid,
-            )
-            if manager_source_deadline is not None and (
-                manager_source_time is None or manager_source_time > manager_source_deadline
-            ):
-                return 0
-        else:
-            manager_seed = _stable_seed(
-                f"service_process_manager:{system.hostname}:{family_name}:{worker_time.isoformat()}"
-            )
-            manager_time = worker_time - timedelta(seconds=30 + (manager_seed % 271))
-            if manager_source_deadline is not None:
-                manager_source_time = self._process_create_source_bound(
-                    system=system,
-                    canonical_time=manager_time,
-                    parent_source_time=self._process_source_frontier_or_bound(
-                        system=system,
-                        pid=manager_parent,
-                    ),
-                )
-                if manager_source_time > manager_source_deadline:
-                    return 0
-
-        worker_pid = (
-            self._active_profiled_service_process(
-                system=system,
-                time=activity_time,
-                spec=worker,
-                parent_pid=manager_pid,
-            )
-            if manager_pid is not None
-            else None
-        )
-        if worker_pid is not None and source_deadline is not None:
-            if not self._process_source_visible_by(
-                system=system,
-                pid=worker_pid,
-                deadline=source_deadline,
-            ):
-                return 0
-        if (
-            source_deadline is not None
-            and singleton_worker_pid is None
-            and manager_source_time is not None
-            and worker_pid is None
-        ):
-            prospective_worker_time = worker_time
-            manager_process = (
-                self.state_manager.get_process(system.hostname, manager_pid)
-                if manager_pid is not None
-                else None
-            )
-            manager_start_time = (
-                manager_process.start_time if manager_process is not None else manager_time
-            )
-            if manager_start_time is not None:
-                earliest_worker_time = manager_start_time + timedelta(milliseconds=1)
-                if earliest_worker_time < activity_time:
-                    prospective_worker_time = max(
-                        prospective_worker_time,
-                        earliest_worker_time,
-                    )
-                else:
-                    prospective_worker_time = activity_time
-            worker_source_bound = self._process_create_source_bound(
-                system=system,
-                canonical_time=prospective_worker_time,
-                parent_source_time=manager_source_time,
-            )
-            if worker_source_bound > source_deadline:
-                return 0
-
-        if manager_pid is None:
-            if manager_time is None:
-                raise StateError("Profiled service manager preflight lost its canonical start")
-            manager_pid = self.generate_system_process(
-                system=system,
-                time=manager_time,
-                process_name=family.manager.image,
-                command_line=family.manager.command_line,
-                parent_pid=manager_parent,
-                username=family.manager.username,
-                emit_linux_syslog=False,
-                _profiled_service_bypass=True,
-                _skip_singleton_reuse=True,
-                source_visible_by=manager_source_deadline,
-            )
-            if manager_pid <= 0:
-                return 0
-
-        if worker_pid is None:
-            worker_pid = self._active_profiled_service_process(
-                system=system,
-                time=activity_time,
-                spec=worker,
-                parent_pid=manager_pid,
-            )
-        if worker_pid is None:
-            manager_process = self.state_manager.get_process(system.hostname, manager_pid)
-            if manager_process is not None:
-                earliest_worker_time = manager_process.start_time + timedelta(milliseconds=1)
-                if earliest_worker_time < activity_time:
-                    worker_time = max(worker_time, earliest_worker_time)
-                else:
-                    worker_time = activity_time
-            worker_pid = self.generate_system_process(
-                system=system,
-                time=worker_time,
-                process_name=worker.image,
-                command_line=worker.command_line,
-                parent_pid=manager_pid,
-                username=worker.username,
-                emit_linux_syslog=False,
-                _profiled_service_bypass=True,
-                source_visible_by=source_visible_by,
-            )
-            if worker_pid <= 0:
-                return 0
-        retained_pids = getattr(self, "_system_pids", {}).setdefault(system.hostname, {})
-        retained_pids[family.manager.key] = manager_pid
-        retained_pids[worker.key] = worker_pid
-        return worker_pid
 
     def _remember_system_connection_owner_finalizer(
         self,
@@ -10504,7 +8045,9 @@ class ActivityGenerator:
             return existing_pid
 
         frontend_time = helper_time - timedelta(milliseconds=rng.randint(80, 650))
-        systemd_pid = self._linux_system_parent_fallback(source_system, frontend_time)
+        systemd_pid = self._process_parents()._linux_system_parent_fallback(
+            source_system, frontend_time
+        )
         frontend_pid = self.generate_system_process(
             source_system,
             frontend_time,
@@ -11052,7 +8595,7 @@ class ActivityGenerator:
         parent_pid = (
             0
             if windows_cli_owner
-            else self._select_parent_pid(
+            else self._process_parents()._select_parent_pid(
                 source_system,
                 user,
                 image,
@@ -11113,7 +8656,7 @@ class ActivityGenerator:
             if singleton_claim is not None:
                 self._cancel_singleton_application_interval(*singleton_claim)
             return -1, None
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(source_system.hostname, pid)
@@ -11264,13 +8807,13 @@ class ActivityGenerator:
                 )
                 if child_source_bound > ensure_utc(source_visible_by):
                     return 0
-        explorer_pid = self._ensure_session_explorer_pid(
+        explorer_pid = self._process_parents()._ensure_session_explorer_pid(
             system,
             user,
             time=shell_time,
             logon_id=session.logon_id,
         )
-        parent_pid = explorer_pid or self._windows_explorer_parent_pid(
+        parent_pid = explorer_pid or self._process_parents()._windows_explorer_parent_pid(
             system,
             user,
             shell_time,
@@ -11291,7 +8834,7 @@ class ActivityGenerator:
         )
         if shell_pid <= 0:
             return 0
-        self._record_user_process(system, user, shell_pid, shell_image)
+        self._process_parents()._record_user_process(system, user, shell_pid, shell_image)
         return shell_pid
 
     def _windows_user_cli_parent_source_bound(
@@ -11307,7 +8850,7 @@ class ActivityGenerator:
         """Return the allocation-free source frontier for Explorer plus one CLI shell."""
 
         session_source_time = _session_source_ready_time(session)
-        explorer_pid = self._get_session_explorer_pid(
+        explorer_pid = self._process_parents()._get_session_explorer_pid(
             system,
             user,
             time=shell_time,
@@ -12648,7 +10191,7 @@ class ActivityGenerator:
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             source_system,
             user,
             image,
@@ -12675,7 +10218,7 @@ class ActivityGenerator:
             suppress_command_file_effect=True,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         return pid, image
@@ -12796,7 +10339,7 @@ class ActivityGenerator:
                 requested_time=process_time,
                 seed_text=command_line,
             )
-            if reserved_time < deadline:
+            if reserved_time is not None and reserved_time < deadline:
                 return shell.pid, reserved_time
 
         non_shell_parent = self._linux_non_shell_session_parent_pid(
@@ -12877,7 +10420,7 @@ class ActivityGenerator:
             requested_time=process_time,
             seed_text=command_line,
         )
-        if reserved_time >= deadline:
+        if reserved_time is None or reserved_time >= deadline:
             return None
         return shell_pid, reserved_time
 
@@ -12967,7 +10510,7 @@ class ActivityGenerator:
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             source_system,
             user,
             image,
@@ -12986,7 +10529,7 @@ class ActivityGenerator:
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(source_system.hostname, pid)
@@ -18691,11 +16234,8 @@ class ActivityGenerator:
 
     @staticmethod
     def _user_profile_directory(username: str) -> str:
-        """Return the Windows profile directory for a process owner."""
-        account = username.split("\\")[-1]
-        if account in _SYSTEM_ACCOUNTS or account.endswith("$"):
-            return r"C:\Windows\System32"
-        return rf"C:\Users\{account}"
+        """Forward to the shared process pure owner."""
+        return process_policy._user_profile_directory(username)
 
     def _derive_current_directory(
         self,
@@ -18706,86 +16246,10 @@ class ActivityGenerator:
         parent_pid: int,
         logon_type: int = 2,
     ) -> str:
-        """Derive a source-native process working directory for Sysmon Event 1."""
-        if _get_os_category(system.os) != "windows":
-            account = username.split("\\")[-1]
-            return (
-                "/root" if account in _SYSTEM_ACCOUNTS or account == "root" else f"/home/{account}"
-            )
-
-        image = process_name.replace("/", "\\")
-        image_lower = image.lower()
-        exe = image_lower.rsplit("\\", 1)[-1]
-        profile_dir = self._user_profile_directory(username)
-        system_dir = r"C:\Windows\System32"
-
-        if username in _SYSTEM_ACCOUNTS or username.endswith("$"):
-            return system_dir + "\\"
-        if logon_type == 5:
-            return system_dir + "\\"
-
-        parent_image = (
-            self._lookup_process_name(system.hostname, parent_pid, _get_os_category(system.os))
-            or ""
-        ).lower()
-        parent_dir = parent_image.rsplit("\\", 1)[0] if "\\" in parent_image else ""
-
-        if exe in {"winword.exe", "excel.exe", "powerpnt.exe", "acrord32.exe", "acrobat.exe"}:
-            if '"' in command_line:
-                for candidate in command_line.split('"')[1::2]:
-                    if "\\" in candidate:
-                        return candidate.rsplit("\\", 1)[0] + "\\"
-            return profile_dir + "\\Documents\\"
-
-        if exe in {"onedrive.exe", "teams.exe", "outlook.exe"}:
-            return profile_dir + "\\"
-
-        if exe in {
-            "cargo.exe",
-            "docker.exe",
-            "git.exe",
-            "kubectl.exe",
-            "node.exe",
-            "npm.cmd",
-            "npm.exe",
-            "ssh.exe",
-        }:
-            if exe == "ssh.exe":
-                return profile_dir + "\\"
-            repo_names = (
-                "clinical-portal",
-                "integration-api",
-                "ops-automation",
-                "platform-services",
-                "security-tools",
-            )
-            repo = repo_names[
-                _stable_seed(
-                    f"windows_project_cwd:{system.hostname}:{username}:{process_name}:"
-                    f"{command_line}"
-                )
-                % len(repo_names)
-            ]
-            return profile_dir + f"\\source\\repos\\{repo}\\"
-
-        if exe in {"chrome.exe", "msedge.exe", "firefox.exe"}:
-            install_dir = image.rsplit("\\", 1)[0] if "\\" in image else ""
-            if parent_dir and parent_dir == install_dir.lower():
-                return install_dir + "\\"
-            return profile_dir + "\\"
-
-        if exe in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
-            if parent_dir and "windows\\system32" not in parent_dir:
-                return parent_dir + "\\"
-            return profile_dir + "\\"
-
-        if "\\windows\\system32\\" in image_lower or "\\windows\\syswow64\\" in image_lower:
-            return system_dir + "\\"
-
-        if "\\" in image:
-            return image.rsplit("\\", 1)[0] + "\\"
-
-        return profile_dir + "\\"
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._derive_current_directory(
+            system, username, process_name, command_line, parent_pid, logon_type
+        )
 
     def _space_one_shot_cli_launch(
         self,
@@ -18797,48 +16261,15 @@ class ActivityGenerator:
         command_line: str,
         time: datetime,
     ) -> datetime:
-        """Avoid machine-impossible bursts of repeated one-shot admin commands."""
-        if _get_os_category(system.os) != "windows":
-            return time
-
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
-            return time
-
-        normalized_command = " ".join(command_line.lower().split())
-        exe_key = (system.hostname, username, logon_id, exe_name)
-        command_key = (*exe_key, normalized_command)
-        adjusted_time = time
-
-        command_last = self._last_one_shot_cli_launch_by_command.get(command_key)
-        if command_last is not None:
-            min_gap = timedelta(
-                seconds=random.Random(
-                    _stable_seed(
-                        f"one_shot_cli_same_command:{system.hostname}:{username}:"
-                        f"{exe_name}:{normalized_command}:{command_last.isoformat()}"
-                    )
-                ).uniform(18.0, 75.0)
-            )
-            if adjusted_time < command_last + min_gap:
-                adjusted_time = command_last + min_gap
-
-        exe_last = self._last_one_shot_cli_launch_by_exe.get(exe_key)
-        if exe_last is not None:
-            min_gap = timedelta(
-                seconds=random.Random(
-                    _stable_seed(
-                        f"one_shot_cli_same_exe:{system.hostname}:{username}:"
-                        f"{exe_name}:{exe_last.isoformat()}"
-                    )
-                ).uniform(2.5, 9.0)
-            )
-            if adjusted_time < exe_last + min_gap:
-                adjusted_time = exe_last + min_gap
-
-        self._last_one_shot_cli_launch_by_exe[exe_key] = adjusted_time
-        self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
-        return adjusted_time
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._space_one_shot_cli_launch(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+        )
 
     def _remember_one_shot_cli_launch(
         self,
@@ -18850,26 +16281,20 @@ class ActivityGenerator:
         command_line: str,
         time: datetime,
     ) -> None:
-        """Record the final launch timestamp for later one-shot CLI spacing."""
-        if _get_os_category(system.os) != "windows":
-            return
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
-            return
-        normalized_command = " ".join(command_line.lower().split())
-        exe_key = (system.hostname, username, logon_id, exe_name)
-        command_key = (*exe_key, normalized_command)
-        self._last_one_shot_cli_launch_by_exe[exe_key] = time
-        self._last_one_shot_cli_launch_by_command[command_key] = time
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._remember_one_shot_cli_launch(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+        )
 
     @staticmethod
     def _is_top_level_browser_launch(process_name: str, command_line: str) -> bool:
-        """Return whether a Windows browser command represents a user-facing process."""
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in _WINDOWS_BROWSER_EXES:
-            return False
-        command = f" {command_line.lower()} "
-        return not any(marker in command for marker in _WINDOWS_BROWSER_CHILD_MARKERS)
+        """Forward to the shared process pure owner."""
+        return process_policy._is_top_level_browser_launch(process_name, command_line)
 
     def _existing_user_browser_pid(
         self,
@@ -18882,62 +16307,16 @@ class ActivityGenerator:
         time: datetime,
         source_visible_by: datetime | None = None,
     ) -> int | None:
-        """Reuse an open browser instead of emitting repeated top-level launches."""
-        if _get_os_category(system.os) != "windows":
-            return None
-        if not self._is_top_level_browser_launch(process_name, command_line):
-            return None
-
-        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        preferred_key = (system.hostname, username, "")
-        preferred_exe = self._preferred_browser_by_session.get(preferred_key)
-        candidates: list[RunningProcess] = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            if proc.username != username:
-                continue
-            if not self._is_pid_active_at(system, proc.pid, time):
-                continue
-            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if proc_exe not in _WINDOWS_BROWSER_EXES:
-                continue
-            if not self._is_top_level_browser_launch(proc.image, proc.command_line):
-                continue
-            candidates.append(proc)
-
-        if not candidates:
-            self._preferred_browser_by_session[preferred_key] = requested_exe
-            return None
-
-        if preferred_exe:
-            preferred = [proc for proc in candidates if proc.image.lower().endswith(preferred_exe)]
-            if preferred:
-                proc = max(preferred, key=lambda candidate: candidate.start_time)
-                if not self._process_source_visible_by(
-                    system=system,
-                    pid=proc.pid,
-                    deadline=source_visible_by,
-                ):
-                    return None
-                self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
-                return proc.pid
-
-        same_exe = [
-            proc
-            for proc in candidates
-            if proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == requested_exe
-        ]
-        chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
-        if not self._process_source_visible_by(
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._existing_user_browser_pid(
             system=system,
-            pid=chosen.pid,
-            deadline=source_visible_by,
-        ):
-            return None
-        self._preferred_browser_by_session[preferred_key] = (
-            chosen.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+            source_visible_by=source_visible_by,
         )
-        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
-        return chosen.pid
 
     def _existing_persistent_user_app_pid(
         self,
@@ -18951,51 +16330,17 @@ class ActivityGenerator:
         source_visible_by: datetime | None = None,
         update_activity: bool = True,
     ) -> int | None:
-        """Reuse already-open desktop apps that normally stay resident."""
-        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        from evidenceforge.generation.activity.application_catalog import (
-            is_singleton_application_image,
-        )
-
-        if requested_exe not in _PERSISTENT_USER_APP_EXES and not is_singleton_application_image(
-            process_name, _get_os_category(system.os)
-        ):
-            return None
-        command = f" {command_line.lower()} "
-        if any(marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS):
-            return None
-
-        candidates: list[RunningProcess] = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            if proc.username != username:
-                continue
-            if proc.logon_id and logon_id and proc.logon_id != logon_id:
-                continue
-            if not self._is_pid_active_at(system, proc.pid, time):
-                continue
-            if self._foreground_process_expired_for_attribution(system, proc, time):
-                continue
-            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if proc_exe == requested_exe:
-                candidates.append(proc)
-
-        if not candidates:
-            return None
-        chosen = max(
-            candidates,
-            key=lambda candidate: candidate.last_activity_time or candidate.start_time,
-        )
-        if not self._process_source_visible_by(
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._existing_persistent_user_app_pid(
             system=system,
-            pid=chosen.pid,
-            deadline=source_visible_by,
-        ):
-            # ``0`` is the bounded caller's explicit reject sentinel. Returning
-            # ``None`` would make it fabricate a duplicate singleton process.
-            return 0
-        if update_activity:
-            self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
-        return chosen.pid
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+            source_visible_by=source_visible_by,
+            update_activity=update_activity,
+        )
 
     def _process_effect_context(
         self,
@@ -19011,39 +16356,16 @@ class ActivityGenerator:
         return proc.image, proc.command_line
 
     def _foreground_process_expired_for_attribution(
-        self,
-        system: System,
-        proc: Any,
-        time: datetime,
+        self, system: System, proc: Any, time: datetime
     ) -> bool:
-        """Return whether a foreground process is not active for new effects."""
-        if proc is None or proc.start_time is None:
-            return False
-        if time < proc.start_time:
-            return True
-        lifetime = self._foreground_process_lifetime_for_attribution(system, proc)
-        if lifetime is None:
-            return False
-        max_process_time = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
-        return time > max_process_time
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._foreground_process_expired_for_attribution(system, proc, time)
 
     def _foreground_process_lifetime_for_attribution(
-        self,
-        system: System,
-        proc: Any,
+        self, system: System, proc: Any
     ) -> tuple[float, float] | None:
-        """Return bounded foreground lifetime for process-owned network attribution."""
-        os_category = _get_os_category(system.os)
-        if os_category == "windows":
-            return _windows_foreground_lifetime(proc.image, proc.command_line)
-        if os_category == "linux":
-            exe_name = proc.image.rsplit("/", 1)[-1].lower()
-            if "/usr/lib/apt/methods/" in str(proc.image).lower():
-                return _linux_foreground_lifetime(proc.image, proc.command_line)
-            if exe_name not in _LINUX_ONE_SHOT_NETWORK_EXES:
-                return None
-            return _linux_foreground_lifetime(proc.image, proc.command_line)
-        return None
+        """Forward to the shared process pure owner."""
+        return process_policy._foreground_process_lifetime_for_attribution(system, proc)
 
     def _space_browser_launch(
         self,
@@ -19055,27 +16377,15 @@ class ActivityGenerator:
         command_line: str,
         time: datetime,
     ) -> datetime:
-        """Avoid rendered bursts of repeated top-level browser process creates."""
-        if _get_os_category(system.os) != "windows":
-            return time
-        if not self._is_top_level_browser_launch(process_name, command_line):
-            return time
-
-        key = (system.hostname, username, logon_id)
-        previous = self._last_browser_launch_by_session.get(key)
-        adjusted_time = time
-        if previous is not None:
-            rng = random.Random(
-                _stable_seed(
-                    f"browser_launch_gap:{system.hostname}:{username}:{logon_id}:"
-                    f"{previous.isoformat()}"
-                )
-            )
-            min_gap = timedelta(seconds=rng.uniform(4.0, 18.0))
-            if adjusted_time < previous + min_gap:
-                adjusted_time = previous + min_gap
-        self._last_browser_launch_by_session[key] = adjusted_time
-        return adjusted_time
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._space_browser_launch(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+        )
 
     @staticmethod
     def _singleton_application_key(
@@ -19144,27 +16454,13 @@ class ActivityGenerator:
 
     @staticmethod
     def _linux_process_is_system_background_helper(process_name: str, command_line: str) -> bool:
-        """Return whether a Linux helper should be modeled as daemon/timer-owned."""
-        image_lower = process_name.lower()
-        command_lower = command_line.lower()
-        exe_name = image_lower.rsplit("/", 1)[-1]
-        if image_lower.startswith("/usr/lib/apt/methods/"):
-            return True
-        if exe_name in {"dnf", "yum"} and any(
-            token in command_lower for token in ("makecache", "check-update", "update")
-        ):
-            return True
-        if exe_name == "service-healthcheck":
-            return True
-        return exe_name == "java" and "integration-worker" in command_lower
+        """Forward to the shared process pure owner."""
+        return process_policy._linux_process_is_system_background_helper(process_name, command_line)
 
     @staticmethod
     def _linux_background_helper_username(process_name: str, command_line: str) -> str:
-        """Return the service principal for a Linux background helper process."""
-        exe_name = process_name.lower().rsplit("/", 1)[-1]
-        if exe_name == "java" and "integration-worker" in command_line.lower():
-            return "www-data"
-        return "root"
+        """Forward to the shared process pure owner."""
+        return process_policy._linux_background_helper_username(process_name, command_line)
 
     def generate_process(
         self,
@@ -19218,6 +16514,19 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        if _get_os_category(system.os) == "linux" and _linux_shell_process_reserves_foreground(
+            process_name, command_line
+        ):
+            ready_at = self._unbounded_foreground_shell_ready_at(
+                system=system,
+                username=user.username,
+                logon_id=logon_id,
+                parent_pid=parent_pid,
+                requested_time=ensure_utc(time),
+                concurrency_group_id=concurrency_group_id,
+            )
+            if ready_at is None or ready_at > ensure_utc(time):
+                return 0
         request = ProcessExecutionRequest(
             user=user,
             system=system,
@@ -19245,61 +16554,8 @@ class ActivityGenerator:
         self,
         request: ProcessExecutionRequest,
     ) -> ProcessExecutionRequest | None:
-        """Reject an impossible process-create source deadline before bundle planning."""
-
-        if request.source_visible_by is None:
-            return request
-        source_deadline = ensure_utc(request.source_visible_by)
-        request = replace(request, source_visible_by=source_deadline)
-        actor = self._prepare_process_effect_actor(request)
-        if (
-            matching_service_worker(
-                os_category=_get_os_category(request.system.os),
-                image=actor.image,
-                command_line=actor.command_line,
-                username=actor.username,
-            )
-            is not None
-        ):
-            # Profiled service workers own their manager/worker composite admission.
-            return request
-        parent_pid = request.parent_pid
-        if not request.require_exact_parent:
-            parent_pid = self._resolve_existing_prepared_process_parent(
-                system=request.system,
-                user=request.user,
-                time=actor.started_at,
-                logon_id=actor.logon_id,
-                parent_pid=parent_pid,
-                process_username=actor.username,
-            )
-        if parent_pid != request.parent_pid:
-            request = replace(request, parent_pid=parent_pid)
-            actor = self._prepare_process_effect_actor(request)
-        reuse_found, reuse_intent = self._bounded_process_reuse_intent(
-            request=request,
-            actor=actor,
-        )
-        if reuse_found:
-            return replace(request, reuse_intent=reuse_intent) if reuse_intent is not None else None
-        parent_source_time = (
-            self._process_source_frontier_or_bound(
-                system=request.system,
-                pid=parent_pid,
-            )
-            if parent_pid > 0
-            else None
-        )
-        session = self.state_manager.get_session(actor.logon_id) if actor.logon_id else None
-        source_bound = self._process_create_source_bound(
-            system=request.system,
-            canonical_time=actor.started_at,
-            parent_source_time=parent_source_time,
-            session_source_time=(
-                _session_source_ready_time(session) if session is not None else None
-            ),
-        )
-        return request if source_bound <= source_deadline else None
+        """Forward to the current process preflight owner."""
+        return self._process_preflight()._preflight_bounded_process_source_deadline(request)
 
     def _bounded_process_reuse_intent(
         self,
@@ -19307,144 +16563,13 @@ class ActivityGenerator:
         request: ProcessExecutionRequest,
         actor: PreparedProcessEffectActor,
     ) -> tuple[bool, ProcessExecutionReuseIntent | None]:
-        """Find and authenticate an exact bounded reuse without mutating its process."""
+        """Forward bounded reuse intent to the process service."""
 
-        if request.source_visible_by is None:
-            return False, None
-        if request.ensure_file_event or any(
-            effect.spec.requirement != EffectRequirement.OPTIONAL
-            for effect in request.requested_endpoint_effects
-        ):
-            return False, None
-        if not request.suppress_command_file_effect:
-            from evidenceforge.generation.activity.edr_pools import (
-                select_command_file_side_effect,
-            )
+        return self._process_execution_service().bounded_reuse_intent(request=request, actor=actor)
 
-            if select_command_file_side_effect(actor.image, actor.command_line) is not None:
-                return False, None
-        if self._runtime_content_manager is not None:
-            resolved_binary = self.dispatcher.resolve_process_binary_identity(
-                request.system.hostname,
-                actor.username,
-                actor.image,
-                cast(Platform, _get_os_category(request.system.os)),
-            )
-            if isinstance(resolved_binary, UnresolvedBinaryIdentity):
-                return False, None
-
-        candidate_pid = self._existing_windows_singleton_pid(
-            request.system,
-            actor.image,
-            actor.started_at,
-        )
-        parent = self.state_manager.get_process(request.system.hostname, request.parent_pid)
-        if (
-            candidate_pid is None
-            and _get_os_category(request.system.os) == "windows"
-            and parent is not None
-            and ntpath.basename(parent.image).lower() == "services.exe"
-        ):
-            candidate_pid = self._existing_windows_singleton_service_pid(
-                system=request.system,
-                process_name=actor.image,
-                time=actor.started_at,
-                username=actor.username,
-                command_line=actor.command_line,
-            )
-        if candidate_pid is None and not request.from_storyline:
-            candidate_pid = self._existing_persistent_user_app_pid(
-                system=request.system,
-                username=actor.username,
-                logon_id=actor.logon_id,
-                process_name=actor.image,
-                command_line=actor.command_line,
-                time=actor.started_at,
-                source_visible_by=request.source_visible_by,
-                update_activity=False,
-            )
-        if candidate_pid is None:
-            return False, None
-        if candidate_pid <= 0:
-            return True, None
-
-        running = self.state_manager.get_process(request.system.hostname, candidate_pid)
-        identity = self.state_manager.get_process_identity(
-            request.system.hostname,
-            candidate_pid,
-        )
-        source_frontier = self.process_source_create_bound(request.system, candidate_pid)
-        if running is None or identity is None or source_frontier is None:
-            return True, None
-        if source_frontier > ensure_utc(request.source_visible_by):
-            return True, None
-        return True, ProcessExecutionReuseIntent(
-            hostname=request.system.hostname,
-            process_object_id=identity.object_id,
-            pid=candidate_pid,
-            parent_pid=running.parent_pid,
-            image=running.image,
-            command_line=running.command_line,
-            username=running.username,
-            logon_id=running.logon_id,
-            started_at=running.start_time,
-            source_frontier=source_frontier,
-        )
-
-    def _finalize_due_process_lifetimes(
-        self,
-        cutoff: datetime,
-        *,
-        exhaust: bool,
-    ) -> None:
-        """Render bounded due-close pages outside lifecycle-authority locks.
-
-        Hot allocation boundaries drain one fixed page and apply backpressure if
-        more work is already due.  Engine watermarks and finalization explicitly
-        repeat pages before sealing the canonical frontier.
-        """
-
-        known_users = getattr(self, "_users_by_username", {})
-        normalized_cutoff = ensure_utc(cutoff)
-        while True:
-            due = self._lifecycle_authority.pop_due_process_closes(normalized_cutoff)
-            if not due:
-                return
-            for intent in due:
-                system = intent.system
-                running = self.state_manager.get_process(system.hostname, intent.pid)
-                if running is None:
-                    continue
-                if running.start_time != intent.started_at:
-                    continue
-                if self._process_termination_recorded(
-                    system.hostname,
-                    intent.pid,
-                    running.start_time,
-                ):
-                    continue
-                process_user = known_users.get(intent.username) or User(
-                    username=intent.username,
-                    full_name=intent.username,
-                    email=f"{intent.username}@example.local",
-                )
-                session = self.state_manager.get_session(running.logon_id or intent.logon_id)
-                self.generate_process_termination(
-                    user=process_user,
-                    system=system,
-                    time=intent.close_at,
-                    pid=intent.pid,
-                    process_name=running.image or intent.process_name,
-                    logon_id=running.logon_id or intent.logon_id,
-                    session_end_plan=session.end_plan if session is not None else None,
-                )
-            if not exhaust:
-                if self._lifecycle_authority.has_due_process_closes(normalized_cutoff):
-                    raise StateError(
-                        "Process allocation cannot proceed while more than one bounded "
-                        "lifecycle close page is already due; advance the engine watermark"
-                    )
-                return
+    def _finalize_due_process_lifetimes(self, cutoff: datetime, *, exhaust: bool) -> None:
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._finalize_due_process_lifetimes(cutoff, exhaust=exhaust)
 
     def _sample_process_spacing_gap(
         self,
@@ -19457,22 +16582,15 @@ class ActivityGenerator:
         mode_seconds: float,
         maximum_seconds: float,
     ) -> timedelta:
-        """Sample one order-independent process spacing gap through the shared runtime."""
-
-        return self.timing_runtime.sampler.sample_timedelta(
-            TriangularDistribution(
-                minimum=minimum_seconds * 1_000_000,
-                mode=mode_seconds * 1_000_000,
-                maximum=maximum_seconds * 1_000_000,
-            ),
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._sample_process_spacing_gap(
             relationship_key=relationship_key,
-            scope=TimingScope(
-                stable_id=stable_id,
-                host=system.hostname,
-                source="endpoint_process",
-                lifecycle_id=logon_id,
-            ),
-            sample_key="gap",
+            stable_id=stable_id,
+            system=system,
+            logon_id=logon_id,
+            minimum_seconds=minimum_seconds,
+            mode_seconds=mode_seconds,
+            maximum_seconds=maximum_seconds,
         )
 
     def record_owned_effect_occurrence_plan(self, plan: OwnedEffectOccurrencePlan) -> None:
@@ -19498,41 +16616,20 @@ class ActivityGenerator:
 
     @staticmethod
     def _nmap_command_probe_count(plan: NmapCommandProbePlan) -> int:
-        """Return exact canonical connection cardinality for one bounded plan."""
+        """Forward to the process preflight owner."""
+        from evidenceforge.generation.actions.process_support.preflight import (
+            ProcessPreflightPlanner,
+        )
 
-        return len(plan.targets) if plan.discovery else len(plan.targets) * len(plan.ports)
+        return ProcessPreflightPlanner._nmap_command_probe_count(plan)
 
     def _plan_process_execution_effects(
         self,
         request: ProcessExecutionRequest,
         anchor: ActionAnchor,
     ) -> ExecutionEffectPlan:
-        """Plan bounded command effects before allocating the root process."""
-
-        planning_request = NmapCommandProbeRequest(
-            user=request.user,
-            system=request.system,
-            time=request.time,
-            pid=-1,
-            process_name=request.process_name,
-            command_line=request.command_line,
-        )
-        scanner_plan = self._plan_nmap_command_probes(
-            planning_request,
-            nmap_command_probe_config(),
-        )
-        if scanner_plan is None:
-            return ExecutionEffectPlan(anchor=anchor)
-        probe_count = self._nmap_command_probe_count(scanner_plan)
-        scanner_node = ExecutionEffectNode.create(
-            anchor,
-            ScannerEffectIntent(
-                tool="nmap",
-                target=request.command_line,
-                probe_count=probe_count,
-            ),
-        )
-        return ExecutionEffectPlan(anchor=anchor, nodes=(scanner_node,))
+        """Forward to the current process preflight owner."""
+        return self._process_preflight()._plan_process_execution_effects(request, anchor)
 
     def _process_endpoint_uses_action_cohort(
         self,
@@ -19541,603 +16638,30 @@ class ActivityGenerator:
         admitted_effects: tuple[PreparedEndpointEffect, ...],
         effect_plan: ExecutionEffectPlan | None,
     ) -> bool:
-        """Select the exact endpoint publication boundary without mutating an owner."""
-
-        from evidenceforge.generation.actions.command_effects import (
-            FileEffectIntent,
-            RegistryEffectIntent,
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._process_endpoint_uses_action_cohort(
+            actor=actor, admitted_effects=admitted_effects, effect_plan=effect_plan
         )
-
-        has_scanner_effect_intent = effect_plan is not None and any(
-            isinstance(node.intent, ScannerEffectIntent) for node in effect_plan.nodes
-        )
-        has_non_single_endpoint_effect = any(
-            isinstance(effect.spec.intent, (FileEffectIntent, RegistryEffectIntent))
-            and effect.spec.intent.occurrence_cardinality != 1
-            for effect in admitted_effects
-        )
-        state_session = self.state_manager.get_session(actor.logon_id) if actor.logon_id else None
-        state_session_identity = (
-            self.state_manager.get_session_identity(actor.logon_id)
-            if state_session is not None
-            else None
-        )
-        lifecycle_session_snapshot = (
-            self._lifecycle_authority.registry.get_session(state_session_identity.object_id)
-            if state_session_identity is not None
-            else None
-        )
-        session_requires_legacy_endpoint_path = state_session is not None and (
-            state_session_identity is None
-            or lifecycle_session_snapshot is None
-            or lifecycle_session_snapshot.identity
-            != LifecycleShadow.project_session_start(state_session_identity)
-        )
-        if has_scanner_effect_intent and has_non_single_endpoint_effect:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "scanner process endpoint effects require exactly one occurrence on the "
-                "legacy publication path",
-            )
-        if session_requires_legacy_endpoint_path and has_non_single_endpoint_effect:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "process endpoint effects require exactly one occurrence when the owning "
-                "State session lacks exact lifecycle-registry identity",
-            )
-        return not has_scanner_effect_intent and not session_requires_legacy_endpoint_path
 
     def _plan_process_execution_side_effects(
         self,
         request: ProcessExecutionRequest,
         anchor: ActionAnchor,
     ) -> ProcessExecutionPreparedEffects | None:
-        """Freeze endpoint/module intent before any PID, lifecycle, or event mutation."""
-
-        if request.reuse_intent is not None:
-            return ProcessExecutionPreparedEffects(
-                root_anchor=anchor,
-                actor=self._prepare_process_effect_actor(request),
-            )
-
-        from evidenceforge.generation.actions.command_effects import (
-            EffectRequirement,
-            FileEffectAction,
-            FileEffectIntent,
-            RegistryEffectAction,
-            RegistryEffectIntent,
-        )
-        from evidenceforge.generation.actions.endpoint_effects import (
-            EndpointEffectSpec,
-            EndpointStateDisposition,
-            PreparedEndpointEffect,
-            PreparedFileEffectPayload,
-            PreparedProcessEndpointEffectPlan,
-            PreparedRegistryEffectPayload,
-        )
-
-        if (
-            matching_service_worker(
-                os_category=_get_os_category(request.system.os),
-                image=request.process_name,
-                command_line=request.command_line,
-                username=request.user.username,
-            )
-            is not None
-        ):
-            return None
-
-        actor = self._prepare_process_effect_actor(request)
-        rng = self._process_endpoint_effect_rng(request, actor)
-        endpoint_window_candidates = [actor.started_at + timedelta(days=1)]
-        scenario_end = getattr(self, "_scenario_end_time", None)
-        if isinstance(scenario_end, datetime):
-            endpoint_window_candidates.append(ensure_utc(scenario_end))
-        dispatcher_end = getattr(self.dispatcher, "output_end_time", None)
-        if isinstance(dispatcher_end, datetime):
-            endpoint_window_candidates.append(ensure_utc(dispatcher_end))
-        endpoint_window_end = min(endpoint_window_candidates)
-        source_ready_floor = actor.started_at + timedelta(seconds=4)
-        planned: list[PreparedEndpointEffect] = list(request.requested_endpoint_effects)
-
-        process_name = actor.image
-        command_line = actor.command_line
-        process_username = actor.username
-        os_category = _get_os_category(request.system.os)
-        exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        bundle_owned_service_payload = exe_lower in {
-            "psexesvc.exe",
-            "healthmonitorsvc.exe",
-        }
-        if request.ensure_file_event and not bundle_owned_service_payload:
-            lower_path = process_name.lower()
-            windows_path = lower_path.replace("/", "\\")
-            is_system_binary = (
-                windows_path.startswith("c:\\windows\\system32\\")
-                or windows_path.startswith("c:\\windows\\syswow64\\")
-                or windows_path.startswith("c:\\program files\\")
-                or windows_path.startswith("c:\\program files (x86)\\")
-                or lower_path.startswith(
-                    (
-                        "/bin/",
-                        "/sbin/",
-                        "/usr/bin/",
-                        "/usr/sbin/",
-                        "/usr/local/bin/",
-                        "/usr/local/sbin/",
-                    )
-                )
-            )
-            if not is_system_binary:
-                occurrence_time = max(
-                    actor.started_at + timedelta(milliseconds=120),
-                    source_ready_floor,
-                )
-                planned.append(
-                    PreparedEndpointEffect(
-                        spec=EndpointEffectSpec(
-                            intent=FileEffectIntent(
-                                action=FileEffectAction.CREATE,
-                                path=process_name,
-                            ),
-                            occurrence_times=(occurrence_time,),
-                            instance_key="guaranteed-process-image-create",
-                            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
-                            retention_deadline=max(
-                                endpoint_window_end,
-                                occurrence_time + timedelta(microseconds=1),
-                            ),
-                        ),
-                        event_type="file_create",
-                        payload=PreparedFileEffectPayload(
-                            path=process_name,
-                            action=FileEffectAction.CREATE,
-                        ),
-                    )
-                )
-
-        semantic_file_effect = None
-        if not request.suppress_command_file_effect:
-            from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
-
-            semantic_file_effect = select_command_file_side_effect(process_name, command_line)
-            if semantic_file_effect is not None:
-                action, path = semantic_file_effect
-                file_action = FileEffectAction(action)
-                occurrence_time = max(
-                    actor.started_at + timedelta(milliseconds=180),
-                    source_ready_floor + timedelta(milliseconds=1),
-                )
-                mutates = file_action in {FileEffectAction.CREATE, FileEffectAction.MODIFY}
-                planned.append(
-                    PreparedEndpointEffect(
-                        spec=EndpointEffectSpec(
-                            intent=FileEffectIntent(action=file_action, path=path),
-                            occurrence_times=(occurrence_time,),
-                            instance_key="semantic-command-file",
-                            state_disposition=(
-                                EndpointStateDisposition.DURABLE_FINAL
-                                if mutates
-                                else EndpointStateDisposition.NONE
-                            ),
-                            retention_deadline=(
-                                max(
-                                    endpoint_window_end,
-                                    occurrence_time + timedelta(microseconds=1),
-                                )
-                                if mutates
-                                else None
-                            ),
-                        ),
-                        event_type=_FILE_ACTION_EVENT_TYPES[action],
-                        payload=PreparedFileEffectPayload(path=path, action=file_action),
-                    )
-                )
-        if (
-            not request.suppress_command_file_effect
-            and semantic_file_effect is None
-            and rng.random() < 0.40
-        ):
-            from evidenceforge.generation.activity.edr_pools import select_file_side_effect
-
-            side_effect = select_file_side_effect(
-                process_name=process_name,
-                command_line=command_line,
-                os_category=os_category,
-                rng=rng,
-                user=process_username,
-            )
-            if side_effect is not None:
-                action, path = side_effect
-                file_action = FileEffectAction(action)
-                occurrence_time = max(
-                    actor.started_at + timedelta(milliseconds=rng.randint(110, 650)),
-                    source_ready_floor + timedelta(milliseconds=2),
-                )
-                mutates = file_action in {FileEffectAction.CREATE, FileEffectAction.MODIFY}
-                planned.append(
-                    PreparedEndpointEffect(
-                        spec=EndpointEffectSpec(
-                            intent=FileEffectIntent(action=file_action, path=path),
-                            occurrence_times=(occurrence_time,),
-                            instance_key="ambient-process-file",
-                            requirement=EffectRequirement.OPTIONAL,
-                            state_disposition=(
-                                EndpointStateDisposition.DURABLE_FINAL
-                                if mutates
-                                else EndpointStateDisposition.NONE
-                            ),
-                            retention_deadline=(
-                                max(
-                                    endpoint_window_end,
-                                    occurrence_time + timedelta(microseconds=1),
-                                )
-                                if mutates
-                                else None
-                            ),
-                        ),
-                        event_type=_FILE_ACTION_EVENT_TYPES[action],
-                        payload=PreparedFileEffectPayload(path=path, action=file_action),
-                    )
-                )
-
-        runtime_image_load: ProcessRuntimeImageLoadPlan | None = None
-        if os_category == "windows" and rng.random() < 0.30:
-            from evidenceforge.generation.activity.dll_load_profiles import (
-                get_runtime_dlls_for_process,
-            )
-
-            dll_profiles = get_runtime_dlls_for_process(exe_lower)
-            dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
-            dll_path = str(dll_profile.get("path", ""))
-            module_time = max(
-                actor.started_at + timedelta(milliseconds=rng.randint(120, 1500)),
-                source_ready_floor + timedelta(milliseconds=2),
-            )
-            if dll_path and module_time < endpoint_window_end:
-                runtime_image_load = ProcessRuntimeImageLoadPlan(
-                    timestamp=module_time,
-                    path=dll_path,
-                    signed=bool(dll_profile.get("signed", True)),
-                    signature=str(dll_profile.get("signature", "Microsoft Windows")),
-                    signature_status=str(dll_profile.get("signature_status", "Valid")),
-                )
-
-        registry_writers = {
-            "svchost.exe",
-            "services.exe",
-            "explorer.exe",
-            "powershell.exe",
-            "rundll32.exe",
-            "msiexec.exe",
-            "reg.exe",
-            "regedit.exe",
-            "taskhostw.exe",
-            "usoclient.exe",
-            "dllhost.exe",
-            "tiworker.exe",
-            "trustedinstaller.exe",
-            "mpcmdrun.exe",
-            "msmpeng.exe",
-            "winword.exe",
-            "excel.exe",
-            "powerpnt.exe",
-            "outlook.exe",
-        }
-        storyline_registry_writers = {"reg.exe", "regedit.exe", "msiexec.exe"}
-        if (
-            os_category == "windows"
-            and exe_lower in registry_writers
-            and (not request.from_storyline or exe_lower in storyline_registry_writers)
-            and rng.random() < 0.50
-        ):
-            from evidenceforge.generation.activity.edr_pools import (
-                get_registry_keys_hkcu,
-                get_registry_keys_hklm,
-                materialize_registry_effect,
-                registry_entries_for_process,
-            )
-
-            hklm_writers = {
-                "svchost.exe",
-                "services.exe",
-                "reg.exe",
-                "regedit.exe",
-                "msiexec.exe",
-            }
-            count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
-            pool_hkcu = registry_entries_for_process(get_registry_keys_hkcu(), process_name)
-            pool_hklm = registry_entries_for_process(get_registry_keys_hklm(), process_name)
-            for registry_index in range(count):
-                if process_username in _SYSTEM_ACCOUNTS:
-                    eligible_registry = pool_hklm
-                elif exe_lower in hklm_writers:
-                    eligible_registry = pool_hklm + pool_hkcu
-                else:
-                    eligible_registry = pool_hkcu
-                if not eligible_registry:
-                    continue
-                key, value_name, details = rng.choice(eligible_registry)
-                registry_time = max(
-                    actor.started_at + timedelta(milliseconds=rng.randint(120, 950)),
-                    source_ready_floor + timedelta(milliseconds=3 + registry_index),
-                )
-                key, value_name, details, value_type = materialize_registry_effect(
-                    (key, value_name, details),
-                    rng,
-                    request.user.username if request.user else "SYSTEM",
-                    registry_time,
-                    host_key=request.system.hostname,
-                    host_ip=request.system.ip,
-                    host_os=request.system.os,
-                    deployment_registry=getattr(self.dispatcher, "deployment_registry", None),
-                )
-                planned.append(
-                    PreparedEndpointEffect(
-                        spec=EndpointEffectSpec(
-                            intent=RegistryEffectIntent(
-                                action=RegistryEffectAction.MODIFY,
-                                key=key,
-                                value_name=value_name,
-                            ),
-                            occurrence_times=(registry_time,),
-                            instance_key=f"ambient-registry-{registry_index}",
-                            requirement=EffectRequirement.OPTIONAL,
-                            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
-                            retention_deadline=max(
-                                endpoint_window_end,
-                                registry_time + timedelta(microseconds=1),
-                            ),
-                        ),
-                        event_type="registry_modify",
-                        payload=PreparedRegistryEffectPayload(
-                            key=key,
-                            value_name=value_name,
-                            value=details,
-                            value_type=value_type,
-                            action=RegistryEffectAction.MODIFY,
-                        ),
-                    )
-                )
-
-        allocation_free_endpoint = (
-            PreparedProcessEndpointEffectPlan(
-                root_anchor=anchor,
-                actor=actor,
-                window_end=endpoint_window_end,
-                retention_horizon_end=endpoint_window_end,
-                effects=tuple(planned),
-            )
-            if planned
-            else None
-        )
-        if allocation_free_endpoint is not None:
-            root_effect_plan = request.effect_plan or self._plan_process_execution_effects(
-                request,
-                anchor,
-            )
-            self._process_endpoint_uses_action_cohort(
-                actor=actor,
-                admitted_effects=allocation_free_endpoint.admitted_effects,
-                effect_plan=root_effect_plan,
-            )
-
-        runtime_content_manager = self._runtime_content_manager
-        deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
-        host_deployment = (
-            deployment_registry.host_deployment(request.system.hostname)
-            if isinstance(deployment_registry, DeploymentContentRegistry)
-            else None
-        )
-        effective_architecture: Architecture | None = request.system.architecture or (
-            host_deployment.architecture if host_deployment is not None else None
-        )
-        newly_reserved: list[LocalArtifactPublishToken] = []
-        if runtime_content_manager is not None:
-            platform = cast(Platform, os_category)
-            prepared_file_effects: list[PreparedEndpointEffect] = []
-            try:
-                for effect in planned:
-                    payload = effect.payload
-                    if (
-                        not isinstance(payload, PreparedFileEffectPayload)
-                        or payload.artifact_publication is not None
-                    ):
-                        prepared_file_effects.append(effect)
-                        continue
-                    same_as_actor_image = canonical_native_path(
-                        payload.path,
-                        platform,
-                    ) == canonical_native_path(actor.image, platform)
-                    executable = same_as_actor_image and effective_architecture is not None
-                    publication = runtime_content_manager.prepare_effect_publication(
-                        root_action_id=anchor.action_id,
-                        stable_source_id=(
-                            f"{anchor.action_id}:{effect.spec.instance_key}:"
-                            f"{effect.spec.intent.semantic_key}"
-                        ),
-                        hostname=request.system.hostname,
-                        principal=actor.username,
-                        platform=platform,
-                        architecture=effective_architecture,
-                        native_path=payload.path,
-                        action=payload.action.value,
-                        observed_at=effect.spec.occurrence_times[0],
-                        owner_kind=_runtime_artifact_owner_kind(
-                            platform,
-                            actor.username,
-                            actor.logon_id,
-                        ),
-                        deployment_registry=deployment_registry,
-                        actor_image=actor.image,
-                        executable=executable,
-                    )
-                    if publication is not None:
-                        newly_reserved.append(publication)
-                    prepared_file_effects.append(
-                        replace(
-                            effect,
-                            payload=replace(payload, artifact_publication=publication),
-                        )
-                    )
-            except RuntimeContentOwnerError as exc:
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                    "prepared process runtime-content owner is inadmissible: "
-                    f"host={request.system.hostname!r} principal={actor.username!r} "
-                    f"image={actor.image!r}: {exc}",
-                ) from exc
-            except (ExecutionEffectPlanError, StateError, ValueError):
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-                raise
-            planned = prepared_file_effects
-
-        try:
-            endpoint = (
-                replace(
-                    allocation_free_endpoint,
-                    effects=tuple(planned),
-                )
-                if allocation_free_endpoint is not None
-                else None
-            )
-            lifetime_plan = self._plan_process_lifetime(request, actor)
-            provisional_termination = self._plan_process_provisional_termination(
-                request,
-                actor,
-                lifetime_plan,
-            )
-            endpoint_close_floor: datetime | None = None
-            if (
-                provisional_termination is not None
-                and endpoint is not None
-                and endpoint.latest_admitted_occurrence is not None
-            ):
-                endpoint_close_floor = endpoint.latest_admitted_occurrence + timedelta(
-                    milliseconds=25
-                )
-                provisional_termination = max(provisional_termination, endpoint_close_floor)
-            if actor.session_deadline is not None and provisional_termination is not None:
-                release_margin_ms = (
-                    _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
-                    if os_category == "linux"
-                    and _linux_foreground_lifetime(actor.image, actor.command_line) is not None
-                    else 25
-                )
-                close_ceiling = actor.session_deadline - timedelta(milliseconds=release_margin_ms)
-                if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
-                    raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared endpoint effects leave no interval for the process lifecycle close",
-                    )
-                if provisional_termination > close_ceiling:
-                    provisional_termination = close_ceiling
-                if provisional_termination <= actor.started_at:
-                    raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "prepared process actor leaves no interval for its lifecycle close: "
-                        f"host={request.system.hostname!r} image={actor.image!r} "
-                        f"started_at={actor.started_at.isoformat()} "
-                        f"session_deadline={actor.session_deadline.isoformat()} "
-                        f"planned_close={provisional_termination.isoformat()}",
-                    )
-
-            root_binary_publication: LocalArtifactPublishToken | None = None
-            if runtime_content_manager is not None:
-                platform = cast(Platform, os_category)
-                endpoint_has_binary = bool(
-                    endpoint is not None
-                    and any(
-                        isinstance(effect.payload, PreparedFileEffectPayload)
-                        and effect.payload.artifact_publication is not None
-                        and effect.payload.artifact_publication.record.binary is not None
-                        and canonical_native_path(
-                            effect.payload.artifact_publication.record.artifact.native_path,
-                            platform,
-                        )
-                        == canonical_native_path(actor.image, platform)
-                        for effect in endpoint.admitted_effects
-                    )
-                )
-                resolved_binary = self.dispatcher.resolve_process_binary_identity(
-                    request.system.hostname,
-                    actor.username,
-                    actor.image,
-                    platform,
-                )
-                if not endpoint_has_binary and isinstance(
-                    resolved_binary,
-                    UnresolvedBinaryIdentity,
-                ):
-                    if effective_architecture is None:
-                        raise ExecutionEffectPlanError(
-                            ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                            "unresolved process executable requires exact host architecture",
-                        )
-                    root_binary_publication = runtime_content_manager.prepare_effect_publication(
-                        root_action_id=anchor.action_id,
-                        stable_source_id=f"{anchor.action_id}:root-process-image",
-                        hostname=request.system.hostname,
-                        principal=actor.username,
-                        platform=platform,
-                        architecture=effective_architecture,
-                        native_path=actor.image,
-                        action="create",
-                        observed_at=actor.started_at,
-                        owner_kind=_runtime_artifact_owner_kind(
-                            platform,
-                            actor.username,
-                            actor.logon_id,
-                        ),
-                        deployment_registry=deployment_registry,
-                        actor_image=actor.image,
-                        executable=True,
-                    )
-                    if root_binary_publication is None:
-                        raise ExecutionEffectPlanError(
-                            ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                            "unresolved process executable did not prepare a binary publication",
-                        )
-                    newly_reserved.append(root_binary_publication)
-
-            return ProcessExecutionPreparedEffects(
-                root_anchor=anchor,
-                actor=actor,
-                endpoint=endpoint,
-                runtime_image_load=runtime_image_load,
-                lifetime_plan=lifetime_plan,
-                provisional_termination=provisional_termination,
-                root_binary_publication=root_binary_publication,
-            )
-        except RuntimeContentOwnerError as exc:
-            if runtime_content_manager is not None:
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process runtime-content owner is inadmissible: "
-                f"host={request.system.hostname!r} principal={actor.username!r} "
-                f"image={actor.image!r}: {exc}",
-            ) from exc
-        except (ExecutionEffectPlanError, StateError, ValueError):
-            if runtime_content_manager is not None:
-                for publication in newly_reserved:
-                    runtime_content_manager.registry.cancel_prepared(publication)
-            raise
+        """Forward to the current process preflight owner."""
+        return self._process_preflight()._plan_process_execution_side_effects(request, anchor)
 
     @staticmethod
     def _process_endpoint_effect_rng(
         request: ProcessExecutionRequest,
         actor: PreparedProcessEffectActor,
     ) -> random.Random:
-        """Return the worker/order-stable RNG for one process endpoint preflight."""
-
-        return random.Random(
-            _stable_seed(f"process_endpoint_preflight:{request.stable_id}:{actor.stable_id}")
+        """Forward to the process preflight owner."""
+        from evidenceforge.generation.actions.process_support.preflight import (
+            ProcessPreflightPlanner,
         )
+
+        return ProcessPreflightPlanner._process_endpoint_effect_rng(request, actor)
 
     def _plan_process_provisional_termination(
         self,
@@ -20145,97 +16669,9 @@ class ActivityGenerator:
         actor: "PreparedProcessEffectActor",
         lifetime_plan: ProcessLifetimePlan,
     ) -> datetime | None:
-        """Freeze a foreground close time before allocating its PID or state."""
-
-        os_category = _get_os_category(request.system.os)
-        lifetime = lifetime_plan.bounds
-        if lifetime is None:
-            return None
-
-        if os_category == "windows":
-            if lifetime_plan.mode == ProcessLifetimeMode.UNCLASSIFIED:
-                parent = self.state_manager.get_process(
-                    request.system.hostname,
-                    request.parent_pid,
-                )
-                parent_exe = (
-                    parent.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].casefold()
-                    if parent is not None
-                    else ""
-                )
-                if parent_exe not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
-                    return None
-            distribution, relationship_key, scope, sample_key = (
-                self._process_provisional_termination_timing_request(
-                    request,
-                    actor,
-                    lifetime_plan,
-                )
-            )
-            owner_sampler = self.timing_runtime.sampler
-            preview_sampler = TimingSampler(
-                namespace=owner_sampler.namespace,
-                generation_seed=owner_sampler.generation_seed,
-            )
-            return preview_sampler.after(
-                actor.started_at,
-                distribution,
-                relationship_key=relationship_key,
-                scope=scope,
-                sample_key=sample_key,
-            )
-
-        if os_category != "linux" or not _linux_shell_process_reserves_foreground(
-            actor.image, actor.command_line
-        ):
-            return None
-        actor_exe = actor.image.rsplit("/", 1)[-1].lower()
-        if actor_exe in {"bash", "sh", "zsh"} and actor.command_line.strip() == f"-{actor_exe}":
-            return None
-        parent_owns_foreground = (
-            self._foreground_shell_key(
-                system=request.system,
-                username=actor.username,
-                logon_id=actor.logon_id,
-                parent_pid=request.parent_pid,
-            )
-            is not None
-        )
-        if not parent_owns_foreground:
-            session = self.state_manager.get_session(actor.logon_id)
-            if (
-                request.lifecycle_group_id
-                and session is not None
-                and request.lifecycle_group_id == session.lifecycle_group_id
-            ):
-                # Explicit session-bootstrap members are closed by their exact
-                # session owner, which preserves the descendant-first graph.
-                return None
-            parent_owns_foreground = bool(
-                actor.logon_id
-                and session is not None
-                and session.system.casefold() == request.system.hostname.casefold()
-            )
-        if not parent_owns_foreground:
-            return None
-        distribution, relationship_key, scope, sample_key = (
-            self._process_provisional_termination_timing_request(
-                request,
-                actor,
-                lifetime_plan,
-            )
-        )
-        owner_sampler = self.timing_runtime.sampler
-        preview_sampler = TimingSampler(
-            namespace=owner_sampler.namespace,
-            generation_seed=owner_sampler.generation_seed,
-        )
-        return preview_sampler.after(
-            actor.started_at,
-            distribution,
-            relationship_key=relationship_key,
-            scope=scope,
-            sample_key=sample_key,
+        """Forward to the current process preflight owner."""
+        return self._process_preflight()._plan_process_provisional_termination(
+            request, actor, lifetime_plan
         )
 
     @staticmethod
@@ -20244,49 +16680,9 @@ class ActivityGenerator:
         actor: "PreparedProcessEffectActor",
         lifetime_plan: ProcessLifetimePlan,
     ) -> tuple[DistributionSpec, str, TimingScope, str]:
-        """Return one deterministic lifetime draw request for preview and commit."""
-
-        lifetime = lifetime_plan.bounds
-        if lifetime is None:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "provisional process termination timing requires bounded lifetime ownership",
-            )
-        minimum_seconds, maximum_seconds = lifetime
-        mode_seconds = minimum_seconds + (maximum_seconds - minimum_seconds) * 0.34
-        os_category = _get_os_category(request.system.os)
-        if os_category == "windows":
-            distribution: DistributionSpec = TriangularDistribution(
-                minimum=minimum_seconds * 1_000_000,
-                mode=mode_seconds * 1_000_000,
-                maximum=maximum_seconds * 1_000_000,
-            )
-            relationship_key = "activity.process.windows_foreground_lifetime"
-            sample_key = f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}"
-        elif os_category == "linux":
-            distribution = TruncatedLognormalDistribution(
-                median=mode_seconds * 1_000_000,
-                sigma=0.78,
-                minimum=minimum_seconds * 1_000_000,
-                maximum=maximum_seconds * 1_000_000,
-            )
-            relationship_key = "activity.process.linux_foreground_lifetime"
-            sample_key = "provisional_close"
-        else:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "provisional process termination timing requires Windows or Linux",
-            )
-        return (
-            distribution,
-            relationship_key,
-            TimingScope(
-                stable_id=request.stable_id,
-                host=request.system.hostname,
-                source="endpoint_process",
-                lifecycle_id=actor.lifecycle_id,
-            ),
-            sample_key,
+        """Forward to the shared process pure owner."""
+        return process_policy._process_provisional_termination_timing_request(
+            request, actor, lifetime_plan
         )
 
     @staticmethod
@@ -20294,219 +16690,18 @@ class ActivityGenerator:
         request: ProcessExecutionRequest,
         actor: "PreparedProcessEffectActor",
     ) -> ProcessLifetimePlan:
-        """Return the immutable lifetime ownership for one prepared process actor."""
-
-        os_category = _get_os_category(request.system.os)
-        if os_category == "windows":
-            return _windows_process_lifetime_plan(actor.image, actor.command_line)
-        if os_category == "linux":
-            lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
-            if lifetime is not None:
-                return ProcessLifetimePlan(
-                    mode=ProcessLifetimeMode.BOUNDED,
-                    minimum_seconds=lifetime[0],
-                    maximum_seconds=lifetime[1],
-                    classification="linux-foreground-command",
-                )
-            if _linux_shell_process_reserves_foreground(actor.image, actor.command_line):
-                return ProcessLifetimePlan(
-                    mode=ProcessLifetimeMode.SESSION_OWNED,
-                    classification="linux-interactive-foreground-command",
-                )
-            return ProcessLifetimePlan(
-                mode=ProcessLifetimeMode.PERSISTENT,
-                classification="linux-background-or-service-process",
-            )
-        return ProcessLifetimePlan(
-            mode=ProcessLifetimeMode.UNCLASSIFIED,
-            minimum_seconds=1.0,
-            maximum_seconds=8.0,
-            classification="unsupported-platform-process",
+        """Forward to the process preflight owner."""
+        from evidenceforge.generation.actions.process_support.preflight import (
+            ProcessPreflightPlanner,
         )
+
+        return ProcessPreflightPlanner._plan_process_lifetime(request, actor)
 
     def _prepare_process_effect_actor(
-        self,
-        request: ProcessExecutionRequest,
+        self, request: ProcessExecutionRequest
     ) -> "PreparedProcessEffectActor":
-        """Resolve the root actor and start fence without mutating runtime state."""
-
-        system = request.system
-        process_name = request.process_name
-        command_line = request.command_line
-        if _get_os_category(system.os) == "windows":
-            process_name, command_line = _windows_script_host_process(
-                process_name,
-                command_line,
-            )
-        exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _get_os_category(system.os) == "windows" and exe_lower == "psexesvc.exe":
-            process_name = r"C:\Windows\PSEXESVC.exe"
-            if "accepteula" in command_line.lower():
-                command_line = r"C:\Windows\PSEXESVC.exe"
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
-
-        started_at = ensure_utc(request.time)
-        process_username, process_logon_id = self._resolve_process_identity(
-            system=system,
-            username=request.user.username,
-            logon_id=request.logon_id,
-            process_name=process_name,
-            time=started_at,
-        )
-        service_account = _windows_service_process_account(process_name, command_line)
-        if _get_os_category(system.os) == "windows" and service_account is not None:
-            process_username = service_account
-            process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_account]
-        if (
-            _get_os_category(system.os) == "linux"
-            and process_logon_id
-            and (session_end := self.state_manager.get_session_end_time(process_logon_id))
-            is not None
-            and started_at >= ensure_utc(session_end)
-            and self._linux_process_is_system_background_helper(process_name, command_line)
-        ):
-            process_username = self._linux_background_helper_username(process_name, command_line)
-            process_logon_id = "0x3e7"
-
-        session = self.state_manager.get_session(process_logon_id)
-        session_end_plan = self.state_manager.get_session_end_plan(process_logon_id)
-        session_deadline = self.state_manager.get_session_end_time(process_logon_id)
-        if (
-            session is not None
-            and session.session_kind.casefold() == "ssh"
-            and session.network_close_time is not None
-        ):
-            network_close_deadline = ensure_utc(session.network_close_time)
-            session_deadline = (
-                network_close_deadline
-                if session_deadline is None
-                else min(ensure_utc(session_deadline), network_close_deadline)
-            )
-        if session_end_plan is not None and session_end_plan.is_hard_deadline:
-            planned_deadline = ensure_utc(session_end_plan.canonical_end)
-            session_deadline = (
-                planned_deadline
-                if session_deadline is None
-                else min(ensure_utc(session_deadline), planned_deadline)
-            )
-        if (
-            session_end_plan is not None
-            and session_end_plan.is_hard_deadline
-            and started_at >= ensure_utc(session_end_plan.canonical_end)
-        ):
-            deadline = ensure_utc(session_end_plan.canonical_end)
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process actor begins at or after its authoritative session end: "
-                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
-                f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
-            )
-        if session_deadline is not None and started_at >= ensure_utc(session_deadline):
-            deadline = ensure_utc(session_deadline)
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process actor begins at or after its session deadline: "
-                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
-                f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
-            )
-        if session is not None and started_at <= ensure_utc(session.start_time):
-            offset_ms = 100 + (
-                _stable_seed(
-                    f"process_after_logon:{system.hostname}:{process_logon_id}:{process_name}"
-                )
-                % 1400
-            )
-            started_at = ensure_utc(session.start_time) + timedelta(milliseconds=offset_ms)
-        is_linux_login_shell = (
-            _get_os_category(system.os) == "linux"
-            and exe_lower in {"bash", "sh", "zsh"}
-            and command_line.strip() == f"-{exe_lower}"
-        )
-        if (
-            _get_os_category(system.os) == "linux"
-            and session is not None
-            and session.session_kind.casefold() == "ssh"
-            and not is_linux_login_shell
-        ):
-            shell_ready = self._linux_ssh_process_shell_ready_time(
-                system=system,
-                session=session,
-                username=process_username,
-                parent_pid=request.parent_pid,
-                activity_time=started_at,
-            )
-            if started_at <= shell_ready:
-                started_at = shell_ready + timedelta(milliseconds=50)
-        parent = self.state_manager.get_process(system.hostname, request.parent_pid)
-        if parent is not None and started_at <= ensure_utc(parent.start_time):
-            offset_ms = 50 + (
-                _stable_seed(
-                    f"process_after_parent:{system.hostname}:{request.parent_pid}:{process_name}:"
-                    f"{command_line}"
-                )
-                % 450
-            )
-            started_at = ensure_utc(parent.start_time) + timedelta(milliseconds=offset_ms)
-
-        if not request.from_storyline and request.source_visible_by is None:
-            started_at = self._preview_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=started_at,
-            )
-            if request.allow_browser_launch_spacing:
-                started_at = self._preview_browser_launch(
-                    system=system,
-                    username=process_username,
-                    logon_id=process_logon_id,
-                    process_name=process_name,
-                    command_line=command_line,
-                    time=started_at,
-                )
-        if (
-            _get_os_category(system.os) == "linux"
-            and request.source_visible_by is None
-            and not request.from_storyline
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is not None
-        ):
-            started_at = self._reserve_foreground_shell_time(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                parent_pid=request.parent_pid,
-                requested_time=started_at,
-                seed_text=command_line,
-                concurrency_group_id=request.concurrency_group_id,
-            )
-        if not request.from_storyline and request.source_visible_by is None:
-            started_at = self._space_interactive_shell_child_launch(
-                system=system,
-                process_name=process_name,
-                parent_pid=request.parent_pid,
-                time=started_at,
-            )
-        effective_deadline = ensure_utc(session_deadline) if session_deadline is not None else None
-        if effective_deadline is not None and started_at >= effective_deadline:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process actor leaves no session interval after launch spacing: "
-                f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
-                f"started_at={started_at.isoformat()} deadline={effective_deadline.isoformat()}",
-            )
-        return PreparedProcessEffectActor(
-            hostname=system.hostname,
-            image=process_name,
-            command_line=command_line,
-            username=process_username,
-            logon_id=process_logon_id,
-            lifecycle_id=request.lifecycle_group_id or request.stable_id,
-            started_at=started_at,
-            session_deadline=effective_deadline,
-        )
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._prepare_process_effect_actor(request)
 
     def _preview_one_shot_cli_launch(
         self,
@@ -20518,47 +16713,15 @@ class ActivityGenerator:
         command_line: str,
         time: datetime,
     ) -> datetime:
-        """Return one-shot spacing without updating compatibility caches."""
-
-        if _get_os_category(system.os) != "windows":
-            return time
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
-            return time
-        normalized_command = " ".join(command_line.lower().split())
-        exe_key = (system.hostname, username, logon_id, exe_name)
-        command_key = (*exe_key, normalized_command)
-        adjusted = time
-        command_last = self._last_one_shot_cli_launch_by_command.get(command_key)
-        if command_last is not None:
-            gap = self._sample_process_spacing_gap(
-                relationship_key="activity.process.one_shot_same_command_gap",
-                stable_id=(
-                    f"{system.hostname}:{username}:{logon_id}:{exe_name}:"
-                    f"{normalized_command}:{command_last.isoformat()}"
-                ),
-                system=system,
-                logon_id=logon_id,
-                minimum_seconds=18.0,
-                mode_seconds=32.0,
-                maximum_seconds=75.0,
-            )
-            adjusted = max(adjusted, command_last + gap)
-        exe_last = self._last_one_shot_cli_launch_by_exe.get(exe_key)
-        if exe_last is not None:
-            gap = self._sample_process_spacing_gap(
-                relationship_key="activity.process.one_shot_same_exe_gap",
-                stable_id=(
-                    f"{system.hostname}:{username}:{logon_id}:{exe_name}:{exe_last.isoformat()}"
-                ),
-                system=system,
-                logon_id=logon_id,
-                minimum_seconds=2.5,
-                mode_seconds=4.2,
-                maximum_seconds=9.0,
-            )
-            adjusted = max(adjusted, exe_last + gap)
-        return adjusted
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._preview_one_shot_cli_launch(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
+        )
 
     def _preview_browser_launch(
         self,
@@ -20570,26 +16733,15 @@ class ActivityGenerator:
         command_line: str,
         time: datetime,
     ) -> datetime:
-        """Return top-level browser spacing without updating compatibility caches."""
-
-        if _get_os_category(system.os) != "windows" or not self._is_top_level_browser_launch(
-            process_name,
-            command_line,
-        ):
-            return time
-        previous = self._last_browser_launch_by_session.get((system.hostname, username, logon_id))
-        if previous is None:
-            return time
-        gap = self._sample_process_spacing_gap(
-            relationship_key="activity.process.browser_launch_gap",
-            stable_id=f"{system.hostname}:{username}:{logon_id}:{previous.isoformat()}",
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._preview_browser_launch(
             system=system,
+            username=username,
             logon_id=logon_id,
-            minimum_seconds=4.0,
-            mode_seconds=7.5,
-            maximum_seconds=18.0,
+            process_name=process_name,
+            command_line=command_line,
+            time=time,
         )
-        return max(time, previous + gap)
 
     def _resolve_existing_prepared_process_parent(
         self,
@@ -20601,79 +16753,15 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int:
-        """Resolve an existing parent for a required bundle without materializing helpers."""
-
-        os_category = _get_os_category(system.os)
-        if parent_pid not in {0, 4}:
-            if (
-                os_category == "windows"
-                and self._is_valid_process_parent_at(
-                    system=system,
-                    parent_pid=parent_pid,
-                    time=time,
-                )
-                and self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=parent_pid,
-                    logon_id=logon_id,
-                    os_category=os_category,
-                )
-            ):
-                return parent_pid
-            if os_category == "linux" and self._linux_parent_usable_for_child_at(
-                system=system,
-                parent_pid=parent_pid,
-                time=time,
-                logon_id=logon_id,
-            ):
-                return parent_pid
-
-        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        if os_category == "windows":
-            user_context = (
-                process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith("$")
-            )
-            if user_context:
-                explorer_pid = self._get_session_explorer_pid(
-                    system,
-                    user,
-                    time=time,
-                    logon_id=logon_id,
-                )
-                if explorer_pid is not None:
-                    return explorer_pid
-            for role in ("explorer", "winlogon", "services", "svchost_dcom", "wininit"):
-                candidate = system_pids.get(role)
-                if (
-                    candidate is not None
-                    and self._is_valid_process_parent_at(
-                        system=system,
-                        parent_pid=candidate,
-                        time=time,
-                    )
-                    and self._parent_process_matches_logon(
-                        hostname=system.hostname,
-                        parent_pid=candidate,
-                        logon_id=logon_id,
-                        os_category=os_category,
-                    )
-                ):
-                    return candidate
-            return 4
-
-        session_shell = self._active_session_shell_pid(system, user, time, logon_id)
-        if session_shell is not None:
-            return session_shell
-        for role in ("bash", "sshd", "systemd", "init"):
-            candidate = system_pids.get(role)
-            if candidate is not None and self._linux_parent_usable_for_child_at(
-                system=system,
-                parent_pid=candidate,
-                time=time,
-                logon_id=logon_id,
-            ):
-                return candidate
-        return 0
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._resolve_existing_prepared_process_parent(
+            system=system,
+            user=user,
+            time=time,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
 
     def _execute_bounded_process_reuse(
         self,
@@ -20681,1147 +16769,29 @@ class ActivityGenerator:
         request: ProcessExecutionRequest,
         actor: PreparedProcessEffectActor,
     ) -> int:
-        """Revalidate one immutable bounded reuse token before activity mutation."""
+        """Forward execute bounded reuse to the process service."""
 
-        intent = request.reuse_intent
-        deadline = request.source_visible_by
-        if intent is None or deadline is None:
-            return 0
-        identity = self.state_manager.get_process_identity(intent.hostname, intent.pid)
-        running = self.state_manager.get_process(intent.hostname, intent.pid)
-        source_frontier = self.process_source_create_bound(request.system, intent.pid)
-        if (
-            identity is None
-            or running is None
-            or identity.object_id != intent.process_object_id
-            or running.parent_pid != intent.parent_pid
-            or running.image != intent.image
-            or running.command_line != intent.command_line
-            or running.username != intent.username
-            or running.logon_id != intent.logon_id
-            or ensure_utc(running.start_time) != intent.started_at
-            or source_frontier != intent.source_frontier
-            or source_frontier > ensure_utc(deadline)
-            or actor.hostname != intent.hostname
-            or actor.image != intent.image
-            or actor.username != intent.username
-            or actor.logon_id != intent.logon_id
-            or not self._is_pid_active_at(request.system, intent.pid, actor.started_at)
-        ):
-            return 0
-        reuse_found, authenticated = self._bounded_process_reuse_intent(
-            request=replace(request, reuse_intent=None),
-            actor=actor,
-        )
-        if not reuse_found or authenticated != intent:
-            return 0
-        self._record_reused_process_optional_effects(request.prepared_effects)
-        self.state_manager.update_process_activity_time(
-            intent.hostname,
-            intent.pid,
-            actor.started_at,
-        )
-        return intent.pid
+        return self._process_execution_service().execute_bounded_reuse(request=request, actor=actor)
 
     def _execute_process_create_bundle(self, request: ProcessExecutionRequest) -> int:
         """Expand a process-execution bundle through the compatibility adapter."""
-        from evidenceforge.events.contexts import ProcessContext
 
-        prepared_effects = request.prepared_effects
-        prepared_endpoint = prepared_effects.endpoint if prepared_effects is not None else None
-        prepared_actor = prepared_effects.actor if prepared_effects is not None else None
-        # Scanner transports still publish through the established post-process network path.
-        # Keep their process/dependent rows on that same legacy boundary until one bounded
-        # scanner transport collector can admit the complete probe group atomically.
-        if prepared_endpoint is not None and prepared_actor is None:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "prepared process endpoint effects lost their allocation-free actor",
-            )
-        uses_action_cohort = bool(
-            prepared_endpoint is not None
-            and prepared_actor is not None
-            and self._process_endpoint_uses_action_cohort(
-                actor=prepared_actor,
-                admitted_effects=prepared_endpoint.admitted_effects,
-                effect_plan=request.effect_plan,
-            )
-        )
-        if uses_action_cohort:
-            admitted_occurrence_count = sum(
-                len(effect.spec.occurrence_times) for effect in prepared_endpoint.admitted_effects
-            )
-            if 1 + admitted_occurrence_count > _PROCESS_ENDPOINT_ACTION_COHORT_MEMBER_LIMIT:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort exceeds its root/occurrence member limit",
-                )
-        prepared_requires_new_root = bool(
-            prepared_effects is not None
-            and (
-                prepared_effects.process_binary_publication is not None
-                or (
-                    prepared_effects.endpoint is not None
-                    and any(
-                        spec.requirement != EffectRequirement.OPTIONAL
-                        for spec in prepared_effects.endpoint.specs
-                    )
-                )
-            )
-        )
-        if prepared_actor is not None:
-            expected_actor = self._prepare_process_effect_actor(
-                replace(request, prepared_effects=None)
-            )
-            if expected_actor != prepared_actor:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                    "prepared process actor drifted before root allocation",
-                )
-
-        user = request.user
-        system = request.system
-        time = prepared_actor.started_at if prepared_actor is not None else request.time
-        logon_id = prepared_actor.logon_id if prepared_actor is not None else request.logon_id
-        process_name = prepared_actor.image if prepared_actor is not None else request.process_name
-        command_line = (
-            prepared_actor.command_line if prepared_actor is not None else request.command_line
-        )
-        parent_pid = request.parent_pid
-        from_storyline = request.from_storyline
-        allow_existing_browser_reuse = request.allow_existing_browser_reuse
-        allow_browser_launch_spacing = request.allow_browser_launch_spacing
-        concurrency_group_id = request.concurrency_group_id
-        source_visible_by = request.source_visible_by
-
-        if request.reuse_intent is not None:
-            return self._execute_bounded_process_reuse(
-                request=request,
-                actor=(
-                    prepared_actor
-                    if prepared_actor is not None
-                    else self._prepare_process_effect_actor(request)
-                ),
-            )
-
-        profiled_worker = matching_service_worker(
-            os_category=_get_os_category(system.os),
-            image=process_name,
-            command_line=command_line,
-            username=user.username,
-        )
-        if profiled_worker is not None and not request.require_exact_parent:
-            family_name, worker_name, _family = profiled_worker
-            return self._ensure_profiled_service_worker(
-                system=system,
-                worker_time=time,
-                activity_time=time,
-                family_name=family_name,
-                worker_name=worker_name,
-                source_visible_by=source_visible_by,
-            )
-
-        session_end_plan = self.state_manager.get_session_end_plan(logon_id)
-        if (
-            session_end_plan is not None
-            and session_end_plan.is_hard_deadline
-            and ensure_utc(time) >= ensure_utc(session_end_plan.canonical_end)
-        ):
-            raise StateError(
-                "Process activity cannot begin at or after its authoritative session end: "
-                f"{system.hostname} logon_id={logon_id} time={ensure_utc(time).isoformat()}"
-            )
-        if _get_os_category(system.os) == "windows":
-            process_name, command_line = _windows_script_host_process(
-                process_name,
-                command_line,
-            )
-
-        # Determine integrity level per UAC model:
-        # - SYSTEM processes: "System" (handled in generate_system_process)
-        # - Explicitly elevated (admin tools, installers): "High"
-        # - Everything else (including admin users under UAC): "Medium"
-        _HIGH_INTEGRITY_EXES = {
-            "msiexec.exe",
-            "regedit.exe",
-            "mmc.exe",
-            "dism.exe",
-            "pkgmgr.exe",
-            "setup.exe",
-            "install.exe",
-            "procdump64.exe",
-            "procdump.exe",
-            "mimikatz.exe",
-            "psexec.exe",
-            "psexesvc.exe",
-        }
-        _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _get_os_category(system.os) == "windows" and _exe_lower == "psexesvc.exe":
-            process_name = r"C:\Windows\PSEXESVC.exe"
-            command_line = (
-                r"C:\Windows\PSEXESVC.exe" if "accepteula" in command_line.lower() else command_line
-            )
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
-        if _exe_lower in _HIGH_INTEGRITY_EXES:
-            _integrity = "High"
-        elif _get_os_category(system.os) == "windows" and any(
-            marker in command_line.lower()
-            for marker in ("sekurlsa::", "privilege::debug", "lsadump::", "token::elevate")
-        ):
-            _integrity = "High"
-        else:
-            _integrity = "Medium"
-            # Browser child processes (renderers) run at Low integrity.
-            # ~65% of browser children are sandboxed renderers (Low),
-            # ~35% are GPU/utility processes (Medium).
-            _BROWSER_EXES = {"chrome.exe", "msedge.exe", "firefox.exe"}
-            if _exe_lower in _BROWSER_EXES:
-                _parent_image = (
-                    self._lookup_process_name(
-                        system.hostname, parent_pid, _get_os_category(system.os)
-                    )
-                    or ""
-                )
-                _parent_exe = _parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-                if _parent_exe in _BROWSER_EXES:
-                    rng = _get_rng()
-                    _integrity = "Low" if rng.random() < 0.65 else "Medium"
-
-        if prepared_actor is not None:
-            process_username = prepared_actor.username
-            process_logon_id = prepared_actor.logon_id
-        else:
-            process_username, process_logon_id = self._resolve_process_identity(
-                system=system,
-                username=user.username,
-                logon_id=logon_id,
-                process_name=process_name,
-                time=time,
-            )
-        service_process_account = _windows_service_process_account(process_name, command_line)
-        if (
-            prepared_actor is None
-            and _get_os_category(system.os) == "windows"
-            and service_process_account is not None
-        ):
-            process_username = service_process_account
-            process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
-            _integrity = "System"
-        if (
-            prepared_actor is not None
-            and _get_os_category(system.os) == "linux"
-            and process_logon_id == "0x3e7"
-            and request.logon_id != "0x3e7"
-            and self._linux_process_is_system_background_helper(process_name, command_line)
-        ):
-            _integrity = "System"
-            parent_pid = self._linux_system_parent_fallback(system, time)
-        linux_session_end_time = (
-            self.state_manager.get_session_end_time(process_logon_id)
-            if _get_os_category(system.os) == "linux" and process_logon_id
-            else None
-        )
-        if (
-            prepared_actor is None
-            and linux_session_end_time is not None
-            and ensure_utc(time) >= ensure_utc(linux_session_end_time)
-            and self._linux_process_is_system_background_helper(process_name, command_line)
-        ):
-            process_username = self._linux_background_helper_username(
-                process_name,
-                command_line,
-            )
-            process_logon_id = "0x3e7"
-            _integrity = "System"
-            parent_pid = self._linux_system_parent_fallback(system, time)
-        if prepared_actor is not None and (
-            process_name != prepared_actor.image
-            or command_line != prepared_actor.command_line
-            or process_username != prepared_actor.username
-            or process_logon_id != prepared_actor.logon_id
-        ):
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "resolved process identity drifted from its allocation-free prepared actor",
-            )
-        session_end_time = self.state_manager.get_session_end_time(process_logon_id)
-        if (
-            prepared_actor is None
-            and session_end_time is not None
-            and time >= session_end_time
-            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
-        ):
-            time = session_end_time - self._sample_profile_activity_gap(
-                "windows.process_create_before_logoff",
-                stable_id=request.stable_id,
-                host=system.hostname,
-                source="endpoint_process",
-                lifecycle_id=process_logon_id,
-                sample_key="before_logoff_gap",
-            )
-        session = self.state_manager.get_session(process_logon_id)
-        process_logon_type = session.logon_type if session is not None else 2
-        if prepared_actor is None and session is not None and time <= session.start_time:
-            logon_gap = self._sample_activity_gap(
-                relationship_key="activity.process.start_after_logon",
-                stable_id=request.stable_id,
-                minimum_ms=100,
-                maximum_ms=1499,
-                host=system.hostname,
-                source="endpoint_process",
-                lifecycle_id=process_logon_id,
-                sample_key="after_logon_gap",
-            )
-            time = session.start_time + logon_gap
-        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if (
-            prepared_actor is None
-            and explicit_parent is not None
-            and time <= explicit_parent.start_time
-        ):
-            parent_gap = self._sample_activity_gap(
-                relationship_key="activity.process.start_after_parent",
-                stable_id=request.stable_id,
-                minimum_ms=50,
-                maximum_ms=499,
-                host=system.hostname,
-                source="endpoint_process",
-                lifecycle_id=process_logon_id,
-                sample_key="after_parent_gap",
-            )
-            time = explicit_parent.start_time + parent_gap
-        # A caller-supplied source deadline means this process owns an already
-        # anchored causal occurrence (for example an SSH socket). Optional
-        # human-spacing must not move the canonical start beyond that anchor.
-        if prepared_actor is None and not from_storyline and source_visible_by is None:
-            spaced_time = self._space_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-                source_visible_by=source_visible_by,
-            )
-            if spaced_time != time:
-                time = spaced_time
-            if allow_browser_launch_spacing:
-                spaced_time = self._space_browser_launch(
-                    system=system,
-                    username=process_username,
-                    logon_id=process_logon_id,
-                    process_name=process_name,
-                    command_line=command_line,
-                    time=time,
-                )
-                if spaced_time != time:
-                    time = spaced_time
-        if (
-            process_username != user.username
-            and process_username not in _SYSTEM_ACCOUNTS
-            and not (
-                _get_os_category(system.os) == "linux"
-                and process_logon_id == "0x3e7"
-                and process_username in {"root", "www-data", "proxy", "postfix"}
-            )
-        ):
-            _integrity = "Medium"
-        if _get_os_category(system.os) == "windows" and process_logon_type == 5:
-            _integrity = "High" if _integrity == "Medium" else _integrity
-        if _get_os_category(system.os) == "windows":
-            _integrity, _token_elevation, _mandatory_label = _windows_token_profile(
-                process_username,
-                _integrity,
-            )
-        else:
-            _token_elevation = "%%1938"
-            _mandatory_label = "S-1-16-8192"
-
-        if (
-            not prepared_requires_new_root
-            and not from_storyline
-            and source_visible_by is None
-            and _get_os_category(system.os) == "windows"
-            and _exe_lower == "explorer.exe"
-            and _is_bare_windows_explorer_launch(process_name, command_line)
-            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
-        ):
-            explorer_pid = self._ensure_session_explorer_pid(
-                system,
-                self._user_model_for_username(process_username),
-                time,
-                process_logon_id,
-            )
-            if explorer_pid is not None:
-                self._record_reused_process_optional_effects(prepared_effects)
-                self.state_manager.update_process_activity_time(
-                    system.hostname,
-                    explorer_pid,
-                    time,
-                )
-                return explorer_pid
-
-        singleton_pid = (
-            self._existing_windows_singleton_pid(system, process_name, time)
-            if not prepared_requires_new_root and not request.require_exact_parent
-            else None
-        )
-        if singleton_pid is not None:
-            if not self._process_source_visible_by(
-                system=system,
-                pid=singleton_pid,
-                deadline=source_visible_by,
-            ):
-                return 0
-            self._record_reused_process_optional_effects(prepared_effects)
-            self.state_manager.update_process_activity_time(
-                system.hostname,
-                singleton_pid,
-                time,
-            )
-            return singleton_pid
-
-        if (
-            not prepared_requires_new_root
-            and _get_os_category(system.os) == "windows"
-            and explicit_parent is not None
-            and ntpath.basename(explicit_parent.image).lower() == "services.exe"
-        ):
-            singleton_service_pid = self._existing_windows_singleton_service_pid(
-                system=system,
-                process_name=process_name,
-                time=time,
-                username=process_username,
-                command_line=command_line,
-            )
-            if singleton_service_pid is not None:
-                if not self._process_source_visible_by(
-                    system=system,
-                    pid=singleton_service_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                self._record_reused_process_optional_effects(prepared_effects)
-                running_proc = self.state_manager.get_process(
-                    system.hostname, singleton_service_pid
-                )
-                if running_proc is not None:
-                    self.state_manager.update_process_activity_time(
-                        system.hostname,
-                        singleton_service_pid,
-                        time,
-                    )
-                return singleton_service_pid
-
-        if not prepared_requires_new_root and not from_storyline:
-            persistent_app_pid = self._existing_persistent_user_app_pid(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-                source_visible_by=source_visible_by,
-            )
-            if persistent_app_pid is not None:
-                if not self._process_source_visible_by(
-                    system=system,
-                    pid=persistent_app_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                self._record_reused_process_optional_effects(prepared_effects)
-                return persistent_app_pid
-
-        if (
-            not prepared_requires_new_root
-            and not from_storyline
-            and allow_existing_browser_reuse
-            and source_visible_by is None
-        ):
-            browser_pid = self._existing_user_browser_pid(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-                source_visible_by=source_visible_by,
-            )
-            if browser_pid is not None:
-                if not self._process_source_visible_by(
-                    system=system,
-                    pid=browser_pid,
-                    deadline=source_visible_by,
-                ):
-                    return 0
-                self._record_reused_process_optional_effects(prepared_effects)
-                return browser_pid
-
-        if request.require_exact_parent:
-            if not self._is_valid_process_parent_at(
-                system=system,
-                parent_pid=parent_pid,
-                time=time,
-            ) or not self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=parent_pid,
-                logon_id=process_logon_id,
-                os_category=_get_os_category(system.os),
-            ):
-                raise StateError(
-                    "Exact authored process parent is not live in the child session: "
-                    f"host={system.hostname} parent_pid={parent_pid} "
-                    f"child={process_name!r}"
-                )
-        elif prepared_requires_new_root:
-            parent_pid = self._resolve_existing_prepared_process_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        else:
-            parent_pid = self._sanitize_user_parent_pid(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-            parent_pid = self._materialize_visible_linux_shell_parent_for_child(
-                system=system,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-            parent_pid = self._repair_process_parent_pid(
-                system=system,
-                time=time,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        if prepared_actor is not None and not self._is_valid_process_parent_at(
-            system=system,
-            parent_pid=parent_pid,
-            time=time,
-        ):
-            # Legacy repair may select a future shell because non-prepared callers
-            # can move the child after it. A prepared actor's start is immutable.
-            parent_pid = self._resolve_existing_prepared_process_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-        repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if (
-            prepared_actor is None
-            and repaired_parent is not None
-            and time <= repaired_parent.start_time
-        ):
-            time = repaired_parent.start_time + timedelta(milliseconds=50)
-        if (
-            prepared_actor is None
-            and _get_os_category(system.os) == "linux"
-            and source_visible_by is None
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is not None
-        ):
-            time = self._reserve_foreground_shell_time(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                parent_pid=parent_pid,
-                requested_time=ensure_utc(time),
-                seed_text=command_line,
-                concurrency_group_id=concurrency_group_id,
-            )
-            if (
-                session_end_plan is not None
-                and session_end_plan.is_hard_deadline
-                and time >= ensure_utc(session_end_plan.canonical_end)
-            ):
-                raise StateError(
-                    "Foreground process cannot begin after its owning shell session ends: "
-                    f"{system.hostname} logon_id={process_logon_id} "
-                    f"time={time.isoformat()}"
-                )
-        if not from_storyline:
-            if source_visible_by is None:
-                if prepared_actor is None:
-                    spaced_time = self._space_interactive_shell_child_launch(
-                        system=system,
-                        process_name=process_name,
-                        parent_pid=parent_pid,
-                        time=time,
-                    )
-                    if spaced_time != time:
-                        time = spaced_time
-
-        # Drain independently committed due closes before freezing the root State and
-        # source-timing fences. Running this after a timing overlay is sealed or claimed
-        # would either stale that overlay or re-enter its locked canonical indexes.
-        self._finalize_due_process_lifetimes(time, exhaust=False)
-
-        # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
-        process_session_id = self._session_id_for_logon(process_logon_id)
-        process_session_identity = self.state_manager.get_session_identity(process_logon_id)
-        action_cohort_builder = (
-            self.state_manager.begin_action_cohort_materialization() if uses_action_cohort else None
-        )
-        if action_cohort_builder is not None:
-            process_plan = action_cohort_builder.plan_process(
-                system=system.hostname,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
-                lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-                concurrency_group_id=concurrency_group_id,
-                os_category=_get_os_category(system.os),
-                start_time=ensure_utc(time),
-                parent_activity_time=(ensure_utc(time) if parent_pid not in {0, 4} else None),
-                auth_session_id=process_session_id,
-                auth_logon_type=process_logon_type,
-            )
-            endpoint_activity_frontier = max(
-                ensure_utc(time),
-                prepared_endpoint.latest_admitted_occurrence or ensure_utc(time),
-            )
-            action_cohort_builder.patch_process_activity(
-                process_plan,
-                endpoint_activity_frontier,
-            )
-            live_session = self.state_manager.get_session(process_logon_id)
-            if live_session is not None and process_session_identity is not None:
-                action_cohort_builder.patch_session_activity(
-                    process_session_identity,
-                    endpoint_activity_frontier,
-                )
-            action_cohort_state_plan = action_cohort_builder.seal()
-        else:
-            process_plan = self.state_manager.plan_process_materialization(
-                system=system.hostname,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
-                lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
-                concurrency_group_id=concurrency_group_id,
-                os_category=_get_os_category(system.os),
-                start_time=ensure_utc(time),
-                parent_activity_time=ensure_utc(time),
-            )
-            action_cohort_state_plan = None
-        process_identity = process_plan.identity
-        pid = process_identity.pid
-        parent_identity = self.state_manager.get_process_identity(
-            system.hostname,
-            process_identity.parent_pid,
-        )
-
-        # Phase 2: Build and validate the complete root/dependent publication batch.
-        provisional_process_termination = (
-            prepared_effects.provisional_termination if prepared_effects is not None else None
-        )
-        if (
-            not uses_action_cohort
-            and provisional_process_termination is None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and self._foreground_shell_key(
-                system=system,
-                username=process_identity.principal,
-                logon_id=process_identity.logon_id,
-                parent_pid=process_identity.parent_pid,
-            )
-            is not None
-        ):
-            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
-            if provisional_lifetime is not None:
-                provisional_rng = random.Random(
-                    _stable_seed(
-                        "canonical-linux-foreground-lifetime:"
-                        f"{system.hostname}:{pid}:{process_identity.started_at.isoformat()}:"
-                        f"{command_line}"
-                    )
-                )
-                provisional_process_termination = ensure_utc(
-                    process_identity.started_at
-                ) + timedelta(seconds=provisional_rng.uniform(*provisional_lifetime))
-                session_deadline = self.state_manager.get_session_end_time(
-                    process_identity.logon_id
-                )
-                if session_deadline is not None:
-                    provisional_process_termination = min(
-                        provisional_process_termination,
-                        ensure_utc(session_deadline) - timedelta(milliseconds=25),
-                    )
-                provisional_process_termination = max(
-                    provisional_process_termination,
-                    ensure_utc(process_identity.started_at) + timedelta(milliseconds=25),
-                )
-        if (
-            uses_action_cohort
-            and provisional_process_termination is None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and self._foreground_shell_key(
-                system=system,
-                username=process_identity.principal,
-                logon_id=process_identity.logon_id,
-                parent_pid=process_identity.parent_pid,
-            )
-            is not None
-        ):
-            provisional_lifetime = _linux_foreground_lifetime(process_name, command_line)
-            if provisional_lifetime is not None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "Linux foreground process reached allocation without a frozen close time",
-                )
-        process_binary_publication = (
-            prepared_effects.process_binary_publication if prepared_effects is not None else None
-        )
-        event = OccurrenceBuilder(
-            timestamp=time,
-            event_type="process_create",
-            src_host=self._build_host_context(system),
-            auth=AuthContext(
-                username=process_username,
-                user_sid=self._get_sid(process_username),
-                logon_id=process_logon_id,
-                session_id=process_session_id,
-                logon_type=process_logon_type,
-                elevated=_integrity in {"High", "System"},
-            ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=process_username,
-                integrity_level=_integrity,
-                logon_id=process_logon_id,
-                parent_image=self._lookup_process_name(
-                    system.hostname, parent_pid, _get_os_category(system.os)
-                ),
-                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
-                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
-                token_elevation=_token_elevation,
-                mandatory_label=_mandatory_label,
-                start_time=process_identity.started_at,
-                current_directory=self._derive_current_directory(
-                    system=system,
-                    username=process_username,
-                    process_name=process_name,
-                    command_line=command_line,
-                    parent_pid=parent_pid,
-                    logon_type=process_logon_type,
-                ),
-                concurrency_group_id=concurrency_group_id,
-                binary_identity=(
-                    process_binary_publication.record.binary
-                    if process_binary_publication is not None
-                    else None
-                ),
-            ),
-            storyline_origin=from_storyline,
-            identity_plan=EventIdentityPlan(
-                subject=process_identity,
-                actor=parent_identity,
-                session=(
-                    process_session_identity if action_cohort_state_plan is not None else None
-                ),
-            ),
-            lifecycle=ActionLifecycleContext(
-                group_id=process_identity.lifecycle_group_id,
-                canonical_start=process_identity.started_at,
-                phase="start",
-                parent_group_id=process_identity.parent_lifecycle_group_id or None,
-            ),
-        )
-
-        endpoint_source_deadline = (
-            prepared_endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
-            if prepared_endpoint is not None
-            and prepared_endpoint.earliest_admitted_occurrence is not None
-            else None
-        )
-        effective_source_visible_by = (
-            min(
-                value
-                for value in (source_visible_by, endpoint_source_deadline)
-                if value is not None
-            )
-            if source_visible_by is not None or endpoint_source_deadline is not None
-            else None
-        )
-        if (
-            provisional_process_termination is not None
-            and prepared_endpoint is not None
-            and prepared_endpoint.latest_admitted_occurrence is not None
-        ):
-            provisional_process_termination = max(
-                provisional_process_termination,
-                prepared_endpoint.latest_admitted_occurrence + timedelta(milliseconds=25),
-            )
-
-        def dependent_artifact_publications(
-            publication: LocalArtifactPublishToken | None,
-        ) -> tuple[LocalArtifactPublishToken, ...]:
-            """Bind the root binary plus a distinct dependent file publication."""
-
-            publications: list[LocalArtifactPublishToken] = []
-            if process_binary_publication is not None:
-                publications.append(process_binary_publication)
-            if publication is not None and publication is not process_binary_publication:
-                publications.append(publication)
-            return tuple(publications)
-
-        with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
-            if (
-                prepared_effects is not None
-                and prepared_effects.provisional_termination is not None
-                and prepared_effects.lifetime_plan is not None
-            ):
-                lifetime_distribution, lifetime_relationship, _scope, _sample_key = (
-                    self._process_provisional_termination_timing_request(
-                        request,
-                        prepared_effects.actor,
-                        prepared_effects.lifetime_plan,
-                    )
-                )
-                timing_preparation.planning_runtime.sampler.record_logical_sample(
-                    lifetime_distribution,
-                    relationship_key=lifetime_relationship,
-                )
-            self._plan_process_source_create_times(
-                event,
-                not_after=effective_source_visible_by,
-            )
-
-            endpoint_reconciliation = None
-            endpoint_builders: tuple[
-                tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...
-            ] = ()
-            if prepared_endpoint is not None:
-                endpoint_reconciliation, endpoint_builders = (
-                    self._prepare_process_owned_endpoint_effects_for_publication(
-                        system=system,
-                        process_identity=process_identity,
-                        process_closes_at=provisional_process_termination,
-                        prepared=prepared_endpoint,
-                        storyline_origin=from_storyline,
-                        action_cohort_owned=action_cohort_state_plan is not None,
-                    )
-                )
-
-            root_dispatch = self.dispatcher.prepare_builder(
-                event,
-                state_intent=(
-                    PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
-                    if action_cohort_state_plan is not None
-                    else PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START
-                ),
-                lifecycle_ticket=(
-                    action_cohort_state_plan
-                    if action_cohort_state_plan is not None
-                    else process_plan
-                ),
-                artifact_publications=(
-                    (process_binary_publication,) if process_binary_publication is not None else ()
-                ),
-                source_timing_preparation=timing_preparation,
-            )
-            dependent_dispatches = tuple(
-                self.dispatcher.prepare_builder(
-                    builder,
-                    state_intent=(
-                        PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
-                        if action_cohort_state_plan is not None
-                        else PreparedDispatchStateIntent.EXTERNAL_DEPENDENT
-                    ),
-                    lifecycle_ticket=(
-                        action_cohort_state_plan
-                        if action_cohort_state_plan is not None
-                        else process_plan
-                    ),
-                    artifact_publications=dependent_artifact_publications(publication),
-                    source_timing_preparation=timing_preparation,
-                )
-                for builder, publication in endpoint_builders
-            )
-        self.dispatcher.validate_prepared(root_dispatch)
-        for dependent_dispatch in dependent_dispatches:
-            self.dispatcher.validate_prepared(dependent_dispatch)
-
-        artifact_publications = (
-            prepared_effects.artifact_publications if prepared_effects is not None else ()
-        )
-        if artifact_publications and self._runtime_content_manager is None:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "prepared process artifacts require the engine-owned runtime content manager",
-            )
-        reservation_ids = tuple(
-            getattr(publication, "_reservation_id", 0) for publication in artifact_publications
-        )
-        if len(reservation_ids) != len(set(reservation_ids)):
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "prepared process artifacts contain a duplicate publication token",
-            )
-
-        if action_cohort_state_plan is not None:
-            from evidenceforge.generation.actions.command_effects import (
-                ExecutionEffectAuditCohortEntry,
-            )
-
-            if endpoint_reconciliation is None or prepared_endpoint is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its exact reconciliation",
-                )
-            endpoint_effect_plan = prepared_endpoint.execution_plan
-            if endpoint_effect_plan is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its execution-effect plan",
-                )
-            effect_member_bindings = tuple(
-                ActionCohortEffectMemberBinding(
-                    entry_ordinal=0,
-                    node_id=builder.effect_provenance.node_id,
-                    occurrence_ordinal=builder.effect_provenance.occurrence_ordinal,
-                    member=dependent_dispatch,
-                )
-                for (builder, _publication), dependent_dispatch in zip(
-                    endpoint_builders,
-                    dependent_dispatches,
-                    strict=True,
-                )
-                if builder.effect_provenance is not None
-            )
-            try:
-                action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                    prepared_endpoint.root_anchor.action_id,
-                    action_cohort_state_plan,
-                    (root_dispatch, *dependent_dispatches),
-                    (
-                        ExecutionEffectAuditCohortEntry(
-                            endpoint_effect_plan,
-                            endpoint_reconciliation,
-                        ),
-                    ),
-                    effect_member_bindings,
-                    (),
-                )
-            except BaseException as primary:
-                if not timing_preparation.committed:
-                    self._reconcile_generator_cleanup(
-                        primary,
-                        "process action-cohort source timing",
-                        timing_preparation.cancel,
-                    )
-                raise
-            self.dispatcher.publish_prepared_action_cohort_batch(action_cohort_batch)
-            running_proc = self.state_manager.get_process(system.hostname, pid)
-            if running_proc is None:  # pragma: no cover - authenticated State result invariant
-                raise StateError("Committed process action cohort did not publish its root")
-        else:
-            with timing_preparation.claimed_commit():
-                with ExitStack() as artifact_stack:
-                    artifact_commits = tuple(
-                        artifact_stack.enter_context(
-                            self._runtime_content_manager.registry.prepared_publication(publication)
-                        )
-                        for publication in artifact_publications
-                    )
-
-                    def finalize_prepared_capabilities() -> None:
-                        for artifact_commit in artifact_commits:
-                            artifact_commit.commit()
-                        timing_preparation.commit_no_fail()
-
-                    running_proc, materialization_receipt = (
-                        self._lifecycle_authority.materialize_process(
-                            process_plan,
-                            finalize_external_no_fail=finalize_prepared_capabilities,
-                        )
-                    )
-
-            self.dispatcher.publish_prepared(
-                root_dispatch,
-                materialization_receipt=materialization_receipt,
-            )
-            for dependent_dispatch in dependent_dispatches:
-                self.dispatcher.publish_prepared(
-                    dependent_dispatch,
-                    materialization_receipt=materialization_receipt,
-                )
-            if endpoint_reconciliation is not None:
-                self._execution_effect_audit.record(endpoint_reconciliation)
-
-        if not from_storyline:
-            self._remember_one_shot_cli_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-            )
-        if running_proc.logon_id and action_cohort_state_plan is None:
-            session = self.state_manager.get_session(running_proc.logon_id)
-            if session is not None:
-                session.last_activity_time = time
-        self._record_process_source_create_time(
-            system.hostname,
-            pid,
-            event,
-            not_after=effective_source_visible_by,
-        )
-        if provisional_process_termination is not None:
-            self._remember_foreground_process_finalizer(
-                system=system,
-                user=user,
-                pid=pid,
-                process_name=process_name,
-                logon_id=running_proc.logon_id,
-                termination_time=provisional_process_termination,
-            )
-        if (
-            _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is None
-            and self._foreground_shell_key(
-                system=system,
-                username=running_proc.username,
-                logon_id=running_proc.logon_id,
-                parent_pid=running_proc.parent_pid,
-            )
-            is not None
-        ):
-            owning_session = self.state_manager.get_session(running_proc.logon_id)
-            shell_deadline = (
-                self.state_manager.get_session_end_time(running_proc.logon_id)
-                if running_proc.logon_id
-                else None
-            )
-            if shell_deadline is None and owning_session is not None:
-                shell_deadline = owning_session.network_close_time
-            if shell_deadline is None:
-                shell_deadline = getattr(self, "_scenario_end_time", None)
-            if shell_deadline is not None:
-                self._remember_foreground_shell_available(
-                    system=system,
-                    username=running_proc.username,
-                    logon_id=running_proc.logon_id,
-                    parent_pid=running_proc.parent_pid,
-                    termination_time=ensure_utc(shell_deadline),
-                    seed_text=running_proc.command_line,
-                    concurrency_group_id=running_proc.concurrency_group_id,
-                )
-        if _get_os_category(system.os) == "windows":
-            self._emit_windows_process_startup_modules(
-                user=user,
-                system=system,
-                time=time,
-                pid=pid,
-                process_name=process_name,
-                from_storyline=from_storyline,
-            )
-        self._emit_process_command_network_effects(
-            user=user,
-            system=system,
-            time=time,
-            pid=pid,
-            process_name=process_name,
-            command_line=command_line,
-            effect_plan=request.effect_plan,
-        )
-
-        runtime_image_load = (
-            prepared_effects.runtime_image_load if prepared_effects is not None else None
-        )
-        if runtime_image_load is not None:
-            self.generate_image_load(
-                user=user,
-                system=system,
-                time=runtime_image_load.timestamp,
-                pid=pid,
-                image=process_name,
-                dll_path=runtime_image_load.path,
-                signed=runtime_image_load.signed,
-                signature=runtime_image_load.signature,
-                signature_status=runtime_image_load.signature_status,
-                load_phase="runtime",
-                from_storyline=from_storyline,
-            )
-        logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
-        return pid
+        return self._process_execution_service().create(request)
 
     def _cancel_uncommitted_process_artifact_publications(
         self,
         prepared_effects: ProcessExecutionPreparedEffects | None,
     ) -> None:
-        """Release every prepared artifact reservation not consumed by a successful bundle."""
-
-        manager = self._runtime_content_manager
-        if manager is None or prepared_effects is None:
-            return
-        for publication in prepared_effects.artifact_publications:
-            manager.registry.cancel_prepared(publication)
+        """Forward to the current process preflight owner."""
+        return self._process_preflight()._cancel_uncommitted_process_artifact_publications(
+            prepared_effects
+        )
 
     def _record_reused_process_optional_effects(
-        self,
-        prepared_effects: ProcessExecutionPreparedEffects | None,
+        self, prepared_effects: ProcessExecutionPreparedEffects | None
     ) -> None:
-        """Reconcile planned optionals explicitly when an existing root is reused."""
-
-        endpoint = prepared_effects.endpoint if prepared_effects is not None else None
-        if endpoint is None:
-            return
-        plan = endpoint.execution_plan
-        if plan is None or any(
-            node.requirement != EffectRequirement.OPTIONAL for node in plan.nodes
-        ):
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "a reused process root may suppress only explicitly optional endpoint effects",
-            )
-        reconciliation = plan.reconcile(
-            tuple(
-                EffectExecutionOutcome(
-                    node_id=node.node_id,
-                    status=EffectOutcomeStatus.SUPPRESSED,
-                    completed_at=endpoint.actor.started_at,
-                    reason="optional endpoint effect omitted because an exact live root was reused",
-                    canonical_occurrence_count=0,
-                )
-                for node in plan.ordered_nodes
-            )
-        )
-        reconciliation.require_complete()
-        self._execution_effect_audit.record(reconciliation)
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._record_reused_process_optional_effects(prepared_effects)
 
     def _prepare_process_owned_endpoint_effects_for_publication(
         self,
@@ -21838,318 +16808,17 @@ class ActivityGenerator:
         ExecutionEffectReconciliation,
         tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...],
     ]:
-        """Bind and stage an endpoint DAG against an allocation-free process identity."""
-
-        from types import SimpleNamespace
-
-        from evidenceforge.events.contracts import (
-            EffectOccurrenceProvenance,
+        """Forward to the shared process effects owner."""
+        return self._process_effects()._prepare_process_owned_endpoint_effects_for_publication(
+            system=system,
+            prepared=prepared,
+            storyline_origin=storyline_origin,
+            action_cohort_owned=action_cohort_owned,
+            process_identity=process_identity,
+            process_closes_at=process_closes_at,
+            pid=pid,
+            parent_pid=parent_pid,
         )
-        from evidenceforge.generation.actions.command_effects import (
-            EffectExecutionOutcome,
-            EffectOutcomeStatus,
-            FileEffectIntent,
-            RegistryEffectIntent,
-        )
-        from evidenceforge.generation.actions.endpoint_effects import (
-            EndpointEffectExecutionPlan,
-            EndpointEffectPreparedCommit,
-            ExactProcessEffectActor,
-            PreparedFileEffectPayload,
-            PreparedRegistryEffectPayload,
-            ProcessOwnedEndpointEffectActionBundle,
-            ProcessOwnedEndpointEffectRequest,
-            bind_prepared_process_endpoint_effect_plan,
-        )
-
-        if process_identity is None:
-            if pid is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                    "endpoint effects require an exact process identity or PID",
-                )
-            process_identity = self.state_manager.get_process_identity(system.hostname, pid)
-            running_process = self.state_manager.get_process(system.hostname, pid)
-            if process_identity is None or running_process is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                    f"endpoint effects require live exact process {system.hostname}:{pid}",
-                )
-            process_closes_at = running_process.end_time
-        if parent_pid is not None and parent_pid != process_identity.parent_pid:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "endpoint effect parent PID drifted from its exact process identity",
-            )
-
-        actor = ExactProcessEffectActor(
-            hostname=process_identity.hostname,
-            pid=process_identity.pid,
-            process_object_id=process_identity.object_id,
-            lifecycle_id=process_identity.lifecycle_group_id,
-            image=process_identity.image,
-            command_line=process_identity.command_line,
-            username=process_identity.principal,
-            logon_id=process_identity.logon_id,
-            started_at=process_identity.started_at,
-            closes_at=process_closes_at,
-        )
-        request = bind_prepared_process_endpoint_effect_plan(prepared, actor)
-        host_context = self._build_host_context(system)
-        auth_context = AuthContext(
-            username=actor.username,
-            user_sid=self._get_sid(actor.username),
-            logon_id=actor.logon_id,
-        )
-        process_context = ProcessContext(
-            pid=process_identity.pid,
-            parent_pid=process_identity.parent_pid,
-            image=actor.image,
-            command_line=actor.command_line,
-            username=actor.username,
-            logon_id=actor.logon_id,
-            start_time=actor.started_at,
-        )
-        effect_graph = prepared.execution_plan
-        if effect_graph is None:
-            raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                "prepared endpoint publication requires its frozen execution-effect graph",
-            )
-        nodes_by_instance_key = {node.instance_key: node for node in effect_graph.ordered_nodes}
-        builders_by_key: dict[
-            str,
-            tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...],
-        ] = {}
-        for effect in prepared.admitted_effects:
-            spec = effect.spec
-            payload = effect.payload
-            intent = spec.intent
-            if isinstance(intent, FileEffectIntent):
-                if not isinstance(payload, PreparedFileEffectPayload):
-                    raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                        "prepared file effect lost its source-native payload",
-                    )
-                semantic_key = f"{system.hostname}:{payload.path.casefold()}"
-                subject = EntityIdentity(
-                    object_id=stable_uuid("file-identity", semantic_key),
-                    kind="file",
-                    hostname=system.hostname,
-                    semantic_key=semantic_key,
-                )
-                builder_template = OccurrenceBuilder(
-                    timestamp=actor.started_at,
-                    event_type=effect.event_type,
-                    src_host=host_context,
-                    auth=auth_context,
-                    process=process_context,
-                    file=FileContext(
-                        path=payload.path,
-                        action=payload.action.value,
-                        pid=process_identity.pid,
-                        artifact_identity=(
-                            payload.artifact_publication.record.artifact
-                            if payload.artifact_publication is not None
-                            else None
-                        ),
-                        content_identity=(
-                            payload.artifact_publication.record.content
-                            if payload.artifact_publication is not None
-                            else None
-                        ),
-                    ),
-                    storyline_origin=storyline_origin,
-                )
-            elif isinstance(intent, RegistryEffectIntent):
-                if not isinstance(payload, PreparedRegistryEffectPayload):
-                    raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                        "prepared registry effect lost its source-native payload",
-                    )
-                target = f"{payload.key}\\{payload.value_name}"
-                semantic_key = f"{system.hostname}:{target.casefold()}:{payload.value}"
-                subject = EntityIdentity(
-                    object_id=stable_uuid("registry-identity", semantic_key),
-                    kind="registry",
-                    hostname=system.hostname,
-                    semantic_key=semantic_key,
-                )
-                builder_template = OccurrenceBuilder(
-                    timestamp=actor.started_at,
-                    event_type=effect.event_type,
-                    src_host=host_context,
-                    auth=auth_context,
-                    process=process_context,
-                    registry=RegistryContext(
-                        key=target,
-                        value=payload.value,
-                        value_type=payload.value_type,
-                        action=payload.action.value,
-                        pid=process_identity.pid,
-                    ),
-                    storyline_origin=storyline_origin,
-                )
-            else:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_INTENT,
-                    "prepared process endpoint adapters accept only file and registry effects",
-                )
-            node = nodes_by_instance_key.get(spec.instance_key)
-            if node is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.MISSING_DEPENDENCY,
-                    "prepared process endpoint payload has no matching effect node",
-                )
-            artifact_publication = (
-                payload.artifact_publication
-                if isinstance(payload, PreparedFileEffectPayload)
-                else None
-            )
-            publication_occurrences = (
-                tuple(enumerate(spec.occurrence_times))
-                if action_cohort_owned
-                else ((0, spec.occurrence_times[0]),)
-            )
-            builders_by_key[spec.instance_key] = tuple(
-                (
-                    replace(
-                        builder_template,
-                        timestamp=occurrence_time,
-                        occurrence_key=(
-                            SemanticOccurrenceKey(
-                                action_id=stable_uuid(
-                                    "canonical-action",
-                                    process_identity.lifecycle_group_id,
-                                ),
-                                role=node.role,
-                                instance_key=stable_uuid(
-                                    "endpoint-effect-occurrence",
-                                    effect_graph.action_id,
-                                    node.node_id,
-                                    occurrence_ordinal,
-                                    occurrence_time.isoformat(),
-                                ),
-                            )
-                            if action_cohort_owned
-                            else None
-                        ),
-                        identity_plan=EventIdentityPlan(
-                            subject=subject,
-                            actor=process_identity,
-                        ),
-                        lifecycle=(
-                            ActionLifecycleContext(
-                                group_id=process_identity.lifecycle_group_id,
-                                canonical_start=process_identity.started_at,
-                                phase="dependent",
-                                parent_group_id=(
-                                    process_identity.parent_lifecycle_group_id or None
-                                ),
-                            )
-                            if action_cohort_owned
-                            else None
-                        ),
-                        effect_provenance=EffectOccurrenceProvenance.planned(
-                            kind=(
-                                EffectOccurrenceKind.FILE
-                                if isinstance(intent, FileEffectIntent)
-                                else EffectOccurrenceKind.REGISTRY
-                            ),
-                            root_action_id=prepared.root_anchor.action_id,
-                            plan_action_id=effect_graph.action_id,
-                            node_id=node.node_id,
-                            occurrence_ordinal=occurrence_ordinal,
-                        ),
-                    ),
-                    artifact_publication,
-                )
-                for occurrence_ordinal, occurrence_time in publication_occurrences
-            )
-
-        staged_builders: tuple[tuple[OccurrenceBuilder, LocalArtifactPublishToken | None], ...] = ()
-
-        def preflight(
-            candidate_request: ProcessOwnedEndpointEffectRequest,
-            _anchor: ActionAnchor,
-        ) -> EndpointEffectExecutionPlan:
-            expected = candidate_request.execution_plan
-            if expected is None or candidate_request.actor != actor:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                    "process endpoint actor drifted from its allocation-free identity",
-                )
-            for occurrence in expected.occurrences():
-                if occurrence.timestamp < process_identity.started_at or (
-                    process_closes_at is not None and occurrence.timestamp >= process_closes_at
-                ):
-                    raise ExecutionEffectPlanError(
-                        ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                        "process endpoint occurrence falls outside its prepared actor lifetime",
-                    )
-            return expected
-
-        def prepare(
-            candidate_request: ProcessOwnedEndpointEffectRequest,
-        ) -> EndpointEffectPreparedCommit:
-            nonlocal staged_builders
-            plan = candidate_request.execution_plan
-            if plan is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint staging requires its exact frozen plan",
-                )
-            suppressed = frozenset(plan.suppressed_instance_keys)
-            admitted_keys = tuple(
-                spec.instance_key for spec in plan.specs if spec.instance_key not in suppressed
-            )
-            if set(admitted_keys) != builders_by_key.keys():
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint builders drifted from admitted planned instances",
-                )
-            staged_builders = tuple(
-                builder for key in admitted_keys for builder in builders_by_key[key]
-            )
-            specs_by_key = {spec.instance_key: spec for spec in plan.specs}
-            outcomes = []
-            for node in plan.effects.ordered_nodes:
-                spec = specs_by_key[node.instance_key]
-                if node.instance_key in suppressed:
-                    outcomes.append(
-                        EffectExecutionOutcome(
-                            node_id=node.node_id,
-                            status=EffectOutcomeStatus.SUPPRESSED,
-                            completed_at=actor.started_at,
-                            reason="optional endpoint effect omitted outside its prepared interval",
-                            canonical_occurrence_count=0,
-                        )
-                    )
-                    continue
-                outcomes.append(
-                    EffectExecutionOutcome(
-                        node_id=node.node_id,
-                        status=EffectOutcomeStatus.REALIZED,
-                        completed_at=spec.occurrence_times[-1],
-                        child_action_id=(actor.lifecycle_id if action_cohort_owned else ""),
-                        canonical_occurrence_count=node.intent.occurrence_cardinality,
-                    )
-                )
-            return EndpointEffectPreparedCommit.create(plan, tuple(outcomes))
-
-        def commit(
-            _candidate_request: ProcessOwnedEndpointEffectRequest,
-            _prepared_commit: EndpointEffectPreparedCommit,
-        ) -> None:
-            return None
-
-        adapter = SimpleNamespace(
-            _preflight_process_owned_endpoint_effects=preflight,
-            _prepare_process_owned_endpoint_effects=prepare,
-            _commit_process_owned_endpoint_effects=commit,
-        )
-        reconciliation = ProcessOwnedEndpointEffectActionBundle(adapter, request).execute()
-        return reconciliation, staged_builders
 
     def _record_process_source_create_time(
         self,
@@ -22160,78 +16829,24 @@ class ActivityGenerator:
         not_after: datetime | None = None,
         publish_finalized: bool = True,
     ) -> None:
-        """Remember the latest rendered source timestamp for a process create."""
-        if event.process is not None and event.auth is not None:
-            self.state_manager.publish_process_auth_identity(
-                hostname,
-                pid,
-                logon_id=event.auth.logon_id,
-                session_id=event.auth.session_id,
-                logon_type=event.auth.logon_type,
-            )
-        self._plan_process_source_create_times(event, not_after=not_after)
-        if not publish_finalized:
-            return
-        start_time = event.process.start_time if event.process is not None else None
-        if start_time is None:
-            return
-        self._remember_process_source_create_bound(hostname, pid, event)
-        visible_create_time = self._source_timing_planner.admitted_process_create_frontier(
-            hostname=hostname,
-            pid=pid,
-            started_at=start_time,
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._record_process_source_create_time(
+            hostname, pid, event, not_after=not_after, publish_finalized=publish_finalized
         )
-        if visible_create_time is not None:
-            self._process_source_create_times[(hostname, pid, start_time)] = visible_create_time
-            latest = getattr(self, "_process_source_create_latest", None)
-            if latest is None:
-                latest = {}
-                self._process_source_create_latest = latest
-            latest[(hostname, pid)] = (
-                start_time,
-                visible_create_time,
-            )
 
     def _remember_process_source_create_bound(
-        self,
-        hostname: str,
-        pid: int,
-        event: OccurrenceBuilder,
+        self, hostname: str, pid: int, event: OccurrenceBuilder
     ) -> None:
-        """Freeze format-independent source timing for a finalized process create."""
-
-        host = event.src_host
-        process_context = event.process
-        if (
-            host is None
-            or process_context is None
-            or host.hostname != hostname
-            or process_context.pid != pid
-            or process_context.start_time is None
-            or host.os_category not in {"windows", "linux"}
-        ):
-            return
-        identity = self.state_manager.get_process_identity(hostname, pid)
-        if identity is None or identity.started_at != ensure_utc(process_context.start_time):
-            return
-        self._process_identity_source_bound(
-            os_category=host.os_category,
-            process=identity,
-        )
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._remember_process_source_create_bound(hostname, pid, event)
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
-        """Return the latest rendered source-create timestamp for a process."""
-        return self._process_cached_time(
-            self._process_source_create_times,
-            getattr(self, "_process_source_create_latest", {}),
-            hostname,
-            pid,
-        )
+        """Forward to the shared process sources owner."""
+        return self._process_sources().process_source_create_time(hostname, pid)
 
     def process_source_create_bound(self, system: System, pid: int) -> datetime | None:
-        """Return the conservative process-create frontier used by canonical planning."""
-
-        return self._process_source_frontier_or_bound(system=system, pid=pid)
+        """Forward to the shared process sources owner."""
+        return self._process_sources().process_source_create_bound(system, pid)
 
     def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the rendered source-terminate timestamp for a process."""
@@ -22251,26 +16866,9 @@ class ActivityGenerator:
         *,
         timing_runtime: TimingRuntime | SourceTimingPlanningRuntime | None = None,
     ) -> datetime:
-        """Keep fast same-process dependents after visible Windows process creation."""
-        if pid <= 0 or _get_os_category(system.os) != "windows":
-            return time
-        visible_create_time = self.process_source_create_bound(system, pid)
-        if visible_create_time is None or time > visible_create_time:
-            return time
-        return visible_create_time + self._sample_profile_activity_gap(
-            relationship_key,
-            stable_id=_activity_timing_stable_id(
-                "windows-visible-process-dependent",
-                system.hostname,
-                pid,
-                visible_create_time,
-                time,
-            ),
-            host=system.hostname,
-            source="endpoint_process",
-            lifecycle_id=str(pid),
-            sample_key="visible_create_gap",
-            timing_runtime=timing_runtime,
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._clamp_after_visible_process_create(
+            system, pid, time, relationship_key, timing_runtime=timing_runtime
         )
 
     def _clamp_after_visible_linux_process_create(
@@ -22372,131 +16970,28 @@ class ActivityGenerator:
         return visible_create_time, required_floor
 
     def _plan_process_source_create_times(
-        self,
-        event: OccurrenceBuilder,
-        *,
-        not_after: datetime | None = None,
+        self, event: OccurrenceBuilder, *, not_after: datetime | None = None
     ) -> None:
-        """Precompute source-create timestamps before threaded emitters render."""
-        host = event.src_host
-        proc = event.process
-        if host is None or proc is None:
-            return
-
-        process_start_time = proc.start_time or event.timestamp
-        session_ready_floor = self._process_session_source_ready_floor(host.hostname, proc)
-
-        if host.os_category == "windows":
-            sysmon_not_before = event.timestamp
-            ecar_not_before = process_start_time
-            if session_ready_floor is not None:
-                sysmon_not_before = max(sysmon_not_before, session_ready_floor)
-                ecar_not_before = max(ecar_not_before, session_ready_floor)
-            if proc.parent_pid > 0:
-                parent_visible_time = self.process_source_create_time(
-                    host.hostname, proc.parent_pid
-                )
-                if parent_visible_time is not None:
-                    sysmon_not_before = max(
-                        sysmon_not_before,
-                        parent_visible_time + timedelta(milliseconds=1),
-                    )
-            self._source_timing_planner.source_time(
-                event,
-                "source.sysmon_process_create",
-                seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=sysmon_not_before,
-                not_after=not_after,
-            )
-            self._source_timing_planner.source_time(
-                event,
-                "source.windows_security_process_create",
-                seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=sysmon_not_before,
-                not_after=not_after,
-            )
-            self._source_timing_planner.source_time(
-                event,
-                "source.ecar_process_create",
-                seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=ecar_not_before,
-                not_after=not_after,
-            )
-            return
-        else:
-            ecar_not_before = process_start_time
-
-        self._source_timing_planner.source_time(
-            event,
-            "source.ecar_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=ecar_not_before,
-            not_after=not_after,
-        )
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._plan_process_source_create_times(event, not_after=not_after)
 
     def _process_session_source_ready_floor(
-        self,
-        hostname: str,
-        proc: ProcessContext,
+        self, hostname: str, proc: ProcessContext
     ) -> datetime | None:
-        """Return the session-visible floor for process-owned source evidence."""
-        logon_id = str(getattr(proc, "logon_id", "") or "")
-        if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
-            return None
-        session = self.state_manager.get_session(logon_id)
-        if session is None or session.system != hostname:
-            return None
-        ready_time = _session_source_ready_time(session)
-        if ready_time is None:
-            return None
-        return ready_time + timedelta(milliseconds=1)
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._process_session_source_ready_floor(hostname, proc)
 
     def _record_process_source_terminate_time(
-        self,
-        hostname: str,
-        pid: int,
-        event: OccurrenceBuilder,
+        self, hostname: str, pid: int, event: OccurrenceBuilder
     ) -> None:
-        """Remember the rendered eCAR source timestamp for process termination."""
-        self._plan_process_source_terminate_times(event)
-        self._remember_process_source_terminate_time(hostname, pid, event)
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._record_process_source_terminate_time(hostname, pid, event)
 
     def _remember_process_source_terminate_time(
-        self,
-        hostname: str,
-        pid: int,
-        event: OccurrenceBuilder,
+        self, hostname: str, pid: int, event: OccurrenceBuilder
     ) -> None:
-        """Adopt already-planned source timing without advancing its canonical owner."""
-
-        source_timing = event.source_timing
-        if source_timing is None:
-            return
-        source_terminate_times = [
-            timestamp
-            for key, timestamp in source_timing.source_times.items()
-            if key.startswith("source.ecar_process_terminate|")
-        ]
-        if source_terminate_times:
-            visible_terminate_time = max(source_terminate_times)
-            start_time = event.process.start_time if event.process is not None else None
-            self._process_source_terminate_times[(hostname, pid, start_time)] = (
-                visible_terminate_time
-            )
-            latest = getattr(self, "_process_source_terminate_latest", None)
-            if latest is None:
-                latest = {}
-                self._process_source_terminate_latest = latest
-            latest[(hostname, pid)] = (
-                start_time,
-                visible_terminate_time,
-            )
-            logon_id = str(getattr(event.process, "logon_id", "") or "")
-            if logon_id:
-                key = (hostname, logon_id)
-                previous = self._session_process_source_terminate_times.get(key)
-                if previous is None or visible_terminate_time > previous:
-                    self._session_process_source_terminate_times[key] = visible_terminate_time
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._remember_process_source_terminate_time(hostname, pid, event)
 
     def _commit_exact_ssh_source_process_termination(
         self,
@@ -22521,41 +17016,8 @@ class ActivityGenerator:
         self._terminated_process_times[key] = ensure_utc(event.timestamp)
 
     def _plan_process_source_terminate_times(self, event: OccurrenceBuilder) -> None:
-        """Precompute eCAR terminate timestamps for source-visible shell ordering."""
-        host = event.src_host
-        proc = event.process
-        if host is None or proc is None or proc.start_time is None:
-            return
-        process_start = ensure_utc(proc.start_time)
-        identity_lookup = getattr(
-            getattr(self, "state_manager", None), "get_process_identity", None
-        )
-        identity = identity_lookup(host.hostname, proc.pid) if callable(identity_lookup) else None
-        process_create_ts = (
-            self._process_identity_source_bound(
-                os_category=host.os_category,
-                process=identity,
-            )
-            if identity is not None and identity.started_at == process_start
-            else None
-        )
-        if process_create_ts is None:
-            process_create_ts = self._process_create_source_bound_for_os(
-                os_category=host.os_category,
-                canonical_time=process_start,
-            )
-        canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
-        self._source_timing_planner.source_time(
-            event,
-            "source.ecar_process_terminate",
-            seed_parts=(
-                host.hostname,
-                proc.pid,
-                proc.start_time,
-                event.timestamp,
-            ),
-            not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
-        )
+        """Forward to the shared process sources owner."""
+        return self._process_sources()._plan_process_source_terminate_times(event)
 
     def _emit_process_command_network_effects(
         self,
@@ -22568,54 +17030,16 @@ class ActivityGenerator:
         command_line: str,
         effect_plan: ExecutionEffectPlan | None = None,
     ) -> None:
-        """Emit direct network effects for well-known network-scanning commands."""
-        probe_request = NmapCommandProbeRequest(
+        """Forward to the shared process effects owner."""
+        return self._process_effects()._emit_process_command_network_effects(
             user=user,
             system=system,
             time=time,
             pid=pid,
             process_name=process_name,
             command_line=command_line,
+            effect_plan=effect_plan,
         )
-        bundle = NmapCommandProbeActionBundle(
-            executor=self,
-            request=probe_request,
-        )
-        if effect_plan is None:
-            bundle.execute()
-            return
-
-        probe_count = self._execute_nmap_command_probe_bundle(probe_request)
-        scanner_nodes = tuple(
-            node for node in effect_plan.nodes if isinstance(node.intent, ScannerEffectIntent)
-        )
-        if scanner_nodes:
-            outcomes = (
-                EffectExecutionOutcome(
-                    node_id=scanner_nodes[0].node_id,
-                    status=EffectOutcomeStatus.REALIZED,
-                    canonical_occurrence_count=probe_count,
-                ),
-            )
-            unplanned_failures = ()
-        elif probe_count:
-            outcomes = ()
-            unplanned_failures = (
-                UnplannedEffectFailure(
-                    effect_kind=EffectKind.SCANNER,
-                    canonical_occurrence_count=probe_count,
-                    reason="nmap emitted canonical probes for an explicit no-effect plan",
-                ),
-            )
-        else:
-            outcomes = ()
-            unplanned_failures = ()
-        reconciliation = effect_plan.reconcile(
-            outcomes,
-            unplanned_failures=unplanned_failures,
-        )
-        self._execution_effect_audit.record(reconciliation)
-        reconciliation.require_complete()
 
     def _execute_nmap_command_probe_bundle(self, request: NmapCommandProbeRequest) -> int:
         """Expand nmap-like process commands into scanner probe connections."""
@@ -22798,11 +17222,10 @@ class ActivityGenerator:
     def _clamp_time_after_process_start(
         self, system: System, pid: int, time: datetime, *, offset_ms: int = 100
     ) -> datetime:
-        """Ensure dependent process telemetry is not timestamped before process start."""
-        process = self.state_manager.get_process(system.hostname, pid)
-        if process and process.start_time and time <= process.start_time:
-            return process.start_time + timedelta(milliseconds=offset_ms)
-        return time
+        """Forward to the shared process effects owner."""
+        return self._process_effects()._clamp_time_after_process_start(
+            system, pid, time, offset_ms=offset_ms
+        )
 
     @staticmethod
     def _ssh_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
@@ -23819,7 +18242,7 @@ class ActivityGenerator:
         )
         if pid <= 0:
             return None
-        self._record_user_process(source_system, user, pid, image)
+        self._process_parents()._record_user_process(source_system, user, pid, image)
         self._emit_bash_command_event(user, source_system, process_time, command_line)
         self._remember_linux_bash_session_activity(
             user,
@@ -24202,6 +18625,16 @@ class ActivityGenerator:
         )
         ProcessTerminationActionBundle(self, request).execute()
 
+    def _generic_logoff_owns_process_close(self, parent: RunningProcess | None) -> bool:
+        """Read the current session teardown's exact frozen process ownership."""
+        schedule = _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.get()
+        return (
+            parent is not None
+            and schedule is not None
+            and schedule.owner is self
+            and any(close.identity.object_id == parent.ecar_object_id for close in schedule.closes)
+        )
+
     def _frozen_generic_logoff_process_close(
         self,
         request: ProcessTerminationRequest,
@@ -24259,244 +18692,8 @@ class ActivityGenerator:
 
     def _execute_process_termination_bundle(self, request: ProcessTerminationRequest) -> None:
         """Expand a process-termination bundle through the compatibility adapter."""
-        from evidenceforge.events.contexts import ProcessContext
 
-        user = request.user
-        system = request.system
-        time = request.time
-        pid = request.pid
-        process_name = request.process_name
-        logon_id = request.logon_id
-        from_storyline = request.from_storyline
-        authoritative_end_plan = request.session_end_plan
-        authoritative_latest_allowed: datetime | None = None
-
-        running_proc = self.state_manager.get_process(system.hostname, pid)
-        frozen_generic_close = self._frozen_generic_logoff_process_close(request, running_proc)
-        frozen_generic_close_time = (
-            frozen_generic_close.end_time if frozen_generic_close is not None else None
-        )
-        if frozen_generic_close_time is not None:
-            time = frozen_generic_close_time
-        if self._process_termination_recorded(
-            system.hostname,
-            pid,
-            running_proc.start_time if running_proc is not None else None,
-        ):
-            return
-
-        if (
-            running_proc is not None
-            and frozen_generic_close_time is None
-            and running_proc.last_activity_time is not None
-            and time <= running_proc.last_activity_time
-        ):
-            if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
-                time = ensure_utc(running_proc.last_activity_time) + timedelta(milliseconds=25)
-            else:
-                time = running_proc.last_activity_time + timedelta(
-                    seconds=_process_termination_delay_after_activity_seconds(
-                        hostname=system.hostname,
-                        pid=pid,
-                        last_activity_time=running_proc.last_activity_time,
-                    )
-                )
-        if running_proc is not None:
-            process_name = running_proc.image
-        process_username = running_proc.username if running_proc is not None else user.username
-        process_membership_logon_id = (
-            running_proc.logon_id if running_proc is not None else logon_id
-        )
-        process_logon_id = (
-            running_proc.token_logon_id or process_membership_logon_id
-            if running_proc is not None
-            else logon_id
-        )
-        owning_session = self.state_manager.get_session(process_membership_logon_id)
-        lifecycle_session = self.state_manager.get_session(logon_id)
-        if (
-            lifecycle_session is not None
-            and lifecycle_session.system == system.hostname
-            and lifecycle_session.session_winlogon_pid == pid
-        ):
-            # winlogon keeps its SYSTEM token/LUID while remaining a member of
-            # the interactive terminal session it bootstraps.  Use that
-            # explicit relationship only for terminal-session metadata and
-            # teardown timing, never to rewrite the process authentication ID.
-            owning_session = lifecycle_session
-        token_session = self.state_manager.get_session(process_logon_id)
-        session_logon_type = (
-            running_proc.auth_logon_type
-            if running_proc is not None and running_proc.auth_logon_type is not None
-            else token_session.logon_type
-            if token_session is not None
-            else 0
-        )
-        session_end_time = (
-            self.state_manager.get_session_end_time(owning_session.logon_id)
-            if owning_session is not None
-            else None
-        )
-        if (
-            owning_session is not None
-            and owning_session.session_kind == "ssh"
-            and owning_session.network_close_time is not None
-            and owning_session.transport_pid != pid
-        ):
-            ssh_transport_end = ensure_utc(owning_session.network_close_time)
-            session_end_time = (
-                ssh_transport_end
-                if session_end_time is None
-                else min(ensure_utc(session_end_time), ssh_transport_end)
-            )
-        if (
-            frozen_generic_close_time is None
-            and session_end_time is not None
-            and time >= session_end_time
-        ):
-            end_margin_ms = 150 + (
-                _stable_seed(
-                    f"process_terminate_before_logoff:{system.hostname}:{pid}:{process_logon_id}"
-                )
-                % 850
-            )
-            latest_allowed = session_end_time - timedelta(milliseconds=end_margin_ms)
-            if running_proc is not None and running_proc.start_time >= latest_allowed:
-                latest_allowed = running_proc.start_time + timedelta(milliseconds=100)
-            if latest_allowed < session_end_time:
-                time = min(time, latest_allowed)
-        if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
-            deadline = ensure_utc(authoritative_end_plan.canonical_end)
-            hold_until = self._process_connection_hold_until.get(
-                self._process_instance_key(system.hostname, pid)
-            )
-            if hold_until is not None and ensure_utc(hold_until) >= deadline:
-                raise StateError(
-                    "Process connection hold extends beyond authoritative session end: "
-                    f"{system.hostname} pid={pid} hold={ensure_utc(hold_until).isoformat()} "
-                    f"end={deadline.isoformat()}"
-                )
-            if frozen_generic_close_time is not None:
-                if frozen_generic_close_time >= deadline:
-                    raise StateError(
-                        "Generic logoff process close is not before its authoritative end"
-                    )
-            else:
-                end_margin_ms = 25 + (
-                    _stable_seed(
-                        "process_terminate_before_authoritative_logoff:"
-                        f"{system.hostname}:{pid}:{process_logon_id}:{deadline.isoformat()}"
-                    )
-                    % 176
-                )
-                authoritative_latest_allowed = deadline - timedelta(milliseconds=end_margin_ms)
-                time = min(ensure_utc(time), authoritative_latest_allowed)
-        else:
-            time = self._held_process_termination_time(
-                system=system,
-                pid=pid,
-                requested_time=time,
-            )
-        if not process_logon_id:
-            if process_username in _SYSTEM_ACCOUNTS:
-                process_logon_id = "0x3e7"
-            else:
-                resolved_username, resolved_logon_id = self._resolve_process_identity(
-                    system=system,
-                    username=process_username,
-                    logon_id=logon_id,
-                    process_name=process_name,
-                    time=time,
-                )
-                process_username = resolved_username
-                process_logon_id = resolved_logon_id or logon_id
-        if authoritative_latest_allowed is None and frozen_generic_close_time is None:
-            time = self._clamp_after_visible_process_create(
-                system,
-                pid,
-                time,
-                "windows.process_exit_after_visible_create",
-            )
-        elif authoritative_latest_allowed is not None:
-            # Source-native ordering is planned below. It must not move the
-            # canonical process lifecycle outside its authoritative session.
-            time = min(ensure_utc(time), authoritative_latest_allowed)
-        self.state_manager.get_process_object_id(system.hostname, pid)
-        process_session_id = (
-            running_proc.auth_session_id
-            if running_proc is not None and running_proc.auth_session_id is not None
-            else token_session.session_id
-            if token_session is not None
-            else 0
-        )
-        event = OccurrenceBuilder(
-            timestamp=time,
-            event_type="process_terminate",
-            src_host=self._build_host_context(system),
-            auth=AuthContext(
-                username=process_username,
-                user_sid=self._get_sid(process_username),
-                logon_id=process_logon_id,
-                session_id=process_session_id,
-                logon_type=session_logon_type or 0,
-            ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=0,
-                image=process_name,
-                command_line="",
-                username=process_username,
-                logon_id=process_logon_id,
-                start_time=running_proc.start_time if running_proc is not None else None,
-                concurrency_group_id=(
-                    running_proc.concurrency_group_id if running_proc is not None else ""
-                ),
-            ),
-            storyline_origin=from_storyline,
-        )
-
-        self._record_process_source_terminate_time(system.hostname, pid, event)
-        if (
-            running_proc is not None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(
-                running_proc.image,
-                running_proc.command_line,
-            )
-            and self._foreground_shell_key(
-                system=system,
-                username=running_proc.username,
-                logon_id=running_proc.logon_id,
-                parent_pid=running_proc.parent_pid,
-            )
-            is not None
-        ):
-            self._remember_foreground_shell_available(
-                system=system,
-                username=running_proc.username,
-                logon_id=running_proc.logon_id,
-                parent_pid=running_proc.parent_pid,
-                termination_time=ensure_utc(event.timestamp),
-                seed_text=running_proc.command_line,
-                concurrency_group_id=running_proc.concurrency_group_id,
-            )
-        self.dispatcher.dispatch_builder(event)
-        termination_start_time = event.process.start_time if event.process is not None else None
-        termination_key = (system.hostname, pid, termination_start_time)
-        self._terminated_process_keys.add(termination_key)
-        self._terminated_process_times[termination_key] = ensure_utc(event.timestamp)
-        self._terminate_completed_one_shot_shell_parent(
-            user=user,
-            system=system,
-            child=running_proc,
-            child_termination_time=event.timestamp,
-            from_storyline=from_storyline,
-            session_end_plan=authoritative_end_plan,
-        )
-
-        logger.debug(
-            f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
-        )
+        return self._process_termination_service().terminate(request)
 
     def _terminate_completed_one_shot_shell_parent(
         self,
@@ -24508,97 +18705,12 @@ class ActivityGenerator:
         from_storyline: bool,
         session_end_plan: SessionEndPlan | None,
     ) -> None:
-        """Close a one-shot Windows wrapper just after its final foreground child."""
-
-        if child is None or _get_os_category(system.os) != "windows" or child.parent_pid <= 0:
-            return
-        parent = self.state_manager.get_process(system.hostname, child.parent_pid)
-        frozen_schedule = _GENERIC_LOGOFF_FROZEN_PROCESS_SCHEDULE.get()
-        if (
-            parent is not None
-            and frozen_schedule is not None
-            and frozen_schedule.owner is self
-            and any(
-                close.identity.object_id == parent.ecar_object_id
-                for close in frozen_schedule.closes
-            )
-        ):
-            return
-        if parent is None or not self._is_one_shot_shell_command(parent.image, parent.command_line):
-            return
-        if not self._windows_shell_parent_invokes_child(
+        """Forward to the shared process foreground owner."""
+        return self._process_foreground()._terminate_completed_one_shot_shell_parent(
+            user=user,
             system=system,
-            parent_pid=parent.pid,
-            process_name=child.image,
-            command_line=child.command_line,
-        ):
-            return
-        if any(
-            process.pid != child.pid and process.parent_pid == parent.pid
-            for process in self.state_manager.get_processes_on_system(system.hostname)
-        ):
-            return
-        child_lifecycle = self._lifecycle_authority.registry.get_process(child.ecar_object_id)
-        if child_lifecycle is None or child_lifecycle.closed_at != ensure_utc(
-            child_termination_time
-        ):
-            # Compatibility dispatch may record a non-strict lifecycle close
-            # failure after ending the child in State.  Do not cascade that
-            # split-brain state into the shell parent; the owning session will
-            # close it after the exact child graph drains.
-            return
-        seed = _stable_seed(
-            "one_shot_shell_after_final_child:"
-            f"{system.hostname}:{parent.pid}:{child.pid}:{child_termination_time.isoformat()}"
-        )
-        parent_termination_time = child_termination_time + timedelta(
-            milliseconds=80 + (seed % 920),
-            microseconds=137 + (seed % 719),
-        )
-        resolved_parent_termination_time = self.resolve_process_lifecycle_close_candidate(
-            system.hostname,
-            parent.pid,
-            parent_termination_time,
-        )
-        if resolved_parent_termination_time is None:
-            return
-        parent_session = self.state_manager.get_session(parent.logon_id)
-        parent_deadlines = [
-            ensure_utc(deadline)
-            for deadline in (
-                (
-                    session_end_plan.canonical_end
-                    if session_end_plan is not None and session_end_plan.is_authoritative
-                    else None
-                ),
-                (
-                    parent_session.end_plan.canonical_end
-                    if parent_session is not None
-                    and parent_session.end_plan is not None
-                    and parent_session.end_plan.is_authoritative
-                    else None
-                ),
-                parent_session.network_close_time if parent_session is not None else None,
-            )
-            if deadline is not None
-        ]
-        if (
-            parent_deadlines and resolved_parent_termination_time >= min(parent_deadlines)
-        ) or not self._is_within_scenario_window(resolved_parent_termination_time):
-            return
-        parent_termination_time = resolved_parent_termination_time
-        parent_user = (
-            user
-            if parent.username == user.username
-            else self._user_model_for_username(parent.username)
-        )
-        self.generate_process_termination(
-            user=parent_user,
-            system=system,
-            time=parent_termination_time,
-            pid=parent.pid,
-            process_name=parent.image,
-            logon_id=parent.logon_id,
+            child=child,
+            child_termination_time=child_termination_time,
             from_storyline=from_storyline,
             session_end_plan=session_end_plan,
         )
@@ -25906,7 +20018,7 @@ class ActivityGenerator:
             process_time = min_process_time
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
-        parent_pid = self._select_parent_pid(
+        parent_pid = self._process_parents()._select_parent_pid(
             system,
             user,
             image,
@@ -25925,7 +20037,7 @@ class ActivityGenerator:
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
         )
-        self._record_user_process(system, user, pid, image)
+        self._process_parents()._record_user_process(system, user, pid, image)
         self.state_manager.update_process_activity_time(system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         running = self.state_manager.get_process(system.hostname, pid)
@@ -26074,7 +20186,7 @@ class ActivityGenerator:
             )
             if process_time >= time:
                 process_time = time - timedelta(milliseconds=100)
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=system,
                 worker_time=process_time,
                 activity_time=time,
@@ -26178,12 +20290,12 @@ class ActivityGenerator:
         """Return the exact active Postfix SMTP worker without sampling timing."""
 
         family = service_process_family("postfix")
-        manager_parent = self._profiled_service_manager_parent_pid(
+        manager_parent = self._process_parents()._profiled_service_manager_parent_pid(
             system=system,
             time=time,
             family=family,
         )
-        manager_pid = self._active_profiled_service_process(
+        manager_pid = self._process_parents()._active_profiled_service_process(
             system=system,
             time=time,
             spec=family.manager,
@@ -26191,7 +20303,7 @@ class ActivityGenerator:
         )
         if manager_pid is None:
             return None
-        return self._active_profiled_service_process(
+        return self._process_parents()._active_profiled_service_process(
             system=system,
             time=time,
             spec=family.workers["smtp"],
@@ -26224,7 +20336,7 @@ class ActivityGenerator:
             )
             if process_time >= time:
                 process_time = time - timedelta(milliseconds=50)
-            pid = self._ensure_profiled_service_worker(
+            pid = self._process_parents()._ensure_profiled_service_worker(
                 system=system,
                 worker_time=process_time,
                 activity_time=time,
@@ -30132,45 +24244,14 @@ class ActivityGenerator:
         logon_time: datetime,
         activity_time: datetime,
     ) -> tuple[datetime, datetime]:
-        """Preview the deterministic receiver and login-shell canonical times."""
-
-        logon_time = ensure_utc(logon_time)
-        activity_time = ensure_utc(activity_time)
-        scenario_start = getattr(self, "_scenario_start_time", None)
-        if scenario_start is not None:
-            scenario_start = ensure_utc(scenario_start)
-        shell_seed = _stable_seed(
-            "linux_ssh_session_shell:"
-            f"{target_system.hostname}:{user.username}:{session.logon_id}:"
-            f"{logon_time.isoformat()}"
+        """Forward to the shared process actors owner."""
+        return self._process_actors()._linux_ssh_session_shell_times(
+            user=user,
+            target_system=target_system,
+            session=session,
+            logon_time=logon_time,
+            activity_time=activity_time,
         )
-        source_ready_time = _session_source_ready_time(session)
-        source_floor = logon_time + timedelta(milliseconds=150)
-        if source_ready_time is not None:
-            source_floor = max(source_floor, source_ready_time + timedelta(milliseconds=50))
-        sshd_delay_ms = 900 + (shell_seed % 1400)
-        sshd_time = max(logon_time + timedelta(milliseconds=sshd_delay_ms), source_floor)
-        if (
-            scenario_start is not None
-            and activity_time >= scenario_start
-            and sshd_time < scenario_start
-        ):
-            pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
-            scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
-            sshd_time = max(scenario_floor, activity_time - pre_command_gap)
-        effective_activity_time = max(activity_time, sshd_time + timedelta(milliseconds=700))
-        latest_parent_time = effective_activity_time - timedelta(milliseconds=500)
-        if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
-            sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
-
-        bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
-        effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
-        latest_bash_time = effective_activity_time - timedelta(milliseconds=120)
-        if bash_time > latest_bash_time and latest_bash_time >= sshd_time + timedelta(
-            milliseconds=20
-        ):
-            bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
-        return sshd_time, bash_time
 
     def _ssh_session_transport_process_parent(
         self,
@@ -30482,7 +24563,7 @@ class ActivityGenerator:
             anchor_time = activity_time
             if scenario_start is not None and logon_time < scenario_start:
                 anchor_time = logon_time
-            parent_pid = self._linux_anchor_pid(target_system, anchor_time)
+            parent_pid = self._process_parents()._linux_anchor_pid(target_system, anchor_time)
 
         shell_seed = _stable_seed(
             "linux_session_shell:"
@@ -30782,7 +24863,7 @@ class ActivityGenerator:
         ):
             if source_visible_by is not None:
                 return None
-            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+            parent_pid = self._process_parents()._linux_anchor_pid(target_system, activity_time)
 
         shell_seed = _stable_seed(
             "linux_visible_shell_parent:"
@@ -31001,7 +25082,7 @@ class ActivityGenerator:
         """Return true when bash-history evidence should be suppressed."""
 
         _ = system
-        return _is_noninteractive_bash_user(user)
+        return is_noninteractive_bash_user(user.username)
 
     @staticmethod
     def _prepare_bash_history_command(system: System, command: str) -> str:
@@ -31033,7 +25114,7 @@ class ActivityGenerator:
         command: str,
     ) -> None:
         """Dispatch a bash-history event at an already scheduled command time."""
-        if _is_noninteractive_bash_user(user):
+        if is_noninteractive_bash_user(user.username):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
                 user.username,
@@ -31121,6 +25202,8 @@ class ActivityGenerator:
                 seed_text=f"{command}:command:{group_index}",
                 concurrency_group_id=concurrency_group_id,
             )
+            if base_process_time is None:
+                break
             stage_times = plan_linux_pipeline_stage_times(
                 base_process_time,
                 stage_count=len(process_group),
@@ -31171,7 +25254,7 @@ class ActivityGenerator:
                 actual_process_start = (
                     running_proc.start_time if running_proc is not None else process_time
                 )
-                self._record_user_process(system, user, pid, image)
+                self._process_parents()._record_user_process(system, user, pid, image)
                 lifetime = _linux_foreground_lifetime(image, process_command_line)
                 if lifetime is not None:
                     termination_time = self._generate_bounded_foreground_process_termination(
@@ -31314,6 +25397,8 @@ class ActivityGenerator:
             scheduled_time,
             command,
         )
+        if scheduled_time is None:
+            return None
         scheduled_time = self._fit_bash_history_time_to_linux_session(
             user,
             system,
@@ -31368,7 +25453,7 @@ class ActivityGenerator:
         system: System,
         scheduled_time: datetime,
         command: str,
-    ) -> datetime:
+    ) -> datetime | None:
         """Move bash history to the same foreground-shell slot as process telemetry."""
         if _get_os_category(system.os) != "linux":
             return scheduled_time
@@ -31394,7 +25479,7 @@ class ActivityGenerator:
 
         parent_pid = session.session_shell_pid
         if parent_pid is None or not self._is_pid_active_at(system, parent_pid, activity_time):
-            parent_pid = self._active_session_shell_pid(
+            parent_pid = self._process_parents()._active_session_shell_pid(
                 system,
                 user,
                 activity_time,
@@ -31638,316 +25723,21 @@ class ActivityGenerator:
         _skip_singleton_reuse: bool = False,
         source_visible_by: datetime | None = None,
     ) -> int:
-        """Generate a system process creation event (no user session required).
-
-        Used for scheduled tasks, service spawns, and other system-initiated
-        processes that don't have an associated user logon session.
-
-        Args:
-            system: System where process is created
-            time: Process creation timestamp
-            process_name: Full path to executable
-            command_line: Command line string
-            parent_pid: Parent process PID
-            username: System account name (SYSTEM, root, etc.)
-            syslog_message: Custom syslog message (overrides auto-generated message)
-            emit_linux_syslog: Whether to attach a Linux syslog record to this process event.
-            concurrency_group_id: Optional source-local process group for related
-                foreground children such as cron shell/workload pairs.
-            source_visible_by: Optional deadline for every process-create source view.
-
-        Returns:
-            PID of the new process
-        """
-        from evidenceforge.events.contexts import ProcessContext
-
-        source_deadline = ensure_utc(source_visible_by) if source_visible_by is not None else None
-        if source_deadline is not None and ensure_utc(time) > source_deadline:
-            return 0
-        if source_deadline is None:
-            self.state_manager.set_current_time(time)
-        if _get_os_category(system.os) == "windows":
-            process_name, command_line = _windows_script_host_process(
-                process_name,
-                command_line,
-            )
-
-        if not _profiled_service_bypass:
-            profiled_worker = matching_service_worker(
-                os_category=_get_os_category(system.os),
-                image=process_name,
-                command_line=command_line,
-                username=username,
-            )
-            if profiled_worker is not None:
-                family_name, worker_name, _family = profiled_worker
-                return self._ensure_profiled_service_worker(
-                    system=system,
-                    worker_time=time,
-                    activity_time=time,
-                    family_name=family_name,
-                    worker_name=worker_name,
-                    source_visible_by=source_visible_by,
-                )
-
-        exe_name = ntpath.basename(process_name).lower()
-        if (
-            _get_os_category(system.os) == "windows"
-            and exe_name in _WINDOWS_SHELL_UWP_USER_PROCESS_EXES
-        ):
-            session = self._active_interactive_windows_session(system, time)
-            if session is None:
-                return 0
-            session_user = self._user_model_for_username(session.username)
-            if self.state_manager.get_process(system.hostname, parent_pid) is None:
-                parent_pid = (
-                    self._resolve_existing_prepared_process_parent(
-                        system=system,
-                        user=session_user,
-                        time=time,
-                        logon_id=session.logon_id,
-                        parent_pid=parent_pid,
-                        process_username=session_user.username,
-                    )
-                    if source_deadline is not None
-                    else self._resolve_parent(
-                        system,
-                        session_user,
-                        time,
-                        session.logon_id,
-                        process_name,
-                    )
-                )
-            if source_deadline is not None:
-                source_floor = ensure_utc(time)
-                session_ready = _session_source_ready_time(session)
-                if session_ready is not None:
-                    source_floor = max(
-                        source_floor,
-                        session_ready + timedelta(milliseconds=1),
-                    )
-                parent_visible_time = self._process_source_frontier_or_bound(
-                    system=system,
-                    pid=parent_pid,
-                )
-                persistent_app_pid = self._existing_persistent_user_app_pid(
-                    system=system,
-                    username=session_user.username,
-                    logon_id=session.logon_id,
-                    process_name=process_name,
-                    command_line=command_line,
-                    time=time,
-                    source_visible_by=source_deadline,
-                )
-                if persistent_app_pid is not None:
-                    return persistent_app_pid
-                if parent_visible_time is not None:
-                    source_floor = max(
-                        source_floor,
-                        ensure_utc(parent_visible_time) + timedelta(milliseconds=1),
-                    )
-                prepared_actor = self._prepare_process_effect_actor(
-                    ProcessExecutionRequest(
-                        user=session_user,
-                        system=system,
-                        time=time,
-                        logon_id=session.logon_id,
-                        process_name=process_name,
-                        command_line=command_line,
-                        parent_pid=parent_pid,
-                        allow_existing_browser_reuse=False,
-                        source_visible_by=source_visible_by,
-                    )
-                )
-                source_floor = max(
-                    source_floor,
-                    self._process_create_source_bound(
-                        system=system,
-                        canonical_time=prepared_actor.started_at,
-                        parent_source_time=parent_visible_time,
-                        session_source_time=session_ready,
-                    ),
-                )
-                if source_floor > source_deadline:
-                    return 0
-            return self.generate_process(
-                user=session_user,
-                system=system,
-                time=time,
-                logon_id=session.logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                allow_existing_browser_reuse=False,
-                source_visible_by=source_visible_by,
-            )
-
-        singleton_service_pid = None
-        if not _skip_singleton_reuse:
-            singleton_service_pid = self._existing_windows_singleton_service_pid(
-                system=system,
-                process_name=process_name,
-                time=time,
-                username=username,
-                command_line=command_line,
-            )
-        if singleton_service_pid is not None:
-            if not self._process_source_visible_by(
-                system=system,
-                pid=singleton_service_pid,
-                deadline=source_deadline,
-            ):
-                return 0
-            return singleton_service_pid
-
-        system_logon_ids = {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}
-        logon_id = system_logon_ids.get(username, "0x3e7")
-        if source_deadline is not None:
-            parent_pid = self._resolve_existing_prepared_process_parent(
-                system=system,
-                user=self._user_model_for_username(username),
-                time=time,
-                logon_id=logon_id,
-                parent_pid=parent_pid,
-                process_username=username,
-            )
-        else:
-            parent_pid = self._repair_process_parent_pid(
-                system=system,
-                time=time,
-                logon_id=logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-                process_username=username,
-            )
-        repaired_parent = self.state_manager.get_process(system.hostname, parent_pid)
-        if repaired_parent is not None and time <= repaired_parent.start_time:
-            time = repaired_parent.start_time + timedelta(milliseconds=50)
-        source_floor = ensure_utc(time)
-        parent_visible_time = None
-        if parent_pid > 0:
-            parent_visible_time = self._process_source_frontier_or_bound(
-                system=system,
-                pid=parent_pid,
-            )
-            if parent_visible_time is not None:
-                source_floor = max(
-                    source_floor,
-                    ensure_utc(parent_visible_time) + timedelta(milliseconds=1),
-                )
-        if source_deadline is not None:
-            source_floor = max(
-                source_floor,
-                self._process_create_source_bound(
-                    system=system,
-                    canonical_time=time,
-                    parent_source_time=parent_visible_time,
-                ),
-            )
-            if source_floor > source_deadline:
-                return 0
-        self.state_manager.set_current_time(time)
-        self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
-        pid = self.state_manager.create_process(
-            system=system.hostname,
-            parent_pid=parent_pid,
-            image=process_name,
-            command_line=command_line,
-            username=username,
-            integrity_level="System",
-            logon_id=logon_id,
+        """Forward to the bundle-owned process system service."""
+        return self._process_system().generate_system_process(
+            system,
+            time,
+            process_name,
+            command_line,
+            parent_pid,
+            username,
+            syslog_message,
+            emit_linux_syslog=emit_linux_syslog,
+            concurrency_group_id=concurrency_group_id,
+            _profiled_service_bypass=_profiled_service_bypass,
+            _skip_singleton_reuse=_skip_singleton_reuse,
+            source_visible_by=source_visible_by,
         )
-
-        # Determine system-level SID and logon ID
-        sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
-
-        self.state_manager.get_process_object_id(system.hostname, pid)
-        self.state_manager.get_process_object_id(system.hostname, parent_pid)
-        event = OccurrenceBuilder(
-            timestamp=time,
-            event_type="system_process_create",
-            src_host=self._build_host_context(system),
-            auth=AuthContext(
-                username=username,
-                user_sid=sid,
-                logon_id=logon_id,
-                subject_sid=sid,
-                subject_username=username,
-                subject_domain="NT AUTHORITY",
-                subject_logon_id=logon_id,
-            ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=parent_pid,
-                image=process_name,
-                command_line=command_line,
-                username=username,
-                integrity_level="System",
-                logon_id=logon_id,
-                parent_image=self._lookup_parent_image(system.hostname, parent_pid),
-                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
-                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
-                token_elevation="%%1936",
-                mandatory_label="S-1-16-16384",
-                start_time=self._lookup_parent_start_time(system.hostname, pid),
-                current_directory=self._derive_current_directory(
-                    system=system,
-                    username=username,
-                    process_name=process_name,
-                    command_line=command_line,
-                    parent_pid=parent_pid,
-                ),
-                concurrency_group_id=concurrency_group_id,
-            ),
-        )
-
-        self._record_process_source_create_time(
-            system.hostname,
-            pid,
-            event,
-            not_after=source_visible_by,
-            publish_finalized=False,
-        )
-        # Attach SyslogContext for Linux hosts
-        if emit_linux_syslog and event.src_host and event.src_host.os_category == "linux":
-            from evidenceforge.events.contexts import SyslogContext
-
-            if syslog_message:
-                event.syslog = SyslogContext(
-                    app_name="systemd",
-                    pid=1,
-                    facility=3,
-                    severity=6,
-                    message=syslog_message,
-                )
-            elif "cron" in (process_name or "").lower():
-                event.syslog = SyslogContext(
-                    app_name="CRON",
-                    pid=pid,
-                    facility=9,
-                    severity=6,
-                    message=f"({username}) CMD ({command_line})",
-                )
-            else:
-                app_name = process_name.split("/")[-1]
-                event.syslog = SyslogContext(
-                    app_name=app_name,
-                    pid=pid,
-                    facility=3,
-                    severity=6,
-                    message=f"started: {command_line}",
-                )
-
-        self.dispatcher.dispatch_builder(event)
-        self._record_process_source_create_time(
-            system.hostname,
-            pid,
-            event,
-            not_after=source_visible_by,
-        )
-
-        return pid
 
     def generate_system_process_termination(
         self,
@@ -33857,7 +27647,7 @@ class ActivityGenerator:
                             username=user.username,
                         )
                         process_name, command_line = source_process_groups[0][0]
-                    parent_pid = self._resolve_parent(
+                    parent_pid = self._process_parents()._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
                     bash_history_group_id = (
@@ -33890,6 +27680,8 @@ class ActivityGenerator:
                                 seed_text=f"{shell_command_line}:command:{group_index}",
                                 concurrency_group_id=concurrency_group_id,
                             )
+                        if group_process_time is None:
+                            break
                         stage_times = plan_linux_pipeline_stage_times(
                             group_process_time,
                             stage_count=len(source_process_group),
@@ -33935,7 +27727,9 @@ class ActivityGenerator:
                                     source_process_time,
                                 )
                             )
-                            self._record_user_process(system, user, source_pid, source_process_name)
+                            self._process_parents()._record_user_process(
+                                system, user, source_pid, source_process_name
+                            )
                             if os_category == "linux":
                                 lifetime = _linux_foreground_lifetime(
                                     source_process_name, source_command_line
@@ -34110,7 +27904,9 @@ class ActivityGenerator:
                         username=user.username,
                         system=system,
                     )
-                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    parent_pid = self._process_parents()._resolve_parent(
+                        system, user, time, logon_id, process_name
+                    )
                     pid = self.generate_process(
                         user,
                         system,
@@ -34120,7 +27916,7 @@ class ActivityGenerator:
                         command_line,
                         parent_pid=parent_pid,
                     )
-                    self._record_user_process(system, user, pid, process_name)
+                    self._process_parents()._record_user_process(system, user, pid, process_name)
                     lifetime = _windows_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
                         self._generate_bounded_foreground_process_termination(
@@ -34156,7 +27952,7 @@ class ActivityGenerator:
                     if active_session is None:
                         raise StateError("Scheduled Linux system process lost its session owner")
                     logon_id = active_session.logon_id
-                    parent_pid = self._resolve_parent(
+                    parent_pid = self._process_parents()._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
                     process_time = self._reserve_foreground_shell_time(
@@ -34167,7 +27963,7 @@ class ActivityGenerator:
                         requested_time=process_time,
                         seed_text=command_line,
                     )
-                    if not self._is_within_scenario_window(process_time):
+                    if process_time is None or not self._is_within_scenario_window(process_time):
                         return
                     pid = self.generate_process(
                         user,
@@ -34184,7 +27980,7 @@ class ActivityGenerator:
                             command_line,
                         ),
                     )
-                    self._record_user_process(system, user, pid, process_name)
+                    self._process_parents()._record_user_process(system, user, pid, process_name)
                     if active_session:
                         active_session.last_activity_time = process_time
                     self._emit_bash_command_event(user, system, process_time, command_line)
@@ -35663,7 +29459,7 @@ class ActivityGenerator:
                 command_line=f"mstsc.exe /v:{target_system.hostname}",
                 parent_pid=parent_pid,
             )
-            self._record_user_process(
+            self._process_parents()._record_user_process(
                 source_system,
                 user,
                 pid,
@@ -35724,28 +29520,10 @@ class ActivityGenerator:
 
     @staticmethod
     def _reconcile_generator_cleanup(
-        primary: BaseException,
-        label: str,
-        cleanup: Callable[[], object],
+        primary: BaseException, label: str, cleanup: Callable[[], object]
     ) -> bool:
-        """Run one idempotent cleanup twice at most without masking its primary."""
-
-        failures: list[BaseException] = []
-        for _attempt in range(2):
-            try:
-                cleanup()
-                return True
-            except BaseException as failure:
-                failures.append(failure)
-        for failure in failures:
-            try:
-                primary.add_note(
-                    f"Generator {label} cleanup also failed with "
-                    f"{type(failure).__module__}.{type(failure).__qualname__}"
-                )
-            except BaseException:
-                continue
-        return False
+        """Forward to the shared process pure owner."""
+        return process_policy._reconcile_generator_cleanup(primary, label, cleanup)
 
     def generate_service_logon(
         self,
@@ -37517,144 +31295,21 @@ class ActivityGenerator:
         load_order: int = 0,
         from_storyline: bool = False,
     ) -> None:
-        """Generate Sysmon Event 7 (ImageLoaded) for DLL/module loading.
-
-        Args:
-            user: User running the process that loaded the DLL
-            system: System where the load occurs
-            time: Event timestamp
-            pid: PID of the process loading the DLL
-            image: Full path of the process image
-            dll_path: Full path of the loaded DLL
-            signed: Whether the DLL is signed
-            signature: Signer name (e.g., "Microsoft Windows")
-            signature_status: Signature validation status (Valid, Expired, etc.)
-            load_phase: Canonical process phase (startup or runtime)
-            load_order: One-based initialization order for startup modules
-            from_storyline: Whether the owning process came from authored activity
-        """
-        from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
-        from evidenceforge.generation.activity.dll_load_profiles import (
-            module_is_compatible_with_process,
-        )
-
-        proc = self.state_manager.get_process(system.hostname, pid)
-        if proc is None:
-            logger.debug(
-                "Skipping image load for non-running process: %s pid=%s image=%s dll=%s",
-                system.hostname,
-                pid,
-                image,
-                dll_path,
-            )
-            return
-        if time >= proc.start_time and not self.state_manager.is_process_active_at(
-            system.hostname, pid, time
-        ):
-            logger.debug(
-                "Skipping image load outside owning process lifetime: %s pid=%s dll=%s",
-                system.hostname,
-                pid,
-                dll_path,
-            )
-            return
-        image = normalize_defender_platform_path(proc.image, system.hostname)
-        dll_path = self._materialize_module_profile_path(
+        """Forward to the shared process effects owner."""
+        return self._process_effects().generate_image_load(
+            user,
+            system,
+            time,
+            pid,
+            image,
             dll_path,
-            system=system,
-            username=proc.username or user.username,
-            pid=pid,
-            process_start=proc.start_time,
+            signed,
+            signature,
+            signature_status,
+            load_phase,
+            load_order,
+            from_storyline,
         )
-        dll_path = normalize_defender_platform_path(dll_path, system.hostname)
-        exe_basename = ntpath.basename(image).lower()
-        if not module_is_compatible_with_process(exe_basename, dll_path):
-            logger.warning(
-                "Skipping module load incompatible with its configured process owner: "
-                "%s pid=%s image=%s dll=%s",
-                system.hostname,
-                pid,
-                image,
-                dll_path,
-            )
-            return
-        module_identity = None
-        deployment_registry = getattr(self.dispatcher, "deployment_registry", None)
-        if deployment_registry is not None:
-            module_identity = deployment_registry.resolve_binary(
-                system.hostname,
-                dll_path,
-                "windows",
-                principal=proc.username or user.username,
-            )
-            if (
-                module_identity is None
-                or deployment_registry.host_module_handle(
-                    system.hostname,
-                    module_identity.content_id,
-                )
-                is None
-            ):
-                logger.debug(
-                    "Skipping image load for undeployed module: %s pid=%s image=%s dll=%s",
-                    system.hostname,
-                    pid,
-                    image,
-                    dll_path,
-                )
-                return
-        if load_phase not in {"startup", "runtime"}:
-            raise ValueError(f"load_phase must be 'startup' or 'runtime', got {load_phase!r}")
-        if load_phase == "startup" and load_order <= 0:
-            raise ValueError("startup module loads require a positive load_order")
-        time = self._clamp_time_after_process_start(system, pid, time)
-        session_end_time = (
-            self.state_manager.get_session_end_time(proc.logon_id) if proc.logon_id else None
-        )
-        if session_end_time is not None and ensure_utc(time) >= ensure_utc(session_end_time):
-            logger.debug(
-                "Skipping image load after owning session ended: %s pid=%s logon_id=%s dll=%s",
-                system.hostname,
-                pid,
-                proc.logon_id,
-                dll_path,
-            )
-            return
-        if not self._mark_loaded_module(system.hostname, pid, proc.start_time, dll_path):
-            logger.debug(
-                "Skipping duplicate image load for process instance: %s pid=%s dll=%s",
-                system.hostname,
-                pid,
-                dll_path,
-            )
-            return
-        self.state_manager.update_process_activity_time(system.hostname, pid, time)
-        self.state_manager.get_process_object_id(system.hostname, pid)
-        event = OccurrenceBuilder(
-            timestamp=time,
-            event_type="image_load",
-            src_host=self._build_host_context(system),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=proc.parent_pid,
-                image=image,
-                command_line=proc.command_line,
-                username=proc.username,
-                logon_id=proc.logon_id,
-                start_time=proc.start_time,
-            ),
-            image_load=ImageLoadContext(
-                image_loaded=dll_path,
-                signed=signed,
-                signature=signature,
-                signature_status=signature_status,
-                load_phase=load_phase,
-                load_order=load_order,
-                binary_identity=module_identity,
-            ),
-            storyline_origin=from_storyline,
-        )
-        self.dispatcher.dispatch_builder(event)
 
     def _emit_windows_process_startup_modules(
         self,
@@ -37666,81 +31321,30 @@ class ActivityGenerator:
         process_name: str,
         from_storyline: bool,
     ) -> None:
-        """Emit the configured Windows loader chain during process initialization."""
-        from evidenceforge.generation.activity.dll_load_profiles import (
-            select_startup_dlls_for_process,
+        """Forward to the shared process effects owner."""
+        return self._process_effects()._emit_windows_process_startup_modules(
+            user=user,
+            system=system,
+            time=time,
+            pid=pid,
+            process_name=process_name,
+            from_storyline=from_storyline,
         )
-
-        exe_basename = ntpath.basename(process_name).lower()
-        startup_modules = select_startup_dlls_for_process(
-            exe_basename,
-            seed_parts=(system.hostname, system.os),
-        )
-        elapsed_ms = 1 + (
-            _stable_seed(f"windows-startup-modules:{system.hostname}:{pid}:{time.isoformat()}") % 4
-        )
-        for load_order, module in enumerate(startup_modules, start=1):
-            dll_path = str(module["path"])
-            self.generate_image_load(
-                user=user,
-                system=system,
-                time=time + timedelta(milliseconds=elapsed_ms),
-                pid=pid,
-                image=process_name,
-                dll_path=dll_path,
-                signed=bool(module["signed"]),
-                signature=str(module["signature"]),
-                signature_status=str(module["signature_status"]),
-                load_phase="startup",
-                load_order=load_order,
-                from_storyline=from_storyline,
-            )
-            spacing_seed = _stable_seed(
-                f"windows-startup-module-spacing:{system.hostname}:{pid}:"
-                f"{time.isoformat()}:{load_order}:{module['path']}"
-            )
-            elapsed_ms += 1 + (spacing_seed % 7)
 
     @staticmethod
     def _materialize_module_profile_path(
-        path: str,
-        *,
-        system: System,
-        username: str,
-        pid: int,
-        process_start: datetime,
+        path: str, *, system: System, username: str, pid: int, process_start: datetime
     ) -> str:
-        """Resolve one module template without consuming an ambient RNG stream."""
-        from evidenceforge.generation.activity.edr_pools import materialize_edr_template
-
-        rng = random.Random(
-            _stable_seed(
-                f"module-profile:{system.hostname}:{pid}:{process_start.isoformat()}:{path}"
-            )
-        )
-        return materialize_edr_template(
-            path,
-            rng,
-            username,
-            host_key=system.hostname,
-            host_ip=system.ip,
-            host_os=system.os,
+        """Forward to the shared process pure owner."""
+        return process_policy._materialize_module_profile_path(
+            path, system=system, username=username, pid=pid, process_start=process_start
         )
 
     def _mark_loaded_module(
-        self,
-        hostname: str,
-        pid: int,
-        process_start: datetime | None,
-        dll_path: str,
+        self, hostname: str, pid: int, process_start: datetime | None, dll_path: str
     ) -> bool:
-        """Return False when this process instance already loaded the module."""
-        process_start_key = process_start.isoformat() if process_start is not None else ""
-        module_key = (hostname, pid, process_start_key, dll_path.lower())
-        if module_key in self._loaded_modules_by_process:
-            return False
-        self._loaded_modules_by_process.add(module_key)
-        return True
+        """Forward to the shared process effects owner."""
+        return self._process_effects()._mark_loaded_module(hostname, pid, process_start, dll_path)
 
     def generate_account_changed(
         self,
@@ -39874,6 +33478,8 @@ class ActivityGenerator:
                     command=command,
                     session=session,
                 )
+                if serialization_ceiling is None:
+                    return 0, None, timing_shift, assigned_tty
                 admission_shift = serialization_ceiling - effective_sudo_time
                 if complete_by + admission_shift > ensure_utc(latest_end):
                     return 0, None, timing_shift, assigned_tty
@@ -39966,6 +33572,13 @@ class ActivityGenerator:
             process_name="/usr/bin/sudo",
             command_line=f"sudo {command}",
         )
+        if reserved_sudo_time is None:
+            self._update_linux_sudo_tty_availability(
+                tty_key,
+                session.logon_id,
+                available,
+            )
+            return 0, None, timing_shift, assigned_tty
         shell_shift = reserved_sudo_time - effective_sudo_time
         effective_sudo_time = reserved_sudo_time
         child_time += shell_shift
@@ -41049,335 +34662,88 @@ class ActivityGenerator:
         username: str,
         command_line: str = "",
     ) -> int | None:
-        """Return an active canonical Windows service singleton PID when one exists."""
-        if _get_os_category(system.os) != "windows":
-            return None
-
-        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
-        exe_name = normalized_path.rsplit("\\", 1)[-1]
-        service_match = re.search(r"(?:^|\s)-s\s+(?P<service>[^\s]+)", command_line, re.IGNORECASE)
-        service_name = service_match.group("service").lower() if service_match else ""
-        from evidenceforge.generation.activity.system_processes import (
-            get_windows_singleton_service_paths,
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._existing_windows_singleton_service_pid(
+            system, process_name, time, username, command_line
         )
 
-        singleton_paths = {
-            key: set(paths) for key, paths in _WINDOWS_SINGLETON_SERVICE_PATHS.items()
-        }
-        for key, paths in get_windows_singleton_service_paths().items():
-            singleton_paths.setdefault(key, set()).update(paths)
-        valid_paths = singleton_paths.get(exe_name)
-        is_named_svchost = exe_name == "svchost.exe" and bool(service_name)
-        if not valid_paths and not is_named_svchost:
-            return None
-
-        if valid_paths and "\\" in normalized_path and normalized_path not in valid_paths:
-            return None
-
-        normalized_username = username.upper()
-        candidates: list[RunningProcess] = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            proc_path = ntpath.normpath(proc.image.replace("/", "\\")).lower()
-            if is_named_svchost:
-                if ntpath.basename(proc_path) != "svchost.exe":
-                    continue
-                proc_service_match = re.search(
-                    r"(?:^|\s)-s\s+(?P<service>[^\s]+)",
-                    proc.command_line,
-                    re.IGNORECASE,
-                )
-                if (
-                    proc_service_match is None
-                    or proc_service_match.group("service").lower() != service_name
-                ):
-                    continue
-            elif valid_paths is not None and proc_path not in valid_paths:
-                continue
-            if proc.username.upper() != normalized_username:
-                continue
-            parent = self.state_manager.get_process(system.hostname, proc.parent_pid)
-            parent_image = parent.image if parent else ""
-            if ntpath.basename(parent_image).lower() != "services.exe":
-                continue
-            candidates.append(proc)
-
-        if not candidates:
-            return None
-        return max(candidates, key=lambda proc: proc.start_time).pid
-
     def _existing_windows_singleton_pid(
-        self,
-        system: System,
-        process_name: str,
-        time: datetime,
+        self, system: System, process_name: str, time: datetime
     ) -> int | None:
-        """Return a seeded Windows singleton PID instead of creating a duplicate."""
-        if _get_os_category(system.os) != "windows":
-            return None
-        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
-        exe_name = normalized_path.rsplit("\\", 1)[-1]
-        role = _WINDOWS_SINGLETON_SYSTEM_PROCESSES.get(exe_name)
-        if role is None:
-            return None
-        if "\\" in normalized_path and normalized_path != f"c:\\windows\\system32\\{exe_name}":
-            return None
-        pid = getattr(self, "_system_pids", {}).get(system.hostname, {}).get(role)
-        if pid is None or not self._is_pid_active_at(system, pid, time):
-            return None
-        return pid
+        """Forward to the shared process reuse owner."""
+        return self._process_reuse()._existing_windows_singleton_pid(system, process_name, time)
 
     def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
-        """Look up the image path of a running process by PID.
-
-        PID 4 is always the Windows System process (ntoskrnl.exe). Unknown
-        Linux PIDs have no safe parent image: returning a shell there fabricates
-        impossible eCAR parent relationships such as bash with ppid=4.
-        """
-        if pid == 4 and os_category == "windows":
-            return r"C:\Windows\System32\ntoskrnl.exe"
-        key = (hostname, pid)
-        proc = self.state_manager.state.running_processes.get(key)
-        if proc:
-            return proc.image
-        if os_category == "linux":
-            return "-"
-        return r"C:\Windows\explorer.exe"
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._lookup_process_name(hostname, pid, os_category)
 
     # Process names that can spawn child processes
-    _WINDOWS_SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "WindowsTerminal.exe"}
-    _WINDOWS_SHELL_NAMES = {"cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe"}
-    _WINDOWS_SPAWNERS = {
-        "cmd.exe",
-        "powershell.exe",
-        "pwsh.exe",
-        "WindowsTerminal.exe",
-        "outlook.exe",
-        "chrome.exe",
-        "firefox.exe",
-        "msedge.exe",
-        "iexplore.exe",
-    }
-    _WINDOWS_SERVICE_SHELL_CHILDREN = {
-        "arp.exe",
-        "certutil.exe",
-        "dcdiag.exe",
-        "dnscmd.exe",
-        "dsquery.exe",
-        "gpresult.exe",
-        "gpupdate.exe",
-        "hostname.exe",
-        "ipconfig.exe",
-        "klist.exe",
-        "net.exe",
-        "net1.exe",
-        "nltest.exe",
-        "nslookup.exe",
-        "ping.exe",
-        "reg.exe",
-        "repadmin.exe",
-        "route.exe",
-        "sc.exe",
-        "schtasks.exe",
-        "systeminfo.exe",
-        "tasklist.exe",
-        "tracert.exe",
-        "wevtutil.exe",
-        "whoami.exe",
-        "wmic.exe",
-    }
+    _WINDOWS_SHELLS = process_policy._WINDOWS_SHELLS
+    _WINDOWS_SHELL_NAMES = process_policy._WINDOWS_SHELL_NAMES
+    _WINDOWS_SPAWNERS = process_policy._WINDOWS_SPAWNERS
+    _WINDOWS_SERVICE_SHELL_CHILDREN = process_policy._WINDOWS_SERVICE_SHELL_CHILDREN
     # GUI apps that users launch from Start Menu / desktop — always parent=explorer.exe
-    _WINDOWS_GUI_APPS = {
-        "outlook.exe",
-        "winword.exe",
-        "excel.exe",
-        "powerpnt.exe",
-        "chrome.exe",
-        "firefox.exe",
-        "msedge.exe",
-        "iexplore.exe",
-        "teams.exe",
-        "onedrive.exe",
-        "acrobat.exe",
-        "7zfm.exe",
-        "notepad++.exe",
-        "idea64.exe",
-        "sublime_text.exe",
-        "code.exe",
-    }
-    _LINUX_SHELLS = {"/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/bash", "/usr/bin/zsh"}
-    _LINUX_SERVICE_USERS = {"apache", "www-data", "nginx", "httpd"}
-    _LINUX_SERVICE_PARENT_KEYS = ("apache2", "httpd", "nginx", "php-fpm")
+    _WINDOWS_GUI_APPS = process_policy._WINDOWS_GUI_APPS
+    _LINUX_SHELLS = process_policy._LINUX_SHELLS
+    _LINUX_SERVICE_USERS = process_policy._LINUX_SERVICE_USERS
+    _LINUX_SERVICE_PARENT_KEYS = process_policy._LINUX_SERVICE_PARENT_KEYS
 
     @staticmethod
     def _is_one_shot_shell_command(process_name: str, command_line: str) -> bool:
-        """Return whether a shell command is a short-lived command wrapper."""
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
-            return False
-        return _windows_foreground_lifetime(process_name, command_line) is not None
+        """Forward to the shared process pure owner."""
+        return process_policy._is_one_shot_shell_command(process_name, command_line)
 
     def _is_one_shot_shell_parent(self, system: System, pid: int) -> bool:
-        """Return whether PID is a short-lived shell unsuitable as a later parent."""
-        proc = self.state_manager.get_process(system.hostname, pid)
-        if proc is None:
-            return False
-        return self._is_one_shot_shell_command(proc.image, proc.command_line)
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._is_one_shot_shell_parent(system, pid)
 
     @staticmethod
     def _windows_one_shot_shell_payload(process_name: str, command_line: str) -> str:
-        """Return the inline command executed by a one-shot Windows shell."""
-        shell_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        command = command_line.strip()
-        if shell_exe == "cmd.exe":
-            match = re.search(r"(?i)(?:^|\s)/(?:c|k)\s+(.+)$", command)
-            return match.group(1).strip().strip('"') if match else ""
-        if shell_exe in {"powershell.exe", "pwsh.exe"}:
-            match = re.search(r"(?i)(?:^|\s)-(?:command|c)\s+(.+)$", command)
-            return match.group(1).strip().strip('"') if match else ""
-        return ""
+        """Forward to the shared process pure owner."""
+        return process_policy._windows_one_shot_shell_payload(process_name, command_line)
 
     @staticmethod
     def _windows_shell_command_signature(command_line: str) -> tuple[str, ...]:
-        """Normalize a Windows command line for shell parent/child matching."""
-        tokens = _command_tokens(command_line)
-        if not tokens:
-            return ()
-        normalized: list[str] = []
-        for index, token in enumerate(tokens):
-            value = token.strip().strip('"').lower()
-            if index == 0:
-                value = value.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-                if value.endswith(".exe"):
-                    value = value[:-4]
-            normalized.append(value)
-        return tuple(normalized)
+        """Forward to the shared process pure owner."""
+        return process_policy._windows_shell_command_signature(command_line)
 
     @classmethod
     def _windows_child_command_signatures(
-        cls,
-        process_name: str,
-        command_line: str,
+        cls, process_name: str, command_line: str
     ) -> set[tuple[str, ...]]:
-        """Return command signatures that can represent a child process launch."""
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        process_stem = process_exe.removesuffix(".exe")
-        signatures: set[tuple[str, ...]] = set()
-        command_signature = cls._windows_shell_command_signature(command_line)
-        if command_signature:
-            signatures.add(command_signature)
-            if command_signature[0] != process_stem:
-                signatures.add((process_stem, *command_signature))
-        else:
-            signatures.add((process_stem,))
-        return signatures
+        """Forward to the shared process pure owner."""
+        return process_policy._windows_child_command_signatures(process_name, command_line)
 
     def _windows_shell_parent_invokes_child(
-        self,
-        *,
-        system: System,
-        parent_pid: int,
-        process_name: str,
-        command_line: str,
+        self, *, system: System, parent_pid: int, process_name: str, command_line: str
     ) -> bool:
-        """Return whether a one-shot shell parent directly invokes this child command."""
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if parent_proc is None:
-            return False
-        if not self._is_one_shot_shell_command(parent_proc.image, parent_proc.command_line):
-            return False
-        payload = self._windows_one_shot_shell_payload(
-            parent_proc.image,
-            parent_proc.command_line,
-        )
-        if not payload:
-            return False
-        parent_signature = self._windows_shell_command_signature(payload)
-        if not parent_signature:
-            return False
-        return parent_signature in self._windows_child_command_signatures(
-            process_name,
-            command_line,
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._windows_shell_parent_invokes_child(
+            system=system,
+            parent_pid=parent_pid,
+            process_name=process_name,
+            command_line=command_line,
         )
 
     def _is_bare_interactive_windows_shell(self, process_name: str, command_line: str) -> bool:
-        """Return whether a shell is an interactive prompt rather than an inline command."""
-        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
-            return False
-        return not self._is_one_shot_shell_command(process_name, command_line)
+        """Forward to the shared process pure owner."""
+        return process_policy._is_bare_interactive_windows_shell(process_name, command_line)
 
     def _space_interactive_shell_child_launch(
-        self,
-        *,
-        system: System,
-        process_name: str,
-        parent_pid: int,
-        time: datetime,
+        self, *, system: System, process_name: str, parent_pid: int, time: datetime
     ) -> datetime:
-        """Add human-scale dwell time before visible children of bare shells."""
-        if _get_os_category(system.os) != "windows":
-            return time
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if process_exe in self._WINDOWS_SHELL_NAMES or process_exe == "conhost.exe":
-            return time
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if parent_proc is None or parent_proc.start_time is None:
-            return time
-        if not self._is_bare_interactive_windows_shell(parent_proc.image, parent_proc.command_line):
-            return time
-        rng = random.Random(
-            _stable_seed(
-                f"interactive_shell_child_gap:{system.hostname}:{parent_pid}:"
-                f"{process_exe}:{parent_proc.start_time.isoformat()}"
-            )
+        """Forward to the shared process scheduling owner."""
+        return self._process_scheduling()._space_interactive_shell_child_launch(
+            system=system, process_name=process_name, parent_pid=parent_pid, time=time
         )
-        minimum_child_time = parent_proc.start_time + timedelta(seconds=rng.uniform(8.0, 45.0))
-        if time < minimum_child_time:
-            return minimum_child_time
-        return time
 
     def _windows_remote_command_owner_pid(
-        self,
-        *,
-        system: System,
-        time: datetime,
-        child_exe: str,
-        child_command_line: str,
+        self, *, system: System, time: datetime, child_exe: str, child_command_line: str
     ) -> int:
-        """Return a concrete service-family owner for a remote/admin shell."""
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        exe = child_exe.lower()
-        command = child_command_line.lower()
-        owner_keys: tuple[str, ...]
-
-        if exe == "schtasks.exe" or "schtasks" in command:
-            if "/create" in command or " /create" in command:
-                owner_keys = ("wmiprvse", "svchost_dcom", "services")
-            else:
-                owner_keys = ("taskhostw", "svchost_local_system", "services")
-        elif exe in {"wmic.exe", "wmic"} or "wmic " in command:
-            owner_keys = ("wmiprvse", "svchost_dcom", "services")
-        elif exe in {"sc.exe", "sc"} or "sc.exe create" in command or " sc create" in command:
-            owner_keys = ("wmiprvse", "svchost_dcom", "services")
-        elif exe in {"wevtutil.exe", "wevtutil", "net.exe", "net1.exe", "net", "net1"}:
-            owner_keys = ("wmiprvse", "taskhostw", "services")
-        elif "powershell" in command or "winrm" in command or "invoke-command" in command:
-            owner_keys = ("wmiprvse", "svchost_dcom", "services")
-        else:
-            seed = _stable_seed(
-                f"windows_remote_owner:{system.hostname}:{exe}:{child_command_line}"
-            )
-            owner_keys = (
-                ("wmiprvse", "taskhostw", "services")
-                if seed % 2
-                else ("taskhostw", "wmiprvse", "services")
-            )
-
-        for key in owner_keys:
-            pid = sys_pids.get(key)
-            if pid and self._is_pid_active_at(system, pid, time):
-                return pid
-        return sys_pids.get("services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4)))
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._windows_remote_command_owner_pid(
+            system=system, time=time, child_exe=child_exe, child_command_line=child_command_line
+        )
 
     def _ensure_windows_service_shell_parent(
         self,
@@ -41389,73 +34755,19 @@ class ActivityGenerator:
         child_exe: str,
         child_command_line: str = "",
     ) -> int | None:
-        """Create a short-lived SYSTEM shell for service-context admin utilities."""
-        if _get_os_category(system.os) != "windows":
-            return None
-        if child_exe not in self._WINDOWS_SERVICE_SHELL_CHILDREN:
-            return None
-
-        parent_pid = self._windows_remote_command_owner_pid(
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._ensure_windows_service_shell_parent(
             system=system,
+            user=user,
             time=time,
+            logon_id=logon_id,
             child_exe=child_exe,
             child_command_line=child_command_line,
         )
-        shell_time = time - timedelta(
-            milliseconds=120
-            + (_stable_seed(f"windows-service-shell:{system.hostname}:{child_exe}:{time}") % 90)
-        )
-        session = self.state_manager.get_session(logon_id)
-        if session is not None and shell_time <= session.start_time:
-            shell_time = session.start_time + timedelta(milliseconds=40)
-        if shell_time >= time:
-            shell_time = time - timedelta(milliseconds=40)
-
-        rendered_child = child_command_line.strip() or child_exe
-        shell_command = f"C:\\Windows\\System32\\cmd.exe /c {rendered_child}"
-        shell_pid = self.generate_process(
-            user=user,
-            system=system,
-            time=shell_time,
-            logon_id=logon_id,
-            process_name=r"C:\Windows\System32\cmd.exe",
-            command_line=shell_command,
-            parent_pid=parent_pid,
-            ensure_file_event=False,
-            from_storyline=True,
-            suppress_command_file_effect=True,
-            allow_existing_browser_reuse=False,
-            allow_browser_launch_spacing=False,
-        )
-        self._record_user_process(system, user, shell_pid, r"C:\Windows\System32\cmd.exe")
-        return shell_pid
 
     def _linux_anchor_pid(self, system: System, time: datetime) -> int:
-        """Return a tracked Linux init/systemd process for parent-chain fallbacks."""
-        sys_pids = getattr(self, "_system_pids", {}).setdefault(system.hostname, {})
-        for role in ("systemd", "init"):
-            pid = sys_pids.get(role)
-            if pid and self._is_pid_active_at(system, pid, time):
-                return pid
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            proc_exe = proc.image.rsplit("/", 1)[-1].lower()
-            if proc_exe in {"systemd", "init"} and proc.start_time <= time:
-                sys_pids.setdefault("systemd", proc.pid)
-                return proc.pid
-
-        current_time = time - timedelta(minutes=5)
-        self.state_manager.set_current_time(current_time)
-        pid = self.state_manager.create_process(
-            system=system.hostname,
-            parent_pid=0,
-            image="/usr/lib/systemd/systemd",
-            command_line="/usr/lib/systemd/systemd",
-            username="root",
-            integrity_level="System",
-            logon_id="",
-        )
-        sys_pids["systemd"] = pid
-        return pid
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._linux_anchor_pid(system, time)
 
     def _linux_local_login_parent_pid(
         self,
@@ -41481,40 +34793,13 @@ class ActivityGenerator:
         if candidate_pids:
             ordered_pids = sorted(set(candidate_pids))
             return ordered_pids[seed % len(ordered_pids)]
-        return self._linux_anchor_pid(system, time)
+        return self._process_parents()._linux_anchor_pid(system, time)
 
     def _active_session_shell_pid(
-        self,
-        system: System,
-        user: User,
-        time: datetime | None,
-        logon_id: str = "",
+        self, system: System, user: User, time: datetime | None, logon_id: str = ""
     ) -> int | None:
-        """Return the actor's live per-session shell when one owns the command."""
-        sessions = (
-            self.state_manager.get_sessions_for_user_at(user.username, time)
-            if time is not None
-            else self.state_manager.get_sessions_for_user(user.username)
-        )
-        if logon_id:
-            sessions = [sess for sess in sessions if sess.logon_id == logon_id]
-        for sess in sessions:
-            if sess.system != system.hostname or sess.session_shell_pid is None:
-                continue
-            if time is not None and not _session_active_for_activity(
-                sess,
-                time,
-                margin_seconds=1.5,
-            ):
-                continue
-            is_active = (
-                self._is_pid_active_at(system, sess.session_shell_pid, time)
-                if time is not None
-                else self._is_pid_alive(system, sess.session_shell_pid)
-            )
-            if is_active:
-                return sess.session_shell_pid
-        return None
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._active_session_shell_pid(system, user, time, logon_id)
 
     def _linux_service_parent_pid(
         self,
@@ -41523,155 +34808,50 @@ class ActivityGenerator:
         time: datetime,
         possible_parents: list[str] | None = None,
     ) -> int | None:
-        """Return a live Linux service daemon parent for service-account commands."""
-        if username not in self._LINUX_SERVICE_USERS:
-            return None
-        parent_names = {parent.lower() for parent in possible_parents or []}
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        for key in self._LINUX_SERVICE_PARENT_KEYS:
-            if parent_names and key not in parent_names:
-                continue
-            pid = sys_pids.get(key)
-            if pid and self._is_pid_active_at(system, pid, time):
-                return pid
-        return None
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._linux_service_parent_pid(
+            system, username, time, possible_parents
+        )
 
     def _is_pid_alive(self, system: System, pid: int) -> bool:
-        """Check if a PID is still running in state manager."""
-        return self.state_manager.get_process(system.hostname, pid) is not None
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._is_pid_alive(system, pid)
 
     def _is_pid_active_at(self, system: System, pid: int, time: datetime) -> bool:
-        """Check whether a PID exists and has started by the requested time."""
-        if pid == 4 and _get_os_category(system.os) == "windows":
-            return True
-        proc = self.state_manager.get_process(system.hostname, pid)
-        return proc is not None and proc.start_time <= time
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._is_pid_active_at(system, pid, time)
 
     def _is_valid_process_parent_at(
-        self,
-        *,
-        system: System,
-        parent_pid: int,
-        time: datetime,
+        self, *, system: System, parent_pid: int, time: datetime
     ) -> bool:
-        """Return whether a PID can be passed to StateManager.create_process()."""
-        if parent_pid == 0:
-            return True
-        if parent_pid == 4 and _get_os_category(system.os) == "windows":
-            return True
-        return self._is_pid_active_at(system, parent_pid, time)
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._is_valid_process_parent_at(
+            system=system, parent_pid=parent_pid, time=time
+        )
 
     def _prune_user_process_history(
-        self,
-        *,
-        system: System,
-        username: str,
-        time: datetime,
-        logon_id: str = "",
+        self, *, system: System, username: str, time: datetime, logon_id: str = ""
     ) -> list[tuple[int, str]]:
-        """Drop ended process PIDs from recent parent-selection history."""
-        key = (system.hostname, username)
-        history = self._user_process_history.get(key, [])
-        if not history:
-            return []
-
-        os_category = _get_os_category(system.os)
-        pruned = [
-            (pid, image)
-            for pid, image in history
-            if self._is_pid_active_at(system, pid, time)
-            and self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=pid,
-                logon_id=logon_id,
-                os_category=os_category,
-            )
-            and (
-                os_category != "linux"
-                or self._linux_parent_usable_for_child_at(
-                    system=system,
-                    parent_pid=pid,
-                    time=time,
-                    logon_id=logon_id,
-                )
-            )
-        ]
-        self._user_process_history[key] = pruned[-10:]
-        return self._user_process_history[key]
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._prune_user_process_history(
+            system=system, username=username, time=time, logon_id=logon_id
+        )
 
     def _windows_system_parent_fallback(self, system: System, time: datetime) -> int:
-        """Return a live Windows service ancestry fallback for system processes."""
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        for role in ("services", "svchost_netsvcs", "svchost_dcom", "wininit"):
-            pid = sys_pids.get(role)
-            if pid and self._is_pid_active_at(system, pid, time):
-                return pid
-        return 4
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._windows_system_parent_fallback(system, time)
 
     def _linux_parent_usable_for_child_at(
-        self,
-        *,
-        system: System,
-        parent_pid: int,
-        time: datetime,
-        logon_id: str = "",
+        self, *, system: System, parent_pid: int, time: datetime, logon_id: str = ""
     ) -> bool:
-        """Return whether a Linux parent process is usable at a child timestamp."""
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if parent_proc is None:
-            return False
-        if not self._is_pid_active_at(system, parent_pid, time):
-            return False
-        if self._process_termination_recorded(
-            system.hostname,
-            parent_pid,
-            parent_proc.start_time,
-        ):
-            return False
-
-        parent_logon_id = parent_proc.logon_id or ""
-        if parent_logon_id:
-            parent_session_end = self.state_manager.get_session_end_time(parent_logon_id)
-            if parent_session_end is not None and ensure_utc(time) >= ensure_utc(
-                parent_session_end
-            ):
-                return False
-            if logon_id and parent_logon_id != logon_id:
-                parent_username = parent_proc.username or ""
-                parent_exe = parent_proc.image.rsplit("/", 1)[-1].lower()
-                is_linux_ssh_priv_parent = (
-                    parent_username == "root"
-                    and parent_exe == "sshd"
-                    and parent_proc.command_line.startswith("sshd: ")
-                    and parent_proc.command_line.endswith(" [priv]")
-                )
-                is_linux_login_priv_parent = (
-                    parent_username == "root"
-                    and parent_exe == "login"
-                    and parent_proc.command_line.startswith("login -- ")
-                )
-                if (
-                    not is_linux_ssh_priv_parent
-                    and not is_linux_login_priv_parent
-                    and parent_username not in _SYSTEM_ACCOUNTS
-                    and not parent_username.endswith("$")
-                ):
-                    return False
-
-        if logon_id and logon_id != "0x3e7":
-            child_session_end = self.state_manager.get_session_end_time(logon_id)
-            if child_session_end is not None and ensure_utc(time) >= ensure_utc(child_session_end):
-                return False
-        return True
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._linux_parent_usable_for_child_at(
+            system=system, parent_pid=parent_pid, time=time, logon_id=logon_id
+        )
 
     def _linux_system_parent_fallback(self, system: System, time: datetime) -> int:
-        """Return a live Linux service ancestry fallback for system processes."""
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        for role in ("systemd", "init", "cron", "crond"):
-            pid = sys_pids.get(role)
-            if pid and self._is_pid_active_at(system, pid, time):
-                return pid
-        return self._linux_anchor_pid(system, time)
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._linux_system_parent_fallback(system, time)
 
     def _repair_process_parent_pid(
         self,
@@ -41684,137 +34864,24 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int:
-        """Resolve a live parent PID before process state allocation."""
-        os_category = _get_os_category(system.os)
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        user_context = process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith(
-            "$"
-        )
-
-        if os_category == "windows":
-            if user_context:
-                repair_user = self._user_model_for_username(process_username)
-                if self._is_windows_same_exe_gui_child(process_name, command_line):
-                    same_exe_parent = self._windows_same_exe_gui_parent_pid(
-                        system=system,
-                        user=repair_user,
-                        time=time,
-                        logon_id=logon_id,
-                        process_name=process_name,
-                        parent_pid=parent_pid,
-                        process_username=process_username,
-                    )
-                    if (
-                        same_exe_parent is not None
-                        and self.state_manager.get_process(system.hostname, same_exe_parent)
-                        is not None
-                    ):
-                        return same_exe_parent
-                if self._is_valid_process_parent_at(
-                    system=system,
-                    parent_pid=parent_pid,
-                    time=time,
-                ):
-                    return parent_pid
-                if process_exe in self._WINDOWS_GUI_APPS or process_exe == "explorer.exe":
-                    explorer_pid = self._ensure_session_explorer_pid(
-                        system,
-                        repair_user,
-                        time,
-                        logon_id,
-                    )
-                    if explorer_pid is not None and self._is_valid_process_parent_at(
-                        system=system,
-                        parent_pid=explorer_pid,
-                        time=time,
-                    ):
-                        return explorer_pid
-                resolved = self._resolve_parent(
-                    system,
-                    repair_user,
-                    time,
-                    logon_id,
-                    process_name,
-                    command_line,
-                )
-                if self._is_valid_process_parent_at(
-                    system=system,
-                    parent_pid=resolved,
-                    time=time,
-                ):
-                    return resolved
-            if self._is_valid_process_parent_at(system=system, parent_pid=parent_pid, time=time):
-                return parent_pid
-            return self._windows_system_parent_fallback(system, time)
-
-        if user_context:
-            repair_user = self._user_model_for_username(process_username)
-            materialized_parent = self._materialize_visible_linux_shell_parent_for_child(
-                system=system,
-                time=time,
-                logon_id=logon_id,
-                parent_pid=parent_pid,
-                process_username=process_username,
-            )
-            if materialized_parent != parent_pid and self._is_valid_process_parent_at(
-                system=system, parent_pid=materialized_parent, time=time
-            ):
-                return materialized_parent
-            if (
-                materialized_parent != parent_pid
-                and self.state_manager.get_process(system.hostname, materialized_parent) is not None
-            ):
-                return materialized_parent
-            parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-            if parent_proc is not None and ensure_utc(parent_proc.start_time) > ensure_utc(time):
-                return parent_pid
-            if self._linux_parent_usable_for_child_at(
-                system=system,
-                parent_pid=parent_pid,
-                time=time,
-                logon_id=logon_id,
-            ):
-                return parent_pid
-            session_shell = self._active_session_shell_pid(system, repair_user, time, logon_id)
-            if session_shell is not None:
-                return session_shell
-            resolved = self._resolve_parent(
-                system,
-                repair_user,
-                time,
-                logon_id,
-                process_name,
-                command_line,
-            )
-            if self._linux_parent_usable_for_child_at(
-                system=system,
-                parent_pid=resolved,
-                time=time,
-                logon_id=logon_id,
-            ):
-                return resolved
-        if self._linux_parent_usable_for_child_at(
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._repair_process_parent_pid(
             system=system,
-            parent_pid=parent_pid,
             time=time,
             logon_id=logon_id,
-        ):
-            return parent_pid
-        return self._linux_system_parent_fallback(system, time)
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
 
     def _lookup_parent_image(self, hostname: str, parent_pid: int) -> str:
-        """Look up parent process image from StateManager, with fallback."""
-        proc = self.state_manager.get_process(hostname, parent_pid)
-        if proc:
-            return proc.image
-        return "-"
+        """Forward to the bundle-owned process queries service."""
+        return self._process_queries()._lookup_parent_image(hostname, parent_pid)
 
     def _lookup_parent_command_line(self, hostname: str, parent_pid: int) -> str:
-        """Look up parent process command line from StateManager."""
-        proc = self.state_manager.get_process(hostname, parent_pid)
-        if proc:
-            return proc.command_line
-        return "-"
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._lookup_parent_command_line(hostname, parent_pid)
 
     def _lookup_parent_username(self, hostname: str, parent_pid: int) -> str:
         """Look up the canonical principal for a child process's parent."""
@@ -41825,74 +34892,22 @@ class ActivityGenerator:
         return identity.principal if identity is not None else ""
 
     def _lookup_parent_start_time(self, hostname: str, parent_pid: int) -> datetime | None:
-        """Look up parent process start time at event construction time."""
-        proc = self.state_manager.get_process(hostname, parent_pid)
-        return proc.start_time if proc else None
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._lookup_parent_start_time(hostname, parent_pid)
 
     def _parent_process_matches_logon(
-        self,
-        *,
-        hostname: str,
-        parent_pid: int,
-        logon_id: str,
-        os_category: str,
+        self, *, hostname: str, parent_pid: int, logon_id: str, os_category: str
     ) -> bool:
-        """Return whether a parent process can source-native spawn this session's child."""
-        if os_category != "windows" or not logon_id:
-            return True
-        parent_proc = self.state_manager.get_process(hostname, parent_pid)
-        if parent_proc is None or not parent_proc.logon_id:
-            if parent_proc is not None:
-                parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-                if (
-                    parent_exe == "explorer.exe"
-                    and parent_proc.username not in _SYSTEM_ACCOUNTS
-                    and not parent_proc.username.endswith("$")
-                ):
-                    return False
-            return True
-        if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
-            return True
-        return parent_proc.logon_id == logon_id
+        """Forward to the shared process queries owner."""
+        return self._process_queries()._parent_process_matches_logon(
+            hostname=hostname, parent_pid=parent_pid, logon_id=logon_id, os_category=os_category
+        )
 
     def _get_session_explorer_pid(
-        self,
-        system: System,
-        user: User,
-        time: datetime | None = None,
-        logon_id: str = "",
+        self, system: System, user: User, time: datetime | None = None, logon_id: str = ""
     ) -> int | None:
-        """Get the explorer.exe PID for the user's active interactive session.
-
-        Returns None if no interactive session exists or explorer PID not set.
-        """
-        sessions = (
-            self.state_manager.get_sessions_for_user_at(user.username, time)
-            if time is not None
-            else self.state_manager.get_sessions_for_user(user.username)
-        )
-        candidates = [
-            session
-            for session in sessions
-            if session.system == system.hostname
-            and session.explorer_pid is not None
-            and (not logon_id or session.logon_id == logon_id)
-        ]
-        candidates.sort(key=lambda session: session.start_time, reverse=True)
-        for session in candidates:
-            if session.explorer_pid is None:
-                continue
-            if time is not None:
-                if self.state_manager.is_process_active_at(
-                    system.hostname,
-                    session.explorer_pid,
-                    time,
-                ):
-                    return session.explorer_pid
-                continue
-            if self._is_pid_alive(system, session.explorer_pid):
-                return session.explorer_pid
-        return None
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._get_session_explorer_pid(system, user, time, logon_id)
 
     def _emit_windows_session_process_create(
         self,
@@ -42069,132 +35084,16 @@ class ActivityGenerator:
                 self.state_manager.set_current_time(original_time)
 
     def _ensure_session_explorer_pid(
-        self,
-        system: System,
-        user: User,
-        time: datetime,
-        logon_id: str,
+        self, system: System, user: User, time: datetime, logon_id: str
     ) -> int | None:
-        """Return or create the per-session Explorer state for GUI children."""
-        existing = self._get_session_explorer_pid(system, user, time=time, logon_id=logon_id)
-        if existing is not None:
-            return existing
-
-        session = self.state_manager.get_session(logon_id)
-        if session is None:
-            return None
-        if session.system != system.hostname or session.username != user.username:
-            return None
-        if not windows_logon_can_own_desktop(session.logon_type) or session.session_kind in {
-            "network",
-            "new_credentials",
-            "service",
-        }:
-            return None
-        if session.windows_shell_bootstrapped and session.initial_explorer_pid is not None:
-            initial_pid = session.initial_explorer_pid
-            if self.state_manager.get_process(system.hostname, initial_pid) is not None:
-                session.explorer_pid = initial_pid
-                return initial_pid
-            # Future-dated teardown may have eagerly removed the process from live
-            # state. `_get_session_explorer_pid()` still returns the retained identity
-            # when it spans this canonical time. A genuinely ended shell may be repaired.
-            if self.state_manager.is_process_active_at(system.hostname, initial_pid, time):
-                return initial_pid
-
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        parent_for_chain = None
-        for candidate in ("smss", "wininit", "winlogon", "services"):
-            pid = sys_pids.get(candidate)
-            if pid and self._is_pid_active_at(system, pid, time):
-                parent_for_chain = pid
-                break
-        if parent_for_chain is None:
-            return None
-
-        original_time = self.state_manager.state.current_time
-        chain_time = max(session.start_time, time - timedelta(seconds=1))
-        self.state_manager.set_current_time(chain_time)
-        try:
-            winlogon_pid = session.session_winlogon_pid
-            if winlogon_pid is None or not self._is_pid_active_at(system, winlogon_pid, time):
-                winlogon_pid = self.state_manager.create_process(
-                    system.hostname,
-                    parent_for_chain,
-                    r"C:\Windows\System32\winlogon.exe",
-                    "winlogon.exe",
-                    "SYSTEM",
-                    "System",
-                    logon_id="0x3e7",
-                )
-                session.session_winlogon_pid = winlogon_pid
-                session.process_tree_root = winlogon_pid
-
-            explorer_pid = self._create_windows_session_shell_lifecycle(
-                user=user,
-                system=system,
-                session=session,
-                winlogon_pid=winlogon_pid,
-                logon_time=chain_time,
-            )
-            session.explorer_pid = explorer_pid
-            if session.initial_explorer_pid is None:
-                session.initial_explorer_pid = explorer_pid
-            session.windows_shell_bootstrapped = True
-            return explorer_pid
-        finally:
-            if original_time is not None:
-                self.state_manager.set_current_time(original_time)
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._ensure_session_explorer_pid(system, user, time, logon_id)
 
     def _windows_explorer_parent_pid(
-        self,
-        system: System,
-        user: User,
-        time: datetime,
-        logon_id: str = "",
+        self, system: System, user: User, time: datetime, logon_id: str = ""
     ) -> int:
-        """Return the Windows logon-chain parent for explorer.exe.
-
-        Explorer is the interactive shell. It is created by userinit/winlogon,
-        not by arbitrary user applications that happen to be alive in the same
-        session.
-        """
-        sessions = self.state_manager.get_sessions_for_user_at(user.username, time)
-        for session in sessions:
-            if session.system != system.hostname:
-                continue
-            if logon_id and session.logon_id != logon_id:
-                continue
-            if session.explorer_pid is None:
-                continue
-            explorer = self.state_manager.get_process(system.hostname, session.explorer_pid)
-            if explorer is None:
-                continue
-            parent_pid = explorer.parent_pid
-            if (
-                parent_pid
-                and self.state_manager.get_process(system.hostname, parent_pid) is not None
-                and self._is_pid_active_at(system, parent_pid, time)
-            ):
-                return parent_pid
-            if (
-                session.session_winlogon_pid
-                and self.state_manager.get_process(system.hostname, session.session_winlogon_pid)
-                is not None
-                and self._is_pid_active_at(system, session.session_winlogon_pid, time)
-            ):
-                return session.session_winlogon_pid
-
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        for role in ("userinit", "winlogon", "services", "wininit"):
-            pid = sys_pids.get(role)
-            if (
-                pid
-                and self.state_manager.get_process(system.hostname, pid) is not None
-                and self._is_pid_active_at(system, pid, time)
-            ):
-                return pid
-        return sys_pids.get("winlogon", sys_pids.get("services", 4))
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._windows_explorer_parent_pid(system, user, time, logon_id)
 
     def _select_parent_pid(
         self,
@@ -42204,175 +35103,10 @@ class ActivityGenerator:
         time: datetime | None = None,
         logon_id: str = "",
     ) -> int:
-        """Select a realistic parent PID based on process type and history.
-
-        Builds process trees with depth by tracking recent user processes.
-        Windows GUI apps always spawn from explorer.exe.
-        CLI/script processes can spawn from shells.
-        Linux user processes typically spawn from login shells.
-
-        Only returns PIDs that are still alive in the state manager.
-        """
-        rng = _get_rng()
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        os_cat = _get_os_category(system.os)
-        effective_time = time or self.state_manager.state.current_time or datetime.now(UTC)
-        history = self._prune_user_process_history(
-            system=system,
-            username=user.username,
-            time=effective_time,
-            logon_id=logon_id,
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._select_parent_pid(
+            system, user, process_name, time, logon_id
         )
-        # Filter history to only include still-running processes
-        alive_history = []
-        for pid, name in history:
-            if not self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=pid,
-                logon_id=logon_id,
-                os_category=os_cat,
-            ):
-                continue
-            if time is not None:
-                if self._is_pid_active_at(system, pid, time):
-                    alive_history.append((pid, name))
-            elif self._is_pid_alive(system, pid):
-                alive_history.append((pid, name))
-
-        if os_cat == "windows":
-            exe_name = (
-                process_name.rsplit("\\", 1)[-1].lower()
-                if "\\" in process_name
-                else process_name.lower()
-            )
-            # Check if the user's active session on this system is a network
-            # logon (type 3). Network logons never spawn explorer.exe — processes
-            # are parented by svchost.exe or services.exe instead.
-            sessions = self.state_manager.get_sessions_for_user(user.username)
-            if logon_id and sessions:
-                active_session = next(
-                    (s for s in sessions if s.system == system.hostname and s.logon_id == logon_id),
-                    None,
-                )
-            else:
-                active_session = (
-                    next((s for s in sessions if s.system == system.hostname), None)
-                    if sessions
-                    else None
-                )
-            is_network_logon = active_session and active_session.logon_type == 3
-            is_service_logon = active_session and active_session.logon_type == 5
-            is_other_non_desktop_logon = active_session and not windows_logon_can_own_desktop(
-                active_session.logon_type
-            )
-
-            if is_network_logon or (is_other_non_desktop_logon and not is_service_logon):
-                # Network logon: parent is services.exe or svchost.exe
-                # (processes arrive via PsExec, WMI, or SMB)
-                # CLI/script processes: check for a running shell as parent first
-                shells = [
-                    (pid, name)
-                    for pid, name in alive_history
-                    if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELL_NAMES
-                    and not self._is_one_shot_shell_parent(system, pid)
-                ]
-                if shells and rng.random() < 0.6:
-                    return shells[-1][0]
-                return sys_pids.get(
-                    "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-                )
-            if is_service_logon:
-                if exe_name in self._WINDOWS_SHELLS:
-                    return sys_pids.get(
-                        "svchost_netsvcs",
-                        sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
-                    )
-                return sys_pids.get(
-                    "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-                )
-
-            if exe_name == "explorer.exe":
-                return self._windows_explorer_parent_pid(
-                    system, user, effective_time, active_session.logon_id if active_session else ""
-                )
-
-            # Prefer session-specific explorer PID over system-wide default
-            session_explorer = self._ensure_session_explorer_pid(
-                system, user, time=time, logon_id=logon_id
-            )
-            fallback_explorer = sys_pids.get("explorer")
-            if fallback_explorer:
-                fallback_proc = self.state_manager.get_process(system.hostname, fallback_explorer)
-                fallback_exe = (
-                    fallback_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-                    if fallback_proc is not None
-                    else ""
-                )
-                if fallback_exe != "explorer.exe" or not self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=fallback_explorer,
-                    logon_id=logon_id,
-                    os_category=os_cat,
-                ):
-                    fallback_explorer = None
-            explorer_pid = (
-                session_explorer
-                or fallback_explorer
-                or sys_pids.get("winlogon", sys_pids.get("services", 4))
-            )
-
-            # Shells and terminals spawn from explorer.exe
-            if exe_name in self._WINDOWS_SHELLS:
-                return explorer_pid
-
-            # GUI apps always spawn from explorer.exe (user launches via Start Menu/desktop)
-            if exe_name in self._WINDOWS_GUI_APPS:
-                return explorer_pid
-
-            # CLI/script processes: check for a running shell as parent
-            shells = [
-                (pid, name)
-                for pid, name in alive_history
-                if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELL_NAMES
-                and not self._is_one_shot_shell_parent(system, pid)
-            ]
-            if shells and rng.random() < 0.6:
-                return shells[-1][0]
-
-            # Check for a browser/app that could spawn this process (e.g. download+run)
-            spawners = [
-                (pid, name)
-                for pid, name in alive_history
-                if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SPAWNERS
-            ]
-            if spawners and rng.random() < 0.3:
-                return spawners[-1][0]
-
-            # Default: session-specific or system-wide explorer.exe
-            return explorer_pid
-        else:
-            # Linux: most user commands spawn from a shell
-            session_shell_pid = self._active_session_shell_pid(
-                system,
-                user,
-                time,
-                logon_id,
-            )
-            if session_shell_pid is not None:
-                return session_shell_pid
-            shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
-            if shells:
-                return shells[-1][0]
-            for role in ("bash", "sshd"):
-                candidate = sys_pids.get(role)
-                if candidate and self._linux_parent_usable_for_child_at(
-                    system=system,
-                    parent_pid=candidate,
-                    time=effective_time or datetime.now(UTC),
-                    logon_id=logon_id,
-                ):
-                    return candidate
-            return self._linux_system_parent_fallback(system, effective_time or datetime.now(UTC))
 
     def _resolve_parent(
         self,
@@ -42383,289 +35117,14 @@ class ActivityGenerator:
         process_name: str,
         command_line: str = "",
     ) -> int:
-        """Resolve the parent PID for a process using spawn rules.
-
-        Transparently finds an existing valid parent or auto-creates the
-        parent chain (with realistic timing) using the spawn rules YAML.
-        Falls back to the legacy _select_parent_pid() for unknown processes.
-        """
-        from evidenceforge.generation.activity.spawn_rules import (
-            get_reverse_index_linux,
-            get_reverse_index_windows,
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._resolve_parent(
+            system, user, time, logon_id, process_name, command_line
         )
-
-        rng = _get_rng()
-        os_cat = _get_os_category(system.os)
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-
-        # Extract basename for rule lookup
-        if os_cat == "windows":
-            exe_name = (
-                process_name.rsplit("\\", 1)[-1].lower()
-                if "\\" in process_name
-                else process_name.lower()
-            )
-        else:
-            exe_name = (
-                process_name.rsplit("/", 1)[-1].lower()
-                if "/" in process_name
-                else process_name.lower()
-            )
-
-        # Special override: SYSTEM user or network logon → svchost (not services.exe directly)
-        # Real Windows: services.exe → svchost.exe → cmd.exe (never services.exe → cmd.exe)
-        _SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
-        is_shell = exe_name in _SHELLS
-        remote_wrapper_pid = self._active_remote_execution_wrapper_pid(system, time)
-        if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
-            if remote_wrapper_pid is not None:
-                return remote_wrapper_pid
-            if is_shell:
-                # Shells get svchost as parent (realistic: service host spawns shell)
-                return sys_pids.get(
-                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-                )
-            shell_parent_pid = self._ensure_windows_service_shell_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=logon_id,
-                child_exe=exe_name,
-                child_command_line=command_line,
-            )
-            if shell_parent_pid is not None:
-                return shell_parent_pid
-            return sys_pids.get(
-                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-            )
-
-        sessions = self.state_manager.get_sessions_for_user_at(user.username, time)
-        # Match by logon_id when available to avoid picking the wrong session
-        # when a user has both interactive (type 2) and network (type 3) sessions
-        # on the same host.
-        if logon_id and sessions:
-            active_session = next(
-                (s for s in sessions if s.system == system.hostname and s.logon_id == logon_id),
-                None,
-            )
-        else:
-            active_session = (
-                next((s for s in sessions if s.system == system.hostname), None)
-                if sessions
-                else None
-            )
-        is_network_logon = active_session and active_session.logon_type == 3
-        is_service_logon = active_session and active_session.logon_type == 5
-        is_other_non_desktop_logon = active_session and not windows_logon_can_own_desktop(
-            active_session.logon_type
-        )
-        if is_network_logon or (is_other_non_desktop_logon and not is_service_logon):
-            if remote_wrapper_pid is not None:
-                return remote_wrapper_pid
-            history = self._prune_user_process_history(
-                system=system,
-                username=user.username,
-                time=time,
-                logon_id=logon_id,
-            )
-            remote_wrappers = []
-            shells = []
-            for pid, name in history:
-                if not self._is_pid_active_at(system, pid, time):
-                    continue
-                if not self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=pid,
-                    logon_id=logon_id,
-                    os_category=os_cat,
-                ):
-                    continue
-                hist_exe = (
-                    name.rsplit("\\", 1)[-1].lower()
-                    if "\\" in name
-                    else name.rsplit("/", 1)[-1].lower()
-                )
-                if hist_exe in {"psexesvc.exe", "wmiprvse.exe", "healthmonitorsvc.exe"}:
-                    remote_wrappers.append(pid)
-                elif hist_exe in self._WINDOWS_SHELL_NAMES and not (
-                    self._is_one_shot_shell_parent(system, pid)
-                ):
-                    shells.append(pid)
-            if remote_wrappers:
-                return remote_wrappers[-1]
-            if shells:
-                return shells[-1]
-            if is_shell:
-                return sys_pids.get(
-                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-                )
-            shell_parent_pid = self._ensure_windows_service_shell_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=logon_id,
-                child_exe=exe_name,
-                child_command_line=command_line,
-            )
-            if shell_parent_pid is not None:
-                return shell_parent_pid
-            return sys_pids.get(
-                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-            )
-        if is_service_logon:
-            if is_shell:
-                return sys_pids.get(
-                    "svchost_netsvcs",
-                    sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
-                )
-            shell_parent_pid = self._ensure_windows_service_shell_parent(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=logon_id,
-                child_exe=exe_name,
-                child_command_line=command_line,
-            )
-            if shell_parent_pid is not None:
-                return shell_parent_pid
-            return sys_pids.get(
-                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
-            )
-
-        if os_cat == "windows" and exe_name == "explorer.exe":
-            return self._windows_explorer_parent_pid(system, user, time, logon_id)
-
-        # Look up valid parents from spawn rules
-        if os_cat == "windows":
-            reverse = get_reverse_index_windows()
-        else:
-            reverse = get_reverse_index_linux()
-
-        possible_parents = reverse.get(exe_name, [])
-        if os_cat == "linux":
-            service_parent = self._linux_service_parent_pid(
-                system, user.username, time, possible_parents
-            )
-            if service_parent is not None:
-                return service_parent
-            shell_parent_allowed = not possible_parents or any(
-                parent in {"bash", "sh", "zsh"} for parent in possible_parents
-            )
-            if shell_parent_allowed:
-                if active_session is not None:
-                    session_shell_pid = self.ensure_linux_session_shell(
-                        user=user,
-                        target_system=system,
-                        logon_id=active_session.logon_id,
-                        logon_time=active_session.start_time,
-                        activity_time=time,
-                    )
-                    if session_shell_pid is not None:
-                        return session_shell_pid
-                visible_shell_pid = self.ensure_linux_visible_shell_parent(
-                    user=user,
-                    target_system=system,
-                    activity_time=time,
-                    logon_id=logon_id,
-                    logon_time=active_session.start_time if active_session is not None else None,
-                )
-                if visible_shell_pid is not None:
-                    return visible_shell_pid
-            session_shell_pid = self._active_session_shell_pid(system, user, time, logon_id)
-            if session_shell_pid is not None and any(
-                parent in {"bash", "sh", "zsh"} for parent in possible_parents
-            ):
-                return session_shell_pid
-
-        if not possible_parents:
-            # No rules for this exe — fall back to legacy logic
-            return self._select_parent_pid(system, user, process_name, time=time, logon_id=logon_id)
-
-        # Check alive_history for a matching parent
-        history = self._prune_user_process_history(
-            system=system,
-            username=user.username,
-            time=time,
-            logon_id=logon_id,
-        )
-        alive_parents = []
-        for pid, name in history:
-            if not self._is_pid_active_at(system, pid, time):
-                continue
-            if not self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=pid,
-                logon_id=logon_id,
-                os_category=os_cat,
-            ):
-                continue
-            hist_exe = (
-                name.rsplit("\\", 1)[-1].lower()
-                if "\\" in name
-                else name.rsplit("/", 1)[-1].lower()
-            )
-            if (
-                os_cat == "windows"
-                and hist_exe in self._WINDOWS_SHELL_NAMES
-                and self._is_one_shot_shell_parent(system, pid)
-            ):
-                continue
-            if hist_exe in possible_parents:
-                alive_parents.append((pid, name))
-
-        # Also check seeded system processes as potential parents
-        for _role, pid in sys_pids.items():
-            proc = self.state_manager.get_process(system.hostname, pid)
-            if proc and proc.start_time <= time:
-                if os_cat == "linux" and not self._linux_parent_usable_for_child_at(
-                    system=system,
-                    parent_pid=pid,
-                    time=time,
-                    logon_id=logon_id,
-                ):
-                    continue
-                if not self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=pid,
-                    logon_id=logon_id,
-                    os_category=os_cat,
-                ):
-                    continue
-                proc_exe = (
-                    proc.image.rsplit("\\", 1)[-1].lower()
-                    if "\\" in proc.image
-                    else proc.image.rsplit("/", 1)[-1].lower()
-                )
-                if proc_exe in possible_parents:
-                    alive_parents.append((pid, proc.image))
-
-        if alive_parents:
-            # Deduplicate by PID
-            seen = set()
-            unique = []
-            for pid, name in alive_parents:
-                if pid not in seen:
-                    seen.add(pid)
-                    unique.append((pid, name))
-            return rng.choice(unique)[0]
-
-        # No valid parent alive — auto-create the chain
-        return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
 
     def _active_remote_execution_wrapper_pid(self, system: System, time: datetime) -> int | None:
-        """Return a live explicit remote-execution service wrapper, if one exists."""
-        wrappers = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
-                continue
-            if not self._is_pid_active_at(system, proc.pid, time):
-                continue
-            wrappers.append(proc)
-        if not wrappers:
-            return None
-        wrappers.sort(key=lambda proc: proc.start_time or time)
-        return wrappers[-1].pid
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._active_remote_execution_wrapper_pid(system, time)
 
     def _sanitize_user_parent_pid(
         self,
@@ -42679,188 +35138,17 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int:
-        """Prevent user-context processes from being parented by impossible fallbacks."""
-        os_category = _get_os_category(system.os)
-        if os_category not in {"windows", "linux"}:
-            return parent_pid
-        if process_username in _SYSTEM_ACCOUNTS or process_username.endswith("$"):
-            return parent_pid
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        parent_image = (parent_proc.image if parent_proc is not None else "").lower()
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        session = self.state_manager.get_session(logon_id)
-        if (
-            os_category == "windows"
-            and session is not None
-            and session.logon_type == 5
-            and parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1] == "explorer.exe"
-        ):
-            sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-            if process_exe in self._WINDOWS_SHELLS:
-                return sys_pids.get(
-                    "svchost_netsvcs",
-                    sys_pids.get("svchost_dcom", sys_pids.get("services", parent_pid)),
-                )
-            return sys_pids.get(
-                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", parent_pid))
-            )
-        is_browser_child = process_exe in _WINDOWS_BROWSER_EXES and not (
-            self._is_top_level_browser_launch(process_name, command_line)
-        )
-        is_same_exe_gui_child = self._is_windows_same_exe_gui_child(
-            process_name,
-            command_line,
-        )
-        if os_category == "windows" and process_exe == "explorer.exe":
-            if not _is_bare_windows_explorer_launch(process_name, command_line):
-                explorer_pid = self._get_session_explorer_pid(
-                    system,
-                    user,
-                    time=time,
-                    logon_id=logon_id,
-                )
-                if explorer_pid is not None:
-                    return explorer_pid
-            return self._windows_explorer_parent_pid(system, user, time, logon_id)
-
-        if os_category == "windows":
-            parent_is_one_shot_shell = self._is_one_shot_shell_parent(system, parent_pid)
-            one_shot_parent_invokes_child = parent_is_one_shot_shell and (
-                self._windows_shell_parent_invokes_child(
-                    system=system,
-                    parent_pid=parent_pid,
-                    process_name=process_name,
-                    command_line=command_line,
-                )
-            )
-            if is_same_exe_gui_child:
-                same_exe_parent = self._windows_same_exe_gui_parent_pid(
-                    system=system,
-                    user=user,
-                    time=time,
-                    logon_id=logon_id,
-                    process_name=process_name,
-                    parent_pid=parent_pid,
-                    process_username=process_username,
-                )
-                if same_exe_parent is not None:
-                    return same_exe_parent
-            if process_exe in self._WINDOWS_GUI_APPS and not is_browser_child:
-                explorer_pid = self._ensure_session_explorer_pid(system, user, time, logon_id)
-                if explorer_pid is not None:
-                    return explorer_pid
-            if (
-                parent_pid != 4
-                and parent_image not in {"system", "ntoskrnl.exe"}
-                and parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-                not in {"winlogon.exe", "userinit.exe"}
-                and self._is_pid_active_at(system, parent_pid, time)
-                and self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=parent_pid,
-                    logon_id=logon_id,
-                    os_category=os_category,
-                )
-                and (not parent_is_one_shot_shell or one_shot_parent_invokes_child)
-            ):
-                return parent_pid
-        elif parent_proc is not None and self._linux_parent_usable_for_child_at(
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._sanitize_user_parent_pid(
             system=system,
+            user=user,
+            time=time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
             parent_pid=parent_pid,
-            time=time,
-            logon_id=logon_id,
-        ):
-            parent_exe = parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-            if parent_exe in {"bash", "sh", "zsh"}:
-                if parent_proc.username == process_username and (
-                    not logon_id or parent_proc.logon_id == logon_id
-                ):
-                    # The caller may have deliberately selected a second
-                    # terminal/channel shell because the session's primary shell
-                    # is occupied. Preserve that concrete valid parent.
-                    return parent_pid
-                session = self.state_manager.get_session(logon_id)
-                if session is not None:
-                    session_shell_pid = self.ensure_linux_session_shell(
-                        user=self._user_model_for_username(process_username),
-                        target_system=system,
-                        logon_id=logon_id,
-                        logon_time=session.start_time,
-                        activity_time=time,
-                    )
-                    if session_shell_pid is not None:
-                        return session_shell_pid
-                visible_shell_pid = self.ensure_linux_visible_shell_parent(
-                    user=self._user_model_for_username(process_username),
-                    target_system=system,
-                    activity_time=time,
-                    logon_id=logon_id,
-                    logon_time=session.start_time if session is not None else None,
-                )
-                if visible_shell_pid is not None:
-                    return visible_shell_pid
-            return parent_pid
-
-        resolved = self._resolve_parent(
-            system,
-            user,
-            time,
-            logon_id,
-            process_name,
-            command_line,
+            process_username=process_username,
         )
-        resolved_proc = self.state_manager.get_process(system.hostname, resolved)
-        resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
-        if os_category == "windows":
-            if (
-                resolved != 4
-                and resolved_image not in {"system", "ntoskrnl.exe"}
-                and self._is_pid_active_at(system, resolved, time)
-            ):
-                return resolved
-        elif resolved_proc is not None and self._linux_parent_usable_for_child_at(
-            system=system,
-            parent_pid=resolved,
-            time=time,
-            logon_id=logon_id,
-        ):
-            return resolved
-
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        if os_category == "linux":
-            for role in ("bash", "sshd", "systemd"):
-                candidate = sys_pids.get(role)
-                if candidate and self._linux_parent_usable_for_child_at(
-                    system=system,
-                    parent_pid=candidate,
-                    time=time,
-                    logon_id=logon_id,
-                ):
-                    return candidate
-            return self._linux_system_parent_fallback(system, time)
-        for role in ("explorer", "winlogon", "services", "svchost_dcom"):
-            candidate = sys_pids.get(role)
-            candidate_proc = self.state_manager.get_process(system.hostname, candidate or -1)
-            candidate_exe = (
-                candidate_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-                if candidate_proc is not None
-                else ""
-            )
-            if process_exe in self._WINDOWS_GUI_APPS and candidate_exe != "explorer.exe":
-                continue
-            if (
-                candidate
-                and candidate != 4
-                and self._is_pid_active_at(system, candidate, time)
-                and self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=candidate,
-                    logon_id=logon_id,
-                    os_category=os_category,
-                )
-            ):
-                return candidate
-        return parent_pid
 
     def _materialize_visible_linux_shell_parent_for_child(
         self,
@@ -42871,58 +35159,18 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int:
-        """Ensure post-window Linux shell parents are source-visible."""
-        if _get_os_category(system.os) != "linux":
-            return parent_pid
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if parent_proc is None or not self._is_pid_active_at(system, parent_pid, time):
-            return parent_pid
-
-        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if parent_exe not in {"bash", "sh", "zsh"}:
-            return parent_pid
-
-        scenario_start = getattr(self, "_scenario_start_time", None)
-        if scenario_start is None:
-            return parent_pid
-        scenario_start = ensure_utc(scenario_start)
-        activity_time = ensure_utc(time)
-        if activity_time < scenario_start:
-            return parent_pid
-        if ensure_utc(parent_proc.start_time) >= scenario_start:
-            return parent_pid
-
-        user = self._user_model_for_username(process_username)
-        session = self.state_manager.get_session(logon_id)
-        if session is not None:
-            session_shell_pid = self.ensure_linux_session_shell(
-                user=user,
-                target_system=system,
-                logon_id=logon_id,
-                logon_time=session.start_time,
-                activity_time=activity_time,
-            )
-            if session_shell_pid is not None:
-                return session_shell_pid
-
-        visible_shell_pid = self.ensure_linux_visible_shell_parent(
-            user=user,
-            target_system=system,
-            activity_time=activity_time,
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._materialize_visible_linux_shell_parent_for_child(
+            system=system,
+            time=time,
             logon_id=logon_id,
-            logon_time=session.start_time if session is not None else None,
+            parent_pid=parent_pid,
+            process_username=process_username,
         )
-        return visible_shell_pid if visible_shell_pid is not None else parent_pid
 
     def _is_windows_same_exe_gui_child(self, process_name: str, command_line: str) -> bool:
-        """Return whether a Windows GUI command should be parented by its own executable."""
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        command = f" {command_line.lower()} "
-        if process_exe in _WINDOWS_BROWSER_EXES:
-            return not self._is_top_level_browser_launch(process_name, command_line)
-        if process_exe in _WINDOWS_ELECTRON_CHILD_EXES:
-            return any(marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS)
-        return False
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._is_windows_same_exe_gui_child(process_name, command_line)
 
     def _windows_same_exe_gui_parent_pid(
         self,
@@ -42935,75 +35183,15 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int | None:
-        """Return or create a same-family parent for browser/Electron child processes."""
-        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
-        if (
-            parent_proc is not None
-            and parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == process_exe
-            and not self._is_windows_same_exe_gui_child(parent_proc.image, parent_proc.command_line)
-            and self._is_pid_active_at(system, parent_pid, time)
-            and self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=parent_pid,
-                logon_id=logon_id,
-                os_category="windows",
-            )
-        ):
-            return parent_pid
-
-        candidates = []
-        for proc in self.state_manager.get_processes_on_system(system.hostname):
-            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            if proc_exe != process_exe:
-                continue
-            if self._is_windows_same_exe_gui_child(proc.image, proc.command_line):
-                continue
-            if proc.username != process_username:
-                continue
-            if proc.logon_id and proc.logon_id != logon_id:
-                continue
-            if not self._is_pid_active_at(system, proc.pid, time):
-                continue
-            candidates.append(proc)
-        if candidates:
-            return max(candidates, key=lambda candidate: candidate.start_time or time).pid
-
-        from evidenceforge.generation.activity.application_catalog import resolve_image_path
-        from evidenceforge.generation.activity.spawn_rules import get_parent_config
-
-        parent_time = time - timedelta(
-            milliseconds=150
-            + (_stable_seed(f"same_exe_gui_parent:{system.hostname}:{process_exe}:{time}") % 850)
-        )
-        session = self.state_manager.get_session(logon_id)
-        if session is not None and parent_time <= session.start_time:
-            parent_time = session.start_time + timedelta(milliseconds=120)
-
-        explorer_pid = self._ensure_session_explorer_pid(system, user, parent_time, logon_id)
-        if explorer_pid is None:
-            return None
-
-        config = get_parent_config("windows", process_exe)
-        templates = config.get("command_templates", [])
-        parent_command = templates[0] if templates else ""
-        parent_command = parent_command.replace("{username}", user.username)
-        parent_image = resolve_image_path(process_exe, "windows", username=user.username)
-        if not parent_image:
-            parent_image = _extract_image_from_command(parent_command) or process_name
-        parent_image = parent_image.replace("{username}", user.username)
-        if not parent_command:
-            parent_command = f'"{parent_image}"'
-
-        return self.generate_process(
-            user=user,
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._windows_same_exe_gui_parent_pid(
             system=system,
-            time=parent_time,
+            user=user,
+            time=time,
             logon_id=logon_id,
-            process_name=parent_image,
-            command_line=parent_command,
-            parent_pid=explorer_pid,
-            allow_existing_browser_reuse=False,
+            process_name=process_name,
+            parent_pid=parent_pid,
+            process_username=process_username,
         )
 
     def _ensure_parent_chain(
@@ -43016,324 +35204,22 @@ class ActivityGenerator:
         os_cat: str,
         depth: int = 0,
     ) -> int:
-        """Recursively create parent processes needed for child_exe.
-
-        Builds the chain up to the nearest seeded system process (explorer,
-        services, sshd, systemd). Depth-limited to 3 to prevent infinite
-        recursion.
-        """
-        from evidenceforge.generation.activity.spawn_rules import (
-            get_parent_config,
-            get_reverse_index_linux,
-            get_reverse_index_windows,
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._ensure_parent_chain(
+            system, user, time, logon_id, child_exe, os_cat, depth
         )
-
-        rng = _get_rng()
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-
-        if os_cat == "windows":
-            reverse = get_reverse_index_windows()
-        else:
-            reverse = get_reverse_index_linux()
-
-        # Safety limit
-        if depth > 3:
-            return self._live_parent_chain_anchor(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=logon_id,
-                os_cat=os_cat,
-            )
-
-        # Pick a parent for child_exe from the rules
-        possible_parents = reverse.get(child_exe, [])
-        if not possible_parents:
-            return self._live_parent_chain_anchor(
-                system=system,
-                user=user,
-                time=time,
-                logon_id=logon_id,
-                os_cat=os_cat,
-            )
-
-        # Auto-created parent chains should not fabricate a fresh parent with
-        # the same executable as the child when another valid parent exists.
-        # Existing same-exe parents are still honored in _resolve_parent().
-        child_exe_lower = child_exe.lower()
-        nonself_parents = [
-            parent for parent in possible_parents if parent.lower() != child_exe_lower
-        ]
-        if nonself_parents:
-            possible_parents = nonself_parents
-
-        if (
-            os_cat == "windows"
-            and child_exe_lower in {"cmd.exe", "powershell.exe", "pwsh.exe"}
-            and "explorer.exe" in {parent.lower() for parent in possible_parents}
-        ):
-            possible_parents = ["explorer.exe"]
-
-        # Fresh CLI parent chains should start from a shell when the rules
-        # allow it. Existing IDE/editor parents are still honored in
-        # _resolve_parent(), but auto-creating a new Code.exe just to launch a
-        # command-line tool looks less like a normal interactive session.
-        if os_cat == "windows":
-            shell_parents = [
-                parent
-                for parent in possible_parents
-                if parent.lower() in {"cmd.exe", "powershell.exe", "pwsh.exe"}
-            ]
-            if shell_parents:
-                possible_parents = shell_parents
-
-        # Prefer shells for CLI tools on Windows, sshd→bash for Linux
-        chosen_parent = rng.choice(possible_parents)
-        if os_cat == "windows" and chosen_parent.lower() == "explorer.exe":
-            session_explorer = self._ensure_session_explorer_pid(
-                system, user, time=time, logon_id=logon_id
-            )
-            if session_explorer is not None:
-                return session_explorer
-
-        # Check if chosen parent is already a seeded system process
-        for _role, pid in sys_pids.items():
-            proc = self.state_manager.get_process(system.hostname, pid)
-            if proc and proc.start_time <= time:
-                if not self._parent_process_matches_logon(
-                    hostname=system.hostname,
-                    parent_pid=pid,
-                    logon_id=logon_id,
-                    os_category=os_cat,
-                ):
-                    continue
-                proc_exe = (
-                    proc.image.rsplit("\\", 1)[-1].lower()
-                    if "\\" in proc.image
-                    else proc.image.rsplit("/", 1)[-1].lower()
-                )
-                if proc_exe == chosen_parent:
-                    return pid
-
-        # Not a seeded process — need to create it, but first ensure ITS parent
-        grandparent_pid = self._ensure_parent_chain(
-            system, user, time, logon_id, chosen_parent, os_cat, depth=depth + 1
-        )
-
-        # Get command template for the parent we're creating
-        config = get_parent_config(os_cat, chosen_parent)
-        cmd_templates = config.get("command_templates", [chosen_parent])
-        cmd_line = rng.choice(cmd_templates)
-
-        # Derive image path from command_templates (which have correct full paths)
-        # rather than blindly prefixing C:\Windows\System32\
-        image = None
-        from evidenceforge.generation.activity.application_catalog import resolve_image_path
-
-        if os_cat == "windows":
-            for tmpl in cmd_templates:
-                if "\\" in tmpl:
-                    image = _extract_image_from_command(tmpl)
-                    break
-            if not image:
-                image = resolve_image_path(chosen_parent, "windows", username=user.username)
-        else:
-            for tmpl in cmd_templates:
-                if "/" in tmpl:
-                    image = _extract_image_from_command(tmpl)
-                    break
-            if not image:
-                image = resolve_image_path(chosen_parent, "linux")
-                if chosen_parent in ("bash", "sh", "zsh"):
-                    image = f"/bin/{chosen_parent}"
-
-        profiled_worker = matching_service_worker(
-            os_category=os_cat,
-            image=image,
-            command_line=cmd_line,
-            username=user.username,
-        )
-        if profiled_worker is not None:
-            family_name, worker_name, _family = profiled_worker
-            return self._ensure_profiled_service_worker(
-                system=system,
-                worker_time=time,
-                activity_time=time,
-                family_name=family_name,
-                worker_name=worker_name,
-            )
-
-        # Timing: parent is created before child
-        spawn_delay = config.get("spawn_delay", [0.5, 3.0])
-        delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
-        parent_time = time - timedelta(seconds=delay_sec * (depth + 1))
-        session = self.state_manager.get_session(logon_id)
-        if session is not None and parent_time <= session.start_time:
-            parent_time = session.start_time + timedelta(milliseconds=10 * (4 - depth))
-
-        if not self._is_valid_process_parent_at(
-            system=system,
-            parent_pid=grandparent_pid,
-            time=parent_time,
-        ):
-            grandparent_pid = self._live_parent_chain_anchor(
-                system=system,
-                user=user,
-                time=parent_time,
-                logon_id=logon_id,
-                os_cat=os_cat,
-            )
-
-        # Determine if this is a pre-existing process (no creation event)
-        # Long-lived parents early in the scenario were "already running"
-        lifetime = config.get("lifetime", "long")
-        scenario_start = getattr(self, "_scenario_start_time", None)
-        is_pre_existing = False
-        if lifetime == "long" and scenario_start:
-            elapsed = (time - scenario_start).total_seconds()
-            if elapsed < 1800 and rng.random() < 0.7:  # First 30 min, 70% chance
-                is_pre_existing = True
-        # Parents created before the output window are always pre-existing
-        # (their creation events would be suppressed by the warm-up filter anyway)
-        if not is_pre_existing and scenario_start and parent_time < scenario_start:
-            is_pre_existing = True
-
-        # Parent-chain members are canonical lifecycle owners, not State-only
-        # compatibility objects. Freeze the exact identity before publication so
-        # every positive PID returned to a strict child is already registered and
-        # live under that same identity.
-        process_plan = self.state_manager.plan_process_materialization(
-            system=system.hostname,
-            parent_pid=grandparent_pid,
-            image=image,
-            command_line=cmd_line,
-            username=user.username,
-            integrity_level="System" if user.username == "SYSTEM" else "Medium",
-            os_category=os_cat,
-            logon_id=logon_id,
-            start_time=parent_time,
-        )
-        process_identity = process_plan.identity
-        parent_pid = process_identity.pid
-
-        if is_pre_existing:
-            self._lifecycle_authority.materialize_process(process_plan)
-        else:
-            # Emit the same single parent process-creation row, but bind it to the
-            # external materialization plan and authenticate publication with the
-            # lifecycle receipt.
-            from evidenceforge.events.base import OccurrenceBuilder
-
-            event = OccurrenceBuilder(
-                timestamp=parent_time,
-                event_type="process_create",
-                src_host=self._build_host_context(system),
-                auth=AuthContext(
-                    username=user.username,
-                    user_sid=self._get_sid(user.username),
-                    logon_id=logon_id,
-                ),
-                process=ProcessContext(
-                    pid=parent_pid,
-                    parent_pid=grandparent_pid,
-                    image=image,
-                    command_line=cmd_line,
-                    username=user.username,
-                    integrity_level="Medium",
-                    logon_id=logon_id,
-                    parent_image=self._lookup_process_name(
-                        system.hostname, grandparent_pid, _get_os_category(system.os)
-                    ),
-                    parent_command_line=self._lookup_parent_command_line(
-                        system.hostname, grandparent_pid
-                    ),
-                    parent_start_time=self._lookup_parent_start_time(
-                        system.hostname, grandparent_pid
-                    ),
-                    token_elevation="%%1938",
-                    mandatory_label="S-1-16-8192",
-                    start_time=process_identity.started_at,
-                ),
-                identity_plan=EventIdentityPlan(
-                    subject=process_identity,
-                    actor=process_plan.parent_identity,
-                ),
-                lifecycle=ActionLifecycleContext(
-                    group_id=process_identity.lifecycle_group_id,
-                    canonical_start=process_identity.started_at,
-                    phase="start",
-                    parent_group_id=process_identity.parent_lifecycle_group_id or None,
-                ),
-            )
-            with self.dispatcher.source_timing_planner.prepared_planning() as timing_preparation:
-                prepared_dispatch = self.dispatcher.prepare_builder(
-                    event,
-                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
-                    lifecycle_ticket=process_plan,
-                    source_timing_preparation=timing_preparation,
-                )
-            self.dispatcher.validate_prepared(prepared_dispatch)
-            with timing_preparation.claimed_commit():
-                _parent, materialization_receipt = self._lifecycle_authority.materialize_process(
-                    process_plan,
-                    finalize_external_no_fail=timing_preparation.commit_no_fail,
-                )
-            self.dispatcher.publish_prepared(
-                prepared_dispatch,
-                materialization_receipt=materialization_receipt,
-            )
-
-        # Record in user process history
-        self._record_user_process(system, user, parent_pid, image)
-        return parent_pid
 
     def _live_parent_chain_anchor(
-        self,
-        *,
-        system: System,
-        user: User,
-        time: datetime,
-        logon_id: str,
-        os_cat: str,
+        self, *, system: System, user: User, time: datetime, logon_id: str, os_cat: str
     ) -> int:
-        """Return a verified live process anchor for recursive parent-chain repair."""
-        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-        if os_cat == "windows":
-            session_explorer = self._ensure_session_explorer_pid(
-                system,
-                user,
-                time=time,
-                logon_id=logon_id,
-            )
-            if session_explorer is not None and self._is_valid_process_parent_at(
-                system=system,
-                parent_pid=session_explorer,
-                time=time,
-            ):
-                return session_explorer
-            return self._windows_system_parent_fallback(system, time)
-
-        for role in ("bash", "sshd"):
-            candidate = sys_pids.get(role)
-            if candidate and self._linux_parent_usable_for_child_at(
-                system=system,
-                parent_pid=candidate,
-                time=time,
-                logon_id=logon_id,
-            ):
-                return candidate
-        return self._linux_system_parent_fallback(system, time)
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._live_parent_chain_anchor(
+            system=system, user=user, time=time, logon_id=logon_id, os_cat=os_cat
+        )
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
-        """Record a user process in history for future parent selection."""
-        proc = self.state_manager.get_process(system.hostname, pid)
-        if proc is not None:
-            process_name = proc.image
-        key = (system.hostname, user.username)
-        self._user_process_history.setdefault(key, []).append((pid, process_name))
-        # Keep only last 10 processes per user/system
-        if len(self._user_process_history[key]) > 10:
-            self._user_process_history[key] = self._user_process_history[key][-10:]
+        """Forward to the shared process parents owner."""
+        return self._process_parents()._record_user_process(system, user, pid, process_name)
 
     def _os_for_ip(self, ip: str) -> str:
         """Look up OS category for an IP address. Defaults to 'windows'."""
@@ -43694,6 +35580,181 @@ class ActivityGenerator:
                 )
             return self._issue_sid_reservation_unlocked(group, kind="explicit")
 
+    def _process_preflight(self) -> "ProcessPreflightPlanner":
+        """Bind current preparation owners for this operation only."""
+        from evidenceforge.generation.actions.process_support.preflight import (
+            ProcessPreflightPlanner,
+        )
+
+        return ProcessPreflightPlanner(
+            state_manager=self.state_manager,
+            timing_runtime=self.timing_runtime,
+            dispatcher=self.dispatcher,
+            _runtime_content_manager=self._runtime_content_manager,
+            _scenario_end_time=getattr(self, "_scenario_end_time", None),
+            actors=self._process_actors(),
+            parents=self._process_parents(),
+            sources=self._process_sources(),
+            foreground=self._process_foreground(),
+            bounded_reuse_intent=self._process_execution_service().bounded_reuse_intent,
+            plan_scanner=self._plan_nmap_command_probes,
+        )
+
+    def _process_actors(self) -> "ProcessActorResolver":
+        """Bind current process actors owners for this call only."""
+        from evidenceforge.generation.actions.process_support.actors import ProcessActorResolver
+
+        return ProcessActorResolver(
+            _lifecycle_authority=self._lifecycle_authority,
+            _scenario_start_time=getattr(self, "_scenario_start_time", None),
+            _workstation_logon_locked_at=self._workstation_logon_locked_at,
+            state_manager=self.state_manager,
+            scheduling=self._process_scheduling(),
+            foreground=self._process_foreground(),
+            queries=self._process_queries(),
+            identity=self._process_identity_capabilities(),
+        )
+
+    def _process_reuse(self) -> "ProcessReusePolicy":
+        """Bind current process reuse owners for this call only."""
+        from evidenceforge.generation.actions.process_support.reuse import ProcessReusePolicy
+
+        return ProcessReusePolicy(
+            _execution_effect_audit=self._execution_effect_audit,
+            _preferred_browser_by_session=self._preferred_browser_by_session,
+            _system_pids=getattr(self, "_system_pids", None),
+            state_manager=self.state_manager,
+            sources=self._process_sources(),
+            queries=self._process_queries(),
+        )
+
+    def _process_parents(self) -> "ProcessParentResolver":
+        """Bind current process parents owners for this call only."""
+        from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
+
+        return ProcessParentResolver(
+            _create_windows_session_shell_lifecycle=self._create_windows_session_shell_lifecycle,
+            _lifecycle_authority=self._lifecycle_authority,
+            _scenario_start_time=getattr(self, "_scenario_start_time", None),
+            _system_pids=getattr(self, "_system_pids", None),
+            _user_process_history=self._user_process_history,
+            dispatcher=self.dispatcher,
+            ensure_linux_session_shell=self.ensure_linux_session_shell,
+            ensure_linux_visible_shell_parent=self.ensure_linux_visible_shell_parent,
+            generate_process=self.generate_process,
+            generate_system_process=self.generate_system_process,
+            state_manager=self.state_manager,
+            reuse=self._process_reuse(),
+            sources=self._process_sources(),
+            queries=self._process_queries(),
+            identity=self._process_identity_capabilities(),
+        )
+
+    def _process_scheduling(self) -> "ProcessLaunchScheduler":
+        """Bind current process scheduling owners for this call only."""
+        from evidenceforge.generation.actions.process_support.scheduling import (
+            ProcessLaunchScheduler,
+        )
+
+        return ProcessLaunchScheduler(
+            _last_browser_launch_by_session=self._last_browser_launch_by_session,
+            _last_one_shot_cli_launch_by_command=self._last_one_shot_cli_launch_by_command,
+            _last_one_shot_cli_launch_by_exe=self._last_one_shot_cli_launch_by_exe,
+            state_manager=self.state_manager,
+            timing_runtime=self.timing_runtime,
+        )
+
+    def _process_foreground(self) -> "ProcessForegroundLifecycle":
+        """Bind current process foreground owners for this call only."""
+        from evidenceforge.generation.actions.process_support.foreground import (
+            ProcessForegroundLifecycle,
+        )
+
+        return ProcessForegroundLifecycle(
+            _bash_history_next_time=self._bash_history_next_time,
+            _foreground_process_finalizers=self._foreground_process_finalizers,
+            _foreground_shell_next_time=self._foreground_shell_next_time,
+            _foreground_shell_release_groups=self._foreground_shell_release_groups,
+            _generic_logoff_owns_process_close=self._generic_logoff_owns_process_close,
+            _is_within_scenario_window=self._is_within_scenario_window,
+            _lifecycle_authority=self._lifecycle_authority,
+            _lifecycle_compatibility_fixture_mode=self._lifecycle_compatibility_fixture_mode,
+            _process_connection_hold_until=self._process_connection_hold_until,
+            _scenario_end_time=getattr(self, "_scenario_end_time", None),
+            _terminated_process_times=self._terminated_process_times,
+            _users_by_username=getattr(self, "_users_by_username", {}),
+            generate_process_termination=self.generate_process_termination,
+            state_manager=self.state_manager,
+            queries=self._process_queries(),
+            identity=self._process_identity_capabilities(),
+        )
+
+    def _process_sources(self) -> "ProcessSourceTiming":
+        """Bind current process sources owners for this call only."""
+        from evidenceforge.generation.actions.process_support.sources import ProcessSourceTiming
+
+        if getattr(self, "_process_source_create_latest", None) is None:
+            self._process_source_create_latest = {}
+        if getattr(self, "_process_source_terminate_latest", None) is None:
+            self._process_source_terminate_latest = {}
+        return ProcessSourceTiming(
+            _process_source_create_bounds=self._process_source_create_bounds,
+            _process_source_create_latest=self._process_source_create_latest,
+            _process_source_create_times=self._process_source_create_times,
+            _process_source_terminate_latest=self._process_source_terminate_latest,
+            _process_source_terminate_times=self._process_source_terminate_times,
+            _session_process_source_terminate_times=self._session_process_source_terminate_times,
+            _source_timing_planner=self._source_timing_planner,
+            state_manager=self.state_manager,
+            queries=self._process_queries(),
+            activity_timing=self._process_activity_timing(),
+        )
+
+    def _process_effects(self) -> "ProcessEvidencePreparer":
+        """Bind current process effects owners for this call only."""
+        from evidenceforge.generation.actions.process_support.effects import ProcessEvidencePreparer
+
+        return ProcessEvidencePreparer(
+            _execute_nmap_command_probe_bundle=self._execute_nmap_command_probe_bundle,
+            _execution_effect_audit=self._execution_effect_audit,
+            _loaded_modules_by_process=self._loaded_modules_by_process,
+            dispatcher=self.dispatcher,
+            state_manager=self.state_manager,
+            identity=self._process_identity_capabilities(),
+        )
+
+    def _process_queries(self) -> "ProcessStateQueries":
+        """Bind current process queries owners for this call only."""
+        from evidenceforge.generation.actions.process_support.queries import ProcessStateQueries
+
+        return ProcessStateQueries(
+            _terminated_process_keys=self._terminated_process_keys,
+            state_manager=self.state_manager,
+        )
+
+    def _process_identity_capabilities(self) -> "ProcessIdentityCapabilities":
+        """Bind the existing shared capabilities for this call only."""
+        from evidenceforge.generation.actions.process_support.capabilities import (
+            ProcessIdentityCapabilities,
+        )
+
+        return ProcessIdentityCapabilities(
+            user_for_username=self._user_model_for_username,
+            host_context=self._build_host_context,
+            user_sid=self._get_sid,
+        )
+
+    def _process_activity_timing(self) -> "ProcessActivityTiming":
+        """Bind the existing shared capabilities for this call only."""
+        from evidenceforge.generation.actions.process_support.capabilities import (
+            ProcessActivityTiming,
+        )
+
+        return ProcessActivityTiming(
+            sample_gap=self._sample_activity_gap,
+            sample_profile_gap=self._sample_profile_activity_gap,
+        )
+
     # Phase 5.2: EDR object type diversity data pools
     # EDR file/registry/DLL pools moved to edr_pools.yaml (data-driven config).
     # Access via: from evidenceforge.generation.activity.edr_pools import get_file_paths, etc.
@@ -43706,3 +35767,60 @@ class ActivityGenerator:
 
     # _emit_ecar_module_event removed in Phase 8.2
     # MODULE events now dispatched via OccurrenceBuilder canonical model
+
+    def _process_execution_service(self) -> "ProcessExecutionService":
+        """Bind process operations to current owners after any checkpoint hydration."""
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessExecutionService,
+        )
+
+        return ProcessExecutionService(
+            actors=self._process_actors(),
+            reuse=self._process_reuse(),
+            parents=self._process_parents(),
+            scheduling=self._process_scheduling(),
+            foreground=self._process_foreground(),
+            sources=self._process_sources(),
+            effects=self._process_effects(),
+            queries=self._process_queries(),
+            identity=self._process_identity_capabilities(),
+            activity_timing=self._process_activity_timing(),
+            state_manager=self.state_manager,
+            dispatcher=self.dispatcher,
+            lifecycle_authority=self._lifecycle_authority,
+            runtime_content_manager=self._runtime_content_manager,
+        )
+
+    def _process_termination_service(self) -> "ProcessTerminationService":
+        """Bind process operations to current owners after any checkpoint hydration."""
+        from evidenceforge.generation.actions.process_execution_service import (
+            ProcessTerminationService,
+        )
+
+        return ProcessTerminationService(
+            actors=self._process_actors(),
+            foreground=self._process_foreground(),
+            sources=self._process_sources(),
+            queries=self._process_queries(),
+            identity=self._process_identity_capabilities(),
+            frozen_session_close=self._frozen_generic_logoff_process_close,
+            state_manager=self.state_manager,
+            dispatcher=self.dispatcher,
+        )
+
+    def _process_system(self) -> "SystemProcessService":
+        """Bind system process execution to current owners for this call only."""
+        from evidenceforge.generation.actions.process_support.system import SystemProcessService
+
+        return SystemProcessService(
+            state_manager=self.state_manager,
+            dispatcher=self.dispatcher,
+            sid_registry=self.sid_registry,
+            actors=self._process_actors(),
+            parents=self._process_parents(),
+            queries=self._process_queries(),
+            reuse=self._process_reuse(),
+            sources=self._process_sources(),
+            identity=self._process_identity_capabilities(),
+            generate_process=self.generate_process,
+        )

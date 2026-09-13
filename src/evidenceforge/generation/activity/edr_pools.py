@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
 from evidenceforge.config.schemas import EdrInstalledSoftwareProduct
+from evidenceforge.config.shell_history_policy import is_noninteractive_bash_user
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
@@ -1116,7 +1117,7 @@ def select_file_side_effect(
         )
         if (
             exe in {"bash", "sh"}
-            and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
+            and is_noninteractive_bash_user(user)
             and path.endswith("/.bash_history")
         ):
             non_history_paths = _exclude_paths(path_templates, ("/.bash_history",))

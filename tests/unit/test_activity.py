@@ -118,6 +118,10 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockRequest,
     plan_linux_pipeline_stage_times,
 )
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
+from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -992,9 +996,9 @@ class TestActivityGenerator:
                 return 0.0
 
         monkeypatch.setattr(
-            activity_gen,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
-            lambda _request, _actor: AlwaysSideEffectRng(1),
+            staticmethod(lambda _request, _actor: AlwaysSideEffectRng(1)),
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.edr_pools.select_file_side_effect",
@@ -6016,8 +6020,10 @@ class TestActivityGenerator:
         assert first.family == "process_execution"
         assert first.stable_id.startswith("process-execution-")
 
-    def test_process_execution_bundle_delegates_to_adapter(self, test_user, test_system):
-        """The bundle should own the entrypoint while preserving the adapter contract."""
+    def test_process_execution_bundle_delegates_to_service(
+        self, test_user, test_system, monkeypatch
+    ):
+        """The bundle should bind its service to the existing runtime owners."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         request = ProcessExecutionRequest(
             user=test_user,
@@ -6028,19 +6034,25 @@ class TestActivityGenerator:
             command_line="cmd.exe /c dir",
         )
         executor = Mock()
-        executor._execute_process_create_bundle.return_value = 4242
+
+        service = Mock()
+        service.create.return_value = 4242
+        factory = Mock(return_value=service)
+        monkeypatch.setattr(executor, "_process_execution_service", factory)
 
         pid = ProcessExecutionActionBundle(executor, request).execute()
 
         assert pid == 4242
-        executor._execute_process_create_bundle.assert_called_once_with(request)
+        factory.assert_called_once_with()
+        service.create.assert_called_once_with(request)
 
-    def test_process_execution_bundle_preflights_effect_plan_before_adapter(
+    def test_process_execution_bundle_preflights_effect_plan_before_service(
         self,
         test_user,
         test_system,
+        monkeypatch,
     ):
-        """An opted-in executor should plan before entering its stateful adapter."""
+        """An opted-in executor should plan before entering the stateful service."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         request = ProcessExecutionRequest(
             user=test_user,
@@ -6057,10 +6069,14 @@ class TestActivityGenerator:
                 calls.append(("plan", planned_request.effect_plan))
                 return ExecutionEffectPlan(anchor)
 
-            def _execute_process_create_bundle(self, execution_request):
+        class Service:
+            def create(self, execution_request):
                 calls.append(("execute", execution_request.effect_plan))
                 return 4242
 
+        monkeypatch.setattr(
+            Executor, "_process_execution_service", lambda self: Service(), raising=False
+        )
         pid = ProcessExecutionActionBundle(Executor(), request).execute()
 
         assert pid == 4242
@@ -6068,10 +6084,11 @@ class TestActivityGenerator:
         assert calls[1][0] == "execute"
         assert isinstance(calls[1][1], ExecutionEffectPlan)
 
-    def test_process_execution_bundle_rejects_invalid_plan_before_adapter(
+    def test_process_execution_bundle_rejects_invalid_plan_before_service(
         self,
         test_user,
         test_system,
+        monkeypatch,
     ):
         """Invalid preflight output must not enter PID/state allocation code."""
         request = ProcessExecutionRequest(
@@ -6085,13 +6102,18 @@ class TestActivityGenerator:
         executor = Mock()
         executor._plan_process_execution_effects = Mock(return_value="invalid-plan")
 
+        factory = Mock()
+        monkeypatch.setattr(executor, "_process_execution_service", factory)
+
         with pytest.raises(ExecutionEffectPlanError) as exc_info:
             ProcessExecutionActionBundle(executor, request).execute()
 
         assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_PLAN
-        executor._execute_process_create_bundle.assert_not_called()
+        factory.assert_not_called()
 
-    def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
+    def test_process_termination_bundle_delegates_to_service(
+        self, test_user, test_system, monkeypatch
+    ):
         """Termination should share the process action-bundle boundary."""
         timestamp = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
         request = ProcessTerminationRequest(
@@ -6104,12 +6126,16 @@ class TestActivityGenerator:
         )
         executor = Mock()
 
+        service = Mock()
+        factory = Mock(return_value=service)
+        monkeypatch.setattr(executor, "_process_termination_service", factory)
         ProcessTerminationActionBundle(executor, request).execute()
 
         anchor = ProcessTerminationActionBundle(Mock(), request).anchor
         assert anchor.family == "process_termination"
         assert anchor.stable_id.startswith("process-termination-")
-        executor._execute_process_termination_bundle.assert_called_once_with(request)
+        factory.assert_called_once_with()
+        service.terminate.assert_called_once_with(request)
 
     def test_generate_process_hosts_windows_batch_scripts_under_cmd(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -8639,7 +8665,7 @@ class TestActivityGenerator:
         )
 
         with patch.object(
-            activity_gen,
+            ProcessPreflightPlanner,
             "_process_endpoint_effect_rng",
             return_value=RegistryOnlyRandom(),
         ):
@@ -8664,7 +8690,7 @@ class TestActivityGenerator:
         """Process-owned registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(ActivityGenerator._plan_process_execution_side_effects)
+        source = inspect.getsource(ProcessPreflightPlanner._select_endpoint_effects)
         assert (
             "key, value_name, details, value_type = materialize_registry_effect(\n"
             "                    (key, value_name, details),\n"
@@ -8716,7 +8742,7 @@ class TestActivityGenerator:
 
         with (
             patch.object(
-                activity_gen,
+                ProcessPreflightPlanner,
                 "_process_endpoint_effect_rng",
                 return_value=RegistryOnlyRandom(),
             ),
@@ -15383,6 +15409,7 @@ class TestActivityGenerator:
                 return "du -sh /var/lib/mysql/*"
 
         monkeypatch.setattr(generator_module, "_get_rng", lambda: AssertingRng())
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: AssertingRng())
         linux = System(
             hostname="DB-PROD-01",
             ip="10.0.0.2",

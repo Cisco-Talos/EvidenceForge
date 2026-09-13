@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from inspect import getattr_static
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.lifecycle import SessionEndPlan
@@ -48,6 +48,9 @@ from evidenceforge.generation.deployment_registry import LocalArtifactPublishTok
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+
+if TYPE_CHECKING:
+    from .process_execution_service import ProcessExecutionService, ProcessTerminationService
 
 
 class ProcessLifetimeMode(StrEnum):
@@ -360,14 +363,14 @@ class ProcessTerminationRequest:
 
 
 class ProcessExecutionExecutor(Protocol):
-    """Adapter protocol implemented by the current activity generator."""
+    """Existing owners injected into bundle-owned process execution."""
 
-    def _execute_process_create_bundle(self, request: ProcessExecutionRequest) -> int:
-        """Expand one process-execution request into canonical evidence."""
+    def _process_execution_service(self) -> ProcessExecutionService:
+        """Bind creation to the current state, timing, identity and lifecycle owners."""
         ...
 
-    def _execute_process_termination_bundle(self, request: ProcessTerminationRequest) -> None:
-        """Expand one process-termination request into canonical evidence."""
+    def _process_termination_service(self) -> ProcessTerminationService:
+        """Bind termination to the current owners without retaining a generator."""
         ...
 
 
@@ -417,7 +420,7 @@ class ProcessExecutionActionBundle:
 
         request = self.preflight()
         try:
-            return self._executor._execute_process_create_bundle(request)
+            return self._executor._process_execution_service().create(request)
         finally:
             cleanup = getattr(
                 self._executor,
@@ -534,4 +537,4 @@ class ProcessTerminationActionBundle:
     def execute(self) -> None:
         """Emit process-termination evidence."""
 
-        self._executor._execute_process_termination_bundle(self._request)
+        self._executor._process_termination_service().terminate(self._request)

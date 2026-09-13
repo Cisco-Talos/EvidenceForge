@@ -1,0 +1,232 @@
+version: '1.0'
+name: cleanup-periodic-content
+description: Frozen bounded coverage for refactor byte comparisons
+environment:
+  description: One Windows and one Linux workstation behind network and firewall sensors
+  proxy:
+    mode: explicit
+    listener_port: 8080
+  users:
+  - username: alice
+    full_name: Alice Example
+    email: alice@example.test
+    primary_system: WIN-01
+    enabled: true
+  - username: bob
+    full_name: Bob Example
+    email: bob@example.test
+    primary_system: LINUX-01
+    enabled: true
+  systems:
+  - hostname: WIN-01
+    ip: 10.0.0.10
+    os: Windows 10
+    type: workstation
+  - hostname: LINUX-01
+    ip: 10.0.0.20
+    os: Ubuntu 22.04
+    type: server
+    services:
+    - squid
+    - nginx
+    - dns-client
+    - postfix
+    - dovecot
+    roles:
+    - forward_proxy
+    - web_server
+  - hostname: WIN-02
+    ip: 10.0.0.11
+    os: Windows 10
+    type: workstation
+    roles:
+    - dhcp_server
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      exposure: internal
+      systems:
+      - WIN-01
+      - LINUX-01
+      - WIN-02
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+    - type: ids
+      name: core-ids
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - snort_alert
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - cisco_asa
+  email:
+    accepted_domains:
+    - example.test
+    mail_servers:
+    - name: mail
+      hostname: mail.example.test
+      system: LINUX-01
+      platform: generic_smtp
+    default_mailbox_servers:
+    - mail
+    outbound_routes:
+    - name: default
+      servers:
+      - mail
+time_window:
+  start: '2024-01-15T10:00:00Z'
+  duration: 40m
+  warmup: 1h
+baseline_activity:
+  description: Small mixed-platform baseline
+  intensity: low
+  variation: low
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+storyline:
+- id: fixture-login
+  time: +2m
+  actor: alice
+  system: WIN-01
+  activity: Exercise login typed handlers
+  events:
+  - type: logon
+    logon_type: 2
+  - type: failed_logon
+    source_ip: 10.0.0.11
+- id: fixture-injection
+  time: +6m
+  actor: alice
+  system: WIN-01
+  activity: Exercise injection typed handlers
+  events:
+  - type: create_remote_thread
+    target_process: notepad.exe
+  - type: process_access
+  - type: explicit_credentials
+    target_username: bob
+    target_server: LINUX-01
+- id: fixture-beacon
+  time: +10m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise beacon typed handlers
+  events:
+  - type: beacon
+    dst_ip: 198.51.100.42
+    dst_port: 443
+    hostname: updates.example.test
+    interval: 10s
+    duration: 30s
+- id: fixture-dns-periodic
+  time: +14m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise dns-periodic typed handlers
+  events:
+  - type: dga_queries
+    interval: 10s
+    duration: 30s
+  - type: dns_tunnel
+    base_domain: tunnel.example.test
+    payload: Frozen cleanup fixture
+    interval: 10s
+    duration: 30s
+- id: fixture-spray-scan
+  time: +18m
+  actor: alice
+  system: WIN-01
+  activity: Exercise spray-scan typed handlers
+  events:
+  - type: credential_spray
+    target_accounts:
+    - alice
+    - bob
+    interval: 10s
+    duration: 30s
+    source_ip: 198.51.100.25
+  - type: port_scan
+    target_ips:
+    - 10.0.0.20
+    target_count: 1
+    ports:
+    - 22
+    - 443
+    scan_rate: 1
+- id: fixture-mail
+  time: +22m
+  actor: alice
+  system: WIN-01
+  activity: Exercise mail typed handlers
+  events:
+  - type: email_message
+    to:
+    - bob@example.test
+    subject: Frozen cleanup comparison
+    body: Deterministic fixture message
+    artifact_id: fixture-message
+- id: fixture-read
+  time: +26m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise read typed handlers
+  events:
+  - type: email_read
+    message_ids:
+    - fixture-message
+    duration: 2.0
+- id: fixture-content
+  time: +30m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise content typed handlers
+  events:
+  - type: spillage
+    surface: syslog_message
+    value: Bearer EvidenceForgeFake_CLEANUP_TEST_TOKEN
+  - type: adversarial_payload
+    surface: syslog_message
+    family: ansi_escape
+  - type: raw
+    target_format: syslog
+    fields:
+      message: Frozen cleanup raw event
+      program: fixture
+- id: fixture-logoff
+  time: +34m
+  actor: bob
+  system: LINUX-01
+  activity: Exercise logoff typed handlers
+  events:
+  - type: logoff
+output:
+  logs:
+  - format: windows
+  - format: zeek
+  - format: ecar
+  - format: syslog
+  - format: bash_history
+  - format: snort_alert
+  - format: cisco_asa
+  - format: web_access
+  - format: proxy_access
+  destination: ./output
+  compression: false

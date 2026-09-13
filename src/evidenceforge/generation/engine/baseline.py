@@ -38,7 +38,7 @@ import math
 import random
 import shlex
 import string
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10832,6 +10832,15 @@ class BaselineMixin:
 
         Uses periodic-with-jitter timing to produce realistic autocorrelation
         in system event intervals.
+
+        Per-host families run in their original order before cross-host passes.
+        They share RNG and runtime owners: regrouping hosts by protocol changes
+        draws, identities and admission. An authored DHCP lease skips the rest
+        of that host's pass, not just renewal. RDP plans every placement before
+        execution advances its global lifecycle frontier. Terminal admission
+        keeps active lifecycles past the collection cutoff. See the baseline
+        contracts in test_baseline_terminal_family_admission.py,
+        test_dhcp_timing_runtime.py and test_rdp_baseline_noise.py.
         """
         from evidenceforge.generation.activity import _get_os_category
 
@@ -10855,6 +10864,10 @@ class BaselineMixin:
         if not hasattr(self, "_ntp_schedule_state"):
             self._ntp_schedule_state: dict[tuple[str, str, int], dict[str, float | int]] = {}
 
+        # Reuse host-specific selections in the later syslog pass. This local map
+        # lasts only for this hourly call and must be populated before host skips.
+        # See test_ambient_resolver_messages_use_the_current_hosts_selected_pool.
+        dns_ips_by_host: dict[str, list[str]] = {}
         for system in self.scenario.environment.systems:
             services = self._system_service_defaults.get(system.hostname, [])
             os_cat = _get_os_category(system.os)
@@ -10872,139 +10885,31 @@ class BaselineMixin:
 
             hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
 
-            # DNS lookups: truly periodic with small jitter, using global schedule
             system_dns_ips = activity_dns_resolver_ips(self.activity_generator, system.ip)
-            if "dns-client" in services and system_dns_ips:
-                _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
-                _dns_lo, _dns_hi = self._scaled_interval_range(
-                    system, "dns_interval", _dns_lo, _dns_hi
-                )
-                _dns_range = max(1, _dns_hi - _dns_lo)
-                dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
-                for observed_second in _dns_query_seconds_for_hour(
-                    system.hostname,
-                    hour_start_sec,
-                    dns_interval,
-                    rng,
-                ):
-                    ts = self._generation_epoch + timedelta(seconds=observed_second)
-                    dst_ip = rng.choice(system_dns_ips)
-                    duration = rng.uniform(0.001, 0.05)
-                    close_bound = self._baseline_network_close_bound_seconds(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        proto="udp",
-                        dst_port=53,
-                        service="dns",
-                        # Context-free DNS accounting can extend the caller's
-                        # canonical response interval through 80.001 ms.
-                        requested_duration_max=0.081,
-                        current_hour=current_hour,
-                        start=ts,
-                        conn_state="SF",
-                        payload_bytes=1,
-                    )
-                    if not self._baseline_pass_admits(
-                        current_hour,
-                        start=ts,
-                        end=ts + timedelta(seconds=close_bound),
-                    ):
-                        continue
-                    self.state_manager.set_current_time(ts)
-                    dns_pid = (
-                        _svc_pid("svchost_net_svc")
-                        if os_cat == "windows"
-                        else _svc_pid("systemd_resolved")
-                        if not is_rhel_like
-                        else -1
-                    )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        time=ts,
-                        dst_port=53,
-                        proto="udp",
-                        service="dns",
-                        duration=duration,
-                        orig_bytes=rng.randint(40, 120),
-                        resp_bytes=rng.randint(80, 512),
-                        source_system=system,
-                        pid=dns_pid,
-                    )
+            if os_cat == "linux":
+                dns_ips_by_host[system.hostname] = system_dns_ips
+            self._generate_system_dns_traffic(
+                _svc_pid=_svc_pid,
+                current_hour=current_hour,
+                hour_start_sec=hour_start_sec,
+                is_rhel_like=is_rhel_like,
+                os_cat=os_cat,
+                rng=rng,
+                services=services,
+                system=system,
+                system_dns_ips=system_dns_ips,
+            )
 
-            # NTP syncs follow a stable per-association poll schedule rather
-            # than a fixed hourly tick.
-            if "ntp-client" in services:
-                # Deterministic NTP source per host (stable across hours)
-                # Exclude the host's own IP — DCs don't NTP-sync to themselves
-                ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
-                ntp_ip = (
-                    ntp_candidates[_stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)]
-                    if ntp_candidates
-                    else None  # This host IS the NTP server; skip NTP client traffic only
-                )
-                if ntp_ip:
-                    poll_seconds = _ntp_association_poll_seconds(
-                        system.ip,
-                        ntp_ip,
-                    )
-                    ntp_pid = (
-                        _svc_pid("svchost_local_svc")
-                        if os_cat == "windows"
-                        else _svc_pid("chronyd", "timesyncd")
-                    )
-                    state_key = (system.hostname, ntp_ip, poll_seconds)
-                    schedule_state = self._ntp_schedule_state.get(state_key)
-                    if schedule_state is None:
-                        phase_rng = random.Random(
-                            _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
-                        )
-                        schedule_state = {
-                            "scheduled_second": phase_rng.uniform(0, min(3600, poll_seconds)),
-                            "sequence": 0,
-                        }
-                        self._ntp_schedule_state[state_key] = schedule_state
-                    for observed_second in _ntp_sync_seconds_for_hour_from_state(
-                        system.hostname,
-                        ntp_ip,
-                        hour_start_sec,
-                        poll_seconds,
-                        schedule_state,
-                    ):
-                        ts = self._generation_epoch + timedelta(seconds=observed_second)
-                        duration = rng.uniform(0.01, 0.1)
-                        close_bound = self._baseline_network_close_bound_seconds(
-                            src_ip=system.ip,
-                            dst_ip=ntp_ip,
-                            proto="udp",
-                            dst_port=123,
-                            service="ntp",
-                            requested_duration_max=ntp_transport_close_headroom_seconds(),
-                            current_hour=current_hour,
-                            start=ts,
-                            conn_state="SF",
-                            payload_bytes=1,
-                        )
-                        if not self._baseline_pass_admits(
-                            current_hour,
-                            start=ts,
-                            end=ts + timedelta(seconds=close_bound),
-                        ):
-                            continue
-                        self.state_manager.set_current_time(ts)
-                        self.activity_generator.generate_connection(
-                            src_ip=system.ip,
-                            dst_ip=ntp_ip,
-                            time=ts,
-                            dst_port=123,
-                            proto="udp",
-                            service="ntp",
-                            duration=duration,
-                            orig_bytes=48,
-                            resp_bytes=48,
-                            source_system=system,
-                            pid=ntp_pid,
-                        )
+            self._generate_system_ntp_traffic(
+                _svc_pid=_svc_pid,
+                current_hour=current_hour,
+                hour_start_sec=hour_start_sec,
+                ntp_ips=ntp_ips,
+                os_cat=os_cat,
+                rng=rng,
+                services=services,
+                system=system,
+            )
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
@@ -11016,84 +10921,13 @@ class BaselineMixin:
                 if storyline_dhcp_time is not None:
                     dhcp_state["next_renewal"] = storyline_dhcp_time.timestamp()
                     continue
-                lease_time = dhcp_state["lease_time"]
-                renewal_sequence = int(dhcp_state.get("renewal_sequence", 0))
-
-                def next_renewal_interval(
-                    lease: float = float(lease_time),
-                    runtime: Any = self.timing_runtime,
-                    stable_id: str = f"{system.hostname}|{dhcp_state['mac']}",
-                    host: str = system.hostname,
-                    granularity: float = float(dhcp_state["timer_granularity"]),
-                ) -> float:
-                    nonlocal renewal_sequence
-                    interval = dhcp_renewal_interval_seconds(
-                        lease,
-                        timing_runtime=runtime,
-                        stable_id=stable_id,
-                        host=host,
-                        renewal_sequence=renewal_sequence,
-                        timer_granularity=granularity,
-                    )
-                    renewal_sequence += 1
-                    return interval
-
-                (
-                    renewal_epochs,
-                    updated_last_renewal,
-                    pending_next_renewal,
-                ) = _dhcp_renewal_epochs_for_hour(
-                    last_renewal=dhcp_state["last_renewal"],
-                    renewal_interval=dhcp_state["renewal_interval"],
+                self._generate_system_dhcp_renewal(
                     current_hour=current_hour,
-                    next_renewal=dhcp_state.get("next_renewal"),
-                    renewal_interval_factory=next_renewal_interval,
+                    dhcp_state=dhcp_state,
+                    rng=rng,
+                    sys_pids=sys_pids,
+                    system=system,
                 )
-                if renewal_epochs:
-                    from evidenceforge.utils.ids import generate_zeek_uid
-
-                for next_renewal, renewal_interval in renewal_epochs:
-                    renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
-                    # Randomize fractional seconds (OS timer imprecision)
-                    renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
-                    renewal_close_bound = self._baseline_dhcp_renewal_close_bound_seconds(
-                        current_hour,
-                        start=renewal_ts,
-                        system=dhcp_state["system"],
-                        server_addr=dhcp_state["server_addr"],
-                    )
-                    if not self._baseline_pass_admits(
-                        current_hour,
-                        start=renewal_ts,
-                        end=renewal_ts + timedelta(seconds=renewal_close_bound),
-                    ):
-                        continue
-                    self.state_manager.set_current_time(renewal_ts)
-                    self.activity_generator.generate_dhcp_lease(
-                        system=dhcp_state["system"],
-                        time=renewal_ts,
-                        mac=dhcp_state["mac"],
-                        server_addr=dhcp_state["server_addr"],
-                        lease_time=lease_time,
-                        uid=generate_zeek_uid("C"),
-                        msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
-                        renewal_interval=renewal_interval,
-                    )
-                    self._emit_dhcp_registry_side_effect(
-                        system=dhcp_state["system"],
-                        time=renewal_ts,
-                        rng=rng,
-                        sys_pids=sys_pids,
-                        dhcp_state=dhcp_state,
-                    )
-                dhcp_state["last_renewal"] = updated_last_renewal
-                if renewal_epochs:
-                    dhcp_state["renewal_interval"] = renewal_epochs[-1][1]
-                dhcp_state["renewal_sequence"] = renewal_sequence
-                if pending_next_renewal is None:
-                    dhcp_state.pop("next_renewal", None)
-                else:
-                    dhcp_state["next_renewal"] = pending_next_renewal
 
             # Directory-service targets used by the Windows Kerberos/LDAP blocks.
             # Baseline SMB is planned once per hour before this per-host pass so
@@ -11116,122 +10950,27 @@ class BaselineMixin:
                     dc_ips=dc_ips,
                 )
 
-            # Kerberos
-            if "kerberos-client" in services and os_cat == "windows" and dc_targets:
-                _krb_lo, _krb_hi = self._resolve_traffic_rate("kerberos")
-                _krb_lo, _krb_hi = self._scaled_count_range(system, "kerberos", _krb_lo, _krb_hi)
-                num_krb = rng.randint(_krb_lo, _krb_hi)
-                base_interval = 3600 / (num_krb + 1)
-                for i in range(num_krb):
-                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
-                    if not self._baseline_pass_admits(
-                        current_hour,
-                        start=ts,
-                        end=ts + timedelta(seconds=0.05),
-                    ):
-                        continue
-                    krb_dst_ip = rng.choice(dc_targets)
-                    close_bound = self._baseline_network_close_bound_seconds(
-                        src_ip=system.ip,
-                        dst_ip=krb_dst_ip,
-                        proto="tcp",
-                        dst_port=88,
-                        service="kerberos",
-                        requested_duration_max=0.05,
-                        current_hour=current_hour,
-                        start=ts,
-                        conn_state="",
-                        payload_bytes=1,
-                    )
-                    if not self._baseline_pass_admits(
-                        current_hour,
-                        start=ts,
-                        end=ts + timedelta(seconds=close_bound),
-                    ):
-                        continue
-                    self.state_manager.set_current_time(ts)
-                    dc_hostname = dc_hostname_by_ip.get(krb_dst_ip)
-                    if dc_hostname is None and dc_hostnames:
-                        dc_hostname = rng.choice(dc_hostnames)
-                    if dc_hostname:
-                        machine_principal = f"{system.hostname}$"
-                        service_name = rng.choices(
-                            [
-                                f"host/{dc_hostname}",
-                                f"ldap/{dc_hostname}",
-                                f"cifs/{dc_hostname}",
-                                f"DNS/{dc_hostname}",
-                            ],
-                            weights=[34, 36, 20, 10],
-                            k=1,
-                        )[0]
-                    else:
-                        machine_principal = ""
-                        service_name = ""
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=krb_dst_ip,
-                        time=ts,
-                        dst_port=88,
-                        proto="tcp",
-                        service="kerberos",
-                        duration=rng.uniform(0.001, 0.05),
-                        orig_bytes=rng.randint(200, 1500),
-                        resp_bytes=rng.randint(200, 2000),
-                        emit_dns=rng.random() > 0.02,
-                        source_system=system,
-                        pid=_svc_pid("lsass"),
-                        kerberos_audit_username=machine_principal,
-                        kerberos_audit_service_name=service_name,
-                    )
+            self._generate_system_kerberos_traffic(
+                _svc_pid=_svc_pid,
+                current_hour=current_hour,
+                dc_hostname_by_ip=dc_hostname_by_ip,
+                dc_hostnames=dc_hostnames,
+                dc_targets=dc_targets,
+                os_cat=os_cat,
+                rng=rng,
+                services=services,
+                system=system,
+            )
 
-            # LDAP
-            if "ldap-client" in services and os_cat == "windows" and dc_targets:
-                _ldap_lo, _ldap_hi = self._resolve_traffic_rate("ldap")
-                _ldap_lo, _ldap_hi = self._scaled_count_range(system, "ldap", _ldap_lo, _ldap_hi)
-                num_ldap = rng.randint(_ldap_lo, _ldap_hi)
-                base_interval = 3600 / (num_ldap + 1)
-                for i in range(num_ldap):
-                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
-                    dst_ip = rng.choice(dc_targets)
-                    duration = rng.uniform(0.01, 0.5)
-                    close_bound = self._baseline_network_close_bound_seconds(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        proto="tcp",
-                        dst_port=389,
-                        service="ldap",
-                        requested_duration_max=duration,
-                        current_hour=current_hour,
-                        start=ts,
-                        conn_state="",
-                        payload_bytes=1,
-                    )
-                    if not self._baseline_pass_admits(
-                        current_hour,
-                        start=ts,
-                        end=ts + timedelta(seconds=close_bound),
-                    ):
-                        continue
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        time=ts,
-                        dst_port=389,
-                        proto="tcp",
-                        service="ldap",
-                        duration=duration,
-                        orig_bytes=rng.randint(100, 2000),
-                        resp_bytes=rng.randint(500, 10000),
-                        emit_dns=rng.random() > 0.02,
-                        source_system=system,
-                        pid=_svc_pid("lsass"),
-                    )
+            self._generate_system_ldap_traffic(
+                _svc_pid=_svc_pid,
+                current_hour=current_hour,
+                dc_targets=dc_targets,
+                os_cat=os_cat,
+                rng=rng,
+                services=services,
+                system=system,
+            )
 
             # Profile-driven traffic: role-based system connections + persona user connections
             # Replaces former HTTPS background + database traffic blocks
@@ -11245,772 +10984,153 @@ class BaselineMixin:
                 planned_logoffs=planned_logoffs,
             )
 
-            # Independent system service processes (not tied to user activity)
-            # Windows hosts spawn 3-8 service processes per hour
-            if os_cat == "windows":
-                from evidenceforge.generation.activity.system_processes import (
-                    pick_system_service_process as _pick_svc,
-                )
+            self._generate_system_service_processes(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                sys_pids=sys_pids,
+                system=system,
+                terminal_pass=terminal_pass,
+            )
 
-                sys_type_str = (system.type or "workstation").lower()
-                num_svc = self._scaled_randint(rng, system, "windows_service_process", 3, 8)
-                for _si in range(num_svc):
-                    svc_offset = rng.uniform(0, 3599)
-                    svc_ts = current_hour + timedelta(seconds=svc_offset)
-                    if not self._baseline_pass_admits(current_hour, start=svc_ts):
-                        continue
-                    svc_image, svc_cmd, svc_parent_key = _pick_svc(
-                        rng,
-                        sys_type_str,
-                        system,
-                        str(self.scenario.environment.domain),
-                    )
-                    svc_parent = _require_seeded_windows_parent(
-                        sys_pids,
-                        svc_parent_key,
-                        family="system_services",
-                    )
-                    svc_lifetime = (
-                        _windows_background_process_lifetime_seconds(
-                            svc_image,
-                            svc_cmd,
-                            rng,
-                        )
-                        if terminal_pass
-                        else None
-                    )
-                    svc_end = (
-                        svc_ts + timedelta(seconds=svc_lifetime)
-                        if svc_lifetime is not None
-                        else None
-                    )
-                    if svc_end is not None and not self._baseline_pass_admits(
-                        current_hour,
-                        start=svc_ts,
-                        end=svc_end,
-                    ):
-                        continue
-                    self.state_manager.set_current_time(svc_ts)
-                    svc_pid = self.activity_generator.generate_system_process(
-                        system=system,
-                        time=svc_ts,
-                        process_name=svc_image,
-                        command_line=svc_cmd,
-                        parent_pid=svc_parent,
-                        username="SYSTEM",
-                        source_visible_by=(
-                            svc_end - timedelta(microseconds=1)
-                            if terminal_pass and svc_end is not None
-                            else None
-                        ),
-                    )
-                    if not terminal_pass:
-                        svc_lifetime = _windows_background_process_lifetime_seconds(
-                            svc_image,
-                            svc_cmd,
-                            rng,
-                        )
-                    if svc_pid and svc_lifetime is not None:
-                        svc_end = svc_ts + timedelta(seconds=svc_lifetime)
-                        self.state_manager.set_current_time(svc_end)
-                        self.activity_generator.generate_system_process_termination(
-                            system=system,
-                            time=svc_end,
-                            pid=svc_pid,
-                            process_name=svc_image,
-                            parent_pid=svc_parent,
-                            username="SYSTEM",
-                        )
+            self._generate_system_registry_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                sys_pids=sys_pids,
+                system=system,
+            )
 
-            self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
+            self._generate_system_scheduled_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                sys_pids=sys_pids,
+                system=system,
+                terminal_pass=terminal_pass,
+            )
 
-            # Baseline registry activity from running services. Real Sysmon
-            # generates hundreds-thousands of Event 12/13 per hour. We emit
-            # 15-40 per host per hour to provide realistic background volume.
-            if os_cat == "windows":
-                from evidenceforge.events.base import OccurrenceBuilder
-                from evidenceforge.events.contexts import (
-                    AuthContext,
-                    ProcessContext,
-                    RegistryContext,
-                )
-                from evidenceforge.generation.activity.edr_pools import (
-                    get_registry_keys_hkcu,
-                    get_registry_keys_hklm,
-                    materialize_registry_effect,
-                )
-                from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
+            self._generate_system_delegation_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                pass_end=pass_end,
+                sys_pids=sys_pids,
+                system=system,
+                terminal_pass=terminal_pass,
+            )
 
-                _REG_KEYS_HKCU = get_registry_keys_hkcu()
-                _REG_KEYS_HKLM = get_registry_keys_hklm()
-                _reg_count = self._scaled_randint(rng, system, "windows_registry", 18, 42)
-                _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
-                _host_ctx = self.activity_generator._build_host_context(system)
-                _registry_cfg = registry_noise_config()
-                _dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
-                # Only emit HKCU on workstations with a logged-in user;
-                # servers and DCs run services, not user desktops.
-                _has_desktop = getattr(
-                    system, "assigned_user", None
-                ) is not None and system.type not in ("server", "domain_controller")
-                _hkcu_rate = 0.30 if _has_desktop else 0.0
-                for _ri in range(_reg_count):
-                    _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    if rng.random() < _hkcu_rate:
-                        dynamic_hkcu = [entry for entry in _REG_KEYS_HKCU if "{" in entry[0]]
-                        static_hkcu = [
-                            entry
-                            for entry in _REG_KEYS_HKCU
-                            if "{" not in entry[0]
-                            and "Office\\16.0\\Word\\Reading Locations\\Document 1" not in entry[0]
-                        ]
-                        pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
-                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
-                    else:
-                        dynamic_hklm = [
-                            entry
-                            for entry in _REG_KEYS_HKLM
-                            if "{" in entry[0] and str(entry[1]).lower() != "driverdesc"
-                        ]
-                        noisy_static_hklm = [
-                            entry
-                            for entry in _REG_KEYS_HKLM
-                            if "{" not in entry[0]
-                            and "Windows NT\\CurrentVersion\\Winlogon" not in entry[0]
-                            and "Services\\EventLog\\Application" not in entry[0]
-                        ]
-                        rare_static_hklm = [
-                            entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]
-                        ]
-                        if dynamic_hklm and rng.random() < 0.85:
-                            pool = dynamic_hklm
-                        elif rng.random() < 0.95:
-                            pool = noisy_static_hklm
-                        else:
-                            pool = rare_static_hklm
-                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
-                    if not _ambient_registry_entry_allowed(
-                        system,
-                        _key,
-                        _vname,
-                        _dhcp_state,
-                        _registry_cfg,
-                    ):
-                        continue
-                    _template_user = system.assigned_user or "SYSTEM"
-                    _key, _vname, _details, _value_type = materialize_registry_effect(
-                        (_key, _vname, _details),
-                        rng,
-                        _template_user,
-                        _reg_ts,
-                        host_ip=system.ip,
-                        dns_server_ip=str(
-                            (_dhcp_state or {}).get("server_addr")
-                            or activity_dns_resolver_ips(self.activity_generator, system.ip)[0]
-                        ),
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    writer_candidates = _registry_writer_candidates(
-                        f"{_key}\\{_vname}",
-                        sys_pids,
-                        system.assigned_user,
-                    )
-                    if writer_candidates:
-                        _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
-                    else:
-                        # An unavailable native owner means the ambient write did
-                        # not occur in this window. Do not substitute a generic
-                        # service process and manufacture false causality.
-                        continue
-                    _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
-                    if _reg_proc is not None:
-                        _reg_image = _reg_proc.image
-                    if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
-                        _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
-                    if not self._baseline_pass_admits(current_hour, start=_reg_ts):
-                        continue
-                    _target = f"{_key}\\{_vname}"
-                    _details = _materialize_registry_value_for_time(
-                        _target,
-                        _details,
-                        _reg_ts,
-                        rng,
-                    )
-                    if not BaselineMixin._ambient_registry_write_changes_state(
-                        self,
-                        system.hostname,
-                        _target,
-                        _details,
-                    ):
-                        continue
-                    # Sysmon value writes are Event 13. Event 12 is reserved for key-only
-                    # create/delete contexts, not the value-name pools used here.
-                    _reg_action = "modify"
-                    self.activity_generator.dispatcher.dispatch_builder(
-                        OccurrenceBuilder(
-                            timestamp=_reg_ts,
-                            event_type="registry_modify",
-                            src_host=_host_ctx,
-                            auth=AuthContext(
-                                username=_reg_user,
-                                user_sid=self.activity_generator._get_sid(_reg_user),
-                                logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
-                            ),
-                            process=ProcessContext(
-                                pid=_reg_pid,
-                                parent_pid=_reg_proc.parent_pid if _reg_proc is not None else 0,
-                                image=_reg_image,
-                                command_line=_reg_proc.command_line
-                                if _reg_proc is not None
-                                else "",
-                                username=_reg_proc.username if _reg_proc is not None else _reg_user,
-                                logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
-                                start_time=_reg_proc.start_time if _reg_proc is not None else None,
-                            ),
-                            registry=RegistryContext(
-                                key=_target,
-                                value=_details,
-                                value_type=_value_type,
-                                action=_reg_action,
-                                pid=_reg_pid,
-                            ),
-                        )
-                    )
+            self._generate_system_group_policy_activity(
+                current_hour=current_hour,
+                hour_start_sec=hour_start_sec,
+                os_cat=os_cat,
+                sys_pids=sys_pids,
+                system=system,
+                terminal_pass=terminal_pass,
+            )
 
-            # Windows scheduled tasks — diverse per-hour selection from YAML.
-            # Linux scheduled tasks are handled by _generate_scheduled_tasks()
-            # which uses realistic daily/weekly frequencies instead of the
-            # legacy 2-5 per hour approach.
-            if os_cat == "windows":
-                for offset in _windows_scheduled_task_offsets(
-                    current_hour,
-                    system,
-                    rng,
-                    count_multiplier=self._activity_multiplier(
-                        system,
-                        "windows_scheduled_task",
-                    ),
-                ):
-                    ts = current_hour + timedelta(seconds=offset)
-                    if not self._baseline_pass_admits(current_hour, start=ts):
-                        continue
-                    task_plan = None
-                    if terminal_pass:
-                        task_plan = self._plan_windows_scheduled_task(
-                            system=system,
-                            rng=rng,
-                            time=ts,
-                        )
-                        selected_task = (
-                            (
-                                task_plan.image,
-                                task_plan.command_line,
-                                task_plan.parent_key,
-                            )
-                            if task_plan is not None
-                            else None
-                        )
-                    else:
-                        self.state_manager.set_current_time(ts)
-                        selected_task = self._select_windows_scheduled_task(
-                            system=system,
-                            rng=rng,
-                            time=ts,
-                        )
-                    if selected_task is None:
-                        continue
-                    task_image, task_cmd, task_parent_key = selected_task
-                    parent_pid = _require_seeded_windows_parent(
-                        sys_pids,
-                        task_parent_key,
-                        family="scheduled_tasks",
-                    )
-                    task_lifetime = (
-                        _windows_background_process_lifetime_seconds(
-                            task_image,
-                            task_cmd,
-                            rng,
-                        )
-                        if terminal_pass
-                        else None
-                    )
-                    task_end = (
-                        ts + timedelta(seconds=task_lifetime) if task_lifetime is not None else None
-                    )
-                    if task_end is not None and not self._baseline_pass_admits(
-                        current_hour,
-                        start=ts,
-                        end=task_end,
-                    ):
-                        continue
-                    if task_plan is not None:
-                        self.state_manager.set_current_time(ts)
-                        self._commit_windows_scheduled_task(task_plan)
-                    task_pid = self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts,
-                        process_name=task_image,
-                        command_line=task_cmd,
-                        parent_pid=parent_pid,
-                        username="SYSTEM",
-                        source_visible_by=(
-                            task_end - timedelta(microseconds=1)
-                            if terminal_pass and task_end is not None
-                            else None
-                        ),
-                    )
-                    if not terminal_pass:
-                        task_lifetime = _windows_background_process_lifetime_seconds(
-                            task_image,
-                            task_cmd,
-                            rng,
-                        )
-                    if task_pid and task_lifetime is not None:
-                        task_end = ts + timedelta(seconds=task_lifetime)
-                        self.state_manager.set_current_time(task_end)
-                        self.activity_generator.generate_system_process_termination(
-                            system=system,
-                            time=task_end,
-                            pid=task_pid,
-                            process_name=task_image,
-                            parent_pid=parent_pid,
-                            username="SYSTEM",
-                        )
+            self._generate_system_remote_thread_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                sys_pids=sys_pids,
+                system=system,
+            )
 
-            # Service account delegation: svc accounts auth to remote servers
-            if os_cat == "windows" and self.scenario.environment.service_accounts:
-                delegation_config = service_account_delegation_config()
-                all_systems = self.scenario.environment.systems
-                servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
-                for svc_name in self.scenario.environment.service_accounts:
-                    if not self._service_account_eligible_for_baseline_noise(svc_name):
-                        continue
-                    owner_hostnames = self._service_account_delegation_owner_hostnames(
-                        svc_name,
-                        all_systems,
-                        delegation_config,
-                    )
-                    if system.hostname not in owner_hostnames:
-                        continue
-                    svc_ts = self._service_account_delegation_time_for_hour(
-                        current_hour=current_hour,
-                        svc_name=svc_name,
-                        hostname=system.hostname,
-                        config=delegation_config,
-                    )
-                    if (
-                        svc_ts is None
-                        or not self._baseline_pass_admits(current_hour, start=svc_ts)
-                        or not self._service_account_available_at(svc_name, svc_ts)
-                    ):
-                        continue
-                    occurrence_rng = random.Random(
-                        _stable_seed(
-                            f"service_account_occurrence:{self.scenario.name}:"
-                            f"{svc_name.lower()}:{system.hostname}:{svc_ts.isoformat()}"
-                        )
-                    )
-                    target_candidates = [
-                        target for target in servers if target.hostname != system.hostname
-                    ]
-                    if not target_candidates:
-                        continue
-                    target_sys = occurrence_rng.choice(target_candidates)
-                    caller_process = self._ensure_service_account_delegation_process(
-                        system=system,
-                        svc_name=svc_name,
-                        time=svc_ts,
-                        sys_pids=sys_pids,
-                        rng=occurrence_rng,
-                        exclusive_end=pass_end if terminal_pass else None,
-                    )
-                    if caller_process is None:
-                        continue
-                    caller_image, caller_pid = caller_process
-                    self.activity_generator.generate_explicit_credentials(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=svc_ts,
-                        target_username=svc_name,
-                        target_server=target_sys.hostname,
-                        process_name=caller_image,
-                        process_pid=caller_pid,
-                    )
+            self._generate_system_process_access_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                sys_pids=sys_pids,
+                system=system,
+            )
 
-            # Group Policy client refresh: host-scoped 90-minute-style schedule.
-            # Automatic refreshes usually stay inside gpsvc; only a minority
-            # materialize an observable gpupdate.exe invocation.
-            if os_cat == "windows" and system.type == "workstation":
-                dc_targets = [ip for ip in self._infra_ips.get("dc", []) if ip != system.ip]
-                if dc_targets:
-                    if not hasattr(self, "_gpo_refresh_schedule_state"):
-                        self._gpo_refresh_schedule_state = {}
-                    schedule_state = self._gpo_refresh_schedule_state.get(system.hostname)
-                    if schedule_state is None:
-                        phase_rng = random.Random(
-                            _stable_seed(f"gpo_refresh_phase:{system.hostname}")
-                        )
-                        first_interval = _gpo_refresh_interval_seconds(system.hostname, 0)
-                        schedule_state = {
-                            "scheduled_second": phase_rng.uniform(0, first_interval),
-                            "sequence": 0,
-                        }
-                        self._gpo_refresh_schedule_state[system.hostname] = schedule_state
-                    for scheduled_second, sequence in _gpo_refresh_occurrences_for_hour(
-                        system.hostname,
-                        hour_start_sec,
-                        schedule_state,
-                    ):
-                        occurrence_rng = random.Random(
-                            _stable_seed(
-                                f"gpo_refresh_occurrence:{system.hostname}:{sequence}:"
-                                f"{scheduled_second:.6f}"
-                            )
-                        )
-                        emission_probability = float(
-                            group_policy_refresh_config().get(
-                                "process_emission_probability",
-                                0.18,
-                            )
-                        )
-                        if occurrence_rng.random() >= emission_probability:
-                            continue
-                        gpo_ts = self._generation_epoch + timedelta(seconds=scheduled_second)
-                        if not self._baseline_pass_admits(current_hour, start=gpo_ts):
-                            continue
-                        gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
-                        gpupdate_command = _gpo_refresh_command_line(
-                            system.hostname,
-                            sequence,
-                        )
-                        parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
-                        lifetime = _windows_foreground_lifetime(
-                            gpupdate_image,
-                            gpupdate_command,
-                        )
-                        end_ts = (
-                            gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
-                            if lifetime is not None
-                            else None
-                        )
-                        if (
-                            terminal_pass
-                            and end_ts is not None
-                            and not self._baseline_pass_admits(
-                                current_hour,
-                                start=gpo_ts,
-                                end=end_ts,
-                            )
-                        ):
-                            continue
-                        self.state_manager.set_current_time(gpo_ts)
-                        gpupdate_pid = self.activity_generator.generate_system_process(
-                            system=system,
-                            time=gpo_ts,
-                            process_name=gpupdate_image,
-                            command_line=gpupdate_command,
-                            parent_pid=parent_pid,
-                            username="SYSTEM",
-                            source_visible_by=(
-                                end_ts - timedelta(microseconds=1)
-                                if terminal_pass and end_ts is not None
-                                else None
-                            ),
-                        )
-                        if gpupdate_pid and end_ts is not None:
-                            self.state_manager.set_current_time(end_ts)
-                            self.activity_generator.generate_system_process_termination(
-                                system=system,
-                                time=end_ts,
-                                pid=gpupdate_pid,
-                                process_name=gpupdate_image,
-                                parent_pid=parent_pid,
-                                username="SYSTEM",
-                            )
+            self._generate_system_module_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                system=system,
+            )
 
-            # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
-            if os_cat == "windows":
-                valid_crt = [
-                    p
-                    for p in load_create_remote_thread_patterns()
-                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
-                ]
-                noise_cfg = load_create_remote_thread_noise_config()
-                probability = float(noise_cfg.get("probability_per_host_hour", 0.08))
-                max_events = int(noise_cfg.get("max_events_per_hour", 1))
-                probability *= self._activity_multiplier(system, "windows_remote_thread")
-                if valid_crt and max_events > 0 and rng.random() < min(0.95, probability):
-                    num_crt = rng.randint(1, max_events)
-                    for _ in range(num_crt):
-                        pattern = pick_create_remote_thread_pattern(valid_crt, rng)
-                        src_key = pattern["source_pid_key"]
-                        src_image = pattern["source_image"]
-                        tgt_key = pattern["target_pid_key"]
-                        tgt_image = pattern["target_image"]
-                        src_pid = sys_pids[src_key]
-                        tgt_pid = sys_pids[tgt_key]
-                        if src_pid == tgt_pid:
-                            continue
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
-                        if not self._baseline_pass_admits(current_hour, start=ts):
-                            continue
-                        self.state_manager.set_current_time(ts)
-                        self.activity_generator.generate_create_remote_thread(
-                            user=_SYSTEM_USER,
-                            system=system,
-                            time=ts,
-                            source_pid=src_pid,
-                            source_image=src_image,
-                            target_pid=tgt_pid,
-                            target_image=tgt_image,
-                        )
+            self._generate_system_linux_shell_activity(
+                current_hour=current_hour,
+                os_cat=os_cat,
+                rng=rng,
+                system=system,
+                terminal_pass=terminal_pass,
+            )
 
-            # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
-            if os_cat == "windows":
-                valid_pa = [
-                    p
-                    for p in load_process_access_patterns()
-                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
-                ]
-                if valid_pa:
-                    num_pa = self._scaled_randint(rng, system, "windows_process_access", 3, 8)
-                    for _ in range(num_pa):
-                        pattern = rng.choice(valid_pa)
-                        src_key = pattern["source_pid_key"]
-                        src_image = pattern["source_image"]
-                        tgt_key = pattern["target_pid_key"]
-                        tgt_image = pattern["target_image"]
-                        src_pid = sys_pids[src_key]
-                        tgt_pid = sys_pids[tgt_key]
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
-                        if not self._baseline_pass_admits(current_hour, start=ts):
-                            continue
-                        self.state_manager.set_current_time(ts)
-                        self.activity_generator.generate_process_access(
-                            user=_SYSTEM_USER,
-                            system=system,
-                            time=ts,
-                            source_pid=src_pid,
-                            source_image=src_image,
-                            target_pid=tgt_pid,
-                            target_image=tgt_image,
-                            granted_access=pick_granted_access(pattern, rng),
-                        )
+        # Placement must finish before execution advances the global RDP frontier.
+        rdp_requests = self._plan_system_rdp_requests(
+            current_hour=current_hour,
+            rng=rng,
+        )
 
-            # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
-            # Uses data-driven DLL profiles from system_processes.yaml and
-            # application_catalog.yaml. Picks from processes actually running
-            # on this system (from StateManager) so PIDs are always valid.
-            if os_cat == "windows":
-                from evidenceforge.generation.activity.dll_load_profiles import (
-                    get_runtime_dlls_for_process,
-                )
+        self._execute_baseline_rdp_requests(rdp_requests, rng)
 
-                running = self.state_manager.get_processes_on_system(system.hostname)
-                if running:
-                    num_dll = self._scaled_randint(rng, system, "windows_module_load", 20, 45)
-                    for _ in range(num_dll):
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
-                        if not self._baseline_pass_admits(current_hour, start=ts):
-                            continue
-                        win_procs: list[tuple[int, str]] = []
-                        for proc in running:
-                            if _eligible_for_hourly_module_load(proc, ts):
-                                win_procs.append((proc.pid, proc.image))
-                        if not win_procs:
-                            continue
-                        proc_pid, proc_image = rng.choice(win_procs)
-                        exe_name = proc_image.rsplit("\\", 1)[-1]
-                        dll_pool = get_runtime_dlls_for_process(exe_name)
-                        if not dll_pool:
-                            continue
-                        dll = rng.choice(dll_pool)
-                        self.state_manager.set_current_time(ts)
-                        self.activity_generator.generate_image_load(
-                            user=_SYSTEM_USER,
-                            system=system,
-                            time=ts,
-                            pid=proc_pid,
-                            image=proc_image,
-                            dll_path=dll["path"],
-                            signed=dll["signed"],
-                            signature=dll["signature"],
-                            signature_status=dll["signature_status"],
-                            load_phase="runtime",
-                        )
+        # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
+        self._generate_rsat_sessions(current_hour, rng, local_dt)
 
-            # ICMP monitoring pings are now handled by role_traffic profiles
+        self._generate_system_service_logons(
+            current_hour=current_hour,
+            rng=rng,
+        )
 
-            # SSH: connections to Linux servers
-            sys_type = (system.type or "workstation").lower()
-            if os_cat == "linux" and sys_type == "server":
-                roster = self._get_baseline_ssh_users(system)
-                if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
-                    from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_session_commands,
-                    )
+        # Machine account ($) authentication to DCs
+        dc_ips = self._infra_ips.get("dc", [])
+        dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+        if isinstance(dc_ips, str):
+            dc_ips = [dc_ips]
+        self._generate_system_machine_authentication(
+            current_hour=current_hour,
+            dc_hostnames=dc_hostnames,
+            dc_ips=dc_ips,
+            pass_end=pass_end,
+            rng=rng,
+            terminal_pass=terminal_pass,
+        )
 
-                    num_ssh = self._linux_remote_admin_session_count(rng, system)
-                    for _ in range(num_ssh):
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
-                        if not self._baseline_pass_admits(current_hour, start=ts):
-                            continue
-                        ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
-                        if ssh_identity is None:
-                            continue
-                        ssh_user, source_system = ssh_identity
-                        self.state_manager.set_current_time(ts)
-                        bootstrap = self.world_planner.bootstrap_user_session(
-                            user=ssh_user,
-                            target_system=system,
-                            time=ts,
-                            rng=rng,
-                            session_kind="ssh",
-                            source_system=source_system,
-                            allow_existing=True,
-                            required_until=current_hour + timedelta(hours=1),
-                        )
-                        terminal_transport_close = (
-                            getattr(bootstrap.session, "network_close_time", None)
-                            if terminal_pass
-                            else None
-                        )
+        self._generate_system_dc_authentication(
+            current_hour=current_hour,
+            dc_hostnames=dc_hostnames,
+            dc_ips=dc_ips,
+            rng=rng,
+        )
 
-                        persona_lower = (ssh_user.persona or "").lower()
-                        if persona_lower == "sysadmin":
-                            n_cmds = self._scaled_randint(
-                                rng,
-                                system,
-                                "linux_shell",
-                                3,
-                                8,
-                                persona=ssh_user.persona,
-                            )
-                        elif persona_lower == "developer":
-                            n_cmds = self._scaled_randint(
-                                rng,
-                                system,
-                                "linux_shell",
-                                2,
-                                6,
-                                persona=ssh_user.persona,
-                            )
-                        else:
-                            n_cmds = self._scaled_randint(
-                                rng,
-                                system,
-                                "linux_shell",
-                                1,
-                                4,
-                                persona=ssh_user.persona,
-                            )
-                        cumulative_gap = 0
-                        _SLOW_CMD_KEYWORDS = frozenset(
-                            [
-                                "build",
-                                "make",
-                                "pytest",
-                                "cargo",
-                                "docker",
-                                "npm run",
-                                "go build",
-                                "gcc",
-                                "compile",
-                                "install",
-                                "apt",
-                                "yum",
-                                "dnf",
-                                "pip install",
-                            ]
-                        )
-                        command_entries = pick_bash_session_commands(
-                            rng,
-                            ssh_user.persona or "",
-                            system.hostname,
-                            system.services,
-                            username=ssh_user.username,
-                            command_count=n_cmds,
-                            system_os=system.os,
-                        )
-                        for cmd, _is_typo in command_entries:
-                            cmd_offset = rng.randint(30, 600)
-                            # Complexity-aware timing: build/install commands
-                            # take longer than simple lookups (ls, cat, pwd)
-                            is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
-                            if is_slow:
-                                gap = rng.randint(30, 180)
-                            else:
-                                gap = rng.choices(
-                                    [
-                                        rng.randint(8, 25),
-                                        rng.randint(30, 90),
-                                        rng.randint(120, 300),
-                                    ],
-                                    weights=[35, 40, 25],
-                                    k=1,
-                                )[0]
-                            cumulative_gap += gap
-                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
-                            if terminal_pass and (
-                                terminal_transport_close is None
-                                or cmd_time >= ensure_utc(terminal_transport_close)
-                            ):
-                                break
-                            if not self._baseline_pass_admits(current_hour, start=cmd_time):
-                                break
-                            self.activity_generator.generate_bash_command(
-                                ssh_user, system, cmd_time, cmd
-                            )
+        if self.scenario.environment.systems:
+            self._generate_system_linux_syslog(
+                current_hour=current_hour,
+                pass_end=pass_end,
+                rng=rng,
+                dns_ips_by_host=dns_ips_by_host,
+                terminal_pass=terminal_pass,
+            )
 
-            # Bash: interactive shell usage on Linux workstations for assigned user
-            if os_cat == "linux" and sys_type == "workstation" and system.assigned_user:
-                ws_user = next(
-                    (
-                        u
-                        for u in self.scenario.environment.users
-                        if u.username == system.assigned_user and u.enabled
-                    ),
-                    None,
-                )
-                if ws_user is not None:
-                    from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_session_commands,
-                    )
+        # ICMP ping between systems on same subnet
+        systems = self.scenario.environment.systems
+        self._generate_system_icmp_traffic(
+            current_hour=current_hour,
+            rng=rng,
+            systems=systems,
+        )
 
-                    n_cmds = self._scaled_randint(
-                        rng,
-                        system,
-                        "linux_shell",
-                        1,
-                        4,
-                        persona=ws_user.persona,
-                    )
-                    ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    cumulative = 0
-                    command_entries = pick_bash_session_commands(
-                        rng,
-                        ws_user.persona or "",
-                        system.hostname,
-                        system.services,
-                        username=ws_user.username,
-                        command_count=n_cmds,
-                        system_os=system.os,
-                    )
-                    for cmd, _is_typo in command_entries:
-                        gap = rng.randint(30, 300)
-                        cumulative += gap
-                        cmd_time = ts0 + timedelta(seconds=cumulative)
-                        if not self._baseline_pass_admits(current_hour, start=cmd_time):
-                            break
-                        self.state_manager.set_current_time(cmd_time)
-                        self.activity_generator.generate_bash_command(
-                            ws_user, system, cmd_time, cmd
-                        )
+        self._generate_system_ids_noise(
+            current_hour=current_hour,
+            rng=rng,
+            systems=systems,
+        )
+
+        # Web access logs
+        for sys_obj in systems:
+            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
+
+    def _plan_system_rdp_requests(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+    ) -> tuple[_BaselineRdpIntent, ...]:
+        """Freeze all RDP placements before execution advances lifecycle state."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # RDP: IT admin connections to Windows servers/DCs. Plan every target
         # first because the exact lifecycle journal owns one global frontier.
@@ -12085,11 +11205,16 @@ class BaselineMixin:
                         session_end_plan=None,
                     )
                 )
+        return tuple(rdp_requests)
 
-        self._execute_baseline_rdp_requests(tuple(rdp_requests), rng)
-
-        # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
-        self._generate_rsat_sessions(current_hour, rng, local_dt)
+    def _generate_system_service_logons(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Run the service logons cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
@@ -12138,11 +11263,19 @@ class BaselineMixin:
                     time=ts,
                 )
 
-        # Machine account ($) authentication to DCs
-        dc_ips = self._infra_ips.get("dc", [])
-        dc_hostnames = self._infra_ips.get("dc_hostnames", [])
-        if isinstance(dc_ips, str):
-            dc_ips = [dc_ips]
+    def _generate_system_machine_authentication(
+        self,
+        *,
+        current_hour: datetime,
+        dc_hostnames: list[str] | str,
+        dc_ips: list[str],
+        pass_end: datetime,
+        rng: random.Random,
+        terminal_pass: bool,
+    ) -> None:
+        """Run the machine authentication cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
+
         if dc_ips and dc_hostnames:
             for system in self.scenario.environment.systems:
                 os_cat = _get_os_category(system.os)
@@ -12173,6 +11306,17 @@ class BaselineMixin:
                         time=ts,
                         exclusive_end=pass_end if terminal_pass else None,
                     )
+
+    def _generate_system_dc_authentication(
+        self,
+        *,
+        current_hour: datetime,
+        dc_hostnames: list[str] | str,
+        dc_ips: list[str],
+        rng: random.Random,
+    ) -> None:
+        """Run the dc authentication cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # DC-side Kerberos event generation
         if dc_ips and dc_hostnames:
@@ -12337,6 +11481,18 @@ class BaselineMixin:
                     self._last_tgt_time[username] = ts
                 elif last_tgt is None:
                     self._last_tgt_time[username] = current_hour
+
+    def _generate_system_linux_syslog(
+        self,
+        *,
+        current_hour: datetime,
+        pass_end: datetime,
+        rng: random.Random,
+        dns_ips_by_host: Mapping[str, list[str]],
+        terminal_pass: bool,
+    ) -> None:
+        """Run the linux syslog cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # Linux syslog diversity
         for system in self.scenario.environment.systems:
@@ -12660,7 +11816,7 @@ class BaselineMixin:
                         msg = self._render_systemd_resolved_message(
                             entry,
                             system.hostname,
-                            system_dns_ips,
+                            dns_ips_by_host[system.hostname],
                             rng,
                         )
                     elif app == "anacron":
@@ -12790,8 +11946,14 @@ class BaselineMixin:
                             self._extra_syslog_entry_counts.get(limit_key, 0) + 1
                         )
 
-        # ICMP ping between systems on same subnet
-        systems = self.scenario.environment.systems
+    def _generate_system_icmp_traffic(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+        systems: list[System],
+    ) -> None:
+        """Run the icmp traffic cross-host pass in host order."""
         if len(systems) >= 2:
             avg_multiplier = sum(
                 self._activity_multiplier(system, "icmp_monitoring") for system in systems
@@ -12839,6 +12001,16 @@ class BaselineMixin:
                     orig_bytes=64,
                     resp_bytes=64,
                 )
+
+    def _generate_system_ids_noise(
+        self,
+        *,
+        current_hour: datetime,
+        rng: random.Random,
+        systems: list[System],
+    ) -> None:
+        """Run the ids noise cross-host pass in host order."""
+        from evidenceforge.generation.activity import _get_os_category
 
         # IDS false-positive alerts
         if self.scenario.environment.network:
@@ -13131,9 +12303,1245 @@ class BaselineMixin:
                         firewall=firewall,
                     )
 
-        # Web access logs
-        for sys_obj in systems:
-            self._emit_web_server_access(sys_obj, systems, rng, current_hour)
+    def _generate_system_dns_traffic(
+        self,
+        *,
+        _svc_pid: Callable[..., int],
+        current_hour: datetime,
+        hour_start_sec: float,
+        is_rhel_like: bool,
+        os_cat: str,
+        rng: random.Random,
+        services: list[str],
+        system: System,
+        system_dns_ips: list[str],
+    ) -> None:
+        """Generate DNS lookups with the already selected host resolver pool."""
+        # DNS lookups: truly periodic with small jitter, using global schedule
+        if "dns-client" in services and system_dns_ips:
+            _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
+            _dns_lo, _dns_hi = self._scaled_interval_range(system, "dns_interval", _dns_lo, _dns_hi)
+            _dns_range = max(1, _dns_hi - _dns_lo)
+            dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
+            for observed_second in _dns_query_seconds_for_hour(
+                system.hostname,
+                hour_start_sec,
+                dns_interval,
+                rng,
+            ):
+                ts = self._generation_epoch + timedelta(seconds=observed_second)
+                dst_ip = rng.choice(system_dns_ips)
+                duration = rng.uniform(0.001, 0.05)
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto="udp",
+                    dst_port=53,
+                    service="dns",
+                    # Context-free DNS accounting can extend the caller's
+                    # canonical response interval through 80.001 ms.
+                    requested_duration_max=0.081,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="SF",
+                    payload_bytes=1,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    continue
+                self.state_manager.set_current_time(ts)
+                dns_pid = (
+                    _svc_pid("svchost_net_svc")
+                    if os_cat == "windows"
+                    else _svc_pid("systemd_resolved")
+                    if not is_rhel_like
+                    else -1
+                )
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    duration=duration,
+                    orig_bytes=rng.randint(40, 120),
+                    resp_bytes=rng.randint(80, 512),
+                    source_system=system,
+                    pid=dns_pid,
+                )
+
+    def _generate_system_ntp_traffic(
+        self,
+        *,
+        _svc_pid: Callable[..., int],
+        current_hour: datetime,
+        hour_start_sec: float,
+        ntp_ips: list[str],
+        os_cat: str,
+        rng: random.Random,
+        services: list[str],
+        system: System,
+    ) -> None:
+        """Generate NTP traffic while advancing the existing per-host periodic schedule."""
+        # NTP syncs follow a stable per-association poll schedule rather
+        # than a fixed hourly tick.
+        if "ntp-client" in services:
+            # Deterministic NTP source per host (stable across hours)
+            # Exclude the host's own IP — DCs don't NTP-sync to themselves
+            ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
+            ntp_ip = (
+                ntp_candidates[_stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)]
+                if ntp_candidates
+                else None  # This host IS the NTP server; skip NTP client traffic only
+            )
+            if ntp_ip:
+                poll_seconds = _ntp_association_poll_seconds(
+                    system.ip,
+                    ntp_ip,
+                )
+                ntp_pid = (
+                    _svc_pid("svchost_local_svc")
+                    if os_cat == "windows"
+                    else _svc_pid("chronyd", "timesyncd")
+                )
+                state_key = (system.hostname, ntp_ip, poll_seconds)
+                schedule_state = self._ntp_schedule_state.get(state_key)
+                if schedule_state is None:
+                    phase_rng = random.Random(
+                        _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
+                    )
+                    schedule_state = {
+                        "scheduled_second": phase_rng.uniform(0, min(3600, poll_seconds)),
+                        "sequence": 0,
+                    }
+                    self._ntp_schedule_state[state_key] = schedule_state
+                for observed_second in _ntp_sync_seconds_for_hour_from_state(
+                    system.hostname,
+                    ntp_ip,
+                    hour_start_sec,
+                    poll_seconds,
+                    schedule_state,
+                ):
+                    ts = self._generation_epoch + timedelta(seconds=observed_second)
+                    duration = rng.uniform(0.01, 0.1)
+                    close_bound = self._baseline_network_close_bound_seconds(
+                        src_ip=system.ip,
+                        dst_ip=ntp_ip,
+                        proto="udp",
+                        dst_port=123,
+                        service="ntp",
+                        requested_duration_max=ntp_transport_close_headroom_seconds(),
+                        current_hour=current_hour,
+                        start=ts,
+                        conn_state="SF",
+                        payload_bytes=1,
+                    )
+                    if not self._baseline_pass_admits(
+                        current_hour,
+                        start=ts,
+                        end=ts + timedelta(seconds=close_bound),
+                    ):
+                        continue
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=ntp_ip,
+                        time=ts,
+                        dst_port=123,
+                        proto="udp",
+                        service="ntp",
+                        duration=duration,
+                        orig_bytes=48,
+                        resp_bytes=48,
+                        source_system=system,
+                        pid=ntp_pid,
+                    )
+
+    def _generate_system_dhcp_renewal(
+        self,
+        *,
+        current_hour: datetime,
+        dhcp_state: dict[str, Any],
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+    ) -> None:
+        """Generate an admitted DHCP renewal; authored-lease whole-host skips stay with the caller."""
+        lease_time = dhcp_state["lease_time"]
+        renewal_sequence = int(dhcp_state.get("renewal_sequence", 0))
+
+        def next_renewal_interval(
+            lease: float = float(lease_time),
+            runtime: Any = self.timing_runtime,
+            stable_id: str = f"{system.hostname}|{dhcp_state['mac']}",
+            host: str = system.hostname,
+            granularity: float = float(dhcp_state["timer_granularity"]),
+        ) -> float:
+            nonlocal renewal_sequence
+            interval = dhcp_renewal_interval_seconds(
+                lease,
+                timing_runtime=runtime,
+                stable_id=stable_id,
+                host=host,
+                renewal_sequence=renewal_sequence,
+                timer_granularity=granularity,
+            )
+            renewal_sequence += 1
+            return interval
+
+        (
+            renewal_epochs,
+            updated_last_renewal,
+            pending_next_renewal,
+        ) = _dhcp_renewal_epochs_for_hour(
+            last_renewal=dhcp_state["last_renewal"],
+            renewal_interval=dhcp_state["renewal_interval"],
+            current_hour=current_hour,
+            next_renewal=dhcp_state.get("next_renewal"),
+            renewal_interval_factory=next_renewal_interval,
+        )
+        if renewal_epochs:
+            from evidenceforge.utils.ids import generate_zeek_uid
+
+        for next_renewal, renewal_interval in renewal_epochs:
+            renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
+            # Randomize fractional seconds (OS timer imprecision)
+            renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
+            renewal_close_bound = self._baseline_dhcp_renewal_close_bound_seconds(
+                current_hour,
+                start=renewal_ts,
+                system=dhcp_state["system"],
+                server_addr=dhcp_state["server_addr"],
+            )
+            if not self._baseline_pass_admits(
+                current_hour,
+                start=renewal_ts,
+                end=renewal_ts + timedelta(seconds=renewal_close_bound),
+            ):
+                continue
+            self.state_manager.set_current_time(renewal_ts)
+            self.activity_generator.generate_dhcp_lease(
+                system=dhcp_state["system"],
+                time=renewal_ts,
+                mac=dhcp_state["mac"],
+                server_addr=dhcp_state["server_addr"],
+                lease_time=lease_time,
+                uid=generate_zeek_uid("C"),
+                msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
+                renewal_interval=renewal_interval,
+            )
+            self._emit_dhcp_registry_side_effect(
+                system=dhcp_state["system"],
+                time=renewal_ts,
+                rng=rng,
+                sys_pids=sys_pids,
+                dhcp_state=dhcp_state,
+            )
+        dhcp_state["last_renewal"] = updated_last_renewal
+        if renewal_epochs:
+            dhcp_state["renewal_interval"] = renewal_epochs[-1][1]
+        dhcp_state["renewal_sequence"] = renewal_sequence
+        if pending_next_renewal is None:
+            dhcp_state.pop("next_renewal", None)
+        else:
+            dhcp_state["next_renewal"] = pending_next_renewal
+
+    def _generate_system_kerberos_traffic(
+        self,
+        *,
+        _svc_pid: Callable[..., int],
+        current_hour: datetime,
+        dc_hostname_by_ip: dict[str, str],
+        dc_hostnames: list[str],
+        dc_targets: list[str],
+        os_cat: str,
+        rng: random.Random,
+        services: list[str],
+        system: System,
+    ) -> None:
+        """Generate Kerberos evidence using the host phase's selected directory targets."""
+        # Kerberos
+        if "kerberos-client" in services and os_cat == "windows" and dc_targets:
+            _krb_lo, _krb_hi = self._resolve_traffic_rate("kerberos")
+            _krb_lo, _krb_hi = self._scaled_count_range(system, "kerberos", _krb_lo, _krb_hi)
+            num_krb = rng.randint(_krb_lo, _krb_hi)
+            base_interval = 3600 / (num_krb + 1)
+            for i in range(num_krb):
+                offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                offset = max(0, min(3599, offset))
+                ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=0.05),
+                ):
+                    continue
+                krb_dst_ip = rng.choice(dc_targets)
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=krb_dst_ip,
+                    proto="tcp",
+                    dst_port=88,
+                    service="kerberos",
+                    requested_duration_max=0.05,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    continue
+                self.state_manager.set_current_time(ts)
+                dc_hostname = dc_hostname_by_ip.get(krb_dst_ip)
+                if dc_hostname is None and dc_hostnames:
+                    dc_hostname = rng.choice(dc_hostnames)
+                if dc_hostname:
+                    machine_principal = f"{system.hostname}$"
+                    service_name = rng.choices(
+                        [
+                            f"host/{dc_hostname}",
+                            f"ldap/{dc_hostname}",
+                            f"cifs/{dc_hostname}",
+                            f"DNS/{dc_hostname}",
+                        ],
+                        weights=[34, 36, 20, 10],
+                        k=1,
+                    )[0]
+                else:
+                    machine_principal = ""
+                    service_name = ""
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=krb_dst_ip,
+                    time=ts,
+                    dst_port=88,
+                    proto="tcp",
+                    service="kerberos",
+                    duration=rng.uniform(0.001, 0.05),
+                    orig_bytes=rng.randint(200, 1500),
+                    resp_bytes=rng.randint(200, 2000),
+                    emit_dns=rng.random() > 0.02,
+                    source_system=system,
+                    pid=_svc_pid("lsass"),
+                    kerberos_audit_username=machine_principal,
+                    kerberos_audit_service_name=service_name,
+                )
+
+    def _generate_system_ldap_traffic(
+        self,
+        *,
+        _svc_pid: Callable[..., int],
+        current_hour: datetime,
+        dc_targets: list[str],
+        os_cat: str,
+        rng: random.Random,
+        services: list[str],
+        system: System,
+    ) -> None:
+        """Generate LDAP traffic with the existing client process and target selection."""
+        # LDAP
+        if "ldap-client" in services and os_cat == "windows" and dc_targets:
+            _ldap_lo, _ldap_hi = self._resolve_traffic_rate("ldap")
+            _ldap_lo, _ldap_hi = self._scaled_count_range(system, "ldap", _ldap_lo, _ldap_hi)
+            num_ldap = rng.randint(_ldap_lo, _ldap_hi)
+            base_interval = 3600 / (num_ldap + 1)
+            for i in range(num_ldap):
+                offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                offset = max(0, min(3599, offset))
+                ts = current_hour + timedelta(seconds=offset)
+                dst_ip = rng.choice(dc_targets)
+                duration = rng.uniform(0.01, 0.5)
+                close_bound = self._baseline_network_close_bound_seconds(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    proto="tcp",
+                    dst_port=389,
+                    service="ldap",
+                    requested_duration_max=duration,
+                    current_hour=current_hour,
+                    start=ts,
+                    conn_state="",
+                    payload_bytes=1,
+                )
+                if not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=ts + timedelta(seconds=close_bound),
+                ):
+                    continue
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=389,
+                    proto="tcp",
+                    service="ldap",
+                    duration=duration,
+                    orig_bytes=rng.randint(100, 2000),
+                    resp_bytes=rng.randint(500, 10000),
+                    emit_dns=rng.random() > 0.02,
+                    source_system=system,
+                    pid=_svc_pid("lsass"),
+                )
+
+    def _generate_system_service_processes(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+        terminal_pass: bool,
+    ) -> None:
+        """Generate Windows service processes with their existing cutoff admission and lifetimes."""
+        # Independent system service processes (not tied to user activity)
+        # Windows hosts spawn 3-8 service processes per hour
+        if os_cat == "windows":
+            from evidenceforge.generation.activity.system_processes import (
+                pick_system_service_process as _pick_svc,
+            )
+
+            sys_type_str = (system.type or "workstation").lower()
+            num_svc = self._scaled_randint(rng, system, "windows_service_process", 3, 8)
+            for _si in range(num_svc):
+                svc_offset = rng.uniform(0, 3599)
+                svc_ts = current_hour + timedelta(seconds=svc_offset)
+                if not self._baseline_pass_admits(current_hour, start=svc_ts):
+                    continue
+                svc_image, svc_cmd, svc_parent_key = _pick_svc(
+                    rng,
+                    sys_type_str,
+                    system,
+                    str(self.scenario.environment.domain),
+                )
+                svc_parent = _require_seeded_windows_parent(
+                    sys_pids,
+                    svc_parent_key,
+                    family="system_services",
+                )
+                svc_lifetime = (
+                    _windows_background_process_lifetime_seconds(
+                        svc_image,
+                        svc_cmd,
+                        rng,
+                    )
+                    if terminal_pass
+                    else None
+                )
+                svc_end = (
+                    svc_ts + timedelta(seconds=svc_lifetime) if svc_lifetime is not None else None
+                )
+                if svc_end is not None and not self._baseline_pass_admits(
+                    current_hour,
+                    start=svc_ts,
+                    end=svc_end,
+                ):
+                    continue
+                self.state_manager.set_current_time(svc_ts)
+                svc_pid = self.activity_generator.generate_system_process(
+                    system=system,
+                    time=svc_ts,
+                    process_name=svc_image,
+                    command_line=svc_cmd,
+                    parent_pid=svc_parent,
+                    username="SYSTEM",
+                    source_visible_by=(
+                        svc_end - timedelta(microseconds=1)
+                        if terminal_pass and svc_end is not None
+                        else None
+                    ),
+                )
+                if not terminal_pass:
+                    svc_lifetime = _windows_background_process_lifetime_seconds(
+                        svc_image,
+                        svc_cmd,
+                        rng,
+                    )
+                if svc_pid and svc_lifetime is not None:
+                    svc_end = svc_ts + timedelta(seconds=svc_lifetime)
+                    self.state_manager.set_current_time(svc_end)
+                    self.activity_generator.generate_system_process_termination(
+                        system=system,
+                        time=svc_end,
+                        pid=svc_pid,
+                        process_name=svc_image,
+                        parent_pid=svc_parent,
+                        username="SYSTEM",
+                    )
+
+        self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
+
+    def _generate_system_registry_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+    ) -> None:
+        """Generate registry mutations through the occurrence-aware canonical materializer."""
+        # Baseline registry activity from running services. Real Sysmon
+        # generates hundreds-thousands of Event 12/13 per hour. We emit
+        # 15-40 per host per hour to provide realistic background volume.
+        if os_cat == "windows":
+            from evidenceforge.events.base import OccurrenceBuilder
+            from evidenceforge.events.contexts import (
+                AuthContext,
+                ProcessContext,
+                RegistryContext,
+            )
+            from evidenceforge.generation.activity.edr_pools import (
+                get_registry_keys_hkcu,
+                get_registry_keys_hklm,
+                materialize_registry_effect,
+            )
+            from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
+
+            _REG_KEYS_HKCU = get_registry_keys_hkcu()
+            _REG_KEYS_HKLM = get_registry_keys_hklm()
+            _reg_count = self._scaled_randint(rng, system, "windows_registry", 18, 42)
+            _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+            _host_ctx = self.activity_generator._build_host_context(system)
+            _registry_cfg = registry_noise_config()
+            _dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+            # Only emit HKCU on workstations with a logged-in user;
+            # servers and DCs run services, not user desktops.
+            _has_desktop = getattr(
+                system, "assigned_user", None
+            ) is not None and system.type not in ("server", "domain_controller")
+            _hkcu_rate = 0.30 if _has_desktop else 0.0
+            for _ri in range(_reg_count):
+                _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                if rng.random() < _hkcu_rate:
+                    dynamic_hkcu = [entry for entry in _REG_KEYS_HKCU if "{" in entry[0]]
+                    static_hkcu = [
+                        entry
+                        for entry in _REG_KEYS_HKCU
+                        if "{" not in entry[0]
+                        and "Office\\16.0\\Word\\Reading Locations\\Document 1" not in entry[0]
+                    ]
+                    pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
+                    _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
+                else:
+                    dynamic_hklm = [
+                        entry
+                        for entry in _REG_KEYS_HKLM
+                        if "{" in entry[0] and str(entry[1]).lower() != "driverdesc"
+                    ]
+                    noisy_static_hklm = [
+                        entry
+                        for entry in _REG_KEYS_HKLM
+                        if "{" not in entry[0]
+                        and "Windows NT\\CurrentVersion\\Winlogon" not in entry[0]
+                        and "Services\\EventLog\\Application" not in entry[0]
+                    ]
+                    rare_static_hklm = [entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]]
+                    if dynamic_hklm and rng.random() < 0.85:
+                        pool = dynamic_hklm
+                    elif rng.random() < 0.95:
+                        pool = noisy_static_hklm
+                    else:
+                        pool = rare_static_hklm
+                    _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
+                if not _ambient_registry_entry_allowed(
+                    system,
+                    _key,
+                    _vname,
+                    _dhcp_state,
+                    _registry_cfg,
+                ):
+                    continue
+                _template_user = system.assigned_user or "SYSTEM"
+                _key, _vname, _details, _value_type = materialize_registry_effect(
+                    (_key, _vname, _details),
+                    rng,
+                    _template_user,
+                    _reg_ts,
+                    host_ip=system.ip,
+                    dns_server_ip=str(
+                        (_dhcp_state or {}).get("server_addr")
+                        or activity_dns_resolver_ips(self.activity_generator, system.ip)[0]
+                    ),
+                    host_key=system.hostname,
+                    host_os=system.os,
+                )
+                writer_candidates = _registry_writer_candidates(
+                    f"{_key}\\{_vname}",
+                    sys_pids,
+                    system.assigned_user,
+                )
+                if writer_candidates:
+                    _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
+                else:
+                    # An unavailable native owner means the ambient write did
+                    # not occur in this window. Do not substitute a generic
+                    # service process and manufacture false causality.
+                    continue
+                _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
+                if _reg_proc is not None:
+                    _reg_image = _reg_proc.image
+                if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
+                    _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
+                if not self._baseline_pass_admits(current_hour, start=_reg_ts):
+                    continue
+                _target = f"{_key}\\{_vname}"
+                _details = _materialize_registry_value_for_time(
+                    _target,
+                    _details,
+                    _reg_ts,
+                    rng,
+                )
+                if not BaselineMixin._ambient_registry_write_changes_state(
+                    self,
+                    system.hostname,
+                    _target,
+                    _details,
+                ):
+                    continue
+                # Sysmon value writes are Event 13. Event 12 is reserved for key-only
+                # create/delete contexts, not the value-name pools used here.
+                _reg_action = "modify"
+                self.activity_generator.dispatcher.dispatch_builder(
+                    OccurrenceBuilder(
+                        timestamp=_reg_ts,
+                        event_type="registry_modify",
+                        src_host=_host_ctx,
+                        auth=AuthContext(
+                            username=_reg_user,
+                            user_sid=self.activity_generator._get_sid(_reg_user),
+                            logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
+                        ),
+                        process=ProcessContext(
+                            pid=_reg_pid,
+                            parent_pid=_reg_proc.parent_pid if _reg_proc is not None else 0,
+                            image=_reg_image,
+                            command_line=_reg_proc.command_line if _reg_proc is not None else "",
+                            username=_reg_proc.username if _reg_proc is not None else _reg_user,
+                            logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
+                            start_time=_reg_proc.start_time if _reg_proc is not None else None,
+                        ),
+                        registry=RegistryContext(
+                            key=_target,
+                            value=_details,
+                            value_type=_value_type,
+                            action=_reg_action,
+                            pid=_reg_pid,
+                        ),
+                    )
+                )
+
+    def _generate_system_scheduled_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+        terminal_pass: bool,
+    ) -> None:
+        """Generate Windows task activity without closing processes at collection cutoff."""
+        # Windows scheduled tasks — diverse per-hour selection from YAML.
+        # Linux scheduled tasks are handled by _generate_scheduled_tasks()
+        # which uses realistic daily/weekly frequencies instead of the
+        # legacy 2-5 per hour approach.
+        if os_cat == "windows":
+            for offset in _windows_scheduled_task_offsets(
+                current_hour,
+                system,
+                rng,
+                count_multiplier=self._activity_multiplier(
+                    system,
+                    "windows_scheduled_task",
+                ),
+            ):
+                ts = current_hour + timedelta(seconds=offset)
+                if not self._baseline_pass_admits(current_hour, start=ts):
+                    continue
+                task_plan = None
+                if terminal_pass:
+                    task_plan = self._plan_windows_scheduled_task(
+                        system=system,
+                        rng=rng,
+                        time=ts,
+                    )
+                    selected_task = (
+                        (
+                            task_plan.image,
+                            task_plan.command_line,
+                            task_plan.parent_key,
+                        )
+                        if task_plan is not None
+                        else None
+                    )
+                else:
+                    self.state_manager.set_current_time(ts)
+                    selected_task = self._select_windows_scheduled_task(
+                        system=system,
+                        rng=rng,
+                        time=ts,
+                    )
+                if selected_task is None:
+                    continue
+                task_image, task_cmd, task_parent_key = selected_task
+                parent_pid = _require_seeded_windows_parent(
+                    sys_pids,
+                    task_parent_key,
+                    family="scheduled_tasks",
+                )
+                task_lifetime = (
+                    _windows_background_process_lifetime_seconds(
+                        task_image,
+                        task_cmd,
+                        rng,
+                    )
+                    if terminal_pass
+                    else None
+                )
+                task_end = (
+                    ts + timedelta(seconds=task_lifetime) if task_lifetime is not None else None
+                )
+                if task_end is not None and not self._baseline_pass_admits(
+                    current_hour,
+                    start=ts,
+                    end=task_end,
+                ):
+                    continue
+                if task_plan is not None:
+                    self.state_manager.set_current_time(ts)
+                    self._commit_windows_scheduled_task(task_plan)
+                task_pid = self.activity_generator.generate_system_process(
+                    system=system,
+                    time=ts,
+                    process_name=task_image,
+                    command_line=task_cmd,
+                    parent_pid=parent_pid,
+                    username="SYSTEM",
+                    source_visible_by=(
+                        task_end - timedelta(microseconds=1)
+                        if terminal_pass and task_end is not None
+                        else None
+                    ),
+                )
+                if not terminal_pass:
+                    task_lifetime = _windows_background_process_lifetime_seconds(
+                        task_image,
+                        task_cmd,
+                        rng,
+                    )
+                if task_pid and task_lifetime is not None:
+                    task_end = ts + timedelta(seconds=task_lifetime)
+                    self.state_manager.set_current_time(task_end)
+                    self.activity_generator.generate_system_process_termination(
+                        system=system,
+                        time=task_end,
+                        pid=task_pid,
+                        process_name=task_image,
+                        parent_pid=parent_pid,
+                        username="SYSTEM",
+                    )
+
+    def _generate_system_delegation_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        pass_end: datetime,
+        sys_pids: dict[str, int],
+        system: System,
+        terminal_pass: bool,
+    ) -> None:
+        """Generate delegation activity only within the owning service and session lifetimes."""
+        # Service account delegation: svc accounts auth to remote servers
+        if os_cat == "windows" and self.scenario.environment.service_accounts:
+            delegation_config = service_account_delegation_config()
+            all_systems = self.scenario.environment.systems
+            servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
+            for svc_name in self.scenario.environment.service_accounts:
+                if not self._service_account_eligible_for_baseline_noise(svc_name):
+                    continue
+                owner_hostnames = self._service_account_delegation_owner_hostnames(
+                    svc_name,
+                    all_systems,
+                    delegation_config,
+                )
+                if system.hostname not in owner_hostnames:
+                    continue
+                svc_ts = self._service_account_delegation_time_for_hour(
+                    current_hour=current_hour,
+                    svc_name=svc_name,
+                    hostname=system.hostname,
+                    config=delegation_config,
+                )
+                if (
+                    svc_ts is None
+                    or not self._baseline_pass_admits(current_hour, start=svc_ts)
+                    or not self._service_account_available_at(svc_name, svc_ts)
+                ):
+                    continue
+                occurrence_rng = random.Random(
+                    _stable_seed(
+                        f"service_account_occurrence:{self.scenario.name}:"
+                        f"{svc_name.lower()}:{system.hostname}:{svc_ts.isoformat()}"
+                    )
+                )
+                target_candidates = [
+                    target for target in servers if target.hostname != system.hostname
+                ]
+                if not target_candidates:
+                    continue
+                target_sys = occurrence_rng.choice(target_candidates)
+                caller_process = self._ensure_service_account_delegation_process(
+                    system=system,
+                    svc_name=svc_name,
+                    time=svc_ts,
+                    sys_pids=sys_pids,
+                    rng=occurrence_rng,
+                    exclusive_end=pass_end if terminal_pass else None,
+                )
+                if caller_process is None:
+                    continue
+                caller_image, caller_pid = caller_process
+                self.activity_generator.generate_explicit_credentials(
+                    user=_SYSTEM_USER,
+                    system=system,
+                    time=svc_ts,
+                    target_username=svc_name,
+                    target_server=target_sys.hostname,
+                    process_name=caller_image,
+                    process_pid=caller_pid,
+                )
+
+    def _generate_system_group_policy_activity(
+        self,
+        *,
+        current_hour: datetime,
+        hour_start_sec: float,
+        os_cat: str,
+        sys_pids: dict[str, int],
+        system: System,
+        terminal_pass: bool,
+    ) -> None:
+        """Generate GPO refreshes, scheduling termination only for an admitted process."""
+        # Group Policy client refresh: host-scoped 90-minute-style schedule.
+        # Automatic refreshes usually stay inside gpsvc; only a minority
+        # materialize an observable gpupdate.exe invocation.
+        if os_cat == "windows" and system.type == "workstation":
+            dc_targets = [ip for ip in self._infra_ips.get("dc", []) if ip != system.ip]
+            if dc_targets:
+                if not hasattr(self, "_gpo_refresh_schedule_state"):
+                    self._gpo_refresh_schedule_state = {}
+                schedule_state = self._gpo_refresh_schedule_state.get(system.hostname)
+                if schedule_state is None:
+                    phase_rng = random.Random(_stable_seed(f"gpo_refresh_phase:{system.hostname}"))
+                    first_interval = _gpo_refresh_interval_seconds(system.hostname, 0)
+                    schedule_state = {
+                        "scheduled_second": phase_rng.uniform(0, first_interval),
+                        "sequence": 0,
+                    }
+                    self._gpo_refresh_schedule_state[system.hostname] = schedule_state
+                for scheduled_second, sequence in _gpo_refresh_occurrences_for_hour(
+                    system.hostname,
+                    hour_start_sec,
+                    schedule_state,
+                ):
+                    occurrence_rng = random.Random(
+                        _stable_seed(
+                            f"gpo_refresh_occurrence:{system.hostname}:{sequence}:"
+                            f"{scheduled_second:.6f}"
+                        )
+                    )
+                    emission_probability = float(
+                        group_policy_refresh_config().get(
+                            "process_emission_probability",
+                            0.18,
+                        )
+                    )
+                    if occurrence_rng.random() >= emission_probability:
+                        continue
+                    gpo_ts = self._generation_epoch + timedelta(seconds=scheduled_second)
+                    if not self._baseline_pass_admits(current_hour, start=gpo_ts):
+                        continue
+                    gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
+                    gpupdate_command = _gpo_refresh_command_line(
+                        system.hostname,
+                        sequence,
+                    )
+                    parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                    lifetime = _windows_foreground_lifetime(
+                        gpupdate_image,
+                        gpupdate_command,
+                    )
+                    end_ts = (
+                        gpo_ts + timedelta(seconds=occurrence_rng.uniform(*lifetime))
+                        if lifetime is not None
+                        else None
+                    )
+                    if (
+                        terminal_pass
+                        and end_ts is not None
+                        and not self._baseline_pass_admits(
+                            current_hour,
+                            start=gpo_ts,
+                            end=end_ts,
+                        )
+                    ):
+                        continue
+                    self.state_manager.set_current_time(gpo_ts)
+                    gpupdate_pid = self.activity_generator.generate_system_process(
+                        system=system,
+                        time=gpo_ts,
+                        process_name=gpupdate_image,
+                        command_line=gpupdate_command,
+                        parent_pid=parent_pid,
+                        username="SYSTEM",
+                        source_visible_by=(
+                            end_ts - timedelta(microseconds=1)
+                            if terminal_pass and end_ts is not None
+                            else None
+                        ),
+                    )
+                    if gpupdate_pid and end_ts is not None:
+                        self.state_manager.set_current_time(end_ts)
+                        self.activity_generator.generate_system_process_termination(
+                            system=system,
+                            time=end_ts,
+                            pid=gpupdate_pid,
+                            process_name=gpupdate_image,
+                            parent_pid=parent_pid,
+                            username="SYSTEM",
+                        )
+
+    def _generate_system_remote_thread_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+    ) -> None:
+        """Generate remote-thread evidence from existing host process identities."""
+        # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
+        if os_cat == "windows":
+            valid_crt = [
+                p
+                for p in load_create_remote_thread_patterns()
+                if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+            ]
+            noise_cfg = load_create_remote_thread_noise_config()
+            probability = float(noise_cfg.get("probability_per_host_hour", 0.08))
+            max_events = int(noise_cfg.get("max_events_per_hour", 1))
+            probability *= self._activity_multiplier(system, "windows_remote_thread")
+            if valid_crt and max_events > 0 and rng.random() < min(0.95, probability):
+                num_crt = rng.randint(1, max_events)
+                for _ in range(num_crt):
+                    pattern = pick_create_remote_thread_pattern(valid_crt, rng)
+                    src_key = pattern["source_pid_key"]
+                    src_image = pattern["source_image"]
+                    tgt_key = pattern["target_pid_key"]
+                    tgt_image = pattern["target_image"]
+                    src_pid = sys_pids[src_key]
+                    tgt_pid = sys_pids[tgt_key]
+                    if src_pid == tgt_pid:
+                        continue
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_create_remote_thread(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=ts,
+                        source_pid=src_pid,
+                        source_image=src_image,
+                        target_pid=tgt_pid,
+                        target_image=tgt_image,
+                    )
+
+    def _generate_system_process_access_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        system: System,
+    ) -> None:
+        """Generate process-access evidence using existing host actors and draw order."""
+        # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
+        if os_cat == "windows":
+            valid_pa = [
+                p
+                for p in load_process_access_patterns()
+                if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+            ]
+            if valid_pa:
+                num_pa = self._scaled_randint(rng, system, "windows_process_access", 3, 8)
+                for _ in range(num_pa):
+                    pattern = rng.choice(valid_pa)
+                    src_key = pattern["source_pid_key"]
+                    src_image = pattern["source_image"]
+                    tgt_key = pattern["target_pid_key"]
+                    tgt_image = pattern["target_image"]
+                    src_pid = sys_pids[src_key]
+                    tgt_pid = sys_pids[tgt_key]
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_process_access(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=ts,
+                        source_pid=src_pid,
+                        source_image=src_image,
+                        target_pid=tgt_pid,
+                        target_image=tgt_image,
+                        granted_access=pick_granted_access(pattern, rng),
+                    )
+
+    def _generate_system_module_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        system: System,
+    ) -> None:
+        """Generate module evidence without creating an independent process lifecycle."""
+        # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
+        # Uses data-driven DLL profiles from system_processes.yaml and
+        # application_catalog.yaml. Picks from processes actually running
+        # on this system (from StateManager) so PIDs are always valid.
+        if os_cat == "windows":
+            from evidenceforge.generation.activity.dll_load_profiles import (
+                get_runtime_dlls_for_process,
+            )
+
+            running = self.state_manager.get_processes_on_system(system.hostname)
+            if running:
+                num_dll = self._scaled_randint(rng, system, "windows_module_load", 20, 45)
+                for _ in range(num_dll):
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
+                    win_procs: list[tuple[int, str]] = []
+                    for proc in running:
+                        if _eligible_for_hourly_module_load(proc, ts):
+                            win_procs.append((proc.pid, proc.image))
+                    if not win_procs:
+                        continue
+                    proc_pid, proc_image = rng.choice(win_procs)
+                    exe_name = proc_image.rsplit("\\", 1)[-1]
+                    dll_pool = get_runtime_dlls_for_process(exe_name)
+                    if not dll_pool:
+                        continue
+                    dll = rng.choice(dll_pool)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_image_load(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=ts,
+                        pid=proc_pid,
+                        image=proc_image,
+                        dll_path=dll["path"],
+                        signed=dll["signed"],
+                        signature=dll["signature"],
+                        signature_status=dll["signature_status"],
+                        load_phase="runtime",
+                    )
+
+        # ICMP monitoring pings are now handled by role_traffic profiles
+
+    def _generate_system_linux_shell_activity(
+        self,
+        *,
+        current_hour: datetime,
+        os_cat: str,
+        rng: random.Random,
+        system: System,
+        terminal_pass: bool,
+    ) -> None:
+        """Generate Linux shell activity through the existing foreground and session owners."""
+        # SSH: connections to Linux servers
+        sys_type = (system.type or "workstation").lower()
+        if os_cat == "linux" and sys_type == "server":
+            roster = self._get_baseline_ssh_users(system)
+            if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
+                from evidenceforge.generation.activity.bash_commands import (
+                    pick_bash_session_commands,
+                )
+
+                num_ssh = self._linux_remote_admin_session_count(rng, system)
+                for _ in range(num_ssh):
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    if not self._baseline_pass_admits(current_hour, start=ts):
+                        continue
+                    ssh_identity = self._pick_baseline_ssh_identity(system, rng, at_time=ts)
+                    if ssh_identity is None:
+                        continue
+                    ssh_user, source_system = ssh_identity
+                    self.state_manager.set_current_time(ts)
+                    bootstrap = self.world_planner.bootstrap_user_session(
+                        user=ssh_user,
+                        target_system=system,
+                        time=ts,
+                        rng=rng,
+                        session_kind="ssh",
+                        source_system=source_system,
+                        allow_existing=True,
+                        required_until=current_hour + timedelta(hours=1),
+                    )
+                    terminal_transport_close = (
+                        getattr(bootstrap.session, "network_close_time", None)
+                        if terminal_pass
+                        else None
+                    )
+
+                    persona_lower = (ssh_user.persona or "").lower()
+                    if persona_lower == "sysadmin":
+                        n_cmds = self._scaled_randint(
+                            rng,
+                            system,
+                            "linux_shell",
+                            3,
+                            8,
+                            persona=ssh_user.persona,
+                        )
+                    elif persona_lower == "developer":
+                        n_cmds = self._scaled_randint(
+                            rng,
+                            system,
+                            "linux_shell",
+                            2,
+                            6,
+                            persona=ssh_user.persona,
+                        )
+                    else:
+                        n_cmds = self._scaled_randint(
+                            rng,
+                            system,
+                            "linux_shell",
+                            1,
+                            4,
+                            persona=ssh_user.persona,
+                        )
+                    cumulative_gap = 0
+                    _SLOW_CMD_KEYWORDS = frozenset(
+                        [
+                            "build",
+                            "make",
+                            "pytest",
+                            "cargo",
+                            "docker",
+                            "npm run",
+                            "go build",
+                            "gcc",
+                            "compile",
+                            "install",
+                            "apt",
+                            "yum",
+                            "dnf",
+                            "pip install",
+                        ]
+                    )
+                    command_entries = pick_bash_session_commands(
+                        rng,
+                        ssh_user.persona or "",
+                        system.hostname,
+                        system.services,
+                        username=ssh_user.username,
+                        command_count=n_cmds,
+                        system_os=system.os,
+                    )
+                    for cmd, _is_typo in command_entries:
+                        cmd_offset = rng.randint(30, 600)
+                        # Complexity-aware timing: build/install commands
+                        # take longer than simple lookups (ls, cat, pwd)
+                        is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
+                        if is_slow:
+                            gap = rng.randint(30, 180)
+                        else:
+                            gap = rng.choices(
+                                [
+                                    rng.randint(8, 25),
+                                    rng.randint(30, 90),
+                                    rng.randint(120, 300),
+                                ],
+                                weights=[35, 40, 25],
+                                k=1,
+                            )[0]
+                        cumulative_gap += gap
+                        cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
+                        if terminal_pass and (
+                            terminal_transport_close is None
+                            or cmd_time >= ensure_utc(terminal_transport_close)
+                        ):
+                            break
+                        if not self._baseline_pass_admits(current_hour, start=cmd_time):
+                            break
+                        self.activity_generator.generate_bash_command(
+                            ssh_user, system, cmd_time, cmd
+                        )
+
+        # Bash: interactive shell usage on Linux workstations for assigned user
+        if os_cat == "linux" and sys_type == "workstation" and system.assigned_user:
+            ws_user = next(
+                (
+                    u
+                    for u in self.scenario.environment.users
+                    if u.username == system.assigned_user and u.enabled
+                ),
+                None,
+            )
+            if ws_user is not None:
+                from evidenceforge.generation.activity.bash_commands import (
+                    pick_bash_session_commands,
+                )
+
+                n_cmds = self._scaled_randint(
+                    rng,
+                    system,
+                    "linux_shell",
+                    1,
+                    4,
+                    persona=ws_user.persona,
+                )
+                ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                cumulative = 0
+                command_entries = pick_bash_session_commands(
+                    rng,
+                    ws_user.persona or "",
+                    system.hostname,
+                    system.services,
+                    username=ws_user.username,
+                    command_count=n_cmds,
+                    system_os=system.os,
+                )
+                for cmd, _is_typo in command_entries:
+                    gap = rng.randint(30, 300)
+                    cumulative += gap
+                    cmd_time = ts0 + timedelta(seconds=cumulative)
+                    if not self._baseline_pass_admits(current_hour, start=cmd_time):
+                        break
+                    self.state_manager.set_current_time(cmd_time)
+                    self.activity_generator.generate_bash_command(ws_user, system, cmd_time, cmd)
 
     def _emit_web_server_access(
         self,

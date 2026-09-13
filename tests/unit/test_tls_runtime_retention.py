@@ -12,6 +12,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.engine.baseline import BaselineMixin
@@ -80,7 +83,9 @@ def test_failed_tls_handshake_does_not_publish_resumption_points(
     crypto_census_before = crypto.census()
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     monkeypatch.setattr(generator_module, "_TCP_CONN_ENTRIES", (("SF", 1, "ShADadf"),))
+    monkeypatch.setattr(network_planner_module, "_TCP_CONN_ENTRIES", (("SF", 1, "ShADadf"),))
     monkeypatch.setattr(generator_module, "_TCP_CONN_WEIGHTS", (1,))
+    monkeypatch.setattr(network_planner_module, "_TCP_CONN_WEIGHTS", (1,))
 
     _generate_tls(generator, at=_START, source_port=50_001, conn_state=None)
 
